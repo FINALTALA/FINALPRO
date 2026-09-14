@@ -349,7 +349,9 @@ stateDiagram-v2
 | Completed | Customer submits a return for this specific item within the eligible window (FR-RET-002) | ReturnRequested | Customer | Vendor notified, scoped to this item | `OrderItemReturnRequested` (cross-links to the Return machine) |
 | ReturnRequested | Return approved and refund processed for this item (Return machine reaches Refunded) | Returned | System, following vendor/support approval | "Item refunded" to customer | `OrderItemReturned` |
 
-**Invalid transitions:** an item cannot enter ReturnRequested while still InheritingSuborderState (it must wait for the suborder, and therefore the item, to reach Completed — no early/partial-fulfillment returns); an item cannot enter ReturnRequested if its parent suborder ended in RejectedByVendor or Cancelled (nothing was ever delivered to return — the suborder-level cancellation path applies instead, not the return path); Returned → any other state (terminal for that item).
+**Invalid transitions:** an item cannot enter ReturnRequested while still InheritingSuborderState (no early/partial-fulfillment returns); an item cannot enter ReturnRequested if its parent suborder ended in RejectedByVendor or Cancelled (nothing was ever delivered to return — the suborder-level cancellation path applies instead); Returned → any other state (terminal for that item).
+
+> **Refined in Part 3:** where a suborder ships in multiple parts (FR-FUL-007, `splitShipment = true`), "the suborder reaches Completed" above is refined to "the item's own shipment (`Fulfillment`) reaches Delivered/PickedUp" — so one item can become Completed and returnable while a sibling item, shipped separately, is still in transit. See [Part 3, BR-025](03-business-rules-data-model.md) and the `Fulfillment`/`OrderItem` entities in Section G. With the default `splitShipment = false`, a suborder has one `Fulfillment` for all its items, reproducing the behavior described above exactly.
 
 ### Payment state machine
 
