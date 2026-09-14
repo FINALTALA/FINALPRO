@@ -86,7 +86,7 @@ stateDiagram-v2
 | FR-CAT-009 | Creating a new brand/category/attribute that closely matches an existing one must trigger a duplicate warning routed to catalog admin for confirmation. | Fuzzy-name check |
 | FR-CAT-010 | The canonical product must support a warranty field (coverage period, type) at the level appropriate to the category (manufacturer warranty on the `CanonicalProductVariant`; vendor-added warranty, if any, on the `OfferVariant` per FR-MATCH-008). | — |
 | FR-CAT-011 | The system must support free-form, admin-curated tags on canonical products, distinct from the structured category/attribute taxonomy, to aid search and merchandising. | — |
-| FR-CAT-012 | Categories must support a product-type classification (physical good, bundle, service/non-physical item where supported) that governs which attribute template and fulfillment rules apply. | — |
+| FR-CAT-012 | Every `CanonicalProduct` must declare a product-type classification (physical good, bundle, service/non-physical item where supported) that governs which fulfillment rules apply. This is a property of the canonical product itself, not inherited from its `Category` — a single category (e.g., "Electronics") may legitimately contain both bundles and individual items, so the classification cannot live at the category level. | Part 3, G.3 (`CanonicalProduct.product_type`) |
 | FR-CAT-013 | A vendor's seller SKU must be unique per vendor (not globally); the system must reject a duplicate SKU within the same vendor's catalog and must not assume SKUs are comparable across vendors. | — |
 | FR-CAT-014 | Canonical-product and offer content (title, description, specifications) must be independently editable per locale (Arabic, English) — the system must not require or assume a mechanical translation between them. | — |
 
@@ -259,8 +259,8 @@ stateDiagram-v2
     Created --> InProgress: any suborder leaves PendingConfirmation
     Created --> NeedsAttention: SLA breach with no suborder movement
     InProgress --> Completed: all suborders Completed/ReturnedRefunded
-    InProgress --> PartiallyCancelled: some suborders Rejected/Cancelled, others still active or completed
-    InProgress --> Cancelled: all suborders Rejected/Cancelled
+    InProgress --> PartiallyCancelled: some suborders Rejected/Cancelled/PaymentFailed, others still active or completed
+    InProgress --> Cancelled: all suborders Rejected/Cancelled/PaymentFailed
     InProgress --> NeedsAttention: any suborder unresolved past its SLA
     NeedsAttention --> InProgress: underlying suborder resumes movement
     NeedsAttention --> Completed
@@ -274,22 +274,27 @@ stateDiagram-v2
 
 | From | Trigger | To | Actor | Notification | Audit event |
 |---|---|---|---|---|---|
-| `[*]` | Checkout submitted (FR-CART-011) | Created | Customer (via system) | Order confirmation to customer; BR-DELIVERY-CONFIRM triple notification fires per suborder | `OrderCreated` |
-| Created | Any suborder leaves PendingConfirmation | InProgress | System (aggregation) | — (internal) | `OrderProgressed` |
+| `[*]` | Checkout submitted (FR-CART-011) | Created | Customer (via system) | Order confirmation to customer; BR-DELIVERY-CONFIRM fires per suborder that starts in PendingConfirmation (COD) — suborders starting in AwaitingPayment (online) notify no one yet, per the VendorSuborder machine above | `OrderCreated` |
+| Created | Any suborder leaves PendingConfirmation, or an online-payment suborder resolves out of AwaitingPayment (to either PendingConfirmation or PaymentFailed) | InProgress | System (aggregation) | — (internal) | `OrderProgressed` |
 | InProgress / NeedsAttention | All suborders reach Completed/ReturnedRefunded | Completed | System | "Order completed" to customer | `OrderCompleted` |
-| InProgress / NeedsAttention | ≥1 suborder Rejected/Cancelled, ≥1 other still active/completed | PartiallyCancelled | System | Customer notified which vendor(s) fell through (FR-ORD-003) | `OrderPartiallyCancelled` |
-| InProgress / NeedsAttention | All suborders Rejected/Cancelled | Cancelled | System | "Order cancelled" to customer | `OrderCancelled` |
+| InProgress / NeedsAttention | ≥1 suborder Rejected/Cancelled/PaymentFailed, ≥1 other still active/completed | PartiallyCancelled | System | Customer notified which vendor(s) fell through — a `PaymentFailed` suborder is reported to the customer as a payment problem, never as the vendor's fault (FR-ORD-003) | `OrderPartiallyCancelled` |
+| InProgress / NeedsAttention | All suborders Rejected/Cancelled/PaymentFailed | Cancelled | System | "Order cancelled" to customer | `OrderCancelled` |
 | Created / InProgress | No suborder state change past its SLA clock | NeedsAttention | System (SLA monitor) | Internal ops alert; informational notice to customer | `OrderFlaggedNeedsAttention` |
 | PartiallyCancelled | Remaining active suborder(s) reach Completed | Completed | System | "Order fully resolved" to customer | `OrderCompleted` (partial-cancellation flag retained) |
-| PartiallyCancelled | Remaining active suborder(s) also end up Rejected/Cancelled (e.g., customer cancels the rest after one vendor fell through) | Cancelled | System | "Order cancelled" to customer | `OrderCancelled` (partial-cancellation flag retained) |
+| PartiallyCancelled | Remaining active suborder(s) also end up Rejected/Cancelled/PaymentFailed (e.g., customer cancels the rest after one vendor fell through) | Cancelled | System | "Order cancelled" to customer | `OrderCancelled` (partial-cancellation flag retained) |
 
 **Invalid transitions:** Completed → any other state (terminal — a post-completion problem is a Return, at suborder/item level, not a parent-order state change); Cancelled → any other state (terminal); Created → Completed directly (must pass through InProgress; a zero-suborder order cannot exist, FR-ORD-001).
 
 ### `VendorSuborder` state machine
 
+**Authoritative rule on payment timing vs. vendor visibility (resolves the Part-5 L-15 review finding):** a `VendorSuborder` is only visible to the vendor, and only fires BR-DELIVERY-CONFIRM's notifications, once its payment is no longer at risk of failing. For **COD**, that's immediate (there is nothing to authorize). For **online payment**, the suborder is created atomically with the rest of the order (BR-010 still holds — nothing here creates a partial-write risk) but starts in an internal `AwaitingPayment` state: no vendor-portal listing, no in-app alert, no SMS. It only advances to `PendingConfirmation` — the first vendor-visible state — once the Payment machine (below) reaches `Authorized`. If payment instead reaches `Failed`, the suborder moves to a terminal `PaymentFailed` state the vendor never sees at all, exactly as Part 5's L-15 requires.
+
 ```mermaid
 stateDiagram-v2
-    [*] --> PendingConfirmation
+    [*] --> AwaitingPayment: online payment
+    [*] --> PendingConfirmation: COD (no payment gate)
+    AwaitingPayment --> PendingConfirmation: Payment reaches Authorized
+    AwaitingPayment --> PaymentFailed: Payment reaches Failed
     PendingConfirmation --> Confirmed
     PendingConfirmation --> RejectedByVendor
     PendingConfirmation --> Cancelled
@@ -306,12 +311,16 @@ stateDiagram-v2
     ReturnRequested --> ReturnedRefunded
     RejectedByVendor --> [*]
     Cancelled --> [*]
+    PaymentFailed --> [*]
     ReturnedRefunded --> [*]
 ```
 
 | From | Trigger | To | Actor | Notification | Audit event |
 |---|---|---|---|---|---|
-| `[*]` | Parent order created | PendingConfirmation | System | BR-DELIVERY-CONFIRM triple notification (vendor in-app alert + 2 SMS legs) | `SuborderCreated` |
+| `[*]` | Checkout submitted with online payment | AwaitingPayment | System | None to the vendor — this suborder does not exist from the vendor's perspective yet; customer sees "processing payment" | `SuborderCreatedAwaitingPayment` |
+| `[*]` | Checkout submitted with COD | PendingConfirmation | System | BR-DELIVERY-CONFIRM triple notification fires immediately (no payment gate for COD) | `SuborderCreated` |
+| AwaitingPayment | Payment reaches Authorized (Payment machine, below) | PendingConfirmation | System | BR-DELIVERY-CONFIRM triple notification fires now — this is the first moment the vendor becomes aware of the order | `SuborderVendorNotified` |
+| AwaitingPayment | Payment reaches Failed (Payment machine, below) | PaymentFailed | System | Customer sees "payment failed, please retry"; vendor is never notified — this suborder is invisible to them for its entire lifecycle | `SuborderPaymentFailed` |
 | PendingConfirmation | Vendor accepts | Confirmed | Vendor order-processing employee | "Vendor confirmed your order" to customer | `SuborderConfirmed` |
 | PendingConfirmation | Vendor rejects (e.g., stock unavailable) | RejectedByVendor | Vendor order-processing employee/owner | Customer notified with reason; sibling suborders unaffected (FR-ORD-003) | `SuborderRejected` |
 | PendingConfirmation | Customer cancels before vendor acts | Cancelled | Customer | Vendor notified | `SuborderCancelledByCustomer` |
@@ -326,7 +335,7 @@ stateDiagram-v2
 | Completed | Customer submits a return within the eligible window (FR-RET-002) | ReturnRequested | Customer | Vendor notified | `ReturnRequested` (cross-links to the Return machine below) |
 | ReturnRequested | Return approved and refund processed (Return machine reaches Refunded) | ReturnedRefunded | System, following vendor/support approval | "Refund processed" to customer | `SuborderReturnedRefunded` |
 
-**Invalid transitions:** RejectedByVendor / Cancelled → any other state (terminal, a new order must be placed); Completed → Preparing/Confirmed/etc. (no reverting a completed suborder); PendingConfirmation → PickedUp/Delivered (cannot skip confirmation, preparation, and dispatch); ReadyForPickup → Delivered or OutForDelivery → PickedUp (a suborder's fulfillment method is fixed at checkout, FR-CART-005 — it cannot switch from pickup to delivery or vice versa mid-flow); ReadyForPickup/OutForDelivery → Cancelled directly (once dispatched, a failed handoff goes through the Delivery machine's FailedAttempt/reschedule path, FR-FUL-006 — not a suborder cancellation).
+**Invalid transitions:** RejectedByVendor / Cancelled / PaymentFailed → any other state (terminal, a new order must be placed); AwaitingPayment → Confirmed/RejectedByVendor/Preparing/etc. directly (the vendor cannot act on, and the system cannot notify about, a suborder whose payment hasn't cleared — it must resolve to PendingConfirmation or PaymentFailed first); Completed → Preparing/Confirmed/etc. (no reverting a completed suborder); PendingConfirmation → PickedUp/Delivered (cannot skip confirmation, preparation, and dispatch); ReadyForPickup → Delivered or OutForDelivery → PickedUp (a suborder's fulfillment method is fixed at checkout, FR-CART-005 — it cannot switch from pickup to delivery or vice versa mid-flow); ReadyForPickup/OutForDelivery → Cancelled directly (once dispatched, a failed handoff goes through the Delivery machine's FailedAttempt/reschedule path, FR-FUL-006 — not a suborder cancellation).
 
 ### `OrderItem` state machine
 
