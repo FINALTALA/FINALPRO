@@ -10,39 +10,43 @@ Builds directly on the FYP Delivery Increment (Part 1, D.4 — proposed, tracked
 
 ## Q.0 Capacity reality check (read before the backlog)
 
-**Gross capacity:** 2 people × 12 weeks = **24 person-weeks**. That number is not the usable budget — it includes no allowance for integration friction, bug-fixing against real pilot/beta data, sprint planning/review overhead, or the vendor-pilot and customer-beta support work that runs *inside* the same 12 weeks (Q.4). A defensible usable budget for **new Must-priority build work** is roughly **60–70% of gross**, i.e. **≈15–18 person-weeks** — the rest is reserved, not idle.
+**Gross capacity:** 2 people × 12 weeks = **24 person-weeks**. That number is not the usable budget — it includes no allowance for integration friction, bug-fixing against real pilot/beta data, sprint planning/review overhead, or the vendor-pilot and customer-beta support work that runs *inside* the same 12 weeks (see the Sprint & release plan, below).
 
-**What actually fits at that budget**, epic by epic (Must-priority items only, after the re-scoping below):
+**Revision note (second pass):** the previous version of this table claimed ≈17.3 Must person-weeks, but summing the actual backlog items below gave a different number — 73 Must items (53×S + 17×M + 1×L at this document's own S=0.2/M=0.5/L=1.0 sizing) = **20.1 person-weeks**, i.e. a real reserve of only ≈3.9 person-weeks (≈16%), not 28%. The fix here is a genuine further cut, not a re-estimate: **8 more items demoted to Should** (`BL-CAT-002`, `BL-CAT-003`, `BL-VEND-006`, `BL-SEARCH-004`, `BL-FUL-004`, `BL-VPORTAL-003`, `BL-ADMIN-003`, `BL-OPS-001` — each was optional depth, not core-mechanic-blocking) and **one item shrunk** (`BL-ADMIN-001`, from a full vendor-management screen to an approve/suspend-only list, M→S), plus one new item added for honesty rather than savings (`BL-INV-004`, formalizing that inventory *reservation* is deferred — see EPIC-INV below). Verified by directly recounting the resulting backlog with the same method that caught the original inconsistency.
 
-| Epic | Must person-weeks (FYP) | What changed from the first draft |
+**Verified count after this pass:** 65 Must items — 48×S + 16×M + 1×L = **18.6 person-weeks**. Against 24 gross, that leaves **≈5.4 person-weeks (≈23%) reserved** for integration, bug-fixing against real pilot/beta data, and planning overhead. `Reviews` (FR-REV, per Part 1 D.4's explicit inclusion of "basic reviews") was deliberately **not** among the items cut this round, to avoid silently contradicting a decision already confirmed in Part 1 — the additional capacity instead came from items that were always optional polish.
+
+**What actually fits at ≈18.6 person-weeks**, epic by epic (individual figures below are planning-level rollups and may not sum to the exact verified total to the first decimal — the 18.6/65-item count above, recomputed directly from the item tables, is the authoritative figure):
+
+| Epic | Must person-weeks (FYP) | What changed |
 |---|---|---|
-| EPIC-FOUND | 1.3 | Unchanged — genuinely prerequisite |
-| EPIC-AUTH | 0.8 | Saved-addresses CRUD screen demoted to Should; address captured inline at checkout instead for the FYP |
-| EPIC-CAT | 0.8 | Full attribute-template system demoted to Should; FYP uses a simpler fixed spec field |
-| EPIC-MATCH | 1.2 | Reviewer UI simplified to a plain approve/reject list, not side-by-side comparison polish |
-| EPIC-VEND | 0.8 | Multi-staff-role management demoted to Should; FYP is owner-account only |
-| EPIC-IMPORT | 0.8 | Field-mapping UI demoted to Should; FYP uses one fixed CSV template |
-| EPIC-SEARCH | 0.5 | Deep Arabic NLP/synonym tooling demoted to Should; FYP keeps basic normalization + `pg_trgm` only |
-| EPIC-COMP | 0.5 | Share/save comparison demoted to Should (already was) |
-| EPIC-INV | 0.4 | Staleness-sweep scheduled job demoted to Should; FYP keeps manual stock entry + checkout-time revalidation only |
-| EPIC-CART | 0.4 | Scheduled-delivery-window and note/terms polish demoted to Should |
-| EPIC-CHECKOUT | 1.3 | Scope unchanged, but now largely *wiring* against infrastructure built in the dedicated core-infra sprint (Q.4) rather than building that infrastructure itself |
-| EPIC-ORD | 0.8 | Consolidated-timeline UI simplified to a plain status list, not a custom timeline component; state-machine core moved into the core-infra sprint |
-| EPIC-PAY | 2.2 | Refund flow (BL-PAY-005) demoted to Should; core (COD, sandbox auth/capture, `PaymentAllocation`, `WebhookInbox`/`OutboxEvent`) kept and moved earlier |
-| EPIC-FUL | 1.2 | PostGIS-based "nearby branch" distance logic demoted to Should; FYP uses a flat governorate/city list check (BR-006 still holds) |
-| **EPIC-RET** | **0 (demoted to Should)** | The whole epic — BR-025's design is fully specified and already proven correct on paper (Part 2/3); building it is valuable but not load-bearing for the FYP exit criteria, and it's the single largest, cleanest cut available |
-| EPIC-REV | 0.2 | Cut to submit + display only; vendor response and moderation demoted to Should/Could |
-| EPIC-NOTIF | 0.8 | **DoD narrowed per the review finding: only the BR-DELIVERY-CONFIRM triple-notification flow is Must.** Favorites/price-drop/back-in-stock alerts demoted to Should/Could — see the epic note below |
-| EPIC-ADMIN | 1.0 | CMS/banner management (BL-ADMIN-004) demoted to Should; core admin cut to vendor management + match-review queue + a minimal audit-log view |
-| EPIC-VPORTAL | 0.7 | Dashboard and order-queue views merged into one simpler screen |
-| **EPIC-ANALYTICS** | **0 (demoted to Should)** | Funnel visibility for the exit-criteria demo is read directly from `AuditLog`/admin queries during the FYP window rather than a dedicated dashboard |
-| EPIC-SEC | 0.4 | Baseline tests (`TC-SEC-001`, webhook signature) kept as Must, folded into the sprints that build the features they test rather than a separate pass; the dedicated hardening pass (BL-SEC-004) stays Should |
-| **EPIC-PERF** | **0 (Should, unchanged)** | Already was Should in the first draft |
-| EPIC-DEPLOY | 0.4 | Backup/restore drill (BL-DEPLOY-002) stays Should — NFR-DR-001 already didn't require it for the FYP demo |
-| EPIC-OPS | 0.8 | Runbooks trimmed to the single highest-risk one (payment-webhook backlog); pilot/beta/rehearsal are ongoing activities threaded through sprints, not concentrated build time |
-| **Total Must** | **≈17.3 person-weeks** | Against 24 gross — **≈6.7 person-weeks (≈28%) reserved** for integration, bug-fixing against real pilot/beta data, and planning overhead |
+| EPIC-FOUND | 1.9 | Unchanged — genuinely prerequisite |
+| EPIC-AUTH | 1.3 | Saved-addresses CRUD screen demoted to Should; address captured inline at checkout instead for the FYP |
+| EPIC-CAT | 0.4 | Full attribute-template system **and** brand duplicate-detection **and** warranty/tags/product-type-field polish all demoted to Should this round; FYP keeps only the category tree and a fixed free-text spec field (SKU-uniqueness folded into `BL-MATCH-001`'s schema work at no extra cost) |
+| EPIC-MATCH | 1.4 | Reviewer UI simplified to a plain approve/reject list, not side-by-side comparison polish |
+| EPIC-VEND | 1.6 | Multi-staff-role management demoted to Should (owner-account only for FYP); the suspended-vendor-access QA test (`BL-VEND-006`) demoted to Should this round — the underlying access rule still ships, only the dedicated test is deferred |
+| EPIC-IMPORT | 0.9 | Field-mapping UI and retry-only-failed-rows demoted to Should; FYP uses one fixed CSV template |
+| EPIC-SEARCH | 0.6 | Deep Arabic NLP/synonym tooling demoted to Should; the unmatched-listing visual label (`BL-SEARCH-004`) demoted to Should this round — the underlying non-linking behavior is already inherent to `BL-MATCH-001`, only the UI badge is deferred |
+| EPIC-COMP | 0.6 | Share/save comparison demoted to Should (already was) |
+| EPIC-INV | 0.4 | **Explicit scope statement (resolves the review finding):** the FYP uses **checkout-time revalidation only** (`BL-INV-001`/`002`) — inventory *reservation* (FR-INV-003, a temporary hold from cart-add until checkout/expiry) is demoted to Should as its own item (`BL-INV-004`), not silently absorbed into anything else. Revalidation alone still blocks checkout on a genuinely sold-out item (FR-INV-004); reservation only closes the narrower race-condition window between two concurrent customers, a low-probability event at FYP pilot traffic |
+| EPIC-CART | 0.6 | Scheduled-delivery-window and note/terms polish demoted to Should |
+| EPIC-CHECKOUT | 1.1 | Scope unchanged, but now largely *wiring* against infrastructure built in the dedicated core-infra sprint (Sprint 5, below) rather than building that infrastructure itself |
+| EPIC-ORD | 1.6 | Consolidated-timeline UI simplified to a plain status list; state-machine core moved into the core-infra sprint; **the vendor-action UI (`BL-ORD-002`) is built in Sprint 8, not Sprint 9** — see the Sprint & release plan fix, below |
+| EPIC-PAY | 1.7 | Refund flow (`BL-PAY-005`) demoted to Should; core (COD, sandbox auth/capture, `PaymentAllocation`, `WebhookInbox`/`OutboxEvent`) kept and moved earlier |
+| EPIC-FUL | 0.9 | PostGIS-based "nearby branch" distance logic **and** the standalone delivery-zone-eligibility item (`BL-FUL-004`) both demoted to Should this round — the underlying BR-006 eligibility check ships as part of `BL-CART-002`'s zone check plus the branch data already captured in vendor onboarding, at no extra listed cost |
+| **EPIC-RET** | **0 (Should)** | The whole epic — BR-025's design is fully specified and already proven correct on paper; not load-bearing for the FYP exit criteria |
+| EPIC-REV | 0.4 | Kept as-is this round (see the note above) — submit + display only; vendor response and moderation stay Should/Could |
+| EPIC-NOTIF | 0.7 | DoD narrowed to only the BR-DELIVERY-CONFIRM triple-notification flow; favorites/alerts demoted to Should/Could |
+| EPIC-ADMIN | 0.4 | CMS/banner management (already Should) and the full multi-entity admin coverage (already Should) stay deferred; the audit-log *viewer UI* (`BL-ADMIN-003`) demoted to Should this round — `AuditLog` writes still happen regardless (built in `BL-FOUND-005`), only the dedicated viewer screen is deferred, with a direct DB query substituting during the FYP. `BL-ADMIN-001` itself shrunk from a full vendor-management screen to an approve/suspend-only list (M→S) |
+| EPIC-VPORTAL | 0.7 | Dashboard and order-queue views merged into one screen; subscription/billing status (`BL-VPORTAL-003`) demoted to Should this round — folded into `BL-VPORTAL-001`'s dashboard as a small status badge at no extra listed cost |
+| **EPIC-ANALYTICS** | **0 (Should)** | Funnel visibility read directly from `AuditLog`/admin queries during the FYP window instead of a dedicated dashboard |
+| EPIC-SEC | 0.6 | Baseline tests (`TC-SEC-001`, webhook signature, rate-limiting) kept as Must, folded into the sprints that build the features they test; the dedicated hardening pass stays Should |
+| **EPIC-PERF** | **0 (Should)** | Unchanged |
+| EPIC-DEPLOY | 0.2 | Backup/restore drill stays Should |
+| EPIC-OPS | 0.6 | The one runbook (`BL-OPS-001`) demoted to Should this round — written opportunistically during Sprint 12 if time allows rather than a tracked commitment; pilot/beta/rehearsal remain Must, threaded through sprints as ongoing activity, not concentrated build time |
+| **Total Must (verified, see above)** | **≈18.6 person-weeks (65 items)** | Against 24 gross — **≈5.4 person-weeks (≈23%) reserved** |
 
-This is the number every Must-priority item below and every sprint in Q.4 is built against. `Should`/`Could` items remain in the backlog, fully specified, and get picked up only if a sprint finishes under budget — they are not silently dropped from the SRS, only from the committed FYP plan.
+This is the number every Must-priority item below and every sprint in the Sprint & release plan (below) is built against. `Should`/`Could` items remain in the backlog, fully specified, and get picked up only if a sprint finishes under budget — they are not silently dropped from the SRS, only from the committed FYP plan.
 
 ---
 
@@ -109,9 +113,9 @@ Each row now carries its own **Phase** tag: `FYP` = committed inside the 3-month
 | ID | Title | FR/BR | Dependencies | Acceptance criteria | Priority | Phase | Estimate |
 |---|---|---|---|---|---|---|---|
 | BL-CAT-001 (Story) | As a catalog admin, I can manage the category tree (AR/EN) | FR-CAT-001 | EPIC-FOUND | Categories CRUD works with both locales required | Must | FYP | S |
-| BL-CAT-002 (Story) | As a catalog admin, I can manage brands with duplicate-name detection | FR-CAT-002/009 | BL-CAT-001 | Near-duplicate brand creation triggers a warning | Must | FYP | S |
-| BL-CAT-003 (Tech) | `CanonicalProduct.product_type`, warranty/tags/SKU-uniqueness fields | FR-CAT-004/010–013 | BL-CAT-001 | Schema matches Part 3, G.3 exactly | Must | FYP | S |
-| BL-CAT-004 (Story) | Full per-category attribute-template system (structured fields, allowed values/units) | FR-CAT-003 | BL-CAT-001 | Drives dynamic offer-editor form fields per category | Should | FYP (stretch) | M |
+| BL-CAT-002 (Story) | As a catalog admin, I can manage brands with duplicate-name detection | FR-CAT-002/009 | BL-CAT-001 | Near-duplicate brand creation triggers a warning; brands still creatable without it (manual admin vigilance substitutes) | Should | FYP (stretch) | S |
+| BL-CAT-003 (Tech) | `CanonicalProduct.product_type`, warranty/tags fields | FR-CAT-004/010–012 | BL-CAT-001 | Schema matches Part 3, G.3 exactly — SKU-uniqueness (FR-CAT-013) folded into `BL-MATCH-001` instead, at no extra listed cost | Should | FYP (stretch) | S |
+| BL-CAT-004 (Story) | Full per-category attribute-template system (structured fields, allowed values/units) | FR-CAT-003 | BL-CAT-001 | Drives dynamic offer-editor form fields per category | Should | Full MVP | M |
 | BL-CAT-004b (Tech) | FYP fallback: a single free-text specs field on the offer, in place of BL-CAT-004 | FR-CAT-003 (simplified) | BL-CAT-001 | Offer editor works without the full template system | Must | FYP | S |
 
 ### 4. EPIC-MATCH — Canonical-product model
@@ -135,7 +139,7 @@ Each row now carries its own **Phase** tag: `FYP` = committed inside the 3-month
 | BL-VEND-004 (Story) | As an approved vendor, I select a subscription plan before publishing | FR-VEND-004/005, ⚠ OPEN-003 | BL-VEND-003 | Vendor status gates offer visibility (BR-014) | Must | FYP | M |
 | BL-VEND-005 (Story) | Multi-staff-role account management (admin/branch-manager/catalog/order-processing sub-roles) | FR-VEND-006/007 | BL-VEND-001 | Role-scoped per Part 1, Section C, in full | Should | FYP (stretch) | M |
 | BL-VEND-005b (Tech) | FYP fallback: owner-only vendor account, no sub-roles | FR-VEND-007 (simplified) | BL-VEND-001 | A single account can operate the whole store | Must | FYP | S |
-| BL-VEND-006 (QA) | Suspended-vendor restricted-access test | FR-VEND-009, Part 5 L-23 | BL-VEND-004 | `TC-VEND-002` passes | Must | FYP | S |
+| BL-VEND-006 (QA) | Suspended-vendor restricted-access test | FR-VEND-009, Part 5 L-23 | BL-VEND-004 | `TC-VEND-002` passes — the underlying access rule (FR-VEND-009) ships regardless; only the dedicated automated test is deferred | Should | FYP (stretch) | S |
 
 ### 6. EPIC-IMPORT — Offer creation and imports
 
@@ -155,7 +159,7 @@ Each row now carries its own **Phase** tag: `FYP` = committed inside the 3-month
 | BL-SEARCH-002 (Tech) | Basic Arabic normalization + `pg_trgm` typo tolerance (deep NLP/synonym tooling deferred) | FR-SEARCH-002 (minimal) | BL-SEARCH-001 | `TC-SEARCH-001` passes on the common cases | Must | FYP | S |
 | BL-SEARCH-002b (Tech) | Full transliteration + curated synonym list | FR-SEARCH-002/012 (full) | BL-SEARCH-002 | Handles regional brand nicknames, etc. | Should | FYP (stretch) | M |
 | BL-SEARCH-003 (Story) | As a customer, I can filter/sort search results | FR-SEARCH-005 | BL-SEARCH-001 | Filters combine correctly (AND semantics) | Must | FYP | S |
-| BL-SEARCH-004 (Story) | Unmatched/unique listings appear labeled in results | FR-SEARCH-010, FR-MATCH-009 | BL-SEARCH-001 | Visual distinction confirmed in UI review | Must | FYP | S |
+| BL-SEARCH-004 (Story) | Unmatched/unique listings appear visually labeled in results | FR-SEARCH-010, FR-MATCH-009 | BL-SEARCH-001 | Visual distinction confirmed in UI review — the underlying non-linking behavior (FR-MATCH-009) is already enforced by `BL-MATCH-001`'s schema regardless; only the search-result UI badge is deferred | Should | FYP (stretch) | S |
 
 ### 8. EPIC-COMP — Comparison
 
@@ -171,8 +175,9 @@ Each row now carries its own **Phase** tag: `FYP` = committed inside the 3-month
 | ID | Title | FR/BR | Dependencies | Acceptance criteria | Priority | Phase | Estimate |
 |---|---|---|---|---|---|---|---|
 | BL-INV-001 (Story) | As vendor staff, I can update stock per branch (manual only) | FR-INV-001/005 | EPIC-VEND, EPIC-IMPORT | Stock updates reflected immediately | Must | FYP | S |
-| BL-INV-002 (Story) | Checkout-time revalidation of price/stock | FR-INV-004, FR-CART-002 | BL-INV-001 | `TC-INV-001` passes | Must | FYP | S |
+| BL-INV-002 (Story) | Checkout-time revalidation of price/stock | FR-INV-004, FR-CART-002 | BL-INV-001 | `TC-INV-001` passes — this is the FYP's *only* oversell defense (see BL-INV-004) | Must | FYP | S |
 | BL-INV-003 (Tech) | Scheduled staleness sweep/flagging per channel | FR-INV-006, BR-005 | BL-INV-001 | Flags stale rows per NFR-STALE-001 | Should | FYP (stretch) | M |
+| BL-INV-004 (Tech) | Inventory **reservation** with expiry window (FR-INV-003) — a temporary hold from cart-add until checkout/expiry, on top of (not instead of) revalidation | FR-INV-003 | BL-INV-002 | A reserved unit is unavailable to a second concurrent customer until the reservation expires or converts to a sale | Should | Full MVP | M |
 
 ### 10. EPIC-CART — Cart
 
@@ -185,29 +190,29 @@ Each row now carries its own **Phase** tag: `FYP` = committed inside the 3-month
 
 ### 11. EPIC-CHECKOUT — Checkout
 
-*Depends on the core commerce infrastructure (minimal Order state machine, Payment stub, notification dispatch, Inventory reservation) built in the dedicated infrastructure sprint (Q.4) — this is what resolves the checkout↔payment↔order↔notification circular dependency from the first draft.*
+*Depends on the core commerce infrastructure (minimal Order state machine, Payment stub, notification dispatch, Inventory revalidation — **not** reservation, which is deferred per EPIC-INV) built in the dedicated infrastructure sprint (Sprint 5, below) — this is what resolves the checkout↔payment↔order↔notification circular dependency from the first draft.*
 
 | ID | Title | FR/BR | Dependencies | Acceptance criteria | Priority | Phase | Estimate |
 |---|---|---|---|---|---|---|---|
-| BL-CHECKOUT-001 (Story) | As a customer, I complete checkout with address + two phone numbers | FR-CART-006, BR-020 | EPIC-CART, EPIC-AUTH, **core infra (Q.4)** | Order confirmation fires BR-DELIVERY-CONFIRM | Must | FYP | M |
+| BL-CHECKOUT-001 (Story) | As a customer, I complete checkout with address + two phone numbers | FR-CART-006, BR-020 | EPIC-CART, EPIC-AUTH, **core infra (Sprint 5)** | Order confirmation fires BR-DELIVERY-CONFIRM | Must | FYP | M |
 | BL-CHECKOUT-002 (Tech) | Idempotent checkout submission | FR-CART-008, Part 4 | BL-CHECKOUT-001 | `TC-CHECKOUT-003` passes | Must | FYP | S |
 | BL-CHECKOUT-003 (Tech) | Wire the `AwaitingPayment` gate (built in core infra) into the checkout flow | ADR-010, Part 2 E.11 | BL-CHECKOUT-001, **core infra Payment stub** | `TC-CHECKOUT-001`/`002` pass | Must | FYP | S |
 | BL-CHECKOUT-004 (QA) | Checkout-failure cart preservation | FR-CART-016 | BL-CHECKOUT-001 | Failed checkout leaves cart intact for resubmission | Must | FYP | S |
 
 ### 12. EPIC-ORD — Orders
 
-*The state-machine core itself is built in the infrastructure sprint (Q.4), ahead of Checkout — this section covers the layers built on top of it afterward.*
+*The state-machine core itself is built in the infrastructure sprint (Sprint 5), ahead of Checkout — this section covers the layers built on top of it afterward.*
 
 | ID | Title | FR/BR | Dependencies | Acceptance criteria | Priority | Phase | Estimate |
 |---|---|---|---|---|---|---|---|
 | BL-ORD-001 (Tech) | `CustomerOrder`/`VendorSuborder`/`OrderItem` state-machine core (data model + transition logic, no UI) | Part 2, E.11 | EPIC-FOUND | Every valid/invalid transition in Part 2 covered by `TC-*` | Must | **FYP — built in the core-infra sprint, before Checkout** | L |
-| BL-ORD-002 (Story) | As a vendor, I can confirm/reject/dispatch a suborder (UI layer) | FR-ORD-007, Part 4 `PATCH /suborders/{id}/status` | BL-ORD-001, EPIC-CHECKOUT | Role-scoped per Part 1, Section C | Must | FYP | S |
+| BL-ORD-002 (Story) | As a vendor, I can confirm/reject/dispatch a suborder — a minimal, even unstyled, action screen; `BL-VPORTAL-001` wraps/polishes it later, doesn't duplicate it | FR-ORD-007, Part 4 `PATCH /suborders/{id}/status` | BL-ORD-001, EPIC-CHECKOUT | Role-scoped per Part 1, Section C | Must | **FYP — built in Sprint 8, alongside Delivery, not Sprint 9 (resolves the review finding: a vendor must be able to act on an order before customer beta starts)** | S |
 | BL-ORD-003 (Story) | As a customer, I see a plain order-status list (not a custom timeline component) | FR-ORD-005 | BL-ORD-001 | Parent + per-suborder status both visible | Must | FYP | S |
 | BL-ORD-004 (QA) | Partial-rejection independence test | FR-ORD-003, Part 5 L-13 | BL-ORD-001 | `TC-ORD-001` passes | Must | FYP | S |
 
 ### 13. EPIC-PAY — Payments
 
-*The stub gateway, `PaymentAllocation`, and `WebhookInbox`/`OutboxEvent` relay worker are built in the core-infra sprint (Q.4), ahead of Checkout.*
+*The stub gateway, `PaymentAllocation`, and `WebhookInbox`/`OutboxEvent` relay worker are built in the core-infra sprint (Sprint 5), ahead of Checkout.*
 
 | ID | Title | FR/BR | Dependencies | Acceptance criteria | Priority | Phase | Estimate |
 |---|---|---|---|---|---|---|---|
@@ -225,9 +230,9 @@ Each row now carries its own **Phase** tag: `FYP` = committed inside the 3-month
 |---|---|---|---|---|---|---|---|
 | BL-FUL-001 (Tech) | Delivery state machine (Part 2, E.11) | FR-FUL-002 | BL-ORD-001 | Assigned→OutForDelivery→Delivered/FailedAttempt all covered | Must | FYP | M |
 | BL-FUL-002 (Story) | Pickup flow with pickup code | FR-FUL-008 | BL-FUL-001 | Branch staff can redeem a code | Must | FYP | S |
-| BL-FUL-003 (Tech) | Wire BR-DELIVERY-CONFIRM's three notifications into checkout/delivery | FR-FUL-003, ⚠ OPEN-004 | **Core-infra notification dispatch (Q.4)** | Real SMS if OPEN-004 resolves in time, else logged/visible fallback per Part 1, D.4 | Must | FYP | S |
-| BL-FUL-004 (Story) | Delivery-zone eligibility via a flat governorate/city list (PostGIS distance logic deferred) | FR-FUL-004, BR-006 (minimal) | EPIC-VEND | Matches BR-006's eligibility rule, not its optional distance-sorting nicety | Must | FYP | S |
-| BL-FUL-004b (Tech) | PostGIS-based "nearby branch" distance logic | FR-SEARCH-006 (full) | BL-FUL-004 | Real distance sorting, not just eligibility | Should | FYP (stretch) | S |
+| BL-FUL-003 (Tech) | Wire BR-DELIVERY-CONFIRM's three notifications into checkout/delivery | FR-FUL-003, ⚠ OPEN-004 | **Core-infra notification dispatch (Sprint 5)** | Real SMS if OPEN-004 resolves in time, else logged/visible fallback per Part 1, D.4 | Must | FYP | S |
+| BL-FUL-004 (Story) | Standalone delivery-zone-eligibility screen/logic beyond what `BL-CART-002` already checks | FR-FUL-004, BR-006 (minimal) | EPIC-VEND, BL-CART-002 | Matches BR-006's eligibility rule as a dedicated item — for the FYP, `BL-CART-002`'s zone check plus the branch data captured in vendor onboarding already covers this at no extra listed cost | Should | FYP (stretch) | S |
+| BL-FUL-004b (Tech) | PostGIS-based "nearby branch" distance logic | FR-SEARCH-006 (full) | BL-FUL-004 | Real distance sorting, not just eligibility | Should | Full MVP | S |
 
 ### 15. EPIC-RET — Returns *(Should — demoted for capacity; fully specified, not built unless time allows)*
 
@@ -259,10 +264,10 @@ Each row now carries its own **Phase** tag: `FYP` = committed inside the 3-month
 
 | ID | Title | FR/BR | Dependencies | Acceptance criteria | Priority | Phase | Estimate |
 |---|---|---|---|---|---|---|---|
-| BL-ADMIN-001 (Story) | As platform admin, I manage vendors centrally (approve/suspend) | FR-ADMIN-001 (vendor slice only) | EPIC-VEND | Covers vendor-management at minimum viable depth | Must | FYP | M |
+| BL-ADMIN-001 (Story) | As platform admin, I manage vendors centrally — shrunk to an **approve/suspend-only list**, not a full vendor-management screen (branch/staff detail views live in the vendor's own portal, not admin) | FR-ADMIN-001 (vendor approve/suspend slice only) | EPIC-VEND | Admin can approve a pending vendor and suspend an active one from a plain list | Must | FYP | S |
 | BL-ADMIN-001b (Story) | Full admin coverage of every entity named in FR-ADMIN-001 (branches, catalog, imports, orders, payments, settlements, returns, disputes, reviews, promotions, content, delivery zones, notifications, tickets, feature flags, fraud signals, data exports) | FR-ADMIN-001 (full) | BL-ADMIN-001 | Matches Part 5, K.1's full admin screen set | Should | Full MVP | L |
 | BL-ADMIN-002 (Story) | Match-review queue (already built in EPIC-MATCH) surfaced in the admin nav | FR-ADMIN-001 | BL-MATCH-003 | Reachable from the admin dashboard | Must | FYP | S |
-| BL-ADMIN-003 (Story) | Minimal audit-log viewer (search by entity, no full filtering UI) | FR-ADMIN-005 (minimal) | BL-FOUND-005 | `AuditLog` rows are queryable, even if the UI is basic | Must | FYP | S |
+| BL-ADMIN-003 (Story) | Minimal audit-log viewer UI (search by entity, no full filtering) | FR-ADMIN-005 (minimal) | BL-FOUND-005 | `AuditLog` rows are queryable through a UI, not just direct DB query — `AuditLog` writes themselves already happen regardless (`BL-FOUND-005`), only this viewer screen is deferred | Should | FYP (stretch) | S |
 | BL-ADMIN-004 (Story) | Basic content/banner management | FR-CMS-001 | BL-ADMIN-001 | Draft/preview/publish workflow works | Should | Full MVP | M |
 
 ### 19. EPIC-VPORTAL — Vendor portal
@@ -271,7 +276,7 @@ Each row now carries its own **Phase** tag: `FYP` = committed inside the 3-month
 |---|---|---|---|---|---|---|---|
 | BL-VPORTAL-001 (Story) | Combined vendor dashboard + order queue (merged into one screen for the FYP) | FR-VPORTAL-001/004 | EPIC-VEND, EPIC-ORD | A vendor can see and act on orders from one screen | Must | FYP | M |
 | BL-VPORTAL-002 (Story) | Vendor notifications surfaced on the same screen | FR-VPORTAL-011 | BL-NOTIF-001 | BR-DELIVERY-CONFIRM alerts appear here | Must | FYP | S |
-| BL-VPORTAL-003 (Story) | Subscription/billing status view (reflects simulated billing) | FR-VPORTAL-006, ⚠ OPEN-003 | EPIC-VEND | Status visible, even if billing itself is simulated per Part 1, D.4 | Must | FYP | S |
+| BL-VPORTAL-003 (Story) | Dedicated subscription/billing status screen (beyond a small status badge on `BL-VPORTAL-001`'s dashboard) | FR-VPORTAL-006, ⚠ OPEN-003 | EPIC-VEND | Full billing-history view, not just current status | Should | FYP (stretch) | S |
 
 ### 20. EPIC-ANALYTICS — Analytics *(Should — demoted for capacity)*
 
@@ -306,7 +311,7 @@ Each row now carries its own **Phase** tag: `FYP` = committed inside the 3-month
 
 | ID | Title | FR/BR | Dependencies | Acceptance criteria | Priority | Phase | Estimate |
 |---|---|---|---|---|---|---|---|
-| BL-OPS-001 (Ops) | Payment-webhook-backlog runbook (the single highest-risk scenario; others deferred) | Part 6 §P | EPIC-PAY | Runbook exists and is readable by whichever engineer isn't on-call | Must | FYP | S |
+| BL-OPS-001 (Ops) | Payment-webhook-backlog runbook (the single highest-risk scenario; others deferred) | Part 6 §P | EPIC-PAY | Runbook exists and is readable by whichever engineer isn't on-call — written opportunistically during Sprint 12's stabilization time if it fits, not a tracked commitment | Should | FYP (stretch) | S |
 | BL-OPS-002 (Ops) | Vendor pilot onboarding (3–6 vendors, per Part 1 D.4) | Part 1, D.4 | EPIC-VEND, EPIC-IMPORT | Pilot vendors listing real offers — ongoing, not one build task | Must | FYP | S (per touchpoint, spread across sprints) |
 | BL-OPS-003 (Ops) | Small customer beta | Part 1, D.3 exit criteria | EPIC-CHECKOUT, EPIC-ORD, EPIC-PAY, EPIC-FUL | End-to-end demo flow completes with real beta users — **starts only once the full path (checkout→payment→delivery) is usable, not before** | Must | FYP | S (per touchpoint) |
 | BL-OPS-004 (Ops) | FYP exit-criteria demo rehearsal | Part 1, D.3 | Every Must item above | Full demo script runs clean | Must | FYP | S |
@@ -325,7 +330,9 @@ Each row now carries its own **Phase** tag: `FYP` = committed inside the 3-month
 
 ### Sprint-by-sprint goals — corrected for real dependencies
 
-The first draft scheduled Payments, Orders, and Notifications *after* Checkout, and Inventory reservation *after* Cart while Cart depended on Inventory — both circular. The fix: **Sprint 5 builds the minimal core commerce infrastructure — Order state-machine core, Payment stub, notification dispatch, and Inventory-with-reservation — before Checkout exists at all**, so Checkout in Sprint 7 is mostly *wiring* against already-working infrastructure, and every subsequent sprint layers portals/UI on top of it, never in front of it.
+The first draft scheduled Payments, Orders, and Notifications *after* Checkout, and Inventory *after* Cart while Cart depended on Inventory — both circular. The fix: **Sprint 5 builds the minimal core commerce infrastructure — Order state-machine core, Payment stub, notification dispatch, and Inventory revalidation (reservation, FR-INV-003, is explicitly deferred to `BL-INV-004`/Full MVP, not built here) — before Checkout exists at all**, so Checkout in Sprint 7 is mostly *wiring* against already-working infrastructure, and every subsequent sprint layers portals/UI on top of it, never in front of it.
+
+A second fix, from the same review round: the first draft left the vendor unable to actually confirm/dispatch an order until Sprint 9, one sprint *after* claiming the full customer path was usable (Sprint 8) — a customer could check out and get "delivered" without any vendor action ever having happened. **`BL-ORD-002` (the minimal vendor order-action screen) now moves into Sprint 8**, alongside Delivery, so a vendor genuinely can act on an order by the time the path is claimed usable.
 
 | Sprint | Weeks | Primary epics | Sprint goal |
 |---|---|---|---|
@@ -333,11 +340,11 @@ The first draft scheduled Payments, Orders, and Notifications *after* Checkout, 
 | 2 | 2 | EPIC-AUTH, EPIC-VEND (start) | A customer can register/verify/log in; a vendor can apply |
 | 3 | 3 | EPIC-CAT, EPIC-MATCH (start) | Catalog admin functional; four-level schema + exact-match auto-linking work |
 | 4 | 4 | EPIC-MATCH (finish), EPIC-VEND (finish), EPIC-IMPORT | Match-review queue functional; vendor onboarding + manual/CSV offer creation complete — **Release gate 1** |
-| 5 | 5 | **Core commerce infrastructure** (BL-ORD-001, BL-PAY-001–004, BL-NOTIF-001, BL-INV-001/002) | Order state-machine core, payment stub with allocation/outbox, notification dispatch, and inventory-with-reservation all working **with no customer-facing UI yet** — the dependency-fix sprint |
-| 6 | 6 | EPIC-CART (built on Sprint 5's inventory reservation), EPIC-SEARCH | Multi-vendor cart partitioning; basic Arabic/English search |
+| 5 | 5 | **Core commerce infrastructure** (BL-ORD-001, BL-PAY-001–004, BL-NOTIF-001, BL-INV-001/002) | Order state-machine core, payment stub with allocation/outbox, notification dispatch, and inventory *revalidation* (not reservation) all working **with no customer-facing UI yet** — the dependency-fix sprint |
+| 6 | 6 | EPIC-CART (built on Sprint 5's inventory revalidation), EPIC-SEARCH | Multi-vendor cart partitioning; basic Arabic/English search |
 | 7 | 7 | EPIC-CHECKOUT (wiring against Sprint 5's infrastructure) | End-to-end multi-vendor checkout, AwaitingPayment gate, BR-DELIVERY-CONFIRM trigger — **Release gate 2 (core commerce)** |
-| 8 | 8 | EPIC-FUL (using Sprint 5's notification dispatch), EPIC-COMP | Vendor delivery/pickup functional; comparison UI — **the full customer path (search→compare→cart→checkout→delivery/pickup) is now usable end-to-end** |
-| 9 | 9 | EPIC-ORD (UI layer: BL-ORD-002/003), EPIC-ADMIN (minimum) | Vendor-facing order actions and a basic admin (vendor management, match queue, audit log) — **customer beta starts now** (Q.5), since the path it needs was completed in Sprint 8, not before |
+| 8 | 8 | EPIC-FUL (using Sprint 5's notification dispatch), EPIC-COMP, **`BL-ORD-002` (vendor order-action screen, moved forward from Sprint 9)** | Vendor delivery/pickup functional; comparison UI; **a vendor can now confirm/dispatch an order** — the full customer-*and*-vendor path (search→compare→cart→checkout→**vendor confirms**→delivery/pickup) is genuinely usable end-to-end, not just the customer-facing half of it |
+| 9 | 9 | EPIC-ORD (remaining UI: `BL-ORD-003` status list), EPIC-ADMIN (minimum) | Customer-facing order-status list; basic admin (vendor approve/suspend, match queue) — **customer beta starts now** (see Vendor pilot and customer beta, below), since Sprint 8 is where the path actually became usable, vendor action included |
 | 10 | 10 | EPIC-VPORTAL, EPIC-REV (minimal), EPIC-SEC (baseline tests) | Vendor portal reaches minimum viable depth; basic reviews; `TC-SEC-001`/`TC-PAY-005`/`TC-OUTBOX-001` pass |
 | 11 | 11 | EPIC-DEPLOY, beta-feedback bug-fixing | Production-equivalent environment live; issues surfaced by the running beta and pilot get fixed |
 | 12 | 12 | Stabilization, EPIC-OPS (rehearsal) | Hardening/bugfix buffer, demo rehearsal, FYP exit-criteria check — **Release gate 3** |
@@ -352,11 +359,11 @@ Parallel workstreams: Engineer A and Engineer B work adjacent epics in the same 
 
 ### Testing and stabilization
 
-Tests run on every PR throughout (per EPIC-FOUND); **Sprint 12** is additionally reserved as a dedicated stabilization/rehearsal period, not new-feature time — consistent with the ≈28% capacity reserve established in Q.0, most of which sits inside the individual sprints rather than only at the end.
+Tests run on every PR throughout (per EPIC-FOUND); **Sprint 12** is additionally reserved as a dedicated stabilization/rehearsal period, not new-feature time — consistent with the ≈23% capacity reserve established in Q.0, most of which sits inside the individual sprints rather than only at the end.
 
 ### Vendor pilot and customer beta
 
-**Vendor pilot** (BL-OPS-002) begins once EPIC-VEND + EPIC-IMPORT are functional (end of Sprint 4) and runs continuously through Sprint 12. **Customer beta** (BL-OPS-003) now starts **at Sprint 9**, not before — corrected from the first draft, which started it while payment/delivery were still incomplete. Sprint 9 is the first point at which the full customer path (search → compare → cart → checkout → payment → delivery/pickup, all completed by end of Sprint 8) is actually usable end-to-end; starting beta any earlier would put real users through a path that doesn't yet work.
+**Vendor pilot** (BL-OPS-002) begins once EPIC-VEND + EPIC-IMPORT are functional (end of Sprint 4) and runs continuously through Sprint 12. **Customer beta** (BL-OPS-003) starts **at Sprint 9**, once the *entire* loop — not just the customer-facing half of it — is usable: search → compare → cart → checkout → payment (Sprint 7) → **a vendor actually confirming/dispatching the order** (`BL-ORD-002`, moved into Sprint 8 specifically for this reason) → delivery/pickup (also Sprint 8). Starting beta any earlier — including at the end of Sprint 8 itself, before the sprint's work is confirmed stable — would put real users through a path where their order could be placed and paid for with no vendor ever able to act on it.
 
 ### Production rollout and post-launch monitoring
 
