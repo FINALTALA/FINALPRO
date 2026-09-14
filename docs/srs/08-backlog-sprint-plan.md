@@ -30,8 +30,8 @@ Builds directly on the FYP Delivery Increment (Part 1, D.4 — proposed, tracked
 | EPIC-COMP | 0.6 | Share/save comparison demoted to Should (already was) |
 | EPIC-INV | 0.4 | **Explicit scope statement (resolves the review finding):** the FYP uses **checkout-time revalidation only** (`BL-INV-001`/`002`) — inventory *reservation* (FR-INV-003, a temporary hold from cart-add until checkout/expiry) is demoted to Should as its own item (`BL-INV-004`), not silently absorbed into anything else. Revalidation alone still blocks checkout on a genuinely sold-out item (FR-INV-004); reservation only closes the narrower race-condition window between two concurrent customers, a low-probability event at FYP pilot traffic |
 | EPIC-CART | 0.6 | Scheduled-delivery-window and note/terms polish demoted to Should |
-| EPIC-CHECKOUT | 1.1 | Scope unchanged, but now largely *wiring* against infrastructure built in the dedicated core-infra sprint (Sprint 5, below) rather than building that infrastructure itself |
-| EPIC-ORD | 1.6 | Consolidated-timeline UI simplified to a plain status list; state-machine core moved into the core-infra sprint; **the vendor-action UI (`BL-ORD-002`) is built in Sprint 8, not Sprint 9** — see the Sprint & release plan fix, below |
+| EPIC-CHECKOUT | 1.1 | Scope unchanged, but now largely *wiring* against infrastructure built across the dedicated core-infra Sprints 5–6 (below) rather than building that infrastructure itself |
+| EPIC-ORD | 1.6 | Consolidated-timeline UI simplified to a plain status list; state-machine core moved into Sprint 6 of the core-infra split; **the vendor-action UI (`BL-ORD-002`) is built in Sprint 8, not Sprint 9** — see the Sprint & release plan fix, below |
 | EPIC-PAY | 1.7 | Refund flow (`BL-PAY-005`) demoted to Should; core (COD, sandbox auth/capture, `PaymentAllocation`, `WebhookInbox`/`OutboxEvent`) kept and moved earlier |
 | EPIC-FUL | 0.9 | PostGIS-based "nearby branch" distance logic **and** the standalone delivery-zone-eligibility item (`BL-FUL-004`) both demoted to Should this round — the underlying BR-006 eligibility check ships as part of `BL-CART-002`'s zone check plus the branch data already captured in vendor onboarding, at no extra listed cost |
 | **EPIC-RET** | **0 (Should)** | The whole epic — BR-025's design is fully specified and already proven correct on paper; not load-bearing for the FYP exit criteria |
@@ -190,47 +190,47 @@ Each row now carries its own **Phase** tag: `FYP` = committed inside the 3-month
 
 ### 11. EPIC-CHECKOUT — Checkout
 
-*Depends on the core commerce infrastructure (minimal Order state machine, Payment stub, notification dispatch, Inventory revalidation — **not** reservation, which is deferred per EPIC-INV) built in the dedicated infrastructure sprint (Sprint 5, below) — this is what resolves the checkout↔payment↔order↔notification circular dependency from the first draft.*
+*Depends on the core commerce infrastructure (minimal Order state machine, Payment stub, notification dispatch, Inventory revalidation — **not** reservation, which is deferred per EPIC-INV) built across the dedicated infrastructure Sprints 5–6 (below, split to fit the 2-person-week-per-sprint ceiling) — this is what resolves the checkout↔payment↔order↔notification circular dependency from the first draft.*
 
 | ID | Title | FR/BR | Dependencies | Acceptance criteria | Priority | Phase | Estimate |
 |---|---|---|---|---|---|---|---|
-| BL-CHECKOUT-001 (Story) | As a customer, I complete checkout with address + two phone numbers | FR-CART-006, BR-020 | EPIC-CART, EPIC-AUTH, **core infra (Sprint 5)** | Order confirmation fires BR-DELIVERY-CONFIRM | Must | FYP | M |
+| BL-CHECKOUT-001 (Story) | As a customer, I complete checkout with address + two phone numbers | FR-CART-006, BR-020 | EPIC-CART, EPIC-AUTH, **core infra (Sprints 5–6)** | Order confirmation fires BR-DELIVERY-CONFIRM | Must | FYP | M |
 | BL-CHECKOUT-002 (Tech) | Idempotent checkout submission | FR-CART-008, Part 4 | BL-CHECKOUT-001 | `TC-CHECKOUT-003` passes | Must | FYP | S |
 | BL-CHECKOUT-003 (Tech) | Wire the `AwaitingPayment` gate (built in core infra) into the checkout flow | ADR-010, Part 2 E.11 | BL-CHECKOUT-001, **core infra Payment stub** | `TC-CHECKOUT-001`/`002` pass | Must | FYP | S |
 | BL-CHECKOUT-004 (QA) | Checkout-failure cart preservation | FR-CART-016 | BL-CHECKOUT-001 | Failed checkout leaves cart intact for resubmission | Must | FYP | S |
 
 ### 12. EPIC-ORD — Orders
 
-*The state-machine core itself is built in the infrastructure sprint (Sprint 5), ahead of Checkout — this section covers the layers built on top of it afterward.*
+*The state-machine core itself is built in Sprint 6 of the infrastructure split, ahead of Checkout — this section covers the layers built on top of it afterward.*
 
 | ID | Title | FR/BR | Dependencies | Acceptance criteria | Priority | Phase | Estimate |
 |---|---|---|---|---|---|---|---|
-| BL-ORD-001 (Tech) | `CustomerOrder`/`VendorSuborder`/`OrderItem` state-machine core (data model + transition logic, no UI) | Part 2, E.11 | EPIC-FOUND | Every valid/invalid transition in Part 2 covered by `TC-*` | Must | **FYP — built in the core-infra sprint, before Checkout** | L |
+| BL-ORD-001 (Tech) | `CustomerOrder`/`VendorSuborder`/`OrderItem` state-machine core (data model + transition logic, no UI) | Part 2, E.11 | EPIC-FOUND | Every valid/invalid transition in Part 2 covered by `TC-*` | Must | **FYP — Sprint 6, before Checkout** | L |
 | BL-ORD-002 (Story) | As a vendor, I can confirm/reject/dispatch a suborder — a minimal, even unstyled, action screen; `BL-VPORTAL-001` wraps/polishes it later, doesn't duplicate it | FR-ORD-007, Part 4 `PATCH /suborders/{id}/status` | BL-ORD-001, EPIC-CHECKOUT | Role-scoped per Part 1, Section C | Must | **FYP — built in Sprint 8, alongside Delivery, not Sprint 9 (resolves the review finding: a vendor must be able to act on an order before customer beta starts)** | S |
 | BL-ORD-003 (Story) | As a customer, I see a plain order-status list (not a custom timeline component) | FR-ORD-005 | BL-ORD-001 | Parent + per-suborder status both visible | Must | FYP | S |
 | BL-ORD-004 (QA) | Partial-rejection independence test | FR-ORD-003, Part 5 L-13 | BL-ORD-001 | `TC-ORD-001` passes | Must | FYP | S |
 
 ### 13. EPIC-PAY — Payments
 
-*The stub gateway, `PaymentAllocation`, and `WebhookInbox`/`OutboxEvent` relay worker are built in the core-infra sprint (Sprint 5), ahead of Checkout.*
+*The stub gateway, `PaymentAllocation`, and `WebhookInbox`/`OutboxEvent` relay worker are built in Sprint 5 of the infrastructure split, ahead of Checkout — note `BL-PAY-001` (COD) depends only on `BL-ORD-001`, which is built in Sprint 6; since COD needs no payment gateway or Order-core dependency to demonstrate its simplest path, it can start in Sprint 5 alongside the rest and finish once `BL-ORD-001` lands in Sprint 6.*
 
 | ID | Title | FR/BR | Dependencies | Acceptance criteria | Priority | Phase | Estimate |
 |---|---|---|---|---|---|---|---|
-| BL-PAY-001 (Story) | COD path through the Payment state machine | FR-PAY-001 | BL-ORD-001 | Works end-to-end | Must | **FYP — core-infra sprint** | S |
-| BL-PAY-002 (Tech) | Sandbox online-payment stub (authorize/capture/fail) | FR-PAY-002, ⚠ OPEN-001 | BL-PAY-001 | Simulated paths all work | Must | **FYP — core-infra sprint** | M |
-| BL-PAY-003 (Tech) | `PaymentAllocation`/`PaymentTransactionAllocation` core | FR-PAY-003, Part 3 | BL-PAY-002 | `TC-PAY-006` passes for both OPEN-007 resolutions | Must | **FYP — core-infra sprint** | M |
-| BL-PAY-004 (Tech) | `WebhookInbox` + `OutboxEvent` relay worker | Part 3, Part 6 M.4, ADR-006 | BL-PAY-002, BL-FOUND-005 | `TC-PAY-002/003/005`, `TC-OUTBOX-001` all pass | Must | **FYP — core-infra sprint** | M |
+| BL-PAY-001 (Story) | COD path through the Payment state machine | FR-PAY-001 | BL-ORD-001 | Works end-to-end | Must | **FYP — Sprint 5 (started), completed once `BL-ORD-001` lands in Sprint 6** | S |
+| BL-PAY-002 (Tech) | Sandbox online-payment stub (authorize/capture/fail) | FR-PAY-002, ⚠ OPEN-001 | BL-PAY-001 | Simulated paths all work | Must | **FYP — Sprint 5** | M |
+| BL-PAY-003 (Tech) | `PaymentAllocation`/`PaymentTransactionAllocation` core | FR-PAY-003, Part 3 | BL-PAY-002 | `TC-PAY-006` passes for both OPEN-007 resolutions | Must | **FYP — Sprint 5** | M |
+| BL-PAY-004 (Tech) | `WebhookInbox` + `OutboxEvent` relay worker | Part 3, Part 6 M.4, ADR-006 | BL-PAY-002, BL-FOUND-005 | `TC-PAY-002/003/005`, `TC-OUTBOX-001` all pass | Must | **FYP — Sprint 5** | M |
 | BL-PAY-005 (Story) | Partial/full refund flow | FR-PAY-004, BR-013 | BL-PAY-003, EPIC-RET | `TC-PAY-004` passes | Should | Full MVP (Returns is demoted; refund has nothing to attach to without it) | M |
 
 ### 14. EPIC-FUL — Delivery
 
-*Depends on the notification-dispatch mechanism built in the core-infra sprint.*
+*Depends on the notification-dispatch mechanism built in Sprint 6 of the core-infra split.*
 
 | ID | Title | FR/BR | Dependencies | Acceptance criteria | Priority | Phase | Estimate |
 |---|---|---|---|---|---|---|---|
 | BL-FUL-001 (Tech) | Delivery state machine (Part 2, E.11) | FR-FUL-002 | BL-ORD-001 | Assigned→OutForDelivery→Delivered/FailedAttempt all covered | Must | FYP | M |
 | BL-FUL-002 (Story) | Pickup flow with pickup code | FR-FUL-008 | BL-FUL-001 | Branch staff can redeem a code | Must | FYP | S |
-| BL-FUL-003 (Tech) | Wire BR-DELIVERY-CONFIRM's three notifications into checkout/delivery | FR-FUL-003, ⚠ OPEN-004 | **Core-infra notification dispatch (Sprint 5)** | Real SMS if OPEN-004 resolves in time, else logged/visible fallback per Part 1, D.4 | Must | FYP | S |
+| BL-FUL-003 (Tech) | Wire BR-DELIVERY-CONFIRM's three notifications into checkout/delivery | FR-FUL-003, ⚠ OPEN-004 | **Core-infra notification dispatch (Sprint 6)** | Real SMS if OPEN-004 resolves in time, else logged/visible fallback per Part 1, D.4 | Must | FYP | S |
 | BL-FUL-004 (Story) | Standalone delivery-zone-eligibility screen/logic beyond what `BL-CART-002` already checks | FR-FUL-004, BR-006 (minimal) | EPIC-VEND, BL-CART-002 | Matches BR-006's eligibility rule as a dedicated item — for the FYP, `BL-CART-002`'s zone check plus the branch data captured in vendor onboarding already covers this at no extra listed cost | Should | FYP (stretch) | S |
 | BL-FUL-004b (Tech) | PostGIS-based "nearby branch" distance logic | FR-SEARCH-006 (full) | BL-FUL-004 | Real distance sorting, not just eligibility | Should | Full MVP | S |
 
@@ -254,8 +254,8 @@ Each row now carries its own **Phase** tag: `FYP` = committed inside the 3-month
 
 | ID | Title | FR/BR | Dependencies | Acceptance criteria | Priority | Phase | Estimate |
 |---|---|---|---|---|---|---|---|
-| BL-NOTIF-001 (Tech) | Generic notification dispatch mechanism (SMS/email/in-app), retry-tracked, built on `OutboxEvent` | FR-NOTIF-001/004 | BL-FOUND-005 | Every notification instance independently tracked | Must | **FYP — core-infra sprint, before Checkout/Delivery** | M |
-| BL-NOTIF-002 (Tech) | Minimal AR+EN strings for the BR-DELIVERY-CONFIRM templates only (full bilingual template system deferred) | FR-NOTIF-003 (minimal) | BL-NOTIF-001 | The three BR-DELIVERY-CONFIRM messages exist in both locales | Must | FYP | S |
+| BL-NOTIF-001 (Tech) | Generic notification dispatch mechanism (SMS/email/in-app), retry-tracked, built on `OutboxEvent` | FR-NOTIF-001/004 | BL-FOUND-005 | Every notification instance independently tracked | Must | **FYP — Sprint 6, before Checkout/Delivery** | M |
+| BL-NOTIF-002 (Tech) | Minimal AR+EN strings for the BR-DELIVERY-CONFIRM templates only (full bilingual template system deferred) | FR-NOTIF-003 (minimal) | BL-NOTIF-001 | The three BR-DELIVERY-CONFIRM messages exist in both locales | Must | **FYP — Sprint 7** (scheduled apart from `BL-NOTIF-001` to balance sprint load) | S |
 | BL-NOTIF-002b (Tech) | Full bilingual template system for every notification type | FR-NOTIF-003 (full) | BL-NOTIF-002 | Every customer-facing template, not just BR-DELIVERY-CONFIRM's three | Should | FYP (stretch) | M |
 | BL-NOTIF-003 (Story) | Favorite products + alert-preference settings | FR-FAV-001/005 | EPIC-COMP | — | Should | Full MVP | M |
 | BL-NOTIF-004 (Story) | Price-drop and back-in-stock alerts | FR-FAV-003/004 | BL-NOTIF-003, EPIC-INV | Triggered off `PriceHistory`/stock-state changes | Could | Full MVP | M |
@@ -330,9 +330,16 @@ Each row now carries its own **Phase** tag: `FYP` = committed inside the 3-month
 
 ### Sprint-by-sprint goals — corrected for real dependencies
 
-The first draft scheduled Payments, Orders, and Notifications *after* Checkout, and Inventory *after* Cart while Cart depended on Inventory — both circular. The fix: **Sprint 5 builds the minimal core commerce infrastructure — Order state-machine core, Payment stub, notification dispatch, and Inventory revalidation (reservation, FR-INV-003, is explicitly deferred to `BL-INV-004`/Full MVP, not built here) — before Checkout exists at all**, so Checkout in Sprint 7 is mostly *wiring* against already-working infrastructure, and every subsequent sprint layers portals/UI on top of it, never in front of it.
+The first draft scheduled Payments, Orders, and Notifications *after* Checkout, and Inventory *after* Cart while Cart depended on Inventory — both circular. The fix: build the minimal core commerce infrastructure — Order state-machine core, Payment stub, notification dispatch, and Inventory revalidation (reservation, FR-INV-003, is explicitly deferred to `BL-INV-004`/Full MVP, not built here) — before Checkout exists at all, so Checkout is mostly *wiring* against already-working infrastructure by the time it starts.
 
-A second fix, from the same review round: the first draft left the vendor unable to actually confirm/dispatch an order until Sprint 9, one sprint *after* claiming the full customer path was usable (Sprint 8) — a customer could check out and get "delivered" without any vendor action ever having happened. **`BL-ORD-002` (the minimal vendor order-action screen) now moves into Sprint 8**, alongside Delivery, so a vendor genuinely can act on an order by the time the path is claimed usable.
+**Sequencing correction (second pass):** the first version of this fix crammed all four infrastructure pieces — Order core (1.0 pw) + Payment core (1.7 pw) + notification dispatch (0.5 pw) + inventory revalidation (0.4 pw) = **3.6 person-weeks** — into a single Sprint 5, against a hard ceiling of 2.0 person-weeks for 2 people in 1 week. That's not tight, it's impossible. The fix spreads the same infrastructure across **Sprints 5–6** (not one), and moves Cart and Search to where they actually fit rather than defaulting both to Sprint 6:
+- **Sprint 5** (≈2.1 pw): Payment core (the largest, most self-contained chunk) + Inventory revalidation.
+- **Sprint 6** (≈2.1 pw): Order-state-machine core + the notification-dispatch mechanism itself + Cart (Cart only depends on Inventory, which finished in Sprint 5 — it does not need Payment or Order, so it doesn't have to wait for all of Sprint 5+6's other pieces).
+- **Sprint 7** (≈1.9 pw): Checkout (wiring against everything above) + Search (Search has no dependency on any of this infrastructure at all — it only needs Matching, done in Sprint 3–4 — so it was never actually blocking or blocked by Checkout, and moves here purely to balance load) + the notification bilingual-string work.
+
+This keeps every sprint at or within rounding distance of the 2.0 pw ceiling instead of one sprint at 1.8× over it — Sprints 5–7 collectively run close to full capacity with little slack, which is an honest reflection of this being the plan's most infrastructure-dense stretch (tied to RISK-016); if either sprint slips, `BL-CAT`/`BL-SEARCH`/other Should-stretch items already excluded from these sprints are what absorb the delay, not the core mechanic.
+
+A second, independent fix from the same review round: the first draft left the vendor unable to actually confirm/dispatch an order until Sprint 9, one sprint *after* claiming the full customer path was usable (Sprint 8) — a customer could check out and get "delivered" without any vendor action ever having happened. **`BL-ORD-002` (the minimal vendor order-action screen) moves into Sprint 8**, alongside Delivery, so a vendor genuinely can act on an order by the time the path is claimed usable.
 
 | Sprint | Weeks | Primary epics | Sprint goal |
 |---|---|---|---|
@@ -340,16 +347,16 @@ A second fix, from the same review round: the first draft left the vendor unable
 | 2 | 2 | EPIC-AUTH, EPIC-VEND (start) | A customer can register/verify/log in; a vendor can apply |
 | 3 | 3 | EPIC-CAT, EPIC-MATCH (start) | Catalog admin functional; four-level schema + exact-match auto-linking work |
 | 4 | 4 | EPIC-MATCH (finish), EPIC-VEND (finish), EPIC-IMPORT | Match-review queue functional; vendor onboarding + manual/CSV offer creation complete — **Release gate 1** |
-| 5 | 5 | **Core commerce infrastructure** (BL-ORD-001, BL-PAY-001–004, BL-NOTIF-001, BL-INV-001/002) | Order state-machine core, payment stub with allocation/outbox, notification dispatch, and inventory *revalidation* (not reservation) all working **with no customer-facing UI yet** — the dependency-fix sprint |
-| 6 | 6 | EPIC-CART (built on Sprint 5's inventory revalidation), EPIC-SEARCH | Multi-vendor cart partitioning; basic Arabic/English search |
-| 7 | 7 | EPIC-CHECKOUT (wiring against Sprint 5's infrastructure) | End-to-end multi-vendor checkout, AwaitingPayment gate, BR-DELIVERY-CONFIRM trigger — **Release gate 2 (core commerce)** |
-| 8 | 8 | EPIC-FUL (using Sprint 5's notification dispatch), EPIC-COMP, **`BL-ORD-002` (vendor order-action screen, moved forward from Sprint 9)** | Vendor delivery/pickup functional; comparison UI; **a vendor can now confirm/dispatch an order** — the full customer-*and*-vendor path (search→compare→cart→checkout→**vendor confirms**→delivery/pickup) is genuinely usable end-to-end, not just the customer-facing half of it |
+| 5 | 5 | **Core infra, part 1** (BL-PAY-001–004, BL-INV-001/002) | Payment stub with allocation/outbox, and inventory *revalidation* (not reservation) working **with no customer-facing UI yet** — ≈2.1 pw, near capacity |
+| 6 | 6 | **Core infra, part 2** (BL-ORD-001, BL-NOTIF-001) + EPIC-CART | Order state-machine core, the notification-dispatch mechanism, and multi-vendor cart partitioning (built on Sprint 5's inventory revalidation) — ≈2.1 pw, near capacity |
+| 7 | 7 | EPIC-CHECKOUT (wiring against Sprints 5–6's infrastructure) + EPIC-SEARCH + `BL-NOTIF-002` (bilingual strings) | End-to-end multi-vendor checkout, AwaitingPayment gate, BR-DELIVERY-CONFIRM trigger, plus basic search (independent of the checkout work, scheduled here to balance load) — **Release gate 2 (core commerce)**, ≈1.9 pw |
+| 8 | 8 | EPIC-FUL (using Sprint 6's notification dispatch), EPIC-COMP, **`BL-ORD-002` (vendor order-action screen, moved forward from Sprint 9)** | Vendor delivery/pickup functional; comparison UI; **a vendor can now confirm/dispatch an order** — the full customer-*and*-vendor path (search→compare→cart→checkout→**vendor confirms**→delivery/pickup) is genuinely usable end-to-end, not just the customer-facing half of it |
 | 9 | 9 | EPIC-ORD (remaining UI: `BL-ORD-003` status list), EPIC-ADMIN (minimum) | Customer-facing order-status list; basic admin (vendor approve/suspend, match queue) — **customer beta starts now** (see Vendor pilot and customer beta, below), since Sprint 8 is where the path actually became usable, vendor action included |
 | 10 | 10 | EPIC-VPORTAL, EPIC-REV (minimal), EPIC-SEC (baseline tests) | Vendor portal reaches minimum viable depth; basic reviews; `TC-SEC-001`/`TC-PAY-005`/`TC-OUTBOX-001` pass |
 | 11 | 11 | EPIC-DEPLOY, beta-feedback bug-fixing | Production-equivalent environment live; issues surfaced by the running beta and pilot get fixed |
 | 12 | 12 | Stabilization, EPIC-OPS (rehearsal) | Hardening/bugfix buffer, demo rehearsal, FYP exit-criteria check — **Release gate 3** |
 
-Parallel workstreams: Engineer A and Engineer B work adjacent epics in the same sprint wherever the dependency table allows it (e.g., Sprint 2's auth and vendor-application work; Sprint 5's order/payment work on Engineer A and notification/inventory work on Engineer B, run in parallel since none of the four core-infra pieces block each other internally — only Checkout in Sprint 7 needs all of them finished). Sequential dependencies that cannot be parallelized regardless of team size: EPIC-MATCH before EPIC-IMPORT; the Sprint-5 core infrastructure before EPIC-CHECKOUT; EPIC-CHECKOUT before EPIC-FUL (nothing to deliver before something is ordered); EPIC-ORD/EPIC-PAY/EPIC-FUL before EPIC-RET (Should, Full MVP — nothing to return before something ships and is paid for).
+Parallel workstreams: Engineer A and Engineer B work adjacent epics in the same sprint wherever the dependency table allows it (e.g., Sprint 2's auth and vendor-application work; Sprint 5's Payment work on Engineer A and Inventory-revalidation work on Engineer B; Sprint 6's Order-core and notification-dispatch work on Engineer A while Engineer B builds Cart on top of Sprint 5's now-finished Inventory work — none of these pieces block each other internally within their sprint). Sequential dependencies that cannot be parallelized regardless of team size: EPIC-MATCH before EPIC-IMPORT; the Sprint 5–6 core infrastructure before EPIC-CHECKOUT (Sprint 7); EPIC-CHECKOUT before EPIC-FUL (nothing to deliver before something is ordered); EPIC-ORD/EPIC-PAY/EPIC-FUL before EPIC-RET (Should, Full MVP — nothing to return before something ships and is paid for).
 
 ### Release gates
 
