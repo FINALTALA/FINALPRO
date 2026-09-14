@@ -22,7 +22,7 @@ Builds on [Part 0](00-phase0-scope-and-clarifications.md), [Part 1](01-executive
 | BR-010 | — | A `CustomerOrder` and all of its `VendorSuborder`/`OrderItem` rows are created atomically from one checkout submission — a partial write (order created but a suborder missing) is not a valid end state and must be rolled back or reconciled (FR-PAY-009 covers the payment-side version of this). | — | None. |
 | BR-011 | — | A `VendorSuborder` is cancellable by the customer only while `PendingConfirmation` or `Confirmed`; by the vendor while `PendingConfirmation` through `Preparing`; never once `ReadyForPickup`/`OutForDelivery` or later (FR-ORD-006). | — | Platform admin override is permitted for exceptional cases, always audit-logged (BR-019). |
 | BR-012 | — | Return eligibility is a time window + reason-code combination configurable per category; the default window applies where a category defines none. | — | Any consumer-protection minimum window is pending legal confirmation (Q11) — do not assert a specific number as compliant without that confirmation. |
-| BR-013 | — | Refund amount = item price + proportional share of delivery fee if the delivery-fee-refund policy for that return reason says so, minus any restocking adjustment; computed in the currency the item was purchased in. | A "wrong item" return refunds the delivery fee; a "change of mind" return may not, per configured policy. | Mixed-currency parent orders: refund currency/amount and FX-movement handling are undecided — ⚠ **OPEN-007**. |
+| BR-013 | ⚠ **Proposed default — pending OPEN-007, not binding** | Refund amount = item price + proportional share of delivery fee if the delivery-fee-refund policy for that return reason says so, minus any restocking adjustment; **proposed** to be computed in the currency the item was purchased in, pending OPEN-007. | A "wrong item" return refunds the delivery fee; a "change of mind" return may not, per configured policy. | This entire rule is a proposed default, not a confirmed decision: mixed-currency parent orders' refund currency/amount and FX-movement handling are undecided — ⚠ **OPEN-007** — and this row must not be implemented as final until that's resolved. |
 | BR-014 | Formalizes **BR-SUBSCRIPTION** | Vendor storefront/offer visibility is gated on an Active subscription status, not on any per-order commission — a vendor Past Due enters a grace period before Suspended (FR-VEND-004/005). | — | Grace-period length and price tiers are undecided — ⚠ **OPEN-003**. The data model reserves an optional commission field for Phase 2 without requiring its use now (FR-PAY-005). |
 | BR-015 | — | Vendor subscription billing and customer-order payment are settled on independent cycles/records — a subscription lapse never retroactively affects an already-placed customer order. | — | — |
 | BR-016 | — | A customer may only review a specific `OfferVariant` after a `CustomerOrder`/`OrderItem` referencing it has reached Completed ("verified purchase") — no review without a matching completed item. | — | None (FR-REV-001). |
@@ -30,7 +30,7 @@ Builds on [Part 0](00-phase0-scope-and-clarifications.md), [Part 1](01-executive
 | BR-018 | — | Customer/vendor account deletion honors a defined retention period for order, payment, and audit records even after the account itself is deleted (soft-deleted, PII redacted, transactional records kept for the retention period). | — | Exact retention periods pending legal confirmation (Q11). |
 | BR-019 | — | Any administrative action that bypasses a normal permission boundary ("break-glass") must capture a reason at the time of the action and is always audit-logged; there is no silent admin override anywhere in the system. | — | None. |
 | BR-020 | Formalizes **BR-DELIVERY-CONFIRM** | Order confirmation requires a home-location pin and two phone numbers from the customer, and fires three independently tracked notifications: vendor-portal in-app alert, SMS to the store's registered number, SMS to the customer-entered number. | — | ⚠ **OPEN-004** (SMS/OTP provider) — see Part 1, D.4 for the FYP fallback behavior. |
-| BR-021 | Formalizes **BR-CURRENCY** | Each `VendorOffer`/`OfferVariant` prices in the vendor's own currency; comparison ranking uses an FX-normalized price in the platform base currency (ILS); checkout charges the customer in the vendor's native currency. | A ₪-priced and a JOD-priced offer for the same canonical variant both show an ILS-equivalent "comparison price" alongside their native price. | ⚠ **OPEN-002** (FX source/refresh) and ⚠ **OPEN-007** (mixed-currency parent-order payment settlement) both remain open. |
+| BR-021 | Formalizes **BR-CURRENCY**; ⚠ **the checkout-currency clause is a proposed default — pending OPEN-007, not binding** | Each `VendorOffer`/`OfferVariant` prices in the vendor's own currency, and comparison ranking uses an FX-normalized price in the platform base currency (ILS) — both of these parts are confirmed (Q7). **Proposed, not yet confirmed:** checkout charges the customer in the vendor's native currency (per suborder) rather than some blended/converted amount — this is only a working default until OPEN-007 decides how a mixed-currency parent order is actually charged and settled. | A ₪-priced and a JOD-priced offer for the same canonical variant both show an ILS-equivalent "comparison price" alongside their native price. | ⚠ **OPEN-002** (FX source/refresh, affects the confirmed comparison-normalization clause) and ⚠ **OPEN-007** (affects only the proposed checkout-currency clause) both remain open — implement the confirmed clauses now, treat the checkout-currency clause as provisional. |
 | BR-022 | Formalizes **BR-VENDOR-VERIFICATION** | A `StoreBranch` flagged as physical cannot leave "pending verification" without an attached geolocation pin and storefront photo, reviewed and approved by a vendor-verification reviewer. | — | ⚠ **OPEN-005** (reviewer assignment, rejection criteria). |
 | BR-023 | Formalizes **BR-AUTH** | Phone number + password is the primary credential; OTP verifies the phone at signup and gates password reset and phone-number change. | — | ⚠ **OPEN-004**. |
 | BR-024 | Formalizes **BR-GUEST** | Guests may search/browse/compare and build a cart unauthenticated; checkout requires an authenticated, phone-verified session; a guest cart merges into the account cart on login. | — | None. |
@@ -86,21 +86,25 @@ erDiagram
     VENDOR_SUBORDER ||--o{ ORDER_ITEM : contains
     VENDOR_SUBORDER ||--o{ FULFILLMENT : "ships as"
     FULFILLMENT ||--o{ ORDER_ITEM : covers
-    FULFILLMENT ||--|| DELIVERY : "tracked by"
+    FULFILLMENT ||--o| DELIVERY : "tracked by (delivery method only)"
     OFFER_VARIANT ||--o{ OFFER_BRANCH_INVENTORY : "stocked at"
     STORE_BRANCH ||--o{ OFFER_BRANCH_INVENTORY : holds
 ```
 
-**Payment, trust & support:**
+**Payment, trust & support** (note: `PaymentAllocation` is what lets one parent `Payment` settle per `VendorSuborder`, per-currency — see G.3 and ⚠ OPEN-007):
 ```mermaid
 erDiagram
     CUSTOMER_ORDER ||--o{ PAYMENT : "paid via"
     PAYMENT ||--o{ PAYMENT_TRANSACTION : records
+    PAYMENT ||--o{ PAYMENT_ALLOCATION : allocates
+    PAYMENT_ALLOCATION }o--|| VENDOR_SUBORDER : "settles"
     ORDER_ITEM ||--o{ RETURN_REQUEST : "may have"
     RETURN_REQUEST ||--o| REFUND : "results in"
-    REFUND }o--|| PAYMENT_TRANSACTION : "processed against"
+    REFUND }o--|| PAYMENT_ALLOCATION : "processed against"
     CUSTOMER ||--o{ REVIEW : writes
-    OFFER_VARIANT ||--o{ REVIEW : "reviewed via"
+    OFFER_VARIANT ||--o{ REVIEW : "product review (nullable target)"
+    VENDOR ||--o{ REVIEW : "vendor review (nullable target)"
+    DELIVERY ||--o{ REVIEW : "delivery review (nullable target)"
     CUSTOMER ||--o{ SUPPORT_TICKET : opens
     VENDOR ||--o{ SUPPORT_TICKET : opens
     RETURN_REQUEST ||--o| DISPUTE : "may escalate to"
@@ -135,13 +139,17 @@ Ownership: **Platform** = catalog/platform admin only · **Vendor** = the owning
 | `CanonicalProductVariant` | canonical_product_id, structural_attributes (JSON: storage/color/size when manufacturer-distinct), mpn/gtin | (canonical_product_id, mpn) unique where mpn present | canonical_product_id → CanonicalProduct | Platform | — |
 | `ProductMedia` | owner_type (CanonicalProduct/CanonicalProductVariant/OfferVariant), owner_id, url, alt_text_ar, alt_text_en, moderation_status | — | polymorphic owner FK | Platform (canonical-level), Vendor (offer-level) | Moderation decisions audit-logged |
 | `VendorOffer` | vendor_id, canonical_product_id (nullable — null means unmatched/unique), title_ar, title_en, status | — | vendor_id → Vendor, canonical_product_id → CanonicalProduct (nullable) | Vendor | — |
-| `OfferVariant` | vendor_offer_id, canonical_variant_id (nullable), seller_sku, condition, currency, base_price, sale_price | (vendor_id, seller_sku) unique — **not** globally unique (BR/FR-CAT-013) | vendor_offer_id → VendorOffer, canonical_variant_id → CanonicalProductVariant (nullable) | Vendor | Price changes feed `PriceHistory` |
+| `OfferVariant` | vendor_id (denormalized from parent, see note below), vendor_offer_id, canonical_variant_id (nullable), seller_sku, condition, currency, base_price, sale_price | (vendor_id, seller_sku) unique — **not** globally unique (BR/FR-CAT-013) | vendor_id → Vendor, vendor_offer_id → VendorOffer, canonical_variant_id → CanonicalProductVariant (nullable) | Vendor | Price changes feed `PriceHistory` |
 | `OfferBranchInventory` | offer_variant_id, branch_id, quantity, availability_state, safety_stock, last_updated_at, source_channel | (offer_variant_id, branch_id) unique | offer_variant_id → OfferVariant, branch_id → StoreBranch | Vendor | Staleness computed from last_updated_at + source_channel (BR-005) |
 | `PriceHistory` | offer_variant_id, price, currency, recorded_at | — | offer_variant_id → OfferVariant | System | Append-only, never updated in place |
 | `ProductMatch` | vendor_offer_id, candidate_canonical_variant_id, confidence_score, status (Queued/Approved/Rejected), reviewer_id, decided_at | — | vendor_offer_id → VendorOffer, candidate_canonical_variant_id → CanonicalProductVariant, reviewer_id → User (nullable) | Platform (matching reviewer) | Full decision audit (FR-MATCH-007) |
 | `ImportJob` | vendor_id, channel (manual/csv/api), file_ref, status, row_count, success_count, failure_count, submitted_by | — | vendor_id → Vendor, submitted_by → User | Vendor | Retained per FR-IMPORT-004 |
 | `ImportRow` | import_job_id, row_number, raw_data (JSON), status, error_reason, resulting_offer_variant_id (nullable) | — | import_job_id → ImportJob, resulting_offer_variant_id → OfferVariant (nullable) | System | Enables retryable partial imports (FR-IMPORT-012) |
 | `FxRate` | from_currency, to_currency, rate, effective_at, source | (from_currency, to_currency, effective_at) unique | — | System | ⚠ OPEN-002 (source undecided) |
+
+**Two invariants tightened after the Part-3 review, both enforced at write time (not just by convention):**
+- `OfferVariant.vendor_id` must equal its parent `VendorOffer.vendor_id` at all times — this closes the gap where `OfferVariant` was implicitly vendor-owned (per G.1) but carried no `vendor_id` column of its own, and it's what the `(vendor_id, seller_sku)` uniqueness constraint above actually keys on.
+- `VendorOffer.canonical_product_id` is a display/query convenience, not an independent source of truth: it must always equal `CanonicalProductVariant.canonical_product_id` for every `OfferVariant` under that `VendorOffer` whose `canonical_variant_id` is set. The **variant-level link is authoritative** — a `ProductMatch` approval (FR-MATCH-003) sets `OfferVariant.canonical_variant_id` first, and `VendorOffer.canonical_product_id` is derived/validated from it, never set independently. A `VendorOffer` cannot end up pointing at one canonical product while one of its variants is matched to a different one.
 
 #### Cart, order & fulfillment domain
 
@@ -152,8 +160,8 @@ Ownership: **Platform** = catalog/platform admin only · **Vendor** = the owning
 | `CustomerOrder` | customer_id, status (E.11 state machine), delivery_address_id, phone_1, phone_2, terms_accepted_at | — | customer_id → CustomerProfile, delivery_address_id → Address | Customer (view), System (state) | Full state-transition audit (FR-ORD-004) |
 | `VendorSuborder` | customer_order_id, vendor_id, status (E.11 state machine), split_shipment_enabled | — | customer_order_id → CustomerOrder, vendor_id → Vendor | Vendor (fulfillment actions), System (state) | Full state-transition audit |
 | `OrderItem` | vendor_suborder_id, offer_variant_id, fulfillment_id, quantity, unit_price, currency, status | — | vendor_suborder_id → VendorSuborder, offer_variant_id → OfferVariant, fulfillment_id → Fulfillment | System | Return eligibility keyed off `fulfillment_id`'s Delivery state (BR-025), not the suborder |
-| `Fulfillment` | vendor_suborder_id, method (delivery/pickup), pickup_code (nullable) | — | vendor_suborder_id → VendorSuborder | Vendor | One-per-suborder when `split_shipment_enabled = false`; many when true |
-| `Delivery` | fulfillment_id, status (E.11/E.13 state machine), driver_id (nullable), proof_of_delivery_ref, failed_attempt_count | — | fulfillment_id → Fulfillment, driver_id → User (nullable) | Vendor / Delivery driver | Full state-transition audit |
+| `Fulfillment` | vendor_suborder_id, method (delivery/pickup), pickup_code (nullable), picked_up_at (nullable, pickup only) | — | vendor_suborder_id → VendorSuborder | Vendor | One-per-suborder when `split_shipment_enabled = false`; many when true. A **pickup**-method `Fulfillment` has no `Delivery` row at all — its PickedUp moment is `picked_up_at` directly on `Fulfillment`; only **delivery**-method `Fulfillment`s create a `Delivery` row (ERD: `Fulfillment` → zero-or-one `Delivery`) |
+| `Delivery` | fulfillment_id, status (E.11/E.13 state machine), driver_id (nullable), proof_of_delivery_ref, failed_attempt_count | — | fulfillment_id → Fulfillment (unique, delivery-method fulfillments only) | Vendor / Delivery driver | Full state-transition audit |
 
 #### Payment, trust & support domain
 
@@ -161,11 +169,12 @@ Ownership: **Platform** = catalog/platform admin only · **Vendor** = the owning
 |---|---|---|---|---|---|
 | `Payment` | customer_order_id, method (COD/online), status (E.11 state machine), currency_scope (⚠ OPEN-007 — single vs. per-suborder currency handling undecided) | — | customer_order_id → CustomerOrder | System | Full state-transition audit; ⚠ OPEN-001, ⚠ OPEN-007 |
 | `PaymentTransaction` | payment_id, type (authorize/capture/refund), amount, currency, gateway_ref, occurred_at | — | payment_id → Payment | System | Immutable, append-only financial audit log (FR-PAY-007) |
+| `PaymentAllocation` | payment_id, vendor_suborder_id, allocated_amount, currency, status (Pending/Captured/Refunded/PartiallyRefunded) | (payment_id, vendor_suborder_id) unique | payment_id → Payment, vendor_suborder_id → VendorSuborder | System | Resolves FR-PAY-003: lets one parent `Payment` settle per vendor suborder in that suborder's own currency without a future schema change once ⚠ OPEN-007 (whether checkout charges once, blended, or once per vendor/currency) is decided — OPEN-007 changes how allocations are *created* at checkout time, not this table's shape |
 | `VendorSettlement` | vendor_id, period, commission_amount (nullable — Phase 2), payout_status | — | vendor_id → Vendor | Finance | Phase-2 optionality (FR-PAY-005/FR-VPORTAL-010) |
 | `Promotion` / `Coupon` | scope (platform/vendor), rule_definition, stacking_group | — | vendor_id → Vendor (nullable, platform-wide if null) | Marketing / Vendor | Phase 2 (BR-008) |
-| `Review` | customer_id, offer_variant_id, target_type (product/vendor/delivery), rating, body, edited_at (nullable), moderation_status | — | customer_id → CustomerProfile, offer_variant_id → OfferVariant | Customer (own), Platform (moderate) | Verified-purchase check against OrderItem (BR-016) |
+| `Review` | customer_id, target_type (Product/Vendor/Delivery), offer_variant_id (nullable), vendor_id (nullable), delivery_id (nullable), rating, body, edited_at (nullable), moderation_status | Exactly one of `offer_variant_id`/`vendor_id`/`delivery_id` must be non-null, matching `target_type` (enforced at write time — a validated polymorphic target, not a loose free-for-all) | customer_id → CustomerProfile, offer_variant_id → OfferVariant (nullable), vendor_id → Vendor (nullable), delivery_id → Delivery (nullable) | Customer (own), Platform (moderate) | Verified-purchase check against OrderItem differs by target: Product requires a Completed `OrderItem` for that `offer_variant_id`; Vendor requires ≥1 Completed suborder with that vendor; Delivery requires that specific `Delivery` to be in the Delivered state (BR-016) |
 | `ReturnRequest` | order_item_id, reason_code, evidence_urls, status (E.11 Return state machine) | — | order_item_id → OrderItem | Customer (submit), Vendor/Support (decide) | Full state-transition audit |
-| `Refund` | return_request_id, payment_transaction_id, amount, currency | — | return_request_id → ReturnRequest, payment_transaction_id → PaymentTransaction | System / Finance | ⚠ OPEN-007 |
+| `Refund` | return_request_id, payment_allocation_id, amount, currency | — | return_request_id → ReturnRequest, payment_allocation_id → PaymentAllocation | System / Finance | ⚠ OPEN-007 |
 | `Dispute` | return_request_id (nullable), support_ticket_id, escalated_by, resolution | — | return_request_id → ReturnRequest (nullable), support_ticket_id → SupportTicket | Support agent / Platform admin | — |
 | `Notification` | recipient_type, recipient_ref, channel, template_id, status, attempt_count, sent_at | — | polymorphic recipient FK | System | Tracks BR-020's three-notification rule; retry log (FR-NOTIF-004) |
 | `SupportTicket` | opened_by (customer/vendor), category, priority, linked_order_id (nullable), sla_deadline | — | linked_order_id → CustomerOrder (nullable) | Customer/Vendor (own), Support agent | SLA-breach audit (FR-SUP-003) |
