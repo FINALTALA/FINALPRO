@@ -267,6 +267,7 @@ stateDiagram-v2
     NeedsAttention --> PartiallyCancelled
     NeedsAttention --> Cancelled
     PartiallyCancelled --> Completed: remaining active suborders finish
+    PartiallyCancelled --> Cancelled: remaining active suborders also end up Rejected/Cancelled
     Completed --> [*]
     Cancelled --> [*]
 ```
@@ -280,6 +281,7 @@ stateDiagram-v2
 | InProgress / NeedsAttention | All suborders Rejected/Cancelled | Cancelled | System | "Order cancelled" to customer | `OrderCancelled` |
 | Created / InProgress | No suborder state change past its SLA clock | NeedsAttention | System (SLA monitor) | Internal ops alert; informational notice to customer | `OrderFlaggedNeedsAttention` |
 | PartiallyCancelled | Remaining active suborder(s) reach Completed | Completed | System | "Order fully resolved" to customer | `OrderCompleted` (partial-cancellation flag retained) |
+| PartiallyCancelled | Remaining active suborder(s) also end up Rejected/Cancelled (e.g., customer cancels the rest after one vendor fell through) | Cancelled | System | "Order cancelled" to customer | `OrderCancelled` (partial-cancellation flag retained) |
 
 **Invalid transitions:** Completed → any other state (terminal — a post-completion problem is a Return, at suborder/item level, not a parent-order state change); Cancelled → any other state (terminal); Created → Completed directly (must pass through InProgress; a zero-suborder order cannot exist, FR-ORD-001).
 
@@ -293,10 +295,13 @@ stateDiagram-v2
     PendingConfirmation --> Cancelled
     Confirmed --> Preparing
     Confirmed --> Cancelled
-    Preparing --> ReadyOrOutForDelivery
+    Preparing --> ReadyForPickup: fulfillment = pickup (FR-FUL-001)
+    Preparing --> OutForDelivery: fulfillment = vendor delivery (FR-FUL-001)
     Preparing --> Cancelled
-    ReadyOrOutForDelivery --> DeliveredOrPickedUp
-    DeliveredOrPickedUp --> Completed
+    ReadyForPickup --> PickedUp
+    OutForDelivery --> Delivered
+    PickedUp --> Completed
+    Delivered --> Completed
     Completed --> ReturnRequested
     ReturnRequested --> ReturnedRefunded
     RejectedByVendor --> [*]
@@ -312,18 +317,39 @@ stateDiagram-v2
 | PendingConfirmation | Customer cancels before vendor acts | Cancelled | Customer | Vendor notified | `SuborderCancelledByCustomer` |
 | Confirmed | Vendor begins fulfillment | Preparing | Vendor staff | Optional "preparing" notice to customer | `SuborderPreparing` |
 | Confirmed | Cancellation within the cancellable window (FR-ORD-006) | Cancelled | Customer or Vendor | Both parties notified | `SuborderCancelled` |
-| Preparing | Vendor dispatches / marks ready | ReadyOrOutForDelivery | Vendor staff / driver | "Ready for pickup" or "out for delivery" to customer | `SuborderDispatched` |
+| Preparing | Vendor marks ready, fulfillment method = pickup (FR-FUL-001) | ReadyForPickup | Vendor staff | "Ready for pickup" to customer, with pickup code (FR-FUL-008) | `SuborderReadyForPickup` |
+| Preparing | Vendor dispatches, fulfillment method = vendor delivery | OutForDelivery | Vendor staff / driver | "Out for delivery" to customer | `SuborderDispatched` |
 | Preparing | Last-chance cancellation before dispatch (Part 3, BR rules) | Cancelled | Vendor, or platform admin override | Customer notified | `SuborderCancelled` |
-| ReadyOrOutForDelivery | Delivery confirmed / pickup code redeemed (FR-FUL-008) | DeliveredOrPickedUp | Delivery driver / branch staff | "Delivered / picked up" to customer | `SuborderDelivered` |
-| DeliveredOrPickedUp | Return window elapses with no request, or customer confirms receipt | Completed | System (timer) or Customer | — | `SuborderCompleted` |
+| ReadyForPickup | Pickup code redeemed at the branch (FR-FUL-008) | PickedUp | Branch staff | "Picked up" confirmation to customer | `SuborderPickedUp` |
+| OutForDelivery | Proof of delivery captured (mirrors the Delivery machine's Delivered transition) | Delivered | Delivery driver | "Delivered" to customer; closes the BR-DELIVERY-CONFIRM loop | `SuborderDelivered` |
+| PickedUp / Delivered | Return window elapses with no request, or customer confirms receipt | Completed | System (timer) or Customer | — | `SuborderCompleted` |
 | Completed | Customer submits a return within the eligible window (FR-RET-002) | ReturnRequested | Customer | Vendor notified | `ReturnRequested` (cross-links to the Return machine below) |
 | ReturnRequested | Return approved and refund processed (Return machine reaches Refunded) | ReturnedRefunded | System, following vendor/support approval | "Refund processed" to customer | `SuborderReturnedRefunded` |
 
-**Invalid transitions:** RejectedByVendor / Cancelled → any other state (terminal, a new order must be placed); Completed → Preparing/Confirmed/etc. (no reverting a completed suborder); PendingConfirmation → DeliveredOrPickedUp (cannot skip confirmation, preparation, and dispatch); ReadyOrOutForDelivery → Cancelled directly (once dispatched, a failed handoff goes through Delivery's FailedAttempt/reschedule flow, FR-FUL-006 — not a suborder cancellation).
+**Invalid transitions:** RejectedByVendor / Cancelled → any other state (terminal, a new order must be placed); Completed → Preparing/Confirmed/etc. (no reverting a completed suborder); PendingConfirmation → PickedUp/Delivered (cannot skip confirmation, preparation, and dispatch); ReadyForPickup → Delivered or OutForDelivery → PickedUp (a suborder's fulfillment method is fixed at checkout, FR-CART-005 — it cannot switch from pickup to delivery or vice versa mid-flow); ReadyForPickup/OutForDelivery → Cancelled directly (once dispatched, a failed handoff goes through the Delivery machine's FailedAttempt/reschedule path, FR-FUL-006 — not a suborder cancellation).
 
-### `OrderItem` state
+### `OrderItem` state machine
 
-An item mirrors its parent suborder's state through DeliveredOrPickedUp/Completed. From Completed, an item may transition **independently of siblings**: `Completed → ReturnRequested → Returned/Refunded` (item-level), without forcing sibling items or the suborder itself out of Completed — this is what makes partial returns possible. Actor/notification/audit for the item-level Return leg are identical to the Return state machine below, scoped to that item. **Invalid:** an item cannot enter ReturnRequested if its parent suborder is RejectedByVendor or Cancelled (nothing was ever delivered to return — a cancellation-refund path applies instead, not the return path).
+An `OrderItem` mirrors its parent suborder's state (PendingConfirmation → ... → PickedUp/Delivered → Completed) by inheritance — it has no independent state of its own until the suborder reaches Completed. From that point on, each item can move **independently of its siblings**, which is what makes partial returns possible: one item in a suborder can be Returned while the others stay Completed.
+
+```mermaid
+stateDiagram-v2
+    [*] --> InheritingSuborderState: mirrors parent VendorSuborder
+    InheritingSuborderState --> Completed: parent suborder reaches Completed
+    Completed --> ReturnRequested
+    ReturnRequested --> Returned
+    Completed --> [*]
+    Returned --> [*]
+```
+
+| From | Trigger | To | Actor | Notification | Audit event |
+|---|---|---|---|---|---|
+| `[*]` | Suborder created (FR-ORD-001) | InheritingSuborderState | System | — (mirrors suborder notifications) | `OrderItemCreated` |
+| InheritingSuborderState | Parent suborder reaches Completed | Completed | System (aggregation) | — | `OrderItemCompleted` |
+| Completed | Customer submits a return for this specific item within the eligible window (FR-RET-002) | ReturnRequested | Customer | Vendor notified, scoped to this item | `OrderItemReturnRequested` (cross-links to the Return machine) |
+| ReturnRequested | Return approved and refund processed for this item (Return machine reaches Refunded) | Returned | System, following vendor/support approval | "Item refunded" to customer | `OrderItemReturned` |
+
+**Invalid transitions:** an item cannot enter ReturnRequested while still InheritingSuborderState (it must wait for the suborder, and therefore the item, to reach Completed — no early/partial-fulfillment returns); an item cannot enter ReturnRequested if its parent suborder ended in RejectedByVendor or Cancelled (nothing was ever delivered to return — the suborder-level cancellation path applies instead, not the return path); Returned → any other state (terminal for that item).
 
 ### Payment state machine
 
@@ -338,10 +364,15 @@ stateDiagram-v2
     Captured --> Settled
     Captured --> Refunded
     Captured --> PartiallyRefunded
+    Settled --> Refunded
+    Settled --> PartiallyRefunded
+    PartiallyRefunded --> Refunded: remaining captured amount later refunded too
     PendingCOD --> CollectedOnDelivery
     CollectedOnDelivery --> Settled
     Failed --> [*]
     Settled --> [*]
+    Refunded --> [*]
+    PartiallyRefunded --> [*]
 ```
 
 | From | Trigger | To | Actor | Notification | Audit event |
@@ -352,13 +383,16 @@ stateDiagram-v2
 | Authorized | Order/suborders confirmed | Captured | System | — | `PaymentCaptured` ⚠ OPEN-001, ⚠ OPEN-007 (per-suborder/currency capture undecided) |
 | Authorized | Capture window expires, or all suborders rejected before capture | Failed | System | Customer informed; authorization released | `PaymentReleased` |
 | Captured | Settlement cycle runs | Settled | System / Finance | — | `PaymentSettled` |
-| Captured | Full return/refund approved | Refunded | Finance/Support (per FR-RET) | "Refund issued" to customer | `PaymentRefunded` ⚠ OPEN-007 (refund currency/FX-movement policy undecided) |
-| Captured | Partial-item return/refund approved | PartiallyRefunded | Finance/Support | "Partial refund issued" to customer | `PaymentPartiallyRefunded` ⚠ OPEN-007 |
+| Captured | Full return/refund approved before settlement | Refunded | Finance/Support (per FR-RET) | "Refund issued" to customer | `PaymentRefunded` ⚠ OPEN-007 (refund currency/FX-movement policy undecided) |
+| Captured | Partial-item return/refund approved before settlement | PartiallyRefunded | Finance/Support | "Partial refund issued" to customer | `PaymentPartiallyRefunded` ⚠ OPEN-007 |
+| Settled | Full return/refund approved after settlement (the common case — most returns happen after the order has already settled) | Refunded | Finance/Support (per FR-RET) | "Refund issued" to customer | `PaymentRefunded` ⚠ OPEN-007 |
+| Settled | Partial-item return/refund approved after settlement | PartiallyRefunded | Finance/Support | "Partial refund issued" to customer | `PaymentPartiallyRefunded` ⚠ OPEN-007 |
+| PartiallyRefunded | A further item on the same order is later refunded, exhausting the remaining captured amount | Refunded | Finance/Support | "Remaining balance refunded" to customer | `PaymentRefunded` ⚠ OPEN-007 |
 | `[*]` | Checkout submitted with COD | PendingCOD | Customer | — | `PaymentInitiated` (COD) |
 | PendingCOD | Driver/branch collects cash on handoff | CollectedOnDelivery | Delivery driver / branch staff | Receipt to customer | `CODCollected` |
 | CollectedOnDelivery | Settlement cycle runs | Settled | Finance | — | `PaymentSettled` |
 
-**Invalid transitions:** Failed → Captured (a declined/expired authorization cannot be captured — a new payment attempt must be initiated); Settled → Authorized/PendingAuthorization (terminal in the forward direction; only Refunded/PartiallyRefunded are reachable after Settled).
+`Refunded` and `PartiallyRefunded` are both valid terminal states: `Refunded` means no further money is owed either way; `PartiallyRefunded` is a legitimate end state on its own (the customer kept the rest of the order and the return window for the remaining items has closed) — it only moves on to `Refunded` if a *further* item is refunded later, per the `PartiallyRefunded → Refunded` row above. **Invalid transitions:** Failed → Captured (a declined/expired authorization cannot be captured — a new payment attempt must be initiated); Settled/Refunded/PartiallyRefunded → Authorized/PendingAuthorization (none of these ever revert to a pre-capture state).
 
 ### Delivery state machine
 
