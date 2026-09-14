@@ -27,7 +27,7 @@ Covers Section **E** of the structure required by [`docs/master-prompt.md`](../m
 | FR-AUTH-003 | The phone number must be verified via one-time password (OTP) at signup before the account can place an order. | ⚠ OPEN-004 |
 | FR-AUTH-004 | Checkout must require an authenticated, phone-verified session — no guest checkout. | BR-GUEST (Q13) |
 | FR-AUTH-005 | Password reset must be performed via phone-number OTP. | ⚠ OPEN-004 |
-| FR-AUTH-006 | OTP must gate sensitive account actions: password reset, phone-number change. | BR-AUTH |
+| FR-AUTH-006 | OTP must gate sensitive account actions: password reset, phone-number change. | BR-AUTH, ⚠ OPEN-004 |
 | FR-AUTH-007 | A guest's in-progress cart must persist by session and merge into the account cart on login at checkout. | BR-GUEST |
 | FR-AUTH-008 | Customer profile must support multiple saved addresses, each with a map pin, free-text landmark/delivery-note field, and phone number(s). | Supports BR-DELIVERY-CONFIRM's two-phone-number requirement |
 | FR-AUTH-009 | The system must support a language preference (Arabic default, English available) persisted per account/session. | — |
@@ -84,6 +84,11 @@ stateDiagram-v2
 | FR-CAT-007 | Canonical products must support per-locale SEO metadata (title/description). | — |
 | FR-CAT-008 | Canonical-product publication must follow the lifecycle Draft → Pending Review → Published → Archived, independent of any individual vendor offer's status. | — |
 | FR-CAT-009 | Creating a new brand/category/attribute that closely matches an existing one must trigger a duplicate warning routed to catalog admin for confirmation. | Fuzzy-name check |
+| FR-CAT-010 | The canonical product must support a warranty field (coverage period, type) at the level appropriate to the category (manufacturer warranty on the `CanonicalProductVariant`; vendor-added warranty, if any, on the `OfferVariant` per FR-MATCH-008). | — |
+| FR-CAT-011 | The system must support free-form, admin-curated tags on canonical products, distinct from the structured category/attribute taxonomy, to aid search and merchandising. | — |
+| FR-CAT-012 | Categories must support a product-type classification (physical good, bundle, service/non-physical item where supported) that governs which attribute template and fulfillment rules apply. | — |
+| FR-CAT-013 | A vendor's seller SKU must be unique per vendor (not globally); the system must reject a duplicate SKU within the same vendor's catalog and must not assume SKUs are comparable across vendors. | — |
+| FR-CAT-014 | Canonical-product and offer content (title, description, specifications) must be independently editable per locale (Arabic, English) — the system must not require or assume a mechanical translation between them. | — |
 
 ---
 
@@ -98,9 +103,20 @@ stateDiagram-v2
 | FR-MATCH-005 | A customer must be able to report an incorrect live match; reported matches are re-queued. | — |
 | FR-MATCH-006 | Catalog/matching admin must be able to merge duplicate canonical products and split an incorrectly-combined one, preserving historical price and order data under the corrected structure. | — |
 | FR-MATCH-007 | Every match/merge/split decision must be fully audit-logged (who, when, before/after state, confidence score at decision time). | — |
-| FR-MATCH-008 | Color/size/etc. must be modeled at the **variant or offer level, never on the canonical product itself**: the canonical product is the model family, variants are its structural options (e.g., storage size), and the offer is what a specific vendor actually stocks (e.g., which colors that vendor currently carries). | Explicit clarification required by master-prompt Section E.4 |
-| FR-MATCH-009 | Unmatched/unique listings (handmade, local, bundles) must remain fully searchable, filterable, and purchasable, clearly labeled as not compared like-for-like. | Resolves Part-1 audit finding |
+| FR-MATCH-008 | Every purchasable dimension (color, size, storage, capacity, etc.) must be assigned to exactly one of the four levels defined below — no dimension may be stored at more than one level, and no implementation may substitute one level for another. | Explicit clarification required by master-prompt Section E.4; resolves Part-2 audit finding |
+| FR-MATCH-009 | Unmatched/unique listings (handmade, local, bundles) must remain fully searchable, filterable, and purchasable, clearly labeled as not compared like-for-like, and must never be presented as, or promoted into, a `CanonicalProductVariant`. | Resolves Part-1 audit finding |
 | FR-MATCH-010 | Conflicting vendor-submitted specifications for the same canonical product must not silently overwrite each other; a source-of-truth policy per field is required. | Finalized alongside Part 3 (data model) and Part 6 (Section N) |
+
+**FR-MATCH-008 — the four-level model (binding for the data model in Part 3):**
+
+| Level | Holds | Does NOT hold |
+|---|---|---|
+| `CanonicalProduct` (model/family) | Shared model identity: brand, model name, category, family-level specs common to every variant | Any purchasable color/size/storage value — a canonical product is never itself buyable |
+| `CanonicalProductVariant` | The globally identifiable manufacturer variant for any dimension that defines a distinct SKU at the manufacturer level (e.g., storage, color, or size *when the manufacturer sells that combination as a distinct model/MPN*) — this is what canonical-to-canonical comparison (FR-COMP-002) operates on | Vendor-specific data: price, stock, branch, fulfillment, vendor media |
+| `OfferVariant` | A specific vendor's sellable record for one `CanonicalProductVariant`: vendor SKU, price/currency, branch inventory, availability, fulfillment options, vendor-specific images/description | Any attribute that redefines what the product structurally *is* — that always belongs on the `CanonicalProductVariant` it references |
+| Unmatched/unique offer | Its own vendor-authored attributes (may include a free-text color/size for display) since it has no canonical link | Must never be linked to, or displayed as, a `CanonicalProductVariant` (FR-MATCH-009) |
+
+Rule of thumb: if two different vendors selling the *same* manufacturer variant should show identical color/storage/size in a side-by-side comparison, that value lives on `CanonicalProductVariant`. If it's specific to what one vendor happens to have on their shelf right now (their photo, their SKU code, their current stock), it lives on `OfferVariant`. This is the single rule every developer must apply — no per-category exceptions without a recorded ADR (Part 7).
 
 ---
 
@@ -117,6 +133,11 @@ stateDiagram-v2
 | FR-IMPORT-007 | Scheduled feeds/webhooks and POS/ERP integrations are out of scope for the FYP Delivery Increment and the initial MVP push; supported opportunistically post-launch. | Q6 default |
 | FR-IMPORT-008 | Web scraping / uncontrolled ingestion must not be built. | Q15 |
 | FR-IMPORT-009 | Data source and freshness (last-updated timestamp, channel) must be recorded per offer and surfaced in comparison. | Feeds FR-COMP-006 |
+| FR-IMPORT-010 | Bulk import must support image import (URLs or a bundled archive matched to SKU by the template), not text fields alone. | — |
+| FR-IMPORT-011 | The import template must support configurable field mapping so a vendor's own column headers/order can be mapped to platform fields rather than forcing an exact template match. | — |
+| FR-IMPORT-012 | A failed or partially failed import must be retryable — re-running the same file must re-attempt only the previously failed rows, not recreate already-committed ones (idempotent by row identity). | — |
+| FR-IMPORT-013 | The system must support a reconciliation report per vendor comparing the platform's current offer set against the vendor's latest submitted file/feed, flagging offers present in one but not the other. | — |
+| FR-IMPORT-014 | Where more than one ingestion channel supplies data for the same offer (e.g., manual edit after a CSV import), a source-priority rule must determine which value wins per field, and the losing value must not be silently discarded (retained in price/change history per FR-PRICE-002/FR-IMPORT-009). | Mirrors FR-MATCH-010's source-of-truth requirement, applied at the offer/ingestion level |
 
 ---
 
@@ -135,6 +156,10 @@ stateDiagram-v2
 | FR-SEARCH-009 | Sponsored/featured results (Phase 2) must be clearly labeled as advertisements and must never silently replace organic relevance ranking. | Phase 2 |
 | FR-SEARCH-010 | Unmatched/unique listings must appear in results alongside matched canonical products, visually distinguished. | FR-MATCH-009 |
 | FR-SEARCH-011 | Voice search is out of scope for MVP/FYP; future capability only. | — |
+| FR-SEARCH-012 | Search must apply an admin-curated synonym list (e.g., regional brand nicknames, common alternate spellings) so a query matches a canonical product even when the exact stored term differs. | — |
+| FR-SEARCH-013 | Search must recognize brand and model tokens within a free-text query (e.g., "iphone 16 pro") and weight matches on the recognized brand/model fields accordingly, rather than treating the query as unstructured text alone. | — |
+| FR-SEARCH-014 | Ranking must be based on a documented, explainable set of factors (text relevance, distance, rating, freshness, stock availability) — the exact weighting is an operational tuning decision, not hardcoded logic hidden from the catalog team. | Complements FR-SEARCH-009's sponsored-labeling rule |
+| FR-SEARCH-015 | Trending products and personalized recommendations are explicitly **Phase 2** scope; MVP/FYP search surfaces only relevance-ranked results, recently viewed items, and saved searches (FR-SEARCH-007) — no recommendation engine is built for launch. | Explicit decision per audit finding — resolves the ambiguity the master prompt leaves open |
 
 ---
 
@@ -202,6 +227,11 @@ stateDiagram-v2
 | FR-CART-009 | Final confirmation must support both cash on delivery and online payment. | ⚠ OPEN-001, ⚠ OPEN-007 — data model must not require restructuring once resolved |
 | FR-CART-010 | Abandoned carts must not have side effects; cart-recovery notifications are optional (Phase 2). | — |
 | FR-CART-011 | Checkout submission must materialize the cart into one `CustomerOrder` containing one `VendorSuborder` per vendor partition. | BR/Q2 |
+| FR-CART-012 | Checkout must require explicit acceptance of platform terms of service (and, per vendor, any vendor-specific terms) before submission is allowed. | — |
+| FR-CART-013 | Where a vendor offers scheduled delivery/pickup (FR-FUL-013), the customer must select a window per vendor partition during checkout, not just at the order-confirmation step after payment. | — |
+| FR-CART-014 | The customer must be able to attach a free-text note per vendor partition (e.g., delivery instructions); the vendor must be able to attach an internal note to the resulting suborder, visible only to vendor staff. | — |
+| FR-CART-015 | Where two vendor partitions in the same cart have mutually incompatible fulfillment requirements for a shared constraint (e.g., a scheduled-delivery slot only one of them can meet), checkout must surface the conflict per partition rather than silently dropping or merging the conflicting choice. | See Part 5 edge cases for the full failure catalogue |
+| FR-CART-016 | On checkout failure (payment decline, revalidation failure, network/timeout error), the cart must be preserved exactly as submitted so the customer can correct the issue and resubmit, rather than having to rebuild the cart from scratch. | Complements FR-CART-008's idempotency guarantee |
 
 ---
 
@@ -217,44 +247,90 @@ stateDiagram-v2
 | FR-ORD-006 | Cancellation eligibility must be governed by the suborder's current state (cancellable while Pending/Confirmed, not once Out for Delivery). | Full rule set in Part 3, Section F |
 | FR-ORD-007 | Vendor-facing suborder actions must be consistent with role permissions (order-processing employee updates status; cancellation after dispatch requires vendor owner/admin or platform admin). | Part 1, Section C |
 
-**`CustomerOrder` state machine:**
+The six state machines below are **complete** per the master-prompt requirement: every transition names its trigger, permitted transitions are diagrammed, invalid transitions are called out explicitly, and every table row states the responsible actor, the notification fired, and the audit event written. E.13 (Fulfillment) and E.14 (Returns) reference the Delivery and Return machines defined here rather than duplicating them.
+
+### `CustomerOrder` state machine
+
+`CustomerOrder` status is a computed aggregate of its `VendorSuborder` states — it is not set directly by any actor.
+
 ```mermaid
 stateDiagram-v2
     [*] --> Created
-    Created --> Completed: all suborders Delivered/Picked-Up
-    Created --> NeedsAttention: any suborder unresolved past SLA
-    Created --> Cancelled: every suborder still cancellable
+    Created --> InProgress: any suborder leaves PendingConfirmation
+    Created --> NeedsAttention: SLA breach with no suborder movement
+    InProgress --> Completed: all suborders Completed/ReturnedRefunded
+    InProgress --> PartiallyCancelled: some suborders Rejected/Cancelled, others still active or completed
+    InProgress --> Cancelled: all suborders Rejected/Cancelled
+    InProgress --> NeedsAttention: any suborder unresolved past its SLA
+    NeedsAttention --> InProgress: underlying suborder resumes movement
     NeedsAttention --> Completed
+    NeedsAttention --> PartiallyCancelled
+    NeedsAttention --> Cancelled
+    PartiallyCancelled --> Completed: remaining active suborders finish
     Completed --> [*]
     Cancelled --> [*]
 ```
 
-**`VendorSuborder` state machine:**
+| From | Trigger | To | Actor | Notification | Audit event |
+|---|---|---|---|---|---|
+| `[*]` | Checkout submitted (FR-CART-011) | Created | Customer (via system) | Order confirmation to customer; BR-DELIVERY-CONFIRM triple notification fires per suborder | `OrderCreated` |
+| Created | Any suborder leaves PendingConfirmation | InProgress | System (aggregation) | — (internal) | `OrderProgressed` |
+| InProgress / NeedsAttention | All suborders reach Completed/ReturnedRefunded | Completed | System | "Order completed" to customer | `OrderCompleted` |
+| InProgress / NeedsAttention | ≥1 suborder Rejected/Cancelled, ≥1 other still active/completed | PartiallyCancelled | System | Customer notified which vendor(s) fell through (FR-ORD-003) | `OrderPartiallyCancelled` |
+| InProgress / NeedsAttention | All suborders Rejected/Cancelled | Cancelled | System | "Order cancelled" to customer | `OrderCancelled` |
+| Created / InProgress | No suborder state change past its SLA clock | NeedsAttention | System (SLA monitor) | Internal ops alert; informational notice to customer | `OrderFlaggedNeedsAttention` |
+| PartiallyCancelled | Remaining active suborder(s) reach Completed | Completed | System | "Order fully resolved" to customer | `OrderCompleted` (partial-cancellation flag retained) |
+
+**Invalid transitions:** Completed → any other state (terminal — a post-completion problem is a Return, at suborder/item level, not a parent-order state change); Cancelled → any other state (terminal); Created → Completed directly (must pass through InProgress; a zero-suborder order cannot exist, FR-ORD-001).
+
+### `VendorSuborder` state machine
+
 ```mermaid
 stateDiagram-v2
     [*] --> PendingConfirmation
     PendingConfirmation --> Confirmed
     PendingConfirmation --> RejectedByVendor
+    PendingConfirmation --> Cancelled
     Confirmed --> Preparing
-    Preparing --> ReadyForPickupOrOutForDelivery
-    ReadyForPickupOrOutForDelivery --> DeliveredOrPickedUp
+    Confirmed --> Cancelled
+    Preparing --> ReadyOrOutForDelivery
+    Preparing --> Cancelled
+    ReadyOrOutForDelivery --> DeliveredOrPickedUp
     DeliveredOrPickedUp --> Completed
     Completed --> ReturnRequested
     ReturnRequested --> ReturnedRefunded
-    PendingConfirmation --> Cancelled
-    Confirmed --> Cancelled
-    Preparing --> Cancelled
     RejectedByVendor --> [*]
     Cancelled --> [*]
     ReturnedRefunded --> [*]
 ```
 
-**`OrderItem` state:** mirrors its parent suborder for most purposes, but supports independent state for **partial** returns/refunds — one item can be Returned while sibling items in the same suborder remain Completed.
+| From | Trigger | To | Actor | Notification | Audit event |
+|---|---|---|---|---|---|
+| `[*]` | Parent order created | PendingConfirmation | System | BR-DELIVERY-CONFIRM triple notification (vendor in-app alert + 2 SMS legs) | `SuborderCreated` |
+| PendingConfirmation | Vendor accepts | Confirmed | Vendor order-processing employee | "Vendor confirmed your order" to customer | `SuborderConfirmed` |
+| PendingConfirmation | Vendor rejects (e.g., stock unavailable) | RejectedByVendor | Vendor order-processing employee/owner | Customer notified with reason; sibling suborders unaffected (FR-ORD-003) | `SuborderRejected` |
+| PendingConfirmation | Customer cancels before vendor acts | Cancelled | Customer | Vendor notified | `SuborderCancelledByCustomer` |
+| Confirmed | Vendor begins fulfillment | Preparing | Vendor staff | Optional "preparing" notice to customer | `SuborderPreparing` |
+| Confirmed | Cancellation within the cancellable window (FR-ORD-006) | Cancelled | Customer or Vendor | Both parties notified | `SuborderCancelled` |
+| Preparing | Vendor dispatches / marks ready | ReadyOrOutForDelivery | Vendor staff / driver | "Ready for pickup" or "out for delivery" to customer | `SuborderDispatched` |
+| Preparing | Last-chance cancellation before dispatch (Part 3, BR rules) | Cancelled | Vendor, or platform admin override | Customer notified | `SuborderCancelled` |
+| ReadyOrOutForDelivery | Delivery confirmed / pickup code redeemed (FR-FUL-008) | DeliveredOrPickedUp | Delivery driver / branch staff | "Delivered / picked up" to customer | `SuborderDelivered` |
+| DeliveredOrPickedUp | Return window elapses with no request, or customer confirms receipt | Completed | System (timer) or Customer | — | `SuborderCompleted` |
+| Completed | Customer submits a return within the eligible window (FR-RET-002) | ReturnRequested | Customer | Vendor notified | `ReturnRequested` (cross-links to the Return machine below) |
+| ReturnRequested | Return approved and refund processed (Return machine reaches Refunded) | ReturnedRefunded | System, following vendor/support approval | "Refund processed" to customer | `SuborderReturnedRefunded` |
 
-**Payment state machine:**
+**Invalid transitions:** RejectedByVendor / Cancelled → any other state (terminal, a new order must be placed); Completed → Preparing/Confirmed/etc. (no reverting a completed suborder); PendingConfirmation → DeliveredOrPickedUp (cannot skip confirmation, preparation, and dispatch); ReadyOrOutForDelivery → Cancelled directly (once dispatched, a failed handoff goes through Delivery's FailedAttempt/reschedule flow, FR-FUL-006 — not a suborder cancellation).
+
+### `OrderItem` state
+
+An item mirrors its parent suborder's state through DeliveredOrPickedUp/Completed. From Completed, an item may transition **independently of siblings**: `Completed → ReturnRequested → Returned/Refunded` (item-level), without forcing sibling items or the suborder itself out of Completed — this is what makes partial returns possible. Actor/notification/audit for the item-level Return leg are identical to the Return state machine below, scoped to that item. **Invalid:** an item cannot enter ReturnRequested if its parent suborder is RejectedByVendor or Cancelled (nothing was ever delivered to return — a cancellation-refund path applies instead, not the return path).
+
+### Payment state machine
+
 ```mermaid
 stateDiagram-v2
     [*] --> PendingAuthorization
+    [*] --> PendingCOD
     PendingAuthorization --> Authorized
     PendingAuthorization --> Failed
     Authorized --> Captured
@@ -262,14 +338,86 @@ stateDiagram-v2
     Captured --> Settled
     Captured --> Refunded
     Captured --> PartiallyRefunded
+    PendingCOD --> CollectedOnDelivery
+    CollectedOnDelivery --> Settled
     Failed --> [*]
     Settled --> [*]
 ```
-COD uses a simplified path: `Pending → Collected on Delivery → Settled`. ⚠ OPEN-001, ⚠ OPEN-007 apply to the online-payment branch.
 
-**Delivery state machine:** `Assigned → Out for Delivery → {Delivered, Failed Attempt → re-Assigned, Cancelled}`, with Proof of Delivery captured on Delivered.
+| From | Trigger | To | Actor | Notification | Audit event |
+|---|---|---|---|---|---|
+| `[*]` | Checkout submitted with online payment | PendingAuthorization | Customer, via gateway | — | `PaymentInitiated` ⚠ OPEN-001 |
+| PendingAuthorization | Gateway approves | Authorized | Payment gateway (external) | — (internal) | `PaymentAuthorized` ⚠ OPEN-001 |
+| PendingAuthorization | Gateway declines / times out | Failed | Payment gateway | "Payment failed, please retry" to customer | `PaymentFailed` |
+| Authorized | Order/suborders confirmed | Captured | System | — | `PaymentCaptured` ⚠ OPEN-001, ⚠ OPEN-007 (per-suborder/currency capture undecided) |
+| Authorized | Capture window expires, or all suborders rejected before capture | Failed | System | Customer informed; authorization released | `PaymentReleased` |
+| Captured | Settlement cycle runs | Settled | System / Finance | — | `PaymentSettled` |
+| Captured | Full return/refund approved | Refunded | Finance/Support (per FR-RET) | "Refund issued" to customer | `PaymentRefunded` ⚠ OPEN-007 (refund currency/FX-movement policy undecided) |
+| Captured | Partial-item return/refund approved | PartiallyRefunded | Finance/Support | "Partial refund issued" to customer | `PaymentPartiallyRefunded` ⚠ OPEN-007 |
+| `[*]` | Checkout submitted with COD | PendingCOD | Customer | — | `PaymentInitiated` (COD) |
+| PendingCOD | Driver/branch collects cash on handoff | CollectedOnDelivery | Delivery driver / branch staff | Receipt to customer | `CODCollected` |
+| CollectedOnDelivery | Settlement cycle runs | Settled | Finance | — | `PaymentSettled` |
 
-**Return state machine:** see E.14 below.
+**Invalid transitions:** Failed → Captured (a declined/expired authorization cannot be captured — a new payment attempt must be initiated); Settled → Authorized/PendingAuthorization (terminal in the forward direction; only Refunded/PartiallyRefunded are reachable after Settled).
+
+### Delivery state machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending
+    Pending --> Assigned
+    Assigned --> OutForDelivery
+    OutForDelivery --> Delivered
+    OutForDelivery --> FailedAttempt
+    FailedAttempt --> Assigned: reschedule
+    FailedAttempt --> Cancelled: max attempts exceeded
+    Delivered --> [*]
+    Cancelled --> [*]
+```
+
+| From | Trigger | To | Actor | Notification | Audit event |
+|---|---|---|---|---|---|
+| `[*]` | Suborder reaches Preparing with delivery fulfillment selected | Pending | System | — | `DeliveryCreated` |
+| Pending | Vendor/driver accepts the delivery job | Assigned | Vendor delivery staff / driver | — | `DeliveryAssigned` |
+| Assigned | Driver departs with the order | OutForDelivery | Delivery driver | "Out for delivery" to customer | `DeliveryDispatched` |
+| OutForDelivery | Proof of delivery captured | Delivered | Delivery driver | Customer notified; closes the BR-DELIVERY-CONFIRM loop | `DeliveryCompleted`, `ProofOfDeliveryRecorded` |
+| OutForDelivery | Customer unavailable / address issue | FailedAttempt | Delivery driver | "Delivery attempt failed, reschedule" to customer | `DeliveryAttemptFailed` |
+| FailedAttempt | Reschedule/reattempt (FR-FUL-006) | Assigned | Vendor staff | Customer informed of new attempt window | `DeliveryReassigned` |
+| FailedAttempt | Max attempts exceeded, or vendor/customer cancels | Cancelled | Vendor / Customer / Platform admin | Both parties notified | `DeliveryCancelled` |
+
+Pickup orders run a parallel, simpler path: `ReadyForPickup → PickedUp` (actor: branch staff verifying the FR-FUL-008 pickup code; audit: `PickupCompleted`); an uncollected pickup past a configured window is an open operational policy (not yet an OPEN-item — to formalize in Part 3 if needed). **Invalid transitions:** Delivered → any other state (terminal — a post-delivery problem is a Return, not a reopened Delivery); Pending → Delivered directly (cannot skip assignment and dispatch).
+
+### Return state machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> Requested
+    Requested --> VendorReview
+    VendorReview --> Approved
+    VendorReview --> Rejected
+    VendorReview --> Escalated: SLA breach, no vendor response
+    Rejected --> Escalated: customer disputes
+    Escalated --> Approved
+    Escalated --> Rejected
+    Approved --> RefundProcessing
+    RefundProcessing --> Refunded
+    Rejected --> [*]
+    Refunded --> [*]
+```
+
+| From | Trigger | To | Actor | Notification | Audit event |
+|---|---|---|---|---|---|
+| `[*]` | Customer submits return request (FR-RET-002) | Requested | Customer | Vendor notified | `ReturnRequested` |
+| Requested | System routes to vendor per SLA | VendorReview | System | — | `ReturnUnderReview` |
+| VendorReview | Vendor approves | Approved | Vendor order-processing employee/owner | "Return approved" to customer | `ReturnApproved` |
+| VendorReview | Vendor rejects with reason | Rejected | Vendor | "Return rejected: [reason]; you may escalate" to customer | `ReturnRejected` |
+| VendorReview | No vendor response before SLA deadline | Escalated | System (auto-escalation, FR-RET-003) | Support + customer notified | `ReturnEscalated` |
+| Rejected | Customer disputes the rejection | Escalated | Customer | Support agent assigned | `ReturnDisputeOpened` |
+| Escalated | Support agent/platform admin decides | Approved or Rejected (final) | Support agent / Platform admin | Customer + vendor notified | `ReturnResolvedByEscalation` |
+| Approved | Approval triggers refund initiation | RefundProcessing | System | — | `RefundInitiated` ⚠ OPEN-007 (mixed-currency refund policy, see FR-PAY-004) |
+| RefundProcessing | Payment-side refund completes (Payment: Captured → Refunded/PartiallyRefunded) | Refunded | System / Finance | "Refund completed" to customer | `ReturnRefunded` |
+
+Reaching Refunded also triggers, as side effects: `OrderItem → Returned` (see above) and an inventory restock check (FR-INV). **Invalid transitions:** Rejected → Approved directly (must pass through Escalated — a rejection cannot be silently overturned); Requested → Refunded directly (cannot skip vendor review/approval).
 
 ---
 
@@ -280,7 +428,7 @@ COD uses a simplified path: `Pending → Collected on Delivery → Settled`. ⚠
 | FR-PAY-001 | The system must support cash on delivery, with collection confirmation recorded by the delivering party. | — |
 | FR-PAY-002 | The system must support online payment authorization and capture against a confirmed gateway. | ⚠ OPEN-001 — FYP uses a sandbox/simulated flow (Part 1, D.4) |
 | FR-PAY-003 | A multi-vendor order's payment must be split/allocated per vendor suborder for settlement, regardless of whether the customer experiences one combined charge or per-vendor charges. | ⚠ OPEN-007 |
-| FR-PAY-004 | The system must support full and partial refunds tied to specific order items/suborders, with delivery-fee treatment defined per return reason. | Part 3, Section F |
+| FR-PAY-004 | The system must support full and partial refunds tied to specific order items/suborders, with delivery-fee treatment defined per return reason. | Part 3, Section F; ⚠ OPEN-007 — refund currency, refunded amount, and handling of FX-rate movement between purchase and refund are undecided for mixed-currency orders |
 | FR-PAY-005 | Vendor commission/fee application is recorded but not charged under the confirmed subscription-based model; the data model must not preclude a future commission field. | BR-SUBSCRIPTION, Phase 2 optionality |
 | FR-PAY-006 | Vendor subscription billing must be tracked as its own payment stream, independent of customer-order payments. | ⚠ OPEN-003 |
 | FR-PAY-007 | Every payment/refund/settlement event must be recorded in an immutable, attributable financial audit log. | — |
@@ -295,14 +443,19 @@ COD uses a simplified path: `Pending → Collected on Delivery → Settled`. ⚠
 | ID | Requirement | Notes |
 |---|---|---|
 | FR-FUL-001 | Each `VendorSuborder` must declare its fulfillment method at checkout: vendor delivery or customer pickup from a specific branch. | Q4 |
-| FR-FUL-002 | Vendor delivery must follow the Delivery state machine (E.11); third-party courier integration is Phase 2. | Q4 default |
+| FR-FUL-002 | Vendor delivery must follow the Delivery state machine defined in full under E.11 (transitions, actors, notifications, audit events); third-party courier integration is Phase 2. | Q4 default |
 | FR-FUL-003 | Order confirmation must trigger BR-DELIVERY-CONFIRM: capture of home-location pin + two phone numbers, then three notifications (vendor-portal alert, SMS to the store's number, SMS to the customer-entered number). | ⚠ OPEN-004 — see Part 1, D.4 for the FYP fallback behavior |
 | FR-FUL-004 | Delivery-zone eligibility must be checked per branch (map-based or governorate/city list), consistent with nationwide rollout. | Q8 |
 | FR-FUL-005 | Delivery-fee calculation per vendor/zone must feed into FR-PRICE-005's final payable price. | — |
-| FR-FUL-006 | Failed-delivery handling (customer unavailable, wrong address) must have a defined retry/reschedule flow with clear messaging. | — |
+| FR-FUL-006 | Failed-delivery handling (customer unavailable, wrong address) must follow the Delivery machine's FailedAttempt → Assigned/Cancelled path (E.11), with clear customer messaging at each step. | — |
 | FR-FUL-007 | Split deliveries within a single suborder are supported only where the vendor explicitly enables partial shipment; default is one shipment per suborder. | — |
 | FR-FUL-008 | Pickup orders must generate a customer-facing pickup code the branch can verify at hand-off. | — |
-| FR-FUL-009 | Return pickups follow the delivery-state machine in reverse, tied to the return workflow. | FR-RET |
+| FR-FUL-009 | Return pickups follow the Delivery state machine (E.11) in reverse, tied to the Return workflow. | FR-RET |
+| FR-FUL-010 | The system must show the customer an estimated delivery/pickup-ready window at checkout and on the order timeline, computed per vendor/zone. | — |
+| FR-FUL-011 | Where a vendor has multiple drivers, the vendor must be able to assign a specific driver to a delivery and track its live status through the Delivery state machine. | — |
+| FR-FUL-012 | For COD orders, the driver/branch staff must record cash handoff as part of the `CollectedOnDelivery` payment transition (E.11), with the amount collected logged against the suborder. | — |
+| FR-FUL-013 | The customer must be able to select a scheduled delivery/pickup window (not just "as soon as possible") where the vendor offers one. | — |
+| FR-FUL-014 | Third-party delivery-provider webhook ingestion (status updates from an external courier) is explicitly Phase 2 scope, deferred until a courier integration is selected. | Phase 2, see Part 1 D.3 |
 
 ---
 
@@ -318,7 +471,7 @@ COD uses a simplified path: `Pending → Collected on Delivery → Settled`. ⚠
 | FR-RET-006 | Unresolved disputes must be escalatable to platform support with full order/communication history visible to the agent. | — |
 | FR-RET-007 | Abuse-prevention limits (anomalous return-rate flags) must route to operations-manager review, not automatic penalty on a single instance. | — |
 
-**Return state machine:** `Requested → Vendor Review → {Approved → Refund Processing → Refunded, Rejected → (Escalated to Support → resolved either way)}`; approval also triggers `OrderItem → Returned` (E.11) and, where applicable, `Inventory: Out of Stock/Low Stock → restocked` (E.9).
+**Return state machine:** defined in full under E.11 (transitions, actors, notifications, audit events) — approval also triggers `OrderItem → Returned` and, where applicable, `Inventory: Out of Stock/Low Stock → restocked` (E.9).
 
 ---
 
@@ -334,6 +487,8 @@ COD uses a simplified path: `Pending → Collected on Delivery → Settled`. ⚠
 | FR-REV-006 | Any user must be able to report a review for abuse, routing it to the content-moderator queue. | — |
 | FR-REV-007 | Anomalous review patterns (rating bursts from new accounts) must be flagged for moderator attention. | Full approach in Part 6 |
 | FR-REV-008 | The vendor-verification badge (from FR-VEND-003) must be visibly displayed on the store page as a trust signal. | — |
+| FR-REV-009 | A customer must be able to edit or delete their own review within a configurable window after posting; an edited review must show an "edited" indicator, and any vendor response posted before the edit must remain visible with its own timestamp. | — |
+| FR-REV-010 | The system must display product-authenticity indicators (e.g., "manufacturer-matched specifications," "vendor-verified branch") on offers, distinct from and in addition to the vendor-verification badge, to help the customer judge trust at the offer level, not only the store level. | — |
 
 ---
 
@@ -346,6 +501,7 @@ COD uses a simplified path: `Pending → Collected on Delivery → Settled`. ⚠
 | FR-FAV-003 | The system must support price-drop alerts on favorited offers, driven by price-history tracking. | FR-PRICE-002 |
 | FR-FAV-004 | The system must support back-in-stock alerts on favorited offers that are Out of Stock. | — |
 | FR-FAV-005 | A customer must control notification preferences and alert frequency. | FR-NOTIF |
+| FR-FAV-006 | The system must support new-offer alerts: notifying a customer who favorited a canonical product when a new vendor offer is matched/published against it. | FR-MATCH |
 
 ---
 
@@ -402,6 +558,8 @@ COD uses a simplified path: `Pending → Collected on Delivery → Settled`. ⚠
 | FR-VPORTAL-007 | Vendors must view performance/SLA reports and respond to reviews. | FR-REV-004 |
 | FR-VPORTAL-008 | Vendors must manage integration credentials for any vendor-authorized API ingestion. | FR-IMPORT-006 |
 | FR-VPORTAL-009 | Vendors must configure store settings (hours, closures, delivery zones per branch, notification preferences). | — |
+| FR-VPORTAL-010 | Vendors must view a settlements screen distinct from FR-VPORTAL-006's subscription billing — this covers any future commission/payout settlement (FR-PAY-005's Phase-2 optionality), kept as its own screen now so it isn't retrofitted into the billing UI later. | Phase 2 optionality, mirrors FR-PAY-005 |
+| FR-VPORTAL-011 | The vendor portal must surface all BR-DELIVERY-CONFIRM in-app order alerts (FR-FUL-003) and other vendor-directed notifications (FR-NOTIF) in a single, filterable notifications view, not scattered across separate screens. | — |
 
 ---
 
@@ -437,10 +595,10 @@ COD uses a simplified path: `Pending → Collected on Delivery → Settled`. ⚠
 | OPEN-001 | FR-CART-009, FR-PAY-002, FR-PAY-010 |
 | OPEN-002 | FR-COMP-009, FR-PRICE-007 |
 | OPEN-003 | FR-VEND-004, FR-VEND-005, FR-PAY-006, FR-VPORTAL-006 |
-| OPEN-004 | FR-AUTH-003, FR-AUTH-005, FR-FUL-003, FR-NOTIF-002 |
+| OPEN-004 | FR-AUTH-003, FR-AUTH-005, FR-AUTH-006, FR-FUL-003, FR-NOTIF-002 |
 | OPEN-005 | FR-VEND-002, FR-VEND-003 |
 | OPEN-006 | Governs which of the above are built in the FYP window vs. deferred — see Part 1, D.4 |
-| OPEN-007 | FR-CART-009, FR-PAY-003, FR-PRICE-007 |
+| OPEN-007 | FR-CART-009, FR-PAY-003, FR-PAY-004, FR-PRICE-007 |
 
 None of these block Part 3 — every tagged requirement remains valid as a *design target*; only its production-integration details wait on the tagged decision.
 
