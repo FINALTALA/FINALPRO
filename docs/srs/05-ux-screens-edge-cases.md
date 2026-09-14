@@ -1,0 +1,149 @@
+# SRS — Part 5: UX & Screen Inventory (Section K) & Edge Cases / Failure Scenarios (Section L)
+
+Builds on [Part 1](01-executive-summary-vision-scope.md) (roles), [Part 2](02-functional-requirements.md) (FR-*, state machines), and [Part 3](03-business-rules-data-model.md) (BR-*, entities). Screens are grouped by portal per the master prompt; each row covers purpose, primary users, main components/actions, the three required UI states, permission restrictions, and RTL/responsive/accessibility notes in one compact line rather than a long prose block per screen — consistent with how this SRS has handled other large inventories (Part 2's FR tables, Part 3's entity tables).
+
+---
+
+## K.1 Screen inventory
+
+Legend: **Empty/Loading/Error** = the three required states; **Perms** = permission restriction; **RTL/Resp/A11y** = combined note.
+
+### Customer web/mobile experience
+
+| Screen | Purpose & primary users | Main components / actions | Empty / Loading / Error | Perms | RTL / Responsive / A11y |
+|---|---|---|---|---|---|
+| Home | Entry point, category/featured navigation | Category nav, featured/banner sections (FR-CMS-001), search bar | Empty: default categories shown if no personalization; Loading: skeleton banners; Error: static fallback content, never a blank page | Guest + Customer | Banner order mirrors in RTL; touch targets ≥44px on mobile |
+| Search results | Find products across vendors (FR-SEARCH) | Query box, facet filters, sort, result cards (comparison-price badge, unmatched-listing badge FR-SEARCH-010) | Empty: broadened-term suggestions (FR-SEARCH-008); Loading: skeleton cards; Error: retry action, cached last-good results if available | Guest + Customer | Filters panel collapses to a bottom sheet on mobile; filter chips flow RTL |
+| Comparison view | Side-by-side offer/product comparison (FR-COMP) | Comparison table, add/remove slots (max per FR-COMP-001), "why best" explainer (FR-COMP-005), stale-data flags (FR-COMP-006) | Empty: prompt to add items; Loading: per-column skeleton; Error: partial comparison shown with a per-item error badge, not a full-page failure | Guest + Customer | Table scrolls horizontally on mobile with sticky first column; mirrors fully in RTL |
+| Product detail | View one canonical product / vendor offer | Media gallery, spec table, offer list per vendor, add-to-cart/compare, reviews summary, authenticity indicator (FR-REV-010) | Empty: "no vendors currently offer this" for a canonical product with zero live offers; Loading: skeleton; Error: retry | Guest + Customer | Image gallery swipe direction follows RTL |
+| Store page | View one vendor's storefront | Store info, verification badge (FR-REV-008), branch list, offer grid, reviews | Empty: "no products published yet"; Loading: skeleton; Error: retry | Guest + Customer | — |
+| Cart | Multi-vendor cart, partitioned by vendor (FR-CART-001) | Per-vendor grouping, per-vendor fulfillment choice, notes (FR-CART-014), minimum-order indicator | Empty: "cart is empty" with a browse CTA; Loading: skeleton; Error: line-item error inline (e.g., price changed), never blocking the rest of the cart | Customer (guest cart allowed, BR-024) | — |
+| Checkout | Confirm delivery/pickup, phone numbers, payment (FR-CART-006/009) | Address + two-phone form (BR-DELIVERY-CONFIRM), fulfillment/payment selection per vendor, terms acceptance, order summary | Empty: N/A (cart already validated non-empty to reach here); Loading: submit-button spinner with disabled re-submit; Error: field-level validation + FR-CART-016's cart-preserved messaging | Customer, authenticated + phone-verified (FR-AUTH-004) | Form field order mirrors in RTL; large tap targets for phone-number entry |
+| Order confirmation | Post-checkout summary | Per-suborder summary, tracking link, "what happens next" | N/A (transitional screen) | Customer | — |
+| Order tracking / timeline | Track one order (FR-ORD-005) | Consolidated parent-order timeline + per-suborder status (E.11), delivery/pickup details, cancel action where eligible (FR-ORD-006) | Empty: N/A; Loading: skeleton; Error: retry, last-known status cached | Customer (own order only) | Timeline direction (top-to-bottom, not left-to-right) avoids RTL ambiguity |
+| Order history | List past orders | Filterable/paginated list, reorder action | Empty: "no orders yet"; Loading: skeleton list; Error: retry | Customer (own orders) | — |
+| Return request | Submit/track a return (FR-RET-002) | Reason picker, evidence upload, per-item eligibility check (BR-025) | Empty: N/A; Loading: submit spinner; Error: `ITEM_NOT_YET_DELIVERED` / `RETURN_WINDOW_CLOSED` messaging mapped from the API (Part 4) | Customer (own item only) | — |
+| Favorites & saved comparisons | Manage favorites/alerts (FR-FAV) | Favorite list, alert-preference toggle, saved comparison list | Empty: "nothing saved yet" with browse CTA; Loading: skeleton; Error: retry | Customer | — |
+| Account & addresses | Profile, language, saved addresses | Profile form, address list with map-pin picker, language toggle (FR-AUTH-009), account deletion (FR-AUTH-010) | Empty: "no saved addresses"; Loading: skeleton; Error: inline validation | Customer (own data) | Language toggle is prominent, not buried |
+| Reviews (write) | Submit a review (FR-REV-001) | Rating, body, image upload, target selector (product/vendor/delivery) | Loading: submit spinner; Error: `NOT_VERIFIED_PURCHASE` messaging | Customer (verified purchase only) | — |
+| Support / tickets | Open/track support tickets (FR-SUP) | Ticket list, new-ticket form linked to an order, message thread | Empty: "no tickets"; Loading: skeleton; Error: retry | Customer/Vendor (own tickets) | — |
+
+### Vendor portal
+
+| Screen | Purpose & primary users | Main components / actions | Empty / Loading / Error | Perms | RTL / Responsive / A11y |
+|---|---|---|---|---|---|
+| Onboarding / application | Apply as a vendor (FR-VEND-001) | Business info form, branch entry, physical-branch geo-pin + photo upload (BR-022) | Loading: submit spinner; Error: field validation | Prospective vendor | Map picker works with keyboard nav for A11y |
+| Vendor dashboard | At-a-glance status (FR-VPORTAL-001) | Orders-needing-attention widget, subscription status, KPI summary | Empty: "no orders yet" for a new vendor; Loading: skeleton widgets; Error: per-widget retry | Vendor owner/admin/staff (scoped) | Widget grid reflows to single column on mobile |
+| Branch & staff management | Manage branches, hours, staff accounts (FR-VEND-006/007) | Branch list/form, staff list with role assignment | Empty: "no branches yet" (blocks catalog publish); Loading: skeleton; Error: inline | Vendor owner/admin | — |
+| Catalog / offer management | Manage offers & variants (FR-VPORTAL-002) | Offer list, variant editor, media upload, match-status indicator (FR-MATCH) | Empty: "no offers yet" with create/import CTA; Loading: skeleton table; Error: inline per-field | Vendor catalog employee+ | Table columns reorder correctly in RTL |
+| Bulk import | Upload CSV/Excel (FR-VPORTAL-003) | File upload, field-mapping UI (FR-IMPORT-011), validation report, retry-failed-rows action | Empty: "no imports yet"; Loading: processing-status poll; Error: downloadable error report, not just an inline toast | Vendor catalog employee+ | — |
+| Inventory management | Update stock per branch (FR-INV) | Per-branch stock grid, safety-stock setting, staleness indicator | Empty: N/A; Loading: skeleton; Error: inline | Vendor catalog employee+ | — |
+| Pricing | Update price/currency (FR-PRICE) | Price editor, price-history chart, currency selector (Q7) | Empty: N/A; Loading: skeleton; Error: inline | Vendor catalog employee+ | — |
+| Orders / suborders queue | Process incoming orders (FR-VPORTAL-004) | Suborder list by status, bulk actions, BR-DELIVERY-CONFIRM alert surfacing (FR-VPORTAL-011) | Empty: "no orders"; Loading: skeleton; Error: retry | Vendor order-processing employee+ | Status badges use color **and** text label, not color alone (A11y) |
+| Order detail | Act on one suborder | State-machine action buttons (confirm/reject/prepare/dispatch), item list, customer contact info (post order-confirmation only) | Loading: action-button spinner; Error: `INVALID_STATE_TRANSITION` messaging | Vendor order-processing employee+ | — |
+| Returns queue | Approve/reject returns (FR-RET-003) | Return list, evidence viewer, approve/reject action | Empty: "no pending returns"; Loading: skeleton; Error: retry | Vendor order-processing employee+ | — |
+| Subscription & billing | View/manage subscription (FR-VPORTAL-006) | Plan/status display, billing history, ⚠ OPEN-003-pending payment-method management | Empty: N/A; Loading: skeleton; Error: retry | Vendor owner | — |
+| Settlements | Phase-2 commission/payout view (FR-VPORTAL-010) | Settlement history table | Empty: "no settlements yet" (expected pre-Phase-2); Loading: skeleton; Error: retry | Vendor owner/Finance-facing | — |
+| Reports & performance | View KPIs/SLA (FR-VPORTAL-007) | Performance charts, review-response widget | Empty: "not enough data yet"; Loading: skeleton; Error: retry | Vendor owner/admin | — |
+| Store settings | Hours, closures, zones, notification prefs (FR-VPORTAL-009) | Settings forms per branch | Empty: N/A; Loading: skeleton; Error: inline | Vendor owner/admin | — |
+
+### Administration portal
+
+| Screen | Purpose & primary users | Main components / actions | Empty / Loading / Error | Perms | RTL / Responsive / A11y |
+|---|---|---|---|---|---|
+| Admin dashboard | Cross-platform overview | KPI widgets (Part 1, Section B), fraud-signal summary (FR-ADMIN-006) | Loading: skeleton; Error: per-widget retry | Platform admin roles | — |
+| Vendor management | Manage vendor lifecycle (FR-VEND-008/009) | Vendor list/detail, status-transition actions, suspension-reason capture (BR-019) | Empty: N/A; Loading: skeleton; Error: retry | Platform admin | — |
+| Vendor verification queue | Approve branch evidence (FR-VEND-003, BR-022) | Evidence viewer (photo + map pin), approve/reject/request-resubmission | Empty: "queue clear"; Loading: skeleton; Error: retry | Vendor verification reviewer | ⚠ OPEN-005 governs reviewer assignment rules shown here |
+| Catalog & taxonomy | Manage categories/brands/attributes (FR-CAT) | Tree editor, duplicate-warning modal (FR-CAT-009) | Empty: N/A; Loading: skeleton; Error: inline | Catalog admin | Tree indentation mirrors in RTL |
+| Product-match review queue | Resolve queued matches (FR-MATCH-003) | Confidence-sorted queue, side-by-side candidate comparison, approve/reject/reassign (`POST /product-matches/{id}/decision`, Part 4) | Empty: "queue clear"; Loading: skeleton; Error: retry | Product-matching reviewer | — |
+| Import monitoring | Cross-vendor import health (FR-ADMIN) | Import job list, failure-rate chart | Empty: N/A; Loading: skeleton; Error: retry | Platform admin | — |
+| Orders overview | Cross-vendor order visibility | Filterable order list, `NeedsAttention` flag surfacing (E.11) | Empty: N/A; Loading: skeleton; Error: retry | Platform admin | — |
+| Payments & settlements | Financial oversight (FR-PAY) | Transaction list, `WebhookInbox` reconciliation queue view (Part 4) | Empty: N/A; Loading: skeleton; Error: retry | Finance / Platform admin | — |
+| Returns & disputes | Escalated-case handling (FR-RET-006) | Dispute queue, resolution action | Empty: "queue clear"; Loading: skeleton; Error: retry | Support agent / Platform admin | — |
+| Review moderation | Moderate flagged reviews (FR-REV-006/007) | Flagged-content queue, approve/remove action | Empty: "queue clear"; Loading: skeleton; Error: retry | Content moderator | — |
+| Promotions / CMS | Manage banners/campaigns (FR-CMS) | Draft/preview/publish workflow, per-locale editor | Empty: "no content yet"; Loading: skeleton; Error: inline | Marketing | Preview renders both LTR and RTL side by side |
+| Delivery zones | Manage zone definitions (FR-FUL-004) | Map/list editor per branch | Empty: N/A; Loading: skeleton; Error: inline | Platform admin / Operations | — |
+| Support ticket queue | Admin-level ticket oversight | SLA-breach flagged list (FR-SUP-003) | Empty: "queue clear"; Loading: skeleton; Error: retry | Support agent / Operations manager | — |
+| Roles & permissions | Configure RBAC (FR-ADMIN-003) | Role editor mapped to Part 1, Section C | Empty: N/A; Loading: skeleton; Error: inline | Platform super admin | — |
+| Feature flags | Stage Phase-2+ features (FR-ADMIN-004) | Flag list, environment toggle | Empty: N/A; Loading: skeleton; Error: inline | Platform super admin | — |
+| Audit log | Search `AuditLog` (FR-ADMIN-005) | Filterable/paginated log viewer, correlation-ID search (Part 4, H.1) | Empty: "no matching entries"; Loading: skeleton; Error: retry | Platform admin | — |
+| Fraud signals | Surface anomalies (FR-ADMIN-006) | Suspicious-login / anomalous-review / anomalous-return dashboards | Empty: "no active signals"; Loading: skeleton; Error: retry | Platform admin / Operations manager | — |
+
+### Customer-support interface
+
+| Screen | Purpose & primary users | Main components / actions | Empty / Loading / Error | Perms | RTL / Responsive / A11y |
+|---|---|---|---|---|---|
+| Ticket queue | Triage tickets (FR-SUP-001) | Priority/SLA-sorted list, category filter | Empty: "queue clear"; Loading: skeleton; Error: retry | Support agent | — |
+| Ticket detail | Resolve one ticket | Customer timeline (Part 1, Section C's data-visibility boundary), message thread, internal notes (not customer-visible), refund-authorization action within limit (FR-SUP-004) | Loading: action spinner; Error: inline | Support agent | — |
+| Knowledge base management | Maintain FAQ content (FR-SUP-006) | Article editor, per-locale content | Empty: "no articles yet"; Loading: skeleton; Error: inline | Support agent / Operations manager | — |
+
+---
+
+## K.2 End-to-end journeys
+
+### Customer journeys
+
+1. **Search and compare** — Home → Search results (FR-SEARCH) → select 2–4 items → Comparison view (FR-COMP-001) → review "why best" explainer (FR-COMP-005).
+2. **Find the cheapest offer** — Product detail → offer list sorted by comparison price (BR-021, FX-normalized where currencies differ) → cheapest badge (FR-COMP-005) with native + normalized price shown (FR-COMP-009).
+3. **Add products from multiple vendors** — Product detail (Vendor A) → add to cart → Product detail (Vendor B) → add to cart → Cart shows two vendor partitions (FR-CART-001).
+4. **Checkout** — Cart → Checkout: address + two phone numbers (BR-020) → per-vendor fulfillment/payment selection → terms acceptance (FR-CART-012) → submit (idempotent, Part 4) → Order confirmation, with three BR-DELIVERY-CONFIRM notifications fired per suborder.
+5. **Track an order** — Order history → Order tracking/timeline → see parent-order aggregate status (E.11) and each suborder's independent progress.
+6. **Cancel an item** — Order tracking → suborder still in a cancellable state (FR-ORD-006) → cancel action → suborder → Cancelled, sibling suborders unaffected (FR-ORD-003), parent order recomputes to PartiallyCancelled or Cancelled (Part 3, BR-025-adjacent CustomerOrder rules).
+7. **Request a return** — Order tracking → item whose own `Fulfillment` reached Delivered/PickedUp (BR-025) → Return request screen → reason + evidence → Return state machine begins (E.11/E.14).
+8. **Receive a refund** — Return approved (vendor or escalation, E.11 Return machine) → `PaymentAllocation`/`Refund` processed (Part 3, ⚠ OPEN-007 for mixed-currency specifics) → customer notified, order timeline reflects Refunded/PartiallyRefunded.
+9. **Save a product and receive a price-drop alert** — Product detail → favorite (FR-FAV-001) → `PriceHistory` records a drop (FR-PRICE-002) → alert fires (FR-FAV-003) → customer returns via the alert link to Product detail.
+
+### Vendor journeys
+
+1. **Apply and onboard** — Onboarding form → branch entry with geo-pin + photo if physical (BR-022) → Vendor Verification queue reviews (FR-VEND-003) → Approved → subscription selection (FR-VEND-004, ⚠ OPEN-003) → Active.
+2. **Create or import an offer** — Catalog screen: manual create, **or** Bulk import screen: upload CSV → field mapping (FR-IMPORT-011) → validation report → commit.
+3. **Match an offer to a canonical product** — New offer auto-checked for exact identifier (FR-MATCH-002); if none, it queues in the platform's Product-match review queue (not a vendor-facing step) — the vendor sees a "pending match review" status on the offer until a reviewer decides.
+4. **Update price and inventory** — Pricing screen: edit price/currency → `PriceHistory` recorded; Inventory screen: edit stock per branch → staleness clock resets (BR-005).
+5. **Process an order** — Vendor-portal order alert (BR-020's in-app leg) → Orders queue → Order detail → Confirm → Preparing → Ready for Pickup / Out for Delivery (E.11).
+6. **Handle a cancellation or return** — Cancellation: suborder cancelled by customer or vendor within the cancellable window (FR-ORD-006), reflected immediately in the Orders queue; Return: Returns queue → evidence review → approve/reject within SLA (FR-RET-003).
+7. **Review settlement** — Subscription & Billing screen for recurring billing status; Settlements screen for any future Phase-2 commission payout (FR-VPORTAL-010).
+
+---
+
+## L. Edge cases and failure scenarios
+
+For every case: **Expected behavior**, **Responsible component**, **Customer message**, **Recovery method**, **Audit requirement**.
+
+| # | Case | Expected behavior | Responsible component | Customer message | Recovery | Audit |
+|---|---|---|---|---|---|---|
+| L-01 | Same product listed under different titles by different vendors | Both link to the same `CanonicalProductVariant` once matched (FR-MATCH-002/003); title differences are cosmetic, not structural | Matching (FR-MATCH) | — (transparent to customer) | Reviewer approves the match | `ProductMatch` decision audit |
+| L-02 | Incorrect product match | Customer/vendor reports it (FR-MATCH-005); re-queued for reviewer | Matching | "Thanks, we're reviewing this listing" | Reviewer corrects via a new `ProductMatch` decision, never silently editing the old one | Full match-decision trail (Part 4, `POST /product-matches/{id}/decision`) |
+| L-03 | Conflicting specifications from different vendors for the same variant | Source-of-truth policy per field (BR/FR-MATCH-010) decides displayed value; losing values retained, not discarded | Catalog/Matching | — | Catalog admin can override with reason | Field-level change audit |
+| L-04 | Product without a barcode | Falls to human-review matching path (FR-MATCH-003) or stays unmatched (FR-MATCH-009) | Matching/Ingestion | Shown as a normal or "unique listing" item, per outcome | — | `ProductMatch` queue entry |
+| L-05 | Unique handmade product | Published as an unmatched offer, searchable/purchasable, excluded from like-for-like comparison (BR-007) | Catalog | Labeled "unique listing" | — | — |
+| L-06 | Used vs. new versions of the same model | `condition` on the `OfferVariant` (FR-CAT-004), same `CanonicalProductVariant` — comparison shows both, filterable by condition | Catalog/Comparison | Condition badge shown per offer | — | — |
+| L-07 | Bundle vs. individual product | `CanonicalProduct.product_type = bundle` (FR-CAT-012) is its own type, never silently matched against a single-item canonical product | Catalog | Labeled as a bundle | — | — |
+| L-08 | Different units/package sizes | Structural difference → distinct `CanonicalProductVariant`s (FR-MATCH-008), never the same variant with a mismatched unit | Matching | Shown as distinct comparable options, not merged | — | — |
+| L-09 | Stale price | Flagged (BR-004) rather than trusted as current in comparison/search | Comparison/Search | "Price may be outdated, confirm at checkout" | Checkout-time revalidation (FR-CART-002) | — |
+| L-10 | Stale inventory | Flagged (BR-005); checkout-time revalidation is the actual gate, not the flag itself | Cart/Checkout | "Availability unconfirmed" pending revalidation | FR-CART-002 | — |
+| L-11 | Product sold out during checkout | Blocked at revalidation (FR-INV-004/FR-CART-002); only that line is affected | Checkout | "This item just sold out — remove or replace it" | Remove/replace, rest of cart preserved (FR-CART-016) | `409 PRICE_OR_STOCK_CHANGED` audit |
+| L-12 | Vendor closes / goes inactive after order submission | Suborder can still be rejected by the vendor (or by admin on the vendor's behalf) through the normal RejectedByVendor path | Orders | "This vendor couldn't fulfill part of your order" | Sibling suborders unaffected (FR-ORD-003); PartiallyCancelled parent state | Suborder + order state audit (E.11) |
+| L-13 | One vendor rejects part of a multi-vendor order | Order → PartiallyCancelled (Part 2 E.11 CustomerOrder machine); remaining suborders proceed independently | Orders | Per-vendor breakdown shown clearly | Remaining suborders complete normally | `OrderPartiallyCancelled` audit |
+| L-14 | Payment succeeds but order creation fails | Reconciliation job detects the mismatch (FR-PAY-009, NFR-REL-003); never silently drops the charge | Payment/Orders | If detected quickly: order recovered transparently; otherwise: proactive refund + apology | Compensating reconciliation, manual review if automated recovery fails | Full transaction + reconciliation audit |
+| L-15 | Order created but payment fails | Order held in a pre-confirmation state until payment resolves; not exposed to the vendor until paid (COD orders skip this by design) | Orders/Payment | "Payment failed, please retry" | Retry payment, or cart preserved for COD fallback | `PaymentFailed` audit |
+| L-16 | Order created but notification fails | `Notification` row logs the failed attempt (FR-NOTIF-004) and retries per policy; order itself is unaffected | Notifications | None immediate — vendor/customer sees it in-app regardless | Automatic retry, dead-letter visibility in admin | Notification attempt log |
+| L-17 | Duplicate webhook | Acknowledged via `WebhookInbox` uniqueness, not reprocessed (Part 4) | Payments | — | — | `WebhookInbox` dedup entry |
+| L-18 | Duplicate checkout submission | Same `Idempotency-Key` returns the original order (FR-CART-008, Part 4) | Checkout | — | — | — |
+| L-19 | Partial refund | `Refund`/`PaymentAllocation` scoped to the specific returned item(s), not the whole order (BR-013) | Payments/Returns | Clear breakdown of what was refunded | — | `PaymentPartiallyRefunded` audit |
+| L-20 | Split delivery | Multiple `Fulfillment` rows per suborder (FR-FUL-007); each item's Completed/return-eligibility tracks its own `Fulfillment` (BR-025) | Fulfillment | Per-shipment tracking shown | — | Per-`Fulfillment` delivery audit |
+| L-21 | Invalid delivery address | Checkout validation rejects or requires re-entry (FR-CART-004); map-pin required, not free text alone | Checkout | Inline validation message | Re-enter/correct address | — |
+| L-22 | Customer outside a vendor's service area | That vendor partition is delivery-ineligible but still pickup-eligible (BR-006) | Cart/Checkout | "Delivery unavailable here — pickup only" | Switch to pickup or remove that vendor's items | — |
+| L-23 | Vendor suspended with active orders | Existing suborders continue through their lifecycle unaffected; only new offer visibility/new orders are blocked | Vendor Management | No visible disruption to an in-flight order | Vendor reactivation restores new-order visibility | Suspension-reason audit (BR-019) |
+| L-24 | Product merge after historical orders exist | `OrderItem`/`PriceHistory` keep referencing the (now-merged) variant via a redirect, never orphaned (FR-MATCH-006) | Matching | — | — | Merge/split audit trail |
+| L-25 | Import failure midway | Partial success — committed rows stand, failed rows reported, retryable without reprocessing committed ones (FR-IMPORT-003/012) | Ingestion | Vendor sees a per-row error report | Retry failed rows only | Import job + row-level audit |
+| L-26 | Arabic/English content mismatch (e.g., one locale missing) | Falls back to the other locale with a visible "untranslated" indicator rather than a blank field (FR-CAT-014) | Catalog | Shown in fallback language | Catalog/vendor fills the gap | — |
+| L-27 | Missing or inappropriate image | Missing: placeholder image shown, never a broken-image icon; inappropriate: moderation queue (FR-CAT-005/FR-REV-003) | Catalog/Moderation | — | Moderator removes/vendor re-uploads | Moderation decision audit |
+| L-28 | Malicious vendor input (e.g., script injection in a free-text field) | Sanitized/escaped at write and render time; never executed | Security (Part 6, Section J covers the full threat model) | — | — | — |
+| L-29 | Review manipulation (fraud) | Anomaly detection flags a burst pattern (FR-REV-007) for moderator review, not an automatic ban | Reviews/Moderation | — | Moderator investigates | Flag + decision audit |
+| L-30 | Platform or integration outage | Health/status monitoring (Part 4, H.1) surfaces the failing integration; customer-facing degradation is graceful (e.g., cached search results) rather than a hard failure everywhere | Ops/Observability (NFR-OBS) | Generic "some features may be temporarily limited" banner, not a raw error | Retry once the integration recovers | Incident timeline in monitoring |
+| L-31 | Mixed-currency parent order payment/refund | Handled per `PaymentAllocation`/`PaymentTransactionAllocation` (Part 3), currency and settlement mechanics still ⚠ **pending OPEN-007** | Payments | Native + normalized price both shown pre-purchase (FR-COMP-009) | — | — |
+| L-32 | Webhook event references an unknown or out-of-order gateway transaction | `WebhookInbox` row marked `Reconciling`, retried by a background job, never dropped or bounced (Part 4) | Payments | — (internal) | Automatic reconciliation as related state catches up | `WebhookInbox` state-transition audit |
+
+---
+
+**Next:** Part 6 will cover Section M (architecture recommendation), Section N (product matching and data-quality strategy), Section O (testing/QA), and Section P (DevOps/operations) — grounding the FYP Delivery Increment's tech choices in the entities, endpoints, and screens defined so far.
