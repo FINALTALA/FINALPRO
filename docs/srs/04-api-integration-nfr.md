@@ -31,7 +31,7 @@ Representative surface area per domain (`✓` = idempotent by design or via the 
 | **Customers** | `GET /customers/me` · `PATCH /customers/me` · `GET/POST /customers/me/addresses` ↕ · `PATCH/DELETE /customers/me/addresses/{id}` · `DELETE /customers/me` (FR-AUTH-010) |
 | **Vendors** | `POST /vendors` (FR-VEND-001) · `GET /vendors/{id}` · `PATCH /vendors/{id}` · `POST /vendors/{id}/verification-evidence` (FR-VEND-002) · `POST /vendors/{id}/staff` · `GET /vendors/{id}/performance` |
 | **Branches** | `POST/GET/PATCH /vendors/{vendorId}/branches` ↕ · `POST /branches/{id}/delivery-zones` |
-| **Catalog** | `GET /categories` / `/brands` / `/attributes` ↕ (public) · `POST/PATCH /categories` / `/brands` (admin) · `GET /canonical-products/{id}` · `POST /canonical-products/{id}/merge` / `/split` (FR-MATCH-006) |
+| **Catalog** | `GET /categories` / `/brands` / `/attributes` ↕ (public) · `POST/PATCH /categories` / `/brands` (admin) · `GET /canonical-products/{id}` · `POST /canonical-products/{id}/merge` / `/split` (FR-MATCH-006) · `GET /product-matches` ↕ (review queue) · `POST /product-matches/{id}/decision` (full detail in H.3) |
 | **Search** | `GET /search` ↕ · `GET /search/autocomplete` |
 | **Comparison** | `POST /comparisons` · `GET /comparisons/{id}` · `GET /comparisons/{id}/share-link` |
 | **Offers** | `POST/GET/PATCH /vendors/{vendorId}/offers` ↕ · `POST /offers/{id}/variants` · `PATCH /offer-variants/{id}` |
@@ -44,6 +44,8 @@ Representative surface area per domain (`✓` = idempotent by design or via the 
 | **Delivery** | `PATCH /fulfillments/{id}/status` · `POST /deliveries/{id}/proof-of-delivery` |
 | **Returns** | `POST /order-items/{id}/return-requests` (full detail in H.3) · `PATCH /return-requests/{id}` |
 | **Reviews** | `POST /reviews` · `PATCH/DELETE /reviews/{id}` · `GET /offer-variants/{id}/reviews` ↕ |
+| **Favorites & alerts** | `POST/GET/DELETE /customers/me/favorites` ↕ (FR-FAV-001) · `POST/GET /customers/me/saved-comparisons` ↕ (FR-FAV-002) · `PATCH /customers/me/alert-preferences` (FR-FAV-005) |
+| **CMS & marketing** | `GET /content/home-sections` (public) · `POST/PATCH /admin/content/banners` ↕ · `POST/PATCH /admin/content/campaign-pages` ↕ (FR-CMS-001/002, draft/preview/scheduled-publish) |
 | **Notifications** | `GET /vendors/{vendorId}/notifications` ↕ (FR-VPORTAL-011; dispatch itself is an internal service, not a public endpoint) |
 | **Support** | `POST/GET /support-tickets` ↕ · `POST /support-tickets/{id}/messages` |
 | **Administration** | `GET/PATCH /admin/{resource}` (role-gated, per FR-ADMIN-001's entity list) · `GET /admin/audit-logs` ↕ |
@@ -56,12 +58,12 @@ Representative surface area per domain (`✓` = idempotent by design or via the 
 
 ### `POST /auth/otp/verify`
 - **Purpose / Actor:** Complete phone verification (FR-AUTH-003); Guest (pre-account) or Customer.
-- **Request:** `{ phone, otp_code, purpose: "signup" | "password_reset" | "phone_change" }`
+- **Request:** `{ phone, otp_code, purpose: "signup" | "password_reset" | "phone_change" }`, with a required `Idempotency-Key` header.
 - **Response:** `{ session_token, phone_verified_at }`
-- **Validation:** OTP must match, be unexpired, and unused; rate-limited attempts per phone (FR-AUTH-011).
+- **Validation:** OTP must match, be unexpired, and not yet consumed. Consumption happens exactly once, on first successful verification — there is no "OTP stays valid for repeat checks" behavior. Safe retry is handled the same way as every other mutating endpoint (H.1): the server stores the verification outcome against the request's `Idempotency-Key` for a short window (e.g., 5 minutes) and replays that stored outcome — including a still-valid `session_token` — if the identical request is retried within it, without touching the (already-consumed) OTP a second time. A retry using a *different* key against an already-consumed OTP fails with `OTP_INVALID`, since that's a distinct, not a replayed, request. Rate-limited attempts per phone (FR-AUTH-011).
 - **Authorization:** None required to call; the resulting session is scoped to the verified phone only.
 - **Errors:** `400 OTP_INVALID`, `409 OTP_EXPIRED`, `429 TOO_MANY_ATTEMPTS`.
-- **Idempotency:** Naturally idempotent — verifying the same valid OTP twice returns the same session outcome; a used/expired OTP fails on retry rather than silently succeeding.
+- **Idempotency:** `Idempotency-Key` **required**, per the mechanism described above — this is the one safe retry path; the OTP itself is single-use.
 - **Pagination:** N/A. — ⚠ **OPEN-004** governs the OTP provider this endpoint ultimately calls.
 
 ### `POST /checkout`
@@ -86,22 +88,27 @@ Representative surface area per domain (`✓` = idempotent by design or via the 
 
 ### `POST /webhooks/payment-gateway` (inbound)
 - **Purpose / Actor:** Receive authorize/capture/refund/chargeback events from the payment gateway; External actor (payment gateway).
-- **Request:** Gateway-defined payload (shape depends on the provider selected — ⚠ **OPEN-001**); mapped internally to a `PaymentTransaction` + one or more `PaymentTransactionAllocation` rows (Part 3, G.3) reconciling it to the affected `VendorSuborder`(s).
-- **Response:** `200 OK` (empty body) on successful processing — gateways generally require a fast, minimal acknowledgment.
-- **Validation:** Signature verification (H.1) before any processing; unrecognized `gateway_ref` is logged and rejected, never silently dropped.
+- **Request:** Gateway-defined payload (shape depends on the provider selected — ⚠ **OPEN-001**).
+- **Processing (transactional, per event):**
+  1. Verify the signature (H.1). A failed signature is rejected outright — never landed.
+  2. Insert a `WebhookInbox` row keyed on `(provider, event_id)` (Part 3, G.3) with the raw payload and `Received` state. The unique constraint is what makes a duplicate delivery safe: if the insert hits the constraint, the event was already received — skip straight to acknowledgment (see Response below) without reprocessing.
+  3. In one database transaction: create/update the `PaymentTransaction`, create the matching `PaymentTransactionAllocation` row(s), update the affected `PaymentAllocation`(s)' status, write the corresponding `AuditLog` entries, and mark the `WebhookInbox` row `Processed`.
+  4. If the event's `gateway_ref` doesn't match any known `PaymentTransaction`/`PaymentAllocation` (unknown reference), or arrives referencing a state its predecessor event hasn't reached yet (out-of-order delivery), the `WebhookInbox` row is marked `Reconciling` instead of `Failed` — a background reconciliation job retries it on a schedule as related state catches up, rather than the event being dropped or bounced back to the gateway.
+- **Response:** `200 OK` (empty body) for every request that passes signature verification — **including a duplicate or a reconciling event** (step 2/4 above). Gateways commonly retry non-2xx responses indefinitely, so a duplicate or not-yet-reconcilable event must still be acknowledged successfully; the duplicate/reconciling outcome is recorded internally (`WebhookInbox.processing_state` + an `AuditLog` entry), never surfaced to the gateway as an error.
+- **Validation:** Signature verification before any processing (see step 1); everything else is handled as a processing-state outcome, not a rejection, per the point above.
 - **Authorization:** Signature-based, not session-based — this endpoint is unauthenticated in the user sense but must reject any request that fails signature verification.
-- **Errors:** `401 SIGNATURE_INVALID`, `409 DUPLICATE_EVENT` (see idempotency below), `422 UNKNOWN_TRANSACTION`.
-- **Idempotency:** Gateway webhooks are not guaranteed exactly-once — the handler deduplicates on the gateway's own event ID before applying any state change (FR-PAY-009's "succeeds but order creation fails" scenario, and the reverse, both route through this same de-duplication path).
+- **Errors:** `401 SIGNATURE_INVALID` is the **only** error response this endpoint returns for a well-formed request; everything else (duplicate, unknown reference, out-of-order) is a `200` with internal-only state tracking, per above.
+- **Idempotency:** Enforced by the `WebhookInbox(provider, event_id)` uniqueness constraint (Part 3, G.3), not by rejecting the retry — this is what closes FR-PAY-009's "succeeds but order creation fails" scenario (and its reverse) without ever telling the gateway to keep retrying something already handled.
 - **Pagination:** N/A. Full request/response contract is finalized once ⚠ OPEN-001 resolves.
 
 ### `POST /vendors/{vendorId}/imports`
 - **Purpose / Actor:** Submit a bulk CSV/Excel offer import (FR-IMPORT-002); Vendor catalog employee.
-- **Request:** `multipart/form-data` file + `{ field_mapping: {...} }` (FR-IMPORT-011); or `{ retry_of_import_job_id }` to re-attempt only previously failed rows (FR-IMPORT-012).
+- **Request:** `multipart/form-data` file + `{ field_mapping: {...} }` (FR-IMPORT-011); or `{ retry_of_import_job_id }` to re-attempt only previously failed rows (FR-IMPORT-012). Every submission — **initial or retry** — requires an `Idempotency-Key` header (H.1); the server additionally computes a content hash of the uploaded file and treats a resubmission with a new key but an identical file content hash within a short window as the same duplicate-submission case, so an accidental double-click doesn't require the client to have preserved the original key.
 - **Response:** `{ import_job_id, status: "processing" }` (async — result fetched via `GET /imports/{id}`)
 - **Validation:** File format/size limits; per-row schema validation against the category's attribute template (FR-CAT-003); partial success allowed (FR-IMPORT-003).
 - **Authorization:** Vendor catalog employee or higher, scoped to `vendorId` only.
 - **Errors:** `400 UNSUPPORTED_FILE_TYPE`, `413 FILE_TOO_LARGE`.
-- **Idempotency:** A `retry_of_import_job_id` submission is idempotent per failed row (FR-IMPORT-012) — already-committed rows from the original job are never reprocessed.
+- **Idempotency:** A duplicate **initial** submission (same `Idempotency-Key`, or the file-content-hash match above) returns the existing `import_job_id` rather than starting a second job; a `retry_of_import_job_id` submission is idempotent per failed row (FR-IMPORT-012) — already-committed rows from the original job are never reprocessed.
 - **Pagination:** N/A for submission; `GET /imports/{id}/rows` is paginated and filterable by `status`.
 
 ### `POST /order-items/{id}/return-requests`
@@ -113,6 +120,16 @@ Representative surface area per domain (`✓` = idempotent by design or via the 
 - **Errors:** `422 RETURN_WINDOW_CLOSED`, `422 ITEM_NOT_YET_DELIVERED`, `409 RETURN_ALREADY_OPEN`.
 - **Idempotency:** A duplicate submission for the same item while a request is already open returns `409` rather than opening a second one.
 - **Pagination:** N/A.
+
+### `POST /product-matches/{id}/decision`
+- **Purpose / Actor:** Resolve one queued `ProductMatch` (Part 3, G.3) — approve, reject, or reassign a vendor offer's proposed link to a `CanonicalProductVariant` (FR-MATCH-002/003). Product-matching reviewer, or platform admin. This is a higher-risk endpoint than most in this inventory: it directly controls whether `VendorOffer.canonical_product_id` and its variants' `canonical_variant_id` stay consistent (Part 3's post-review invariant), and every decision feeds the comparison model's correctness (BR-001/BR-007).
+- **Request:** `{ decision: "approve" | "reject" | "reassign", reassign_to_canonical_variant_id? (required if decision = "reassign"), note? }`
+- **Response:** `{ product_match_id, status, offer_variant: { id, canonical_variant_id }, decided_at, reviewer_id }`
+- **Validation:** The `ProductMatch` must currently be `Queued` (a decision on an already-decided match is rejected, not silently overwritten — corrections go through a new match record, preserving history); `reassign` requires the target `CanonicalProductVariant` to exist and be `Published`; an `approve` writes `OfferVariant.canonical_variant_id` and re-derives `VendorOffer.canonical_product_id` from it (Part 3's authoritative-variant-link invariant) in the same transaction.
+- **Authorization:** Product-matching reviewer or platform admin only (Part 1, Section C) — never the vendor who submitted the offer (conflict of interest with BR-001/BR-002).
+- **Errors:** `409 MATCH_ALREADY_DECIDED`, `422 TARGET_VARIANT_NOT_PUBLISHED` (reassign only), `403 ROLE_NOT_PERMITTED`.
+- **Idempotency:** A repeated identical decision on the same (now-decided) match returns the existing decided state rather than erroring, but a *conflicting* repeat (e.g., `reject` after an already-recorded `approve`) is rejected per the `MATCH_ALREADY_DECIDED` validation above — corrections require a fresh `ProductMatch`/merge-split flow (FR-MATCH-006), not overwriting history.
+- **Pagination:** N/A. `GET /product-matches` (the review queue itself) is paginated and filterable by `status`/`confidence_score`.
 
 ### `GET /search`
 - **Purpose / Actor:** Full-text/faceted product search (FR-SEARCH-001–010); any actor including Guest.
