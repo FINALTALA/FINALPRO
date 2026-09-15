@@ -205,7 +205,7 @@ Each row now carries its own **Phase** tag: `FYP` = committed inside the 3-month
 
 | ID | Title | FR/BR | Dependencies | Acceptance criteria | Priority | Phase | Estimate |
 |---|---|---|---|---|---|---|---|
-| BL-ORD-001 (Tech) | `CustomerOrder`/`VendorSuborder`/`OrderItem` state-machine core (data model + transition logic, no UI) | Part 2, E.11 | EPIC-FOUND | Every valid/invalid transition in Part 2 covered by `TC-*` | Must | **FYP — Sprint 6, before Checkout** | L |
+| BL-ORD-001 (Tech) | `CustomerOrder`/`VendorSuborder`/`OrderItem` state-machine core (data model + transition logic, no UI) | Part 2, E.11 | EPIC-FOUND | Every valid/invalid transition in Part 2 covered by `TC-*` | Must | **FYP — Sprint 5, before Payment (Sprint 6) and Checkout (Sprint 7)** | L |
 | BL-ORD-002 (Story) | As a vendor, I can confirm/reject/dispatch a suborder — a minimal, even unstyled, action screen; `BL-VPORTAL-001` wraps/polishes it later, doesn't duplicate it | FR-ORD-007, Part 4 `PATCH /suborders/{id}/status` | BL-ORD-001, EPIC-CHECKOUT | Role-scoped per Part 1, Section C | Must | **FYP — built in Sprint 8, alongside Delivery, not Sprint 9 (resolves the review finding: a vendor must be able to act on an order before customer beta starts)** | S |
 | BL-ORD-003 (Story) | As a customer, I see a plain order-status list (not a custom timeline component) | FR-ORD-005 | BL-ORD-001 | Parent + per-suborder status both visible | Must | FYP | S |
 | BL-ORD-004 (QA) | Partial-rejection independence test | FR-ORD-003, Part 5 L-13 | BL-ORD-001 | `TC-ORD-001` passes | Must | FYP | S |
@@ -217,8 +217,8 @@ Each row now carries its own **Phase** tag: `FYP` = committed inside the 3-month
 | ID | Title | FR/BR | Dependencies | Acceptance criteria | Priority | Phase | Estimate |
 |---|---|---|---|---|---|---|---|
 | BL-PAY-001 (Story) | COD path through the Payment state machine | FR-PAY-001 | BL-ORD-001 | Works end-to-end | Must | **FYP — Sprint 6, after `BL-ORD-001` lands in Sprint 5 (a real order must exist before COD can attach a status to it)** | S |
-| BL-PAY-002 (Tech) | Sandbox online-payment stub (authorize/capture/fail) | FR-PAY-002, ⚠ OPEN-001 | BL-PAY-001 | Simulated paths all work | Must | **FYP — Sprint 5** (the stub itself has no Order dependency, unlike `BL-PAY-001`) | M |
-| BL-PAY-003 (Tech) | `PaymentAllocation`/`PaymentTransactionAllocation` core | FR-PAY-003, Part 3 | BL-PAY-002 | `TC-PAY-006` passes for both OPEN-007 resolutions | Must | **FYP — Sprint 6** (`PaymentAllocation` references `VendorSuborder`, so it also needs `BL-ORD-001` first) | M |
+| BL-PAY-002 (Tech) | Sandbox online-payment stub (authorize/capture/fail) — an independent gateway adapter, built and testable in isolation against a dummy/mock order reference, not a continuation of `BL-PAY-001`'s COD path | FR-PAY-002, ⚠ OPEN-001 | BL-FOUND-003 | Simulated paths all work | Must | **FYP — Sprint 5** (no dependency on `BL-PAY-001`, which is a separate, independent payment-method path scheduled Sprint 6 once Order-core exists) | M |
+| BL-PAY-003 (Tech) | `PaymentAllocation`/`PaymentTransactionAllocation` core | FR-PAY-003, Part 3 | BL-PAY-002, BL-ORD-001 | `TC-PAY-006` passes for both OPEN-007 resolutions | Must | **FYP — Sprint 6** (`PaymentAllocation` references `VendorSuborder`, so it needs `BL-ORD-001`, Sprint 5, not just `BL-PAY-002`) | M |
 | BL-PAY-004 (Tech) | `WebhookInbox` + `OutboxEvent` relay worker | Part 3, Part 6 M.4, ADR-006 | BL-PAY-002, BL-FOUND-005 | `TC-PAY-002/003/005`, `TC-OUTBOX-001` all pass | Must | **FYP — Sprint 6** (no real Order dependency, but grouped here to balance sprint load) | M |
 | BL-PAY-005 (Story) | Partial/full refund flow | FR-PAY-004, BR-013 | BL-PAY-003, EPIC-RET | `TC-PAY-004` passes | Should | Full MVP (Returns is demoted; refund has nothing to attach to without it) | M |
 
