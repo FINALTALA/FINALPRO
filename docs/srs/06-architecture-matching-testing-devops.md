@@ -199,9 +199,10 @@ Already specified functionally in FR-MATCH-006/007 (Part 2) — Section N adds o
 | TC-MATCHAPI-001 | A repeated, byte-for-byte identical decision on an already-decided `ProductMatch` returns the existing state with `200`; a *different* decision on the same match returns `409` | Part 4's match-decision idempotency fix |
 | TC-IMPORT-001 | A CSV import with 3 invalid rows commits the valid rows and reports the 3 failures individually | FR-IMPORT-003 |
 | TC-IMPORT-002 | Retrying a failed import job reprocesses only the previously failed rows, not the already-committed ones | FR-IMPORT-012 |
+| TC-PRICE-001 | Saving a price change on an offer — whether via the manual editor (`BL-IMPORT-001`) or a bulk CSV import row (`BL-IMPORT-002`) — writes a `PriceHistory` row (new price, currency, timestamp) in the same transaction as the save; a save that doesn't change the price writes no new row | FR-PRICE-002 |
 | TC-SEARCH-001 | A search query with a common Arabic spelling variant returns the same results as the canonical spelling | FR-SEARCH-002 |
 | TC-COMP-001 | Comparing two offers in different currencies shows both the native and FX-normalized price with the rate/date disclosed | FR-COMP-009, ⚠ OPEN-002 |
-| TC-INV-001 | An item that goes out of stock between cart-add and checkout blocks only that line, preserving the rest of the cart | FR-INV-004, FR-CART-016 |
+| TC-INV-001 | **Concurrent** test: an offer with exactly one unit in stock is in two different customers' carts; both submit checkout simultaneously. The atomic conditional decrement (FR-INV-004) must let exactly one succeed and the other fail with the item blocked on that line only, rest of cart preserved — never both succeeding (oversold) and never both failing (a false-negative lock conflict) | FR-INV-004, FR-CART-016 |
 | TC-VEND-001 | A vendor branch marked physical cannot be approved without both a geolocation pin and a storefront photo | BR-022 |
 | TC-VEND-002 | A suspended vendor retains access to its Orders queue/Order detail/Returns queue but loses new-offer/storefront visibility | Part 5, L-23 fix |
 | TC-SUB-001 | A vendor subscription reaching its grace-period deadline without payment transitions to Suspended, not immediately on the due date | BR-014, ⚠ OPEN-003 |

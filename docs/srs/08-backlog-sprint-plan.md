@@ -78,8 +78,11 @@ This is the number every Must-priority item below and every sprint in the Sprint
 | 22 | EPIC-PERF | Performance | NFR-PERF-*, NFR-SCALE-001 | Should | Real load-testing is valuable but not exit-criteria-blocking at FYP scale | Should | — | FYP-scale targets met under a basic load test — built only if time allows |
 | 23 | EPIC-DEPLOY | Deployment | Part 6 §P | FYP Increment | Nothing ships without a real deploy target | Must | RISK-011 | Staging and a production-equivalent environment both deployable via the CI/CD pipeline |
 | 24 | EPIC-OPS | Operational readiness | Part 6 §P, Part 5 K.2 | FYP Increment | This *is* the deliverable — a working pilot and beta against the exit criteria | Must | RISK-001, RISK-011, RISK-016 | The highest-risk runbook exists; the vendor pilot and a small customer beta both run successfully against the FYP exit criteria (Part 1, D.3) |
+| 25 | EPIC-SUP | Customer support | FR-SUP | **Full MVP** | Trust/safety and post-purchase support quality (BO-8) — but not load-bearing for proving the core mechanic at pilot scale | **Won't (FYP)** | RISK-009 | A formal in-app ticketing system exists — deferred; not built in the FYP window at all |
 
 **Note on folded modules:** the master prompt's own implementation-order list does not name Favorites/Alerts or CMS/Marketing as separate epics — they're folded here into the epic they're most operationally similar to (Favorites/Alerts → Notifications; CMS/Marketing → Administration) rather than silently dropped, and both retain their own `FR-FAV-*`/`FR-CMS-*` IDs from Part 2 for traceability. Their Must-priority status inside those epics was explicitly narrowed in this revision (see EPIC-NOTIF's revised DoD and EPIC-ADMIN's Should-demotion of BL-ADMIN-004).
+
+**Note on EPIC-SUP (added after the Part 9 traceability review):** the master prompt's implementation-order list doesn't name Customer Support as a standalone item either, and unlike Favorites/CMS it was never folded anywhere — it was simply missing from this backlog until Part 9's traceability matrix caught the omission. It is recorded here, explicitly, as the source of truth: **not built during the FYP.** At pilot scale (3–6 vendors, a small closed beta), the 2-person team handles support through an informal channel they already monitor directly (e.g., a shared inbox), not a formal ticketing system — a defensible scope cut, but one that must be a stated decision (`BL-SUP-001`, below), not a silent gap.
 
 ---
 
@@ -145,8 +148,8 @@ Each row now carries its own **Phase** tag: `FYP` = committed inside the 3-month
 
 | ID | Title | FR/BR | Dependencies | Acceptance criteria | Priority | Phase | Estimate |
 |---|---|---|---|---|---|---|---|
-| BL-IMPORT-001 (Story) | As a vendor catalog employee, I can create/edit an offer manually | FR-IMPORT-001 | EPIC-MATCH, EPIC-CAT | Uses the FYP fallback specs field (BL-CAT-004b) | Must | FYP | S |
-| BL-IMPORT-002 (Story) | Bulk CSV import against one fixed template (no configurable field-mapping UI in the FYP) | FR-IMPORT-002 | BL-IMPORT-001 | Validation report generated; partial success supported | Must | FYP | M |
+| BL-IMPORT-001 (Story) | As a vendor catalog employee, I can create/edit an offer manually | FR-IMPORT-001, FR-PRICE-002 | EPIC-MATCH, EPIC-CAT | Uses the FYP fallback specs field (BL-CAT-004b); **every save that changes `OfferVariant.base_price`/`sale_price`/`currency` writes a corresponding `PriceHistory` row in the same transaction** (`TC-PRICE-001`) — not optional follow-up work, part of this item's own definition of done | Must | FYP | S |
+| BL-IMPORT-002 (Story) | Bulk CSV import against one fixed template (no configurable field-mapping UI in the FYP) | FR-IMPORT-002, FR-PRICE-002 | BL-IMPORT-001 | Validation report generated; partial success supported; each committed row's price write goes through the same `PriceHistory`-writing path as `BL-IMPORT-001` (no separate/parallel write path that could skip it) | Must | FYP | M |
 | BL-IMPORT-002b (Story) | Configurable field-mapping UI | FR-IMPORT-011 | BL-IMPORT-002 | Vendor's own column headers can be mapped | Should | FYP (stretch) | M |
 | BL-IMPORT-003 (Story) | Retry only the failed rows of an import | FR-IMPORT-012 | BL-IMPORT-002 | `TC-IMPORT-002` passes | Should | FYP (stretch) | S |
 | BL-IMPORT-004 (QA) | Partial-success import test | FR-IMPORT-003 | BL-IMPORT-002 | `TC-IMPORT-001` passes | Must | FYP | S |
@@ -175,9 +178,9 @@ Each row now carries its own **Phase** tag: `FYP` = committed inside the 3-month
 | ID | Title | FR/BR | Dependencies | Acceptance criteria | Priority | Phase | Estimate |
 |---|---|---|---|---|---|---|---|
 | BL-INV-001 (Story) | As vendor staff, I can update stock per branch (manual only) | FR-INV-001/005 | EPIC-VEND, EPIC-IMPORT | Stock updates reflected immediately | Must | FYP | S |
-| BL-INV-002 (Story) | Checkout-time revalidation of price/stock | FR-INV-004, FR-CART-002 | BL-INV-001 | `TC-INV-001` passes — this is the FYP's *only* oversell defense (see BL-INV-004) | Must | FYP | S |
+| BL-INV-002 (Story) | Checkout-time stock enforcement via an **atomic conditional decrement** (`UPDATE ... WHERE quantity >= 1`, rows-affected checked) inside the same transaction as order creation — not a plain read-then-write revalidation, which can race | FR-INV-004, FR-CART-002 | BL-INV-001 | `TC-INV-001` passes, including its concurrent-checkout case — this is the FYP's *only* oversell defense, and it's concurrency-safe on its own (see `BL-INV-004`'s narrower scope) | Must | FYP | S |
 | BL-INV-003 (Tech) | Scheduled staleness sweep/flagging per channel | FR-INV-006, BR-005 | BL-INV-001 | Flags stale rows per NFR-STALE-001 | Should | FYP (stretch) | M |
-| BL-INV-004 (Tech) | Inventory **reservation** with expiry window (FR-INV-003) — a temporary hold from cart-add until checkout/expiry, on top of (not instead of) revalidation | FR-INV-003 | BL-INV-002 | A reserved unit is unavailable to a second concurrent customer until the reservation expires or converts to a sale | Should | Full MVP | M |
+| BL-INV-004 (Tech) | Inventory **reservation** with expiry window (FR-INV-003) — a temporary hold from cart-add until checkout/expiry. **Not a correctness fix** (`BL-INV-002`'s atomic decrement already makes checkout itself oversell-safe on its own) — this is a UX improvement, showing a customer accurate availability *while still browsing/before submitting checkout*, rather than letting them build a cart around an item only to lose the race at the final step | FR-INV-003 | BL-INV-002 | A customer with a reserved unit in their cart sees it as unavailable to add for a second concurrent customer, before either reaches checkout | Should | Full MVP | M |
 
 ### 10. EPIC-CART — Cart
 
@@ -315,6 +318,12 @@ Each row now carries its own **Phase** tag: `FYP` = committed inside the 3-month
 | BL-OPS-002 (Ops) | Vendor pilot onboarding (3–6 vendors, per Part 1 D.4) | Part 1, D.4 | EPIC-VEND, EPIC-IMPORT | Pilot vendors listing real offers — ongoing, not one build task | Must | FYP | S (per touchpoint, spread across sprints) |
 | BL-OPS-003 (Ops) | Small customer beta | Part 1, D.3 exit criteria | EPIC-CHECKOUT, EPIC-ORD, EPIC-PAY, EPIC-FUL | End-to-end demo flow completes with real beta users — **starts only once the full path (checkout→payment→delivery) is usable, not before** | Must | FYP | S (per touchpoint) |
 | BL-OPS-004 (Ops) | FYP exit-criteria demo rehearsal | Part 1, D.3 | Every Must item above | Full demo script runs clean | Must | FYP | S |
+
+### 25. EPIC-SUP — Customer support
+
+| ID | Title | FR/BR | Dependencies | Acceptance criteria | Priority | Phase | Estimate |
+|---|---|---|---|---|---|---|---|
+| BL-SUP-001 (Ops) | **Full MVP — informal FYP support.** No in-app ticketing system (FR-SUP-001–006) is built during the FYP window. Support during the pilot/beta runs through an informal channel (e.g., a shared inbox or messaging channel) the 2-person team monitors directly, linked manually to the relevant `CustomerOrder`/vendor account when needed | FR-SUP-001–006 | None (a decision record, not a build task) | The informal channel is set up and monitored before customer beta starts (Sprint 10); every beta/pilot participant is told how to reach it | Won't (FYP) | Full MVP | — |
 
 ---
 
