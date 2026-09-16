@@ -11,17 +11,164 @@ datasource db {
   provider = "postgresql"
 }
 
-/// Minimal placeholder for Part 3's User entity - expanded in Sprint 2
-/// (EPIC-AUTH) with phone, password_hash, email, language_pref, etc.
-/// Kept here only so AuditLog.actorId has something to reference now
-/// (Part 3, G.3) without blocking Foundation on Auth's own schema work.
+/// Part 3, G.3 identity domain. phone is the primary credential
+/// (FR-AUTH-002); email is optional (Q12). phoneVerifiedAt is set once,
+/// at registration, after a successful OTP verify - never cleared by a
+/// later password reset or login (those re-prove the password, not
+/// phone ownership).
 model User {
-  id        String   @id @default(uuid())
-  createdAt DateTime @default(now())
+  id              String    @id @default(uuid())
+  phone           String    @unique
+  passwordHash    String
+  email           String?
+  languagePref    String    @default("ar")
+  phoneVerifiedAt DateTime?
+  createdAt       DateTime  @default(now())
 
-  auditLogs AuditLog[]
+  customerProfile CustomerProfile?
+  vendorUsers     VendorUser[]
+  auditLogs       AuditLog[]
 
   @@map("users")
+}
+
+/// Part 3, G.3: one-to-one with User. Split out (rather than folding
+/// displayName etc. into User) because Part 3 models it as its own
+/// entity - VendorUser and future staff-role entities reference User
+/// directly, not CustomerProfile, so a vendor-only account never needs
+/// one.
+model CustomerProfile {
+  id          String  @id @default(uuid())
+  userId      String  @unique
+  user        User    @relation(fields: [userId], references: [id])
+  displayName String?
+
+  addresses Address[]
+
+  @@map("customer_profiles")
+}
+
+/// Part 3, G.3 (FR-AUTH-008): map pin + landmark + up to two phone
+/// numbers, supporting BR-020's two-phone-number delivery-confirmation
+/// requirement. Sprint 2 (BL-AUTH-004) ships only creation - the
+/// saved-addresses management screen (list/edit/delete) is BL-AUTH-004b,
+/// a Should/stretch item deferred past the FYP Must scope.
+model Address {
+  id           String          @id @default(uuid())
+  customerId   String
+  customer     CustomerProfile @relation(fields: [customerId], references: [id])
+  label        String?
+  lat          Float
+  lng          Float
+  landmarkNote String?
+  phoneNumber1 String
+  phoneNumber2 String?
+  createdAt    DateTime        @default(now())
+
+  @@index([customerId])
+  @@map("addresses")
+}
+
+enum OtpPurpose {
+  SIGNUP
+  PASSWORD_RESET
+  PHONE_CHANGE
+}
+
+/// Backs `POST /auth/otp/request` / `POST /auth/otp/verify` (Part 4,
+/// H.3; FR-AUTH-003/005/006). Only codeHash is stored, never the
+/// plaintext code - the code itself is only ever surfaced through the
+/// OPEN-004 logged/fallback channel (SmsService), matching Part 1 D.4's
+/// documented FYP fallback for the still-unselected SMS/OTP provider.
+/// attemptCount backs the 429 TOO_MANY_ATTEMPTS response Part 4
+/// specifies; consumedAt enforces "consumption happens exactly once."
+model OtpCode {
+  id           String     @id @default(uuid())
+  phone        String
+  purpose      OtpPurpose
+  codeHash     String
+  expiresAt    DateTime
+  consumedAt   DateTime?
+  attemptCount Int        @default(0)
+  createdAt    DateTime   @default(now())
+
+  @@index([phone, purpose])
+  @@map("otp_codes")
+}
+
+/// Part 2's vendor status lifecycle (E.2). Sprint 2 (BL-VEND-001) only
+/// ever creates a Vendor at APPLIED - the UnderReview/Approved/Active
+/// transitions belong to FR-VEND-003/004 (Sprint 3+ review workflow).
+enum VendorStatus {
+  APPLIED
+  UNDER_REVIEW
+  REJECTED
+  APPROVED
+  ACTIVE
+  SUSPENDED
+  CANCELLED
+}
+
+/// Only OWNER exists for the FYP window (BL-VEND-005b: "owner-only
+/// vendor account, no sub-roles" is the Must-scope fallback for the
+/// full admin/branch-manager/catalog/order-processing role set in
+/// FR-VEND-007/BL-VEND-005, which is a Should/stretch item).
+enum VendorUserRole {
+  OWNER
+}
+
+/// Part 3, G.3. Sprint 2 (BL-VEND-001) captures just enough to submit
+/// an application - name, whether it's a physical location, and an
+/// optional pin. The verification-evidence fields FR-VEND-002 requires
+/// (a mandatory pin + storefront photo, checked before *approval* not
+/// *submission*) are exercised starting BL-VEND-002 (Sprint 3);
+/// verificationPhotoUrl/verificationStatus exist here now because
+/// they're intrinsic to this entity per Part 3, not because Sprint 2
+/// enforces them yet.
+enum BranchVerificationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model Vendor {
+  id        String       @id @default(uuid())
+  legalName String
+  status    VendorStatus @default(APPLIED)
+  createdAt DateTime     @default(now())
+
+  vendorUsers   VendorUser[]
+  storeBranches StoreBranch[]
+
+  @@map("vendors")
+}
+
+model VendorUser {
+  id       String         @id @default(uuid())
+  userId   String
+  user     User           @relation(fields: [userId], references: [id])
+  vendorId String
+  vendor   Vendor         @relation(fields: [vendorId], references: [id])
+  role     VendorUserRole @default(OWNER)
+
+  @@unique([userId, vendorId])
+  @@map("vendor_users")
+}
+
+model StoreBranch {
+  id                   String                   @id @default(uuid())
+  vendorId             String
+  vendor               Vendor                   @relation(fields: [vendorId], references: [id])
+  name                 String
+  isPhysical           Boolean                  @default(true)
+  lat                  Float?
+  lng                  Float?
+  verificationPhotoUrl String?
+  verificationStatus   BranchVerificationStatus @default(PENDING)
+  createdAt            DateTime                 @default(now())
+
+  @@index([vendorId])
+  @@map("store_branches")
 }
 
 /// Immutable, append-only audit trail - the source of truth for every

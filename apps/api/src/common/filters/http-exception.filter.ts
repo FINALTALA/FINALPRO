@@ -34,6 +34,13 @@ export class HttpExceptionFilter implements ExceptionFilter {
     if (exception instanceof HttpException) {
       status = exception.getStatus();
       const body = exception.getResponse();
+      // Part 4, H.1's examples (`400 OTP_INVALID`, `409 OTP_EXPIRED`, ...)
+      // are business-specific codes, not just the HTTP status name - a
+      // thrown exception can supply its own `code` in the response body
+      // (e.g. `new BadRequestException({ code: 'OTP_INVALID', message })`)
+      // and it's used verbatim; anything that doesn't falls back to the
+      // generic status-derived code exactly as before.
+      let customCode: string | undefined;
       if (typeof body === 'string') {
         message = body;
       } else if (typeof body === 'object' && body !== null) {
@@ -42,8 +49,10 @@ export class HttpExceptionFilter implements ExceptionFilter {
         details = Array.isArray(asRecord.message)
           ? (asRecord.message as unknown[])
           : [];
+        customCode =
+          typeof asRecord.code === 'string' ? asRecord.code : undefined;
       }
-      code = HttpStatus[status] ?? 'ERROR';
+      code = customCode ?? HttpStatus[status] ?? 'ERROR';
     } else if (exception instanceof Error) {
       message = exception.message;
       this.logger.error(exception.message, exception.stack, correlationId);

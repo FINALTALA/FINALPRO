@@ -6,14 +6,16 @@ import {
   NestInterceptor,
   UnprocessableEntityException,
 } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import { createHash } from 'crypto';
 import { Request, Response } from 'express';
 import { Observable, from } from 'rxjs';
 import { catchError, switchMap } from 'rxjs/operators';
 import { IdempotencyKeyStatus, Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { IDEMPOTENCY_TTL_KEY } from './idempotency-ttl.decorator';
 
-const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000; // 24h, per Part 4 H.1
+const DEFAULT_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000; // 24h, per Part 4 H.1
 const STALE_IN_PROGRESS_MS = 30_000; // abandon a claim if its owner never finished (e.g. crashed)
 const MAX_TAKEOVER_ATTEMPTS = 5; // bound retries if takeover attempts keep losing the CAS race
 
@@ -74,7 +76,10 @@ type ClaimResult =
  */
 @Injectable()
 export class IdempotencyInterceptor implements NestInterceptor {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly reflector: Reflector,
+  ) {}
 
   async intercept(
     context: ExecutionContext,
@@ -90,22 +95,26 @@ export class IdempotencyInterceptor implements NestInterceptor {
       });
     }
 
-    // Scope is the acting user once EPIC-AUTH lands (Sprint 2) and sets
-    // req.user; "anonymous" is a deliberate, temporary placeholder for
-    // Foundation's unauthenticated demo endpoint only - a real mutating
-    // endpoint must not ship without a real scope here, since two
-    // different anonymous callers would otherwise share one scope and
-    // could collide on the same client-chosen key.
+    // Scope is the authenticated user (SessionAuthGuard sets req.user,
+    // Part 4 H.1/EPIC-AUTH) so two different users can never collide on
+    // the same client-chosen key. "anonymous" only applies to a route
+    // with no auth guard at all (e.g. health.echo's demo endpoint) -
+    // every real mutating endpoint sits behind SessionAuthGuard and so
+    // always has a real scope here.
     const scope =
       (request as { user?: { id?: string } }).user?.id ?? 'anonymous';
     const requestPath = request.path;
     const requestHash = hashRequest(request.method, requestPath, request.body);
+    const ttlMs =
+      this.reflector.get<number>(IDEMPOTENCY_TTL_KEY, context.getHandler()) ??
+      DEFAULT_IDEMPOTENCY_TTL_MS;
 
     const claim = await this.claimOrInspect(
       key,
       scope,
       requestPath,
       requestHash,
+      ttlMs,
     );
 
     if (claim.outcome === 'replay') {
@@ -135,7 +144,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
                 responseBody: (body ?? {}) as Prisma.InputJsonValue,
                 responseCode: response.statusCode,
                 completedAt: new Date(),
-                expiresAt: new Date(Date.now() + IDEMPOTENCY_TTL_MS),
+                expiresAt: new Date(Date.now() + ttlMs),
               },
             })
             .then(() => body),
@@ -159,6 +168,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
     scope: string,
     requestPath: string,
     requestHash: string,
+    ttlMs: number,
   ): Promise<ClaimResult> {
     try {
       const row = await this.prisma.idempotencyKey.create({
@@ -168,7 +178,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
           requestPath,
           requestHash,
           status: 'IN_PROGRESS',
-          expiresAt: new Date(Date.now() + IDEMPOTENCY_TTL_MS),
+          expiresAt: new Date(Date.now() + ttlMs),
         },
       });
       return { outcome: 'claimed', row };

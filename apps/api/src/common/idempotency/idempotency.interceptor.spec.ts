@@ -3,6 +3,7 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { CallHandler, ExecutionContext } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import { createHash } from 'crypto';
 import { of, throwError, firstValueFrom } from 'rxjs';
 import { Prisma } from '../../../generated/prisma/client';
@@ -34,6 +35,7 @@ function makeContext(opts: {
       getRequest: () => req,
       getResponse: () => res,
     }),
+    getHandler: () => ({}),
   } as unknown as ExecutionContext;
 }
 
@@ -55,6 +57,7 @@ describe('IdempotencyInterceptor', () => {
     };
   };
   let handler: CallHandler;
+  let reflector: { get: jest.Mock };
 
   beforeEach(() => {
     prisma = {
@@ -65,8 +68,13 @@ describe('IdempotencyInterceptor', () => {
         updateMany: jest.fn(),
       },
     };
+    // No route in these tests overrides the TTL, so `get()` returning
+    // undefined (falling back to the 24h default) matches every real
+    // route except POST /auth/otp/verify (see idempotency-ttl.decorator.ts).
+    reflector = { get: jest.fn().mockReturnValue(undefined) };
     interceptor = new IdempotencyInterceptor(
       prisma as unknown as PrismaService,
+      reflector as unknown as Reflector,
     );
     handler = { handle: () => of({ echoed: true }) };
   });
@@ -103,6 +111,23 @@ describe('IdempotencyInterceptor', () => {
         data: expect.objectContaining({ status: 'COMPLETED' }),
       }),
     );
+  });
+
+  it("uses a route-overridden idempotency TTL (e.g. OTP verify's 5-minute window) instead of the 24h default", async () => {
+    prisma.idempotencyKey.create.mockResolvedValue({ id: 'row-ttl' });
+    prisma.idempotencyKey.update.mockResolvedValue({});
+    const fiveMinutesMs = 5 * 60 * 1000;
+    reflector.get.mockReturnValue(fiveMinutesMs);
+
+    const context = makeContext({ headers: { 'idempotency-key': 'k-ttl' } });
+    await interceptor.intercept(context, handler);
+
+    const createCall = prisma.idempotencyKey.create.mock.calls[0][0];
+    const expiresAt: Date = createCall.data.expiresAt;
+    const deltaMs = expiresAt.getTime() - Date.now();
+    // Close to the 5-minute override, nowhere near the 24h default.
+    expect(deltaMs).toBeGreaterThan(fiveMinutesMs - 5_000);
+    expect(deltaMs).toBeLessThan(fiveMinutesMs + 5_000);
   });
 
   it('replays the stored response for a duplicate key with the same payload, without calling the handler', async () => {
