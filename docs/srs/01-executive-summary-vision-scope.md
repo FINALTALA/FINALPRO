@@ -137,7 +137,7 @@ The master prompt requires evaluating comparison-only, reservation/purchase-requ
 
 ### D.4 The FYP Delivery Increment, in concrete terms
 
-This is a **recommendation pending OPEN-006 sign-off**, not a unilateral scope cut — it changes nothing about what the full SRS specifies as the target platform (Parts 2–9 describe the full confirmed scope). It only defines what the 2-person/3-month team actually builds first, using the same data model and API contracts so later work extends rather than replaces it.
+**✅ Approved by the product owner, 2026-09-16 (OPEN-006, Part 7).** This was a recommendation, not a unilateral scope cut — it changes nothing about what the full SRS specifies as the target platform (Parts 2–9 describe the full confirmed scope). It only defines what the 2-person/3-month team actually builds first, using the same data model and API contracts so later work extends rather than replaces it. Implementation began at Sprint 1 on this basis.
 
 - **Client platforms:** build one shared codebase (framework choice finalized in Part 6, Architecture) capable of producing Web, Android, and iOS builds, rather than three independent native codebases — this is the only realistic way to honor "Web + Android + iOS from launch" (Q9) inside 3 months with 2 people.
 - **Payment:** real COD flow; online payment implemented against a sandbox/test-mode gateway (or a clearly-labeled simulated "online payment" flow) until OPEN-001 (a licensed, integrable local gateway) is resolved.
