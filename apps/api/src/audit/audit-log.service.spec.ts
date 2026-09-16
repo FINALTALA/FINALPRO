@@ -21,9 +21,10 @@ describe('AuditLogService', () => {
     service = module.get(AuditLogService);
   });
 
-  it('writes an audit row with the given actor, action, and entity', async () => {
+  it('writes an audit row with the given actor, correlation id, action, and entity', async () => {
     await service.record({
       actorId: 'user-1',
+      correlationId: 'corr-1',
       action: 'vendor.suspended',
       entityType: 'Vendor',
       entityId: 'vendor-1',
@@ -34,6 +35,7 @@ describe('AuditLogService', () => {
     expect(prisma.auditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         actorId: 'user-1',
+        correlationId: 'corr-1',
         action: 'vendor.suspended',
         entityType: 'Vendor',
         entityId: 'vendor-1',
@@ -41,15 +43,16 @@ describe('AuditLogService', () => {
     });
   });
 
-  it('defaults actorId to null for a System actor', async () => {
+  it('defaults actorId to null for a System actor, but still requires correlationId', async () => {
     await service.record({
+      correlationId: 'corr-2',
       action: 'outbox.reconciled',
       entityType: 'OutboxEvent',
       entityId: 'event-1',
     });
 
     expect(prisma.auditLog.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ actorId: null }),
+      data: expect.objectContaining({ actorId: null, correlationId: 'corr-2' }),
     });
   });
 
@@ -59,7 +62,12 @@ describe('AuditLogService', () => {
     };
 
     await service.record(
-      { action: 'test.tx', entityType: 'Test', entityId: 't1' },
+      {
+        correlationId: 'corr-3',
+        action: 'test.tx',
+        entityType: 'Test',
+        entityId: 't1',
+      },
       tx as never,
     );
 

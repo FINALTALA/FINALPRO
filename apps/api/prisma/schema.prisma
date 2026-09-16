@@ -27,20 +27,25 @@ model User {
 /// Immutable, append-only audit trail - the source of truth for every
 /// "must write an audit record" requirement across Part 2 (Part 3, G.3/G.4).
 /// actorId is nullable: a System actor (background job, migration) writes
-/// audit rows too, per Part 3's ownership note.
+/// audit rows too, per Part 3's ownership note. correlationId is required
+/// per Part 4, H.1: "every AuditLog row" carries it, propagated from the
+/// request that triggered the write (or the job/worker's own correlation
+/// id for a System-initiated one - never silently omitted).
 model AuditLog {
-  id          String   @id @default(uuid())
-  actorId     String?
-  actor       User?    @relation(fields: [actorId], references: [id])
-  action      String
-  entityType  String
-  entityId    String
-  beforeState Json?
-  afterState  Json?
-  occurredAt  DateTime @default(now())
+  id            String   @id @default(uuid())
+  actorId       String?
+  actor         User?    @relation(fields: [actorId], references: [id])
+  correlationId String
+  action        String
+  entityType    String
+  entityId      String
+  beforeState   Json?
+  afterState    Json?
+  occurredAt    DateTime @default(now())
 
   @@index([entityType, entityId])
   @@index([occurredAt])
+  @@index([correlationId])
   @@map("audit_logs")
 }
 
@@ -70,18 +75,45 @@ model OutboxEvent {
   @@map("outbox_events")
 }
 
-/// Backs the Idempotency-Key convention (Part 4, H.1): a mutating
-/// endpoint that creates a financial/order-affecting resource stores
-/// its response here keyed on the client-supplied header, and replays
-/// it verbatim on a retry with the same key instead of reprocessing.
-model IdempotencyKey {
-  key           String   @id
-  requestPath   String
-  responseBody  Json
-  responseCode  Int
-  createdAt     DateTime @default(now())
-  expiresAt     DateTime
+enum IdempotencyKeyStatus {
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+}
 
+/// Backs the Idempotency-Key convention (Part 4, H.1).
+///
+/// The row IS the atomicity mechanism: a request "claims" a key by
+/// INSERTing a row (status IN_PROGRESS) and relying on the database's
+/// unique-constraint enforcement - not an application-level
+/// findUnique-then-write, which two concurrent requests can both pass
+/// before either writes (the race the first version of this table had).
+/// Whichever concurrent INSERT the database accepts first wins the
+/// claim; the other gets a unique-violation error and must inspect the
+/// winning row instead of proceeding.
+///
+/// `key` is the client-supplied header value, not globally unique on
+/// its own - `scope` (the acting user/session; "anonymous" only until
+/// EPIC-AUTH lands, see the interceptor) and `requestPath` are part of
+/// the identity, so two different users - or two different endpoints -
+/// can never collide on the same client-chosen string. `requestHash`
+/// (method + path + body) is what a *reused* key with a *different*
+/// payload is checked against - a mismatch is a 409, per Part 4, H.1
+/// (a same-key-different-payload reuse is a conflict, not a replay).
+model IdempotencyKey {
+  id           String               @id @default(uuid())
+  key          String
+  scope        String
+  requestPath  String
+  requestHash  String
+  status       IdempotencyKeyStatus @default(IN_PROGRESS)
+  responseBody Json?
+  responseCode Int?
+  createdAt    DateTime             @default(now())
+  completedAt  DateTime?
+  expiresAt    DateTime
+
+  @@unique([key, scope, requestPath], name: "idempotency_lookup")
   @@index([expiresAt])
   @@map("idempotency_keys")
 }
