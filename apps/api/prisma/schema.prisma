@@ -1,0 +1,87 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+// Prisma 7: the connection URL lives in prisma.config.ts for Migrate/CLI
+// purposes; the runtime PrismaClient gets its connection via a driver
+// adapter (@prisma/adapter-pg) constructed from DATABASE_URL in code,
+// not from a `url` field here - see https://pris.ly/d/prisma7-client-config
+datasource db {
+  provider = "postgresql"
+}
+
+/// Minimal placeholder for Part 3's User entity - expanded in Sprint 2
+/// (EPIC-AUTH) with phone, password_hash, email, language_pref, etc.
+/// Kept here only so AuditLog.actorId has something to reference now
+/// (Part 3, G.3) without blocking Foundation on Auth's own schema work.
+model User {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+
+  auditLogs AuditLog[]
+
+  @@map("users")
+}
+
+/// Immutable, append-only audit trail - the source of truth for every
+/// "must write an audit record" requirement across Part 2 (Part 3, G.3/G.4).
+/// actorId is nullable: a System actor (background job, migration) writes
+/// audit rows too, per Part 3's ownership note.
+model AuditLog {
+  id          String   @id @default(uuid())
+  actorId     String?
+  actor       User?    @relation(fields: [actorId], references: [id])
+  action      String
+  entityType  String
+  entityId    String
+  beforeState Json?
+  afterState  Json?
+  occurredAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([occurredAt])
+  @@map("audit_logs")
+}
+
+enum OutboxEventStatus {
+  PENDING
+  PUBLISHED
+  FAILED
+}
+
+/// The transactional outbox (ADR-006, Part 3 G.3): written in the same
+/// Postgres transaction as the business write it accompanies - e.g.
+/// checkout's CustomerOrder/VendorSuborder creation. A separate relay
+/// worker (Part 6, M.4) polls Pending rows and publishes each to BullMQ,
+/// marking it Published only on confirmed delivery. This is what makes
+/// the checkout->notification/payment pipeline durable even if Redis is
+/// briefly unavailable at the moment of commit.
+model OutboxEvent {
+  id           String            @id @default(uuid())
+  eventType    String
+  payload      Json
+  status       OutboxEventStatus @default(PENDING)
+  createdAt    DateTime          @default(now())
+  publishedAt  DateTime?
+  attemptCount Int               @default(0)
+
+  @@index([status, createdAt])
+  @@map("outbox_events")
+}
+
+/// Backs the Idempotency-Key convention (Part 4, H.1): a mutating
+/// endpoint that creates a financial/order-affecting resource stores
+/// its response here keyed on the client-supplied header, and replays
+/// it verbatim on a retry with the same key instead of reprocessing.
+model IdempotencyKey {
+  key           String   @id
+  requestPath   String
+  responseBody  Json
+  responseCode  Int
+  createdAt     DateTime @default(now())
+  expiresAt     DateTime
+
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}
