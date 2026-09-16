@@ -421,6 +421,8 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
         .send({ phone, otp_code: code, new_password: 'new-password' })
         .expect(200);
       expect(typeof confirm.body.session_token).toBe('string');
+      expect(confirm.body.session_status).toBe('ISSUED');
+      expect(confirm.body.password_reset_completed).toBe(true);
 
       // Old session is revoked.
       await request(app.getHttpServer())
@@ -572,7 +574,7 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
         .expect(200);
     });
 
-    it('does not report success with a null session_token when session issuance fails after a genuine password change - the client gets an error, not a misleading 200 (Sprint 2 review round 5)', async () => {
+    it('reports LOGIN_REQUIRED (a real, honest 200 - not an error, not a silent lie) when session issuance fails after a genuine password change, and a same-key retry replays the exact same answer (Sprint 2 review round 6)', async () => {
       const phone = uniquePhone();
       await signup(phone, 'old-password');
 
@@ -581,34 +583,57 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
         .send({ phone })
         .expect(202);
       const code = fakeSms.lastCodeFor(phone);
+      const key = `reset-redisfail-${phone}`;
 
       const sessions = app.get(SessionService);
       const createSpy = jest
         .spyOn(sessions, 'create')
         .mockRejectedValueOnce(new Error('simulated Redis outage'));
 
-      const res = await request(app.getHttpServer())
+      const first = await request(app.getHttpServer())
         .post('/api/v1/auth/password/reset-confirm')
-        .set('Idempotency-Key', `reset-redisfail-${phone}`)
-        .send({ phone, otp_code: code, new_password: 'new-password' });
+        .set('Idempotency-Key', key)
+        .send({ phone, otp_code: code, new_password: 'new-password' })
+        .expect(200);
 
       createSpy.mockRestore();
 
-      expect(res.status).not.toBe(200);
-      expect(res.body.session_token).toBeUndefined();
+      // By explicit product decision (Sprint 2 review round 6): once
+      // the Postgres transaction commits, the password reset is final
+      // - Redis is never part of that transaction and can never roll
+      // it back or gate it. A Redis failure during the *separate*
+      // session-issuance step is reported as a real, successful
+      // outcome, not a 500 and not a 200 with a silently-null token.
+      expect(first.body).toEqual({
+        session_token: null,
+        session_status: 'LOGIN_REQUIRED',
+        password_reset_completed: true,
+      });
+
+      // A same-key retry replays this exact record - it never
+      // re-enters the handler (the transaction already marked it
+      // COMPLETED), so it can't magically succeed at issuing a session
+      // just because Redis has recovered by the time of the retry;
+      // the client's signal to get a real session is to call
+      // POST /auth/login directly, using the new password below.
+      const second = await request(app.getHttpServer())
+        .post('/api/v1/auth/password/reset-confirm')
+        .set('Idempotency-Key', key)
+        .send({ phone, otp_code: code, new_password: 'new-password' })
+        .expect(200);
+      expect(second.headers['idempotent-replayed']).toBe('true');
+      expect(second.body).toEqual(first.body);
 
       // The password change itself is durably committed by the
-      // transaction (Sprint 2 review round 3/4), independent of this
-      // later, Redis-only step - the new password already works even
-      // though this specific response reported an error, not a
-      // misleading 200 with a null token.
+      // transaction, independent of the Redis-only session step - the
+      // new password already works.
       await request(app.getHttpServer())
         .post('/api/v1/auth/login')
         .send({ phone, password: 'new-password' })
         .expect(200);
     });
 
-    it('under two concurrent resets for the same user with two different valid OTPs, every returned session token is immediately valid - no stale predicted-sessionVersion tokens (Sprint 2 review round 5)', async () => {
+    it('when a second PASSWORD_RESET OTP is requested before the first is used, only the latest OTP can succeed - and its session token (if issued) is immediately valid, never minted against a stale predicted sessionVersion (Sprint 2 review round 6)', async () => {
       const phone = uniquePhone();
       await signup(phone, 'old-password');
 
@@ -616,12 +641,13 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
         .post('/api/v1/auth/password/reset-request')
         .send({ phone })
         .expect(202);
-      const codeA = fakeSms.lastCodeFor(phone);
+      const codeA = fakeSms.lastCodeFor(phone); // superseded the instant codeB is issued, below
+
       await request(app.getHttpServer())
         .post('/api/v1/auth/password/reset-request')
         .send({ phone })
         .expect(202);
-      const codeB = fakeSms.lastCodeFor(phone);
+      const codeB = fakeSms.lastCodeFor(phone); // the only OTP checkCode() will ever match now
 
       const [resA, resB] = await Promise.all([
         request(app.getHttpServer())
@@ -634,19 +660,27 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
           .send({ phone, otp_code: codeB, new_password: 'password-b' }),
       ]);
 
-      // Both OTPs are independently valid, so both resets can
-      // legitimately succeed (the last to commit determines the final
-      // password) - what must never happen is either one returning a
-      // session_token that immediately fails SessionAuthGuard because
-      // it was minted against a *predicted* sessionVersion instead of
-      // the transaction's real, post-increment one.
-      for (const res of [resA, resB]) {
-        if (res.status === 200 && res.body.session_token) {
-          await request(app.getHttpServer())
-            .get('/api/v1/customers/me')
-            .set('Authorization', `Bearer ${res.body.session_token}`)
-            .expect(200);
-        }
+      // OtpService.checkCode() only ever considers the single most
+      // recently issued, still-unconsumed OTP for a given phone+purpose
+      // (see its own doc comment) - it was never designed to let two
+      // outstanding OTPs both be independently valid at once. Issuing a
+      // second OTP therefore supersedes the first deterministically,
+      // not as a race: codeA can never succeed once codeB exists,
+      // regardless of timing, so only resB can be a 200 here.
+      expect(resA.status).toBe(400);
+      expect(resA.body.error.code).toBe('OTP_INVALID');
+      expect(resB.status).toBe(200);
+      expect(resB.body.password_reset_completed).toBe(true);
+
+      // Whatever session_status resB got, it must be internally
+      // consistent - and critically, if a token WAS issued, it must be
+      // immediately valid, never minted against a stale, pre-
+      // transaction-predicted sessionVersion (the bug round 5 fixed).
+      if (resB.body.session_status === 'ISSUED') {
+        await request(app.getHttpServer())
+          .get('/api/v1/customers/me')
+          .set('Authorization', `Bearer ${resB.body.session_token}`)
+          .expect(200);
       }
     });
 

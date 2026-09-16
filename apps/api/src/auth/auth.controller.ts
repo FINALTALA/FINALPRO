@@ -32,6 +32,21 @@ import { SessionService } from './session.service';
 
 const OTP_VERIFY_IDEMPOTENCY_TTL_MS = 5 * 60 * 1000; // Part 4, H.3's "short window (e.g. 5 minutes)"
 
+/**
+ * confirmPasswordReset's explicit, always-replayable "core operation
+ * succeeded, session issuance is separate" response (Sprint 2 review
+ * round 6). Written into the Idempotency-Key completion record by the
+ * password-changing transaction itself - a caller who only ever sees
+ * this value (a genuine Redis outage during session issuance, or a
+ * replay of one) still gets a clear, honest 200: the password change
+ * is final and already happened; log in with it directly.
+ */
+const LOGIN_REQUIRED_RESPONSE = {
+  session_token: null,
+  session_status: 'LOGIN_REQUIRED',
+  password_reset_completed: true,
+} as const;
+
 /** Throws the exact {status, code} pair Part 4, H.3 documents for an OTP failure. */
 function throwForOtpFailure(reason: OtpCheckResult['reason']): never {
   switch (reason) {
@@ -352,24 +367,23 @@ export class AuthController {
     // sessionVersion; both were wrong. A failed OTP consumption or any
     // other transaction failure would already have revoked the user's
     // other sessions with no password change to show for it - and the
-    // prediction itself was unsafe whenever two independent resets for
-    // the same user, under two different valid OTPs, could commit
-    // concurrently: the second to commit lands on a version one higher
-    // than either prediction, computed before either transaction ran,
-    // could have accounted for - immediately invalidating that token).
+    // prediction itself was unsafe under two concurrent resets for the
+    // same user).
     //
     // OTP consumption, the password/sessionVersion update, the audit
     // record, AND this route's own Idempotency-Key completion record
     // are all in ONE transaction (Sprint 2 review round 3/4): if any
     // part fails, none of it commits, so a retry can genuinely start
-    // over; if it all commits, the completion record commits with it.
-    // The stored responseBody's session_token is necessarily null at
-    // this point - Redis can't participate in this transaction, and
-    // the real sessionVersion a valid session needs is only known once
-    // this transaction actually commits, not before. A caller who only
-    // ever sees this stored value (a replay after the session-issuing
-    // step below has failed) still gets an honest answer: the password
-    // changed; log in again.
+    // over; if it all commits, the password reset is final - by
+    // explicit product decision (Sprint 2 review round 6), Redis is
+    // never allowed to roll it back or gate it. session_token is
+    // necessarily null at this point - Redis can't participate in this
+    // transaction, and the real sessionVersion a valid session needs
+    // is only known once this transaction actually commits, not
+    // before - but session_status: LOGIN_REQUIRED and
+    // password_reset_completed: true are both unconditionally true the
+    // moment this commits, and stay true for every future replay of
+    // this exact request.
     let updatedUser: {
       id: string;
       phone: string;
@@ -409,7 +423,7 @@ export class AuthController {
             where: { id: req.idempotencyClaimId },
             data: {
               status: 'COMPLETED',
-              responseBody: { session_token: null } as Prisma.InputJsonValue,
+              responseBody: LOGIN_REQUIRED_RESPONSE as Prisma.InputJsonValue,
               responseCode: 200,
               completedAt: new Date(),
               expiresAt: new Date(Date.now() + OTP_VERIFY_IDEMPOTENCY_TTL_MS),
@@ -429,39 +443,54 @@ export class AuthController {
       throw err;
     }
 
-    // The password change is now durably committed, using the REAL,
-    // authoritative sessionVersion the transaction actually produced -
-    // never a pre-transaction prediction. Revoking old sessions is
-    // purely an optimization now (SessionAuthGuard's version check
-    // already makes them unusable the instant the transaction above
-    // committed); it happens only now, strictly after that commit,
-    // never before. Deliberately NOT caught-and-swallowed: if Redis is
-    // unreachable here, this request must not report success with a
-    // null token (the interceptor's now-conditional FAILED-write, see
-    // its catchError, safely leaves the record COMPLETED either way -
-    // it only ever downgrades a still-IN_PROGRESS record, never this
-    // one).
-    await this.sessions.revokeAllForUser(updatedUser.id);
-    const token = await this.sessions.create({
-      userId: updatedUser.id,
-      phone: updatedUser.phone,
-      phoneVerifiedAt: updatedUser.phoneVerifiedAt?.toISOString() ?? null,
-      sessionVersion: updatedUser.sessionVersion,
-    });
+    // The password change is final and already durably committed,
+    // using the REAL, authoritative sessionVersion the transaction
+    // actually produced - never a pre-transaction prediction. Session
+    // issuance from here on is a pure enhancement on top of that
+    // already-successful outcome, never a condition of it: if Redis is
+    // unreachable, this request still reports success -
+    // session_status: LOGIN_REQUIRED, the exact same response the
+    // transaction above already durably recorded - rather than a
+    // misleading 500 for an operation that, in truth, already
+    // succeeded. Revoking old sessions is now purely an optimization
+    // (SessionAuthGuard's sessionVersion check already makes them
+    // unusable the instant the transaction above committed).
+    let responseBody: {
+      session_token: string | null;
+      session_status: 'LOGIN_REQUIRED' | 'ISSUED';
+      password_reset_completed: true;
+    } = LOGIN_REQUIRED_RESPONSE;
+    try {
+      await this.sessions.revokeAllForUser(updatedUser.id);
+      const token = await this.sessions.create({
+        userId: updatedUser.id,
+        phone: updatedUser.phone,
+        phoneVerifiedAt: updatedUser.phoneVerifiedAt?.toISOString() ?? null,
+        sessionVersion: updatedUser.sessionVersion,
+      });
+      responseBody = {
+        session_token: token,
+        session_status: 'ISSUED',
+        password_reset_completed: true,
+      };
+    } catch (err) {
+      this.logger.error(
+        `Password reset for user ${updatedUser.id} committed, but session issuance failed - client should log in manually: ${(err as Error).message}`,
+      );
+    }
 
-    // Keep the durably-completed record in sync with the real token,
+    // Keep the durably-completed record in sync with the real outcome,
     // so a later replay of *this* successful attempt returns it too,
-    // not the transaction's null placeholder. Best-effort: this client
-    // already has the real token in the response below regardless of
+    // not the transaction's LOGIN_REQUIRED placeholder. Best-effort:
+    // this client already has the correct response below regardless of
     // whether this specific patch succeeds - only a hypothetical
-    // future replay would see the degraded (null) value if it doesn't.
-    if (req.idempotencyClaimId) {
+    // future replay would see LOGIN_REQUIRED instead of ISSUED if it
+    // doesn't (still an honest, successful answer either way).
+    if (responseBody.session_status === 'ISSUED' && req.idempotencyClaimId) {
       try {
         await this.prisma.idempotencyKey.update({
           where: { id: req.idempotencyClaimId },
-          data: {
-            responseBody: { session_token: token } as Prisma.InputJsonValue,
-          },
+          data: { responseBody: responseBody as Prisma.InputJsonValue },
         });
       } catch (err) {
         this.logger.error(
@@ -470,6 +499,6 @@ export class AuthController {
       }
     }
 
-    return { session_token: token };
+    return responseBody;
   }
 }
