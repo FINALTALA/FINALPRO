@@ -41,20 +41,40 @@ describe('PhoneVerificationService', () => {
   });
 
   describe('recovery index', () => {
-    it('recovers a token by the OTP id it was indexed under', async () => {
+    it('recovers a token by the OTP id AND the exact Idempotency-Key it was indexed under', async () => {
       const redis = makeRedisMock();
       const service = new PhoneVerificationService(redis as never);
 
-      await service.createRecoveryIndex('otp-1', 'tok_abc123');
+      await service.createRecoveryIndex('otp-1', 'my-key', 'tok_abc123');
 
-      expect(await service.recoverToken('otp-1')).toBe('tok_abc123');
+      expect(await service.recoverToken('otp-1', 'my-key')).toBe('tok_abc123');
     });
 
     it('returns null for an OTP id with no recovery index', async () => {
       const redis = makeRedisMock();
       const service = new PhoneVerificationService(redis as never);
 
-      expect(await service.recoverToken('never-indexed')).toBeNull();
+      expect(await service.recoverToken('never-indexed', 'my-key')).toBeNull();
+    });
+
+    it('returns null for the right OTP id but the wrong Idempotency-Key - a different concurrent request can never recover this one', async () => {
+      const redis = makeRedisMock();
+      const service = new PhoneVerificationService(redis as never);
+
+      await service.createRecoveryIndex('otp-1', 'winner-key', 'tok_abc123');
+
+      expect(await service.recoverToken('otp-1', 'loser-key')).toBeNull();
+    });
+
+    it('keeps two concurrent requests for the same OTP id fully isolated - each Idempotency-Key gets its own entry, neither overwrites the other', async () => {
+      const redis = makeRedisMock();
+      const service = new PhoneVerificationService(redis as never);
+
+      await service.createRecoveryIndex('otp-1', 'key-a', 'tok_a');
+      await service.createRecoveryIndex('otp-1', 'key-b', 'tok_b');
+
+      expect(await service.recoverToken('otp-1', 'key-a')).toBe('tok_a');
+      expect(await service.recoverToken('otp-1', 'key-b')).toBe('tok_b');
     });
 
     it('is a separate entry from the main token - consuming the main token does not remove the recovery index', async () => {
@@ -65,11 +85,11 @@ describe('PhoneVerificationService', () => {
         phone: '+970000000001',
         purpose: 'SIGNUP',
       });
-      await service.createRecoveryIndex('otp-2', token);
+      await service.createRecoveryIndex('otp-2', 'my-key', token);
 
       await service.consume(token);
 
-      expect(await service.recoverToken('otp-2')).toBe(token);
+      expect(await service.recoverToken('otp-2', 'my-key')).toBe(token);
     });
   });
 });

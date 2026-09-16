@@ -217,7 +217,22 @@ export class IdempotencyInterceptor implements NestInterceptor {
       catchError((err) =>
         from(
           this.prisma.idempotencyKey
-            .update({ where: { id: claimId }, data: { status: 'FAILED' } })
+            // Conditional on status: IN_PROGRESS (Sprint 2 review round
+            // 5) - an unconditional update() here could downgrade an
+            // already-legitimately-COMPLETED record back to FAILED if
+            // *anything* after a handler that wrote its own completion
+            // transactionally then throws (e.g. this interceptor's own
+            // pre-check findUnique() above hitting a transient error).
+            // That would silently corrupt a genuinely successful
+            // operation's record and reintroduce the exact "retry can't
+            // recover" bug this mechanism exists to prevent. A record
+            // that's still IN_PROGRESS is matched and moved to FAILED
+            // as before; one that's already COMPLETED matches zero rows
+            // and is left untouched.
+            .updateMany({
+              where: { id: claimId, status: 'IN_PROGRESS' },
+              data: { status: 'FAILED' },
+            })
             .catch(() => undefined) // don't let a bookkeeping failure mask the real error
             .then(() => {
               throw err;

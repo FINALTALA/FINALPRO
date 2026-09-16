@@ -44,27 +44,48 @@ export class PhoneVerificationService {
   }
 
   /**
-   * A second, minimal Redis entry - keyed by the OtpCode row's own id
-   * rather than by the token itself - letting a retry recover an
-   * already-issued token by otpId alone (Sprint 2 review round 4;
-   * AuthController.verifyOtp). Shares the main entry's exact TTL, so
-   * recovery is naturally possible only within the same window the
-   * token itself would still have been usable anyway - no separate
-   * cleanup policy to define or forget, and nothing durably persisted:
-   * if Redis loses it (restart, eviction, or it simply expires), the
-   * token is not recoverable, matching the outcome of the token itself
-   * having expired.
+   * A second, minimal Redis entry - keyed by the OtpCode row's id AND
+   * the exact Idempotency-Key that's about to attempt consuming it,
+   * not by the token itself - letting a retry recover an already-
+   * issued token by (otpId, idempotencyKey) alone (Sprint 2 review
+   * round 4; AuthController.verifyOtp). Shares the main entry's exact
+   * TTL, so recovery is naturally possible only within the same window
+   * the token itself would still have been usable anyway - no separate
+   * cleanup policy to define or forget, and nothing durably persisted.
+   *
+   * The Idempotency-Key is part of the Redis key itself (not just an
+   * argument used to look the row up in Postgres, as consumedByKey is)
+   * because this method is called *before* consume() now (Sprint 2
+   * review round 5 - see verifyOtp's ordering comment): two genuinely
+   * concurrent verifies for the same code, under two different keys,
+   * would otherwise both write to the *same* recovery-index entry
+   * before either has won the consume() race, and whichever write
+   * landed last would silently overwrite the other's - a losing
+   * request's retry could then recover a token it was never issued (or
+   * vice versa). Scoping the Redis key itself by idempotencyKey keeps
+   * each request's index entry - and its own eventual recovery lookup,
+   * gated by findConsumedRecord()'s exact consumedByKey match - fully
+   * isolated from every other concurrent request's.
    */
-  async createRecoveryIndex(otpId: string, token: string): Promise<void> {
+  async createRecoveryIndex(
+    otpId: string,
+    idempotencyKey: string,
+    token: string,
+  ): Promise<void> {
     await this.redis.set(
-      RECOVERY_INDEX_KEY_PREFIX + otpId,
+      RECOVERY_INDEX_KEY_PREFIX + otpId + ':' + idempotencyKey,
       token,
       'EX',
       VERIFICATION_TTL_SECONDS,
     );
   }
 
-  async recoverToken(otpId: string): Promise<string | null> {
-    return this.redis.get(RECOVERY_INDEX_KEY_PREFIX + otpId);
+  async recoverToken(
+    otpId: string,
+    idempotencyKey: string,
+  ): Promise<string | null> {
+    return this.redis.get(
+      RECOVERY_INDEX_KEY_PREFIX + otpId + ':' + idempotencyKey,
+    );
   }
 }

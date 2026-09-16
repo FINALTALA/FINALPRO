@@ -134,6 +134,7 @@ export class AuthController {
         if (consumedRecord) {
           const recoveredToken = await this.phoneVerification.recoverToken(
             consumedRecord.id,
+            idempotencyKey,
           );
           if (recoveredToken) {
             return {
@@ -152,17 +153,33 @@ export class AuthController {
       throwForOtpFailure(check.reason);
     }
 
-    // Create the Redis verification token BEFORE consuming the OTP in
-    // Postgres. If Redis is what fails, nothing in Postgres has
-    // changed yet, so an identical retry (same Idempotency-Key, same
-    // code) finds the OTP still unconsumed and can complete cleanly -
-    // consuming first and creating the token second would burn the
-    // OTP on a Redis hiccup with no way for a retry to recover it.
+    // Create the Redis verification token, AND its recovery index,
+    // BEFORE consuming the OTP in Postgres (Sprint 2 review round 5 -
+    // a prior version of this fix created the recovery index *after*
+    // consume(), which reopened the exact gap it was meant to close:
+    // if THAT write failed, the OTP was already consumed with no index
+    // for a retry to recover). If Redis is what fails at either of
+    // these two steps, nothing in Postgres has changed yet, so an
+    // identical retry (same Idempotency-Key, same code) finds the OTP
+    // still unconsumed and can complete cleanly.
+    //
+    // A request that goes on to *lose* the consume() race below still
+    // wrote a recovery-index entry for a token nobody will ever
+    // receive - harmless: that entry is keyed by this request's own
+    // Idempotency-Key, and findConsumedRecord()'s exact consumedByKey
+    // match means only the *winner's* key can ever look up the row
+    // that's actually recorded as consumed. The loser's entry and
+    // token simply expire unused.
     const phoneVerifiedAt = new Date();
     const token = await this.phoneVerification.create({
       phone: dto.phone,
       purpose,
     });
+    await this.phoneVerification.createRecoveryIndex(
+      check.claim!.id,
+      idempotencyKey,
+      token,
+    );
 
     const consumed = await this.otp.consume(check.claim!, { idempotencyKey });
     if (!consumed) {
@@ -176,11 +193,6 @@ export class AuthController {
         message: 'This OTP code is invalid',
       });
     }
-
-    // Written only now, after confirming THIS request actually won the
-    // consume() race - if it lost, there is nothing of this request's
-    // own to index for recovery.
-    await this.phoneVerification.createRecoveryIndex(check.claim!.id, token);
 
     return {
       session_token: token,
@@ -331,52 +343,44 @@ export class AuthController {
     const existingUser = await this.prisma.user.findUniqueOrThrow({
       where: { phone: dto.phone },
     });
-    const nextSessionVersion = existingUser.sessionVersion + 1;
     const passwordHash = await bcrypt.hash(dto.new_password, 10);
+    const idempotencyKey = req.header('Idempotency-Key')!;
 
-    // Prepare the new session BEFORE the transaction that actually
-    // changes the password, stamped with the sessionVersion this reset
-    // is *about to* produce. A session minted this way stays inert -
-    // SessionAuthGuard's exact-version check rejects it - until the
-    // transaction below genuinely commits that same version, so a
-    // Redis hiccup here leaves Postgres completely untouched (same
-    // "prepare the side artifact first, commit atomically last"
-    // ordering as otp/verify), instead of stranding an
-    // already-changed password with no way to report it.
-    let token: string | null = null;
-    try {
-      await this.sessions.revokeAllForUser(existingUser.id);
-      token = await this.sessions.create({
-        userId: existingUser.id,
-        phone: existingUser.phone,
-        phoneVerifiedAt: existingUser.phoneVerifiedAt?.toISOString() ?? null,
-        sessionVersion: nextSessionVersion,
-      });
-    } catch (err) {
-      this.logger.error(
-        `Password reset session preparation failed for phone ${dto.phone} before the password change - client should retry: ${(err as Error).message}`,
-      );
-    }
-    const responseBody = { session_token: token };
-
+    // Nothing touches Redis before or during this transaction (Sprint
+    // 2 review round 5 - a prior version prepared/revoked sessions
+    // *before* this point, using a *predicted* post-increment
+    // sessionVersion; both were wrong. A failed OTP consumption or any
+    // other transaction failure would already have revoked the user's
+    // other sessions with no password change to show for it - and the
+    // prediction itself was unsafe whenever two independent resets for
+    // the same user, under two different valid OTPs, could commit
+    // concurrently: the second to commit lands on a version one higher
+    // than either prediction, computed before either transaction ran,
+    // could have accounted for - immediately invalidating that token).
+    //
     // OTP consumption, the password/sessionVersion update, the audit
     // record, AND this route's own Idempotency-Key completion record
-    // are now all in ONE transaction - not just the first three. This
-    // is what actually closes the "transaction commits, but the
-    // interceptor's own separate bookkeeping write then fails" gap
-    // (Sprint 2 review round 3's finding on this exact endpoint): if
-    // any part fails, none of it commits, including the completion
-    // record, so a retry can genuinely start over; if it all commits,
-    // the completion record commits with it, so there is no longer a
-    // window where the password changed but nothing durable and
-    // replayable says so. IdempotencyInterceptor skips its own
-    // post-handler write when it finds the record already COMPLETED
-    // (see its intercept()) - this transaction beats it there.
+    // are all in ONE transaction (Sprint 2 review round 3/4): if any
+    // part fails, none of it commits, so a retry can genuinely start
+    // over; if it all commits, the completion record commits with it.
+    // The stored responseBody's session_token is necessarily null at
+    // this point - Redis can't participate in this transaction, and
+    // the real sessionVersion a valid session needs is only known once
+    // this transaction actually commits, not before. A caller who only
+    // ever sees this stored value (a replay after the session-issuing
+    // step below has failed) still gets an honest answer: the password
+    // changed; log in again.
+    let updatedUser: {
+      id: string;
+      phone: string;
+      phoneVerifiedAt: Date | null;
+      sessionVersion: number;
+    };
     try {
-      await this.prisma.$transaction(async (tx) => {
+      updatedUser = await this.prisma.$transaction(async (tx) => {
         const consumed = await this.otp.consume(check.claim!, {
           tx,
-          idempotencyKey: req.header('Idempotency-Key')!,
+          idempotencyKey,
         });
         if (!consumed) {
           // Lost the atomic-consume race to a different concurrent
@@ -385,7 +389,7 @@ export class AuthController {
           throw new OtpConsumeRaceLostError();
         }
 
-        await tx.user.update({
+        const updated = await tx.user.update({
           where: { id: existingUser.id },
           data: { passwordHash, sessionVersion: { increment: 1 } },
         });
@@ -405,13 +409,15 @@ export class AuthController {
             where: { id: req.idempotencyClaimId },
             data: {
               status: 'COMPLETED',
-              responseBody: responseBody as Prisma.InputJsonValue,
+              responseBody: { session_token: null } as Prisma.InputJsonValue,
               responseCode: 200,
               completedAt: new Date(),
               expiresAt: new Date(Date.now() + OTP_VERIFY_IDEMPOTENCY_TTL_MS),
             },
           });
         }
+
+        return updated;
       });
     } catch (err) {
       if (err instanceof OtpConsumeRaceLostError) {
@@ -423,6 +429,47 @@ export class AuthController {
       throw err;
     }
 
-    return responseBody;
+    // The password change is now durably committed, using the REAL,
+    // authoritative sessionVersion the transaction actually produced -
+    // never a pre-transaction prediction. Revoking old sessions is
+    // purely an optimization now (SessionAuthGuard's version check
+    // already makes them unusable the instant the transaction above
+    // committed); it happens only now, strictly after that commit,
+    // never before. Deliberately NOT caught-and-swallowed: if Redis is
+    // unreachable here, this request must not report success with a
+    // null token (the interceptor's now-conditional FAILED-write, see
+    // its catchError, safely leaves the record COMPLETED either way -
+    // it only ever downgrades a still-IN_PROGRESS record, never this
+    // one).
+    await this.sessions.revokeAllForUser(updatedUser.id);
+    const token = await this.sessions.create({
+      userId: updatedUser.id,
+      phone: updatedUser.phone,
+      phoneVerifiedAt: updatedUser.phoneVerifiedAt?.toISOString() ?? null,
+      sessionVersion: updatedUser.sessionVersion,
+    });
+
+    // Keep the durably-completed record in sync with the real token,
+    // so a later replay of *this* successful attempt returns it too,
+    // not the transaction's null placeholder. Best-effort: this client
+    // already has the real token in the response below regardless of
+    // whether this specific patch succeeds - only a hypothetical
+    // future replay would see the degraded (null) value if it doesn't.
+    if (req.idempotencyClaimId) {
+      try {
+        await this.prisma.idempotencyKey.update({
+          where: { id: req.idempotencyClaimId },
+          data: {
+            responseBody: { session_token: token } as Prisma.InputJsonValue,
+          },
+        });
+      } catch (err) {
+        this.logger.error(
+          `Password reset for user ${updatedUser.id} succeeded, but updating the replay record with the real session token failed: ${(err as Error).message}`,
+        );
+      }
+    }
+
+    return { session_token: token };
   }
 }

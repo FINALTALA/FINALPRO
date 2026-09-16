@@ -424,7 +424,7 @@ describe('IdempotencyInterceptor', () => {
 
   it('marks the claim FAILED (not left IN_PROGRESS forever) if the handler throws', async () => {
     prisma.idempotencyKey.create.mockResolvedValue({ id: 'row-7' });
-    prisma.idempotencyKey.update.mockResolvedValue({});
+    prisma.idempotencyKey.updateMany.mockResolvedValue({ count: 1 });
     const failingHandler: CallHandler = {
       handle: () => throwError(() => new Error('boom')),
     };
@@ -433,12 +433,42 @@ describe('IdempotencyInterceptor', () => {
     const result$ = await interceptor.intercept(context, failingHandler);
 
     await expect(firstValueFrom(result$)).rejects.toThrow('boom');
-    expect(prisma.idempotencyKey.update).toHaveBeenCalledWith(
+    expect(prisma.idempotencyKey.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 'row-7' },
+        where: { id: 'row-7', status: 'IN_PROGRESS' },
         data: { status: 'FAILED' },
       }),
     );
+  });
+
+  it("never downgrades an already-COMPLETED record to FAILED, even if something after the handler (e.g. this interceptor's own pre-check) then throws", async () => {
+    prisma.idempotencyKey.create.mockResolvedValue({ id: 'row-8' });
+    // Simulates the handler having already committed COMPLETED itself
+    // (e.g. AuthController.confirmPasswordReset writing completion
+    // inside its own transaction), and this interceptor's own
+    // subsequent status pre-check then failing for an unrelated reason.
+    prisma.idempotencyKey.findUnique.mockRejectedValue(
+      new Error('transient blip'),
+    );
+    // The conditional FAILED-write is scoped to status: IN_PROGRESS -
+    // since the record is actually COMPLETED, it matches zero rows.
+    prisma.idempotencyKey.updateMany.mockResolvedValue({ count: 0 });
+
+    const context = makeContext({
+      headers: { 'idempotency-key': 'k-preserve-completed' },
+    });
+    const result$ = await interceptor.intercept(context, handler);
+
+    await expect(firstValueFrom(result$)).rejects.toThrow('transient blip');
+
+    expect(prisma.idempotencyKey.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'row-8', status: 'IN_PROGRESS' },
+        data: { status: 'FAILED' },
+      }),
+    );
+    // The old, unconditional update() to FAILED must never be used here.
+    expect(prisma.idempotencyKey.update).not.toHaveBeenCalled();
   });
 });
 
