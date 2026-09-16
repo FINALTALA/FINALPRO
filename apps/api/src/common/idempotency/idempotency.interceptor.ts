@@ -32,6 +32,22 @@ function hashRequest(method: string, path: string, body: unknown): string {
     .digest('hex');
 }
 
+declare module 'express' {
+  interface Request {
+    /**
+     * The current Idempotency-Key claim's row id, set right after a
+     * successful claim/takeover, before the handler runs. Lets a
+     * handler whose own success can't be captured by a simple return
+     * value alone (e.g. one that must record completion inside its own
+     * Prisma transaction - see AuthController.confirmPasswordReset)
+     * write directly to this same IdempotencyKey row as part of that
+     * transaction, rather than relying solely on this interceptor's own
+     * separate post-handler write.
+     */
+    idempotencyClaimId?: string;
+  }
+}
+
 /**
  * Scope for a mutating, idempotent endpoint that runs before a session
  * exists (POST /auth/otp/verify, POST /auth/password/reset-confirm -
@@ -164,21 +180,38 @@ export class IdempotencyInterceptor implements NestInterceptor {
     // contract, and for the same reason: a fire-and-forget write here
     // would let a fast retry slip past an unrecorded completion.
     const claimId = claim.row.id;
+    request.idempotencyClaimId = claimId;
     return next.handle().pipe(
       switchMap((body) =>
         from(
           this.prisma.idempotencyKey
-            .update({
-              where: { id: claimId },
-              data: {
-                status: 'COMPLETED',
-                responseBody: (body ?? {}) as Prisma.InputJsonValue,
-                responseCode: response.statusCode,
-                completedAt: new Date(),
-                expiresAt: new Date(Date.now() + ttlMs),
-              },
-            })
-            .then(() => body),
+            .findUnique({ where: { id: claimId }, select: { status: true } })
+            .then((current) => {
+              if (current?.status === 'COMPLETED') {
+                // The handler already recorded its own completion as
+                // part of a transaction it controlled (see
+                // request.idempotencyClaimId's doc comment) - nothing
+                // left for us to do. Writing again here would be
+                // redundant at best; if THIS write then failed, the
+                // catchError below would mark an already-legitimately-
+                // COMPLETED record FAILED, reintroducing the exact
+                // "retry can't recover" bug this whole mechanism exists
+                // to prevent.
+                return body;
+              }
+              return this.prisma.idempotencyKey
+                .update({
+                  where: { id: claimId },
+                  data: {
+                    status: 'COMPLETED',
+                    responseBody: (body ?? {}) as Prisma.InputJsonValue,
+                    responseCode: response.statusCode,
+                    completedAt: new Date(),
+                    expiresAt: new Date(Date.now() + ttlMs),
+                  },
+                })
+                .then(() => body);
+            }),
         ),
       ),
       catchError((err) =>

@@ -17,6 +17,7 @@ import { Request } from 'express';
 import { AuditLogService } from '../audit/audit-log.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { IdempotencyTtl } from '../common/idempotency/idempotency-ttl.decorator';
+import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
 import { OtpRequestDto } from './dto/otp-request.dto';
@@ -124,17 +125,28 @@ export class AuthController {
         // Idempotency-Key so a *different* concurrent request for the
         // same code (one that legitimately lost consume()'s atomic
         // race) can never recover someone else's token this way.
-        const recovered = await this.otp.findRecoverableToken(
+        const consumedRecord = await this.otp.findConsumedRecord(
           dto.phone,
           purpose,
           dto.otp_code,
           idempotencyKey,
         );
-        if (recovered) {
-          return {
-            session_token: recovered.token,
-            phone_verified_at: recovered.consumedAt.toISOString(),
-          };
+        if (consumedRecord) {
+          const recoveredToken = await this.phoneVerification.recoverToken(
+            consumedRecord.id,
+          );
+          if (recoveredToken) {
+            return {
+              session_token: recoveredToken,
+              phone_verified_at: consumedRecord.consumedAt.toISOString(),
+            };
+          }
+          // The OTP was consumed by this exact key, but its Redis-side
+          // recovery index has itself expired (both share the same
+          // 15-minute TTL as the token they're recovering - nothing to
+          // separately clean up). The original token is gone the same
+          // way it would be after 15 minutes regardless of this bug -
+          // there's nothing left to hand back.
         }
       }
       throwForOtpFailure(check.reason);
@@ -152,10 +164,7 @@ export class AuthController {
       purpose,
     });
 
-    const consumed = await this.otp.consume(check.claim!, {
-      verificationToken: token,
-      idempotencyKey,
-    });
+    const consumed = await this.otp.consume(check.claim!, { idempotencyKey });
     if (!consumed) {
       // Lost the atomic-consume race to a different concurrent verify
       // for the same code (a different Idempotency-Key - the
@@ -167,6 +176,11 @@ export class AuthController {
         message: 'This OTP code is invalid',
       });
     }
+
+    // Written only now, after confirming THIS request actually won the
+    // consume() race - if it lost, there is nothing of this request's
+    // own to index for recovery.
+    await this.phoneVerification.createRecoveryIndex(check.claim!.id, token);
 
     return {
       session_token: token,
@@ -311,25 +325,59 @@ export class AuthController {
       throwForOtpFailure(check.reason);
     }
 
-    // OTP consumption, the password update, and the audit record all
-    // happen in ONE transaction: if any part fails, none of it commits
-    // - the OTP stays unconsumed and an identical retry can genuinely
-    // start over, instead of finding a burned OTP with no completed
-    // password change to show for it. sessionVersion is bumped in the
-    // SAME write as passwordHash - this is what actually invalidates
-    // every other session (see SessionAuthGuard), not the best-effort
-    // Redis deletion below, so it happens regardless of whether Redis
-    // is even reachable right now.
+    // Only reachable with a real user - requestPasswordReset() never
+    // issues a PASSWORD_RESET OTP for an unregistered phone, so a
+    // valid, consumable claim implies the user exists.
+    const existingUser = await this.prisma.user.findUniqueOrThrow({
+      where: { phone: dto.phone },
+    });
+    const nextSessionVersion = existingUser.sessionVersion + 1;
     const passwordHash = await bcrypt.hash(dto.new_password, 10);
-    let user: {
-      id: string;
-      phone: string;
-      phoneVerifiedAt: Date | null;
-      sessionVersion: number;
-    };
+
+    // Prepare the new session BEFORE the transaction that actually
+    // changes the password, stamped with the sessionVersion this reset
+    // is *about to* produce. A session minted this way stays inert -
+    // SessionAuthGuard's exact-version check rejects it - until the
+    // transaction below genuinely commits that same version, so a
+    // Redis hiccup here leaves Postgres completely untouched (same
+    // "prepare the side artifact first, commit atomically last"
+    // ordering as otp/verify), instead of stranding an
+    // already-changed password with no way to report it.
+    let token: string | null = null;
     try {
-      user = await this.prisma.$transaction(async (tx) => {
-        const consumed = await this.otp.consume(check.claim!, { tx });
+      await this.sessions.revokeAllForUser(existingUser.id);
+      token = await this.sessions.create({
+        userId: existingUser.id,
+        phone: existingUser.phone,
+        phoneVerifiedAt: existingUser.phoneVerifiedAt?.toISOString() ?? null,
+        sessionVersion: nextSessionVersion,
+      });
+    } catch (err) {
+      this.logger.error(
+        `Password reset session preparation failed for phone ${dto.phone} before the password change - client should retry: ${(err as Error).message}`,
+      );
+    }
+    const responseBody = { session_token: token };
+
+    // OTP consumption, the password/sessionVersion update, the audit
+    // record, AND this route's own Idempotency-Key completion record
+    // are now all in ONE transaction - not just the first three. This
+    // is what actually closes the "transaction commits, but the
+    // interceptor's own separate bookkeeping write then fails" gap
+    // (Sprint 2 review round 3's finding on this exact endpoint): if
+    // any part fails, none of it commits, including the completion
+    // record, so a retry can genuinely start over; if it all commits,
+    // the completion record commits with it, so there is no longer a
+    // window where the password changed but nothing durable and
+    // replayable says so. IdempotencyInterceptor skips its own
+    // post-handler write when it finds the record already COMPLETED
+    // (see its intercept()) - this transaction beats it there.
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const consumed = await this.otp.consume(check.claim!, {
+          tx,
+          idempotencyKey: req.header('Idempotency-Key')!,
+        });
         if (!consumed) {
           // Lost the atomic-consume race to a different concurrent
           // reset-confirm for the same code - roll back (nothing to
@@ -337,27 +385,33 @@ export class AuthController {
           throw new OtpConsumeRaceLostError();
         }
 
-        // Only reachable with a real user - requestPasswordReset()
-        // never issues a PASSWORD_RESET OTP for an unregistered phone,
-        // so a valid, consumable claim implies the user exists.
-        const existing = await tx.user.findUniqueOrThrow({
-          where: { phone: dto.phone },
-        });
-        const updated = await tx.user.update({
-          where: { id: existing.id },
+        await tx.user.update({
+          where: { id: existingUser.id },
           data: { passwordHash, sessionVersion: { increment: 1 } },
         });
         await this.auditLog.record(
           {
-            actorId: updated.id,
+            actorId: existingUser.id,
             correlationId: req.correlationId,
             action: 'user.password_reset',
             entityType: 'User',
-            entityId: updated.id,
+            entityId: existingUser.id,
           },
           tx,
         );
-        return updated;
+
+        if (req.idempotencyClaimId) {
+          await tx.idempotencyKey.update({
+            where: { id: req.idempotencyClaimId },
+            data: {
+              status: 'COMPLETED',
+              responseBody: responseBody as Prisma.InputJsonValue,
+              responseCode: 200,
+              completedAt: new Date(),
+              expiresAt: new Date(Date.now() + OTP_VERIFY_IDEMPOTENCY_TTL_MS),
+            },
+          });
+        }
       });
     } catch (err) {
       if (err instanceof OtpConsumeRaceLostError) {
@@ -369,31 +423,6 @@ export class AuthController {
       throw err;
     }
 
-    // The password change (and the sessionVersion bump that actually
-    // invalidates old sessions) is already durably committed above -
-    // from here on, a hiccup must degrade gracefully rather than fail
-    // the request. Throwing here would mark this Idempotency-Key
-    // FAILED and make a same-key retry re-attempt OTP consumption,
-    // which can now only ever fail since the OTP was already,
-    // correctly, consumed above. revokeAllForUser() is now purely an
-    // optimization (frees the old Redis keys immediately instead of
-    // waiting for SessionAuthGuard's version check to reject them one
-    // at a time) - security no longer depends on it succeeding.
-    let token: string | null = null;
-    try {
-      await this.sessions.revokeAllForUser(user.id);
-      token = await this.sessions.create({
-        userId: user.id,
-        phone: user.phone,
-        phoneVerifiedAt: user.phoneVerifiedAt?.toISOString() ?? null,
-        sessionVersion: user.sessionVersion,
-      });
-    } catch (err) {
-      this.logger.error(
-        `Password reset for user ${user.id} committed, but session housekeeping failed - client should log in again: ${(err as Error).message}`,
-      );
-    }
-
-    return { session_token: token };
+    return responseBody;
   }
 }

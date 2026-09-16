@@ -68,6 +68,11 @@ describe('IdempotencyInterceptor', () => {
         updateMany: jest.fn(),
       },
     };
+    // Default: "nothing else is there yet" / "not already completed" -
+    // matches every existing test's assumptions. Tests exercising the
+    // race/takeover/replay paths override this with their own specific
+    // mockResolvedValue.
+    prisma.idempotencyKey.findUnique.mockResolvedValue(null);
     // No route in these tests overrides the TTL, so `get()` returning
     // undefined (falling back to the 24h default) matches every real
     // route except POST /auth/otp/verify (see idempotency-ttl.decorator.ts).
@@ -111,6 +116,47 @@ describe('IdempotencyInterceptor', () => {
         data: expect.objectContaining({ status: 'COMPLETED' }),
       }),
     );
+  });
+
+  it('sets request.idempotencyClaimId to the claim row id right after claiming, before the handler runs', async () => {
+    prisma.idempotencyKey.create.mockResolvedValue({ id: 'row-claim-id' });
+    prisma.idempotencyKey.update.mockResolvedValue({});
+    const context = makeContext({
+      headers: { 'idempotency-key': 'k-claimid' },
+    });
+    let seenDuringHandler: string | undefined;
+    const capturingHandler: CallHandler = {
+      handle: () => {
+        const req = context.switchToHttp().getRequest() as {
+          idempotencyClaimId?: string;
+        };
+        seenDuringHandler = req.idempotencyClaimId;
+        return of({ echoed: true });
+      },
+    };
+
+    await interceptor.intercept(context, capturingHandler);
+
+    expect(seenDuringHandler).toBe('row-claim-id');
+  });
+
+  it('skips its own redundant completion write when the handler already marked the claim COMPLETED itself (e.g. inside its own transaction)', async () => {
+    prisma.idempotencyKey.create.mockResolvedValue({
+      id: 'row-self-completed',
+    });
+    // The handler "did its own thing" and left the row COMPLETED before
+    // returning - simulates AuthController.confirmPasswordReset writing
+    // completion inside its own Prisma transaction.
+    prisma.idempotencyKey.findUnique.mockResolvedValue({ status: 'COMPLETED' });
+
+    const context = makeContext({
+      headers: { 'idempotency-key': 'k-self-completed' },
+    });
+    const result$ = await interceptor.intercept(context, handler);
+    const result = await firstValueFrom(result$);
+
+    expect(result).toEqual({ echoed: true });
+    expect(prisma.idempotencyKey.update).not.toHaveBeenCalled();
   });
 
   it("uses a route-overridden idempotency TTL (e.g. OTP verify's 5-minute window) instead of the 24h default", async () => {

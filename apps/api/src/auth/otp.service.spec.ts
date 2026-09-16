@@ -165,7 +165,7 @@ describe('OtpService', () => {
           expiresAt: { gt: expect.any(Date) },
           attemptCount: 0,
         },
-        data: { consumedAt: expect.any(Date), verificationToken: undefined },
+        data: { consumedAt: expect.any(Date), consumedByKey: undefined },
       });
     });
 
@@ -207,7 +207,7 @@ describe('OtpService', () => {
       );
     });
 
-    it('persists a durable verificationToken and the consuming Idempotency-Key alongside consumedAt when given', async () => {
+    it('persists the consuming Idempotency-Key alongside consumedAt when given', async () => {
       prisma.otpCode.updateMany.mockResolvedValue({ count: 1 });
 
       await service.consume(
@@ -216,15 +216,12 @@ describe('OtpService', () => {
           expiresAt: new Date(Date.now() + 60_000),
           attemptCount: 0,
         },
-        { verificationToken: 'tok_abc123', idempotencyKey: 'the-key' },
+        { idempotencyKey: 'the-key' },
       );
 
       expect(prisma.otpCode.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({
-            verificationToken: 'tok_abc123',
-            consumedByKey: 'the-key',
-          }),
+          data: expect.objectContaining({ consumedByKey: 'the-key' }),
         }),
       );
     });
@@ -248,30 +245,30 @@ describe('OtpService', () => {
     });
   });
 
-  describe('findRecoverableToken', () => {
-    it('returns the token and consumedAt for a recently-consumed row matching the code hash AND the exact Idempotency-Key', async () => {
+  describe('findConsumedRecord', () => {
+    it('returns the id and consumedAt for a consumed row matching the code hash AND the exact Idempotency-Key', async () => {
       const consumedAt = new Date(Date.now() - 1_000);
       prisma.otpCode.findFirst.mockResolvedValue({
+        id: 'otp-consumed-1',
         codeHash: hashOf('654321'),
-        verificationToken: 'tok_recovered',
         consumedByKey: 'my-retry-key',
         consumedAt,
       });
 
-      const result = await service.findRecoverableToken(
+      const result = await service.findConsumedRecord(
         '+970000000001',
         'SIGNUP',
         '654321',
         'my-retry-key',
       );
 
-      expect(result).toEqual({ token: 'tok_recovered', consumedAt });
+      expect(result).toEqual({ id: 'otp-consumed-1', consumedAt });
     });
 
     it('returns null when no matching consumed row exists', async () => {
       prisma.otpCode.findFirst.mockResolvedValue(null);
 
-      const result = await service.findRecoverableToken(
+      const result = await service.findConsumedRecord(
         '+970000000001',
         'SIGNUP',
         '654321',
@@ -281,10 +278,10 @@ describe('OtpService', () => {
       expect(result).toBeNull();
     });
 
-    it('queries only recently-consumed rows with a stored token, matched by code hash AND the exact Idempotency-Key - not any past use, and not a different concurrent request for the same code', async () => {
+    it('queries only consumed rows matched by code hash AND the exact Idempotency-Key - not a different concurrent request for the same code', async () => {
       prisma.otpCode.findFirst.mockResolvedValue(null);
 
-      await service.findRecoverableToken(
+      await service.findConsumedRecord(
         '+970000000001',
         'SIGNUP',
         '654321',
@@ -298,8 +295,7 @@ describe('OtpService', () => {
             purpose: 'SIGNUP',
             codeHash: hashOf('654321'),
             consumedByKey: 'my-retry-key',
-            verificationToken: { not: null },
-            consumedAt: expect.objectContaining({ not: null }),
+            consumedAt: { not: null },
           }),
         }),
       );

@@ -5,6 +5,7 @@ import { RedisService } from '../redis/redis.service';
 
 const VERIFICATION_TTL_SECONDS = 15 * 60; // 15 minutes
 const VERIFICATION_KEY_PREFIX = 'phone_verification:';
+const RECOVERY_INDEX_KEY_PREFIX = 'phone_verification_recovery:';
 
 export interface PhoneVerificationData {
   phone: string;
@@ -40,5 +41,30 @@ export class PhoneVerificationService {
   async consume(token: string): Promise<PhoneVerificationData | null> {
     const raw = await this.redis.getdel(VERIFICATION_KEY_PREFIX + token);
     return raw ? (JSON.parse(raw) as PhoneVerificationData) : null;
+  }
+
+  /**
+   * A second, minimal Redis entry - keyed by the OtpCode row's own id
+   * rather than by the token itself - letting a retry recover an
+   * already-issued token by otpId alone (Sprint 2 review round 4;
+   * AuthController.verifyOtp). Shares the main entry's exact TTL, so
+   * recovery is naturally possible only within the same window the
+   * token itself would still have been usable anyway - no separate
+   * cleanup policy to define or forget, and nothing durably persisted:
+   * if Redis loses it (restart, eviction, or it simply expires), the
+   * token is not recoverable, matching the outcome of the token itself
+   * having expired.
+   */
+  async createRecoveryIndex(otpId: string, token: string): Promise<void> {
+    await this.redis.set(
+      RECOVERY_INDEX_KEY_PREFIX + otpId,
+      token,
+      'EX',
+      VERIFICATION_TTL_SECONDS,
+    );
+  }
+
+  async recoverToken(otpId: string): Promise<string | null> {
+    return this.redis.get(RECOVERY_INDEX_KEY_PREFIX + otpId);
   }
 }

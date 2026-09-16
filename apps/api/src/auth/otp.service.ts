@@ -15,8 +15,6 @@ function hashCode(code: string): string {
   return createHash('sha256').update(code).digest('hex');
 }
 
-const RECOVERY_WINDOW_MS = 5 * 60 * 1000; // matches the OTP-verify Idempotency-Key TTL - see consume()'s doc comment
-
 export interface OtpClaim {
   id: string;
   expiresAt: Date;
@@ -25,10 +23,13 @@ export interface OtpClaim {
 
 export interface OtpConsumeOptions {
   tx?: Prisma.TransactionClient;
-  /** Durably stored on the row alongside consumedAt - see findRecoverableToken(). */
-  verificationToken?: string;
-  /** The client's Idempotency-Key at the moment of consumption - required for findRecoverableToken() to ever recover this row. */
+  /** The client's Idempotency-Key at the moment of consumption - required for findConsumedRecord() to ever recover this row. */
   idempotencyKey?: string;
+}
+
+export interface OtpConsumedRecord {
+  id: string;
+  consumedAt: Date;
 }
 
 // Flat, not a discriminated union - see idempotency.interceptor's
@@ -152,8 +153,8 @@ export class OtpService {
    * in that transaction rolls the consumption back too, leaving the
    * OTP genuinely retryable rather than burned for nothing.
    *
-   * Pass `verificationToken` to durably record it on this same write -
-   * see findRecoverableToken() for why.
+   * Pass `idempotencyKey` to record it on this same write - see
+   * findConsumedRecord() for why.
    */
   async consume(
     claim: OtpClaim,
@@ -169,7 +170,6 @@ export class OtpService {
       },
       data: {
         consumedAt: new Date(),
-        verificationToken: options.verificationToken,
         consumedByKey: options.idempotencyKey,
       },
     });
@@ -177,49 +177,44 @@ export class OtpService {
   }
 
   /**
-   * Recovers a durably-stored verificationToken from an OTP consumption
-   * whose Idempotency-Key exactly matches `idempotencyKey` - for when
-   * IdempotencyInterceptor's own completion-bookkeeping write fails
-   * *after* checkCode()+consume() already succeeded and a token was
-   * already returned to the caller (Sprint 2 review fix round 2). A
-   * retry with the same Idempotency-Key re-enters the handler, but the
-   * OTP no longer looks "checkable" - checkCode() only ever looks at
-   * unconsumed rows, so an already-consumed one is indistinguishable
+   * Finds the OTP row that a specific Idempotency-Key already,
+   * legitimately, consumed - for a caller recovering from a since-
+   * failed completion write elsewhere (IdempotencyInterceptor's own
+   * bookkeeping for otp/verify; see AuthController.verifyOtp, which
+   * pairs this with PhoneVerificationService's Redis-side recovery
+   * index to get back the actual token). checkCode() only ever looks
+   * at unconsumed rows, so an already-consumed one is indistinguishable
    * from "never existed" without this.
    *
    * The exact-match on `idempotencyKey` (not just the code hash) is
    * load-bearing, not optional: two genuinely different, concurrent
    * requests for the same code (different Idempotency-Keys, e.g. a
    * double-submit) both reach this point after one wins the consume()
-   * race - without the key check, the *loser* could recover the
-   * *winner's* token by matching on code alone, defeating single-use
-   * under exactly the concurrency case consume()'s CAS exists to
-   * prevent. Only the request that was actually recorded as the
-   * consumer can ever recover this row.
+   * race - without the key check, the *loser* could recover whatever
+   * the *winner* received by matching on code alone, defeating
+   * single-use under exactly the concurrency case consume()'s CAS
+   * exists to prevent. Only the request that was actually recorded as
+   * the consumer can ever recover this row.
    */
-  async findRecoverableToken(
+  async findConsumedRecord(
     phone: string,
     purpose: OtpPurpose,
     code: string,
     idempotencyKey: string,
-  ): Promise<{ token: string; consumedAt: Date } | null> {
+  ): Promise<OtpConsumedRecord | null> {
     const row = await this.prisma.otpCode.findFirst({
       where: {
         phone,
         purpose,
         codeHash: hashCode(code),
         consumedByKey: idempotencyKey,
-        consumedAt: {
-          not: null,
-          gte: new Date(Date.now() - RECOVERY_WINDOW_MS),
-        },
-        verificationToken: { not: null },
+        consumedAt: { not: null },
       },
       orderBy: { consumedAt: 'desc' },
     });
-    if (!row || !row.verificationToken || !row.consumedAt) {
+    if (!row || !row.consumedAt) {
       return null;
     }
-    return { token: row.verificationToken, consumedAt: row.consumedAt };
+    return { id: row.id, consumedAt: row.consumedAt };
   }
 }

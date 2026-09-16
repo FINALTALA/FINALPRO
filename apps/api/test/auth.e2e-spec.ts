@@ -476,6 +476,59 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
         .expect(401);
     });
 
+    it('records OTP consumption, the password change, and the Idempotency-Key completion atomically - a retry with the same key replays instead of re-running the reset (Sprint 2 review round 4)', async () => {
+      const phone = uniquePhone();
+      await signup(phone, 'old-password');
+
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/password/reset-request')
+        .send({ phone })
+        .expect(202);
+      const code = fakeSms.lastCodeFor(phone);
+      const key = `reset-atomic-${phone}`;
+
+      const first = await request(app.getHttpServer())
+        .post('/api/v1/auth/password/reset-confirm')
+        .set('Idempotency-Key', key)
+        .send({ phone, otp_code: code, new_password: 'new-password' })
+        .expect(200);
+
+      // The transaction itself writes the Idempotency-Key completion
+      // record (AuthController.confirmPasswordReset, via
+      // req.idempotencyClaimId) - not a separate post-handler step -
+      // so it is already COMPLETED, with the exact response body, by
+      // the time this HTTP response returns. Previously (Sprint 2
+      // review round 3) that completion write was a second, separate
+      // Postgres statement outside the transaction; if it failed after
+      // the transaction had already committed, the client got an
+      // error and a same-key retry could never recover, since
+      // checkCode() only ever finds unconsumed OTPs and this route had
+      // no Redis-backed recovery index the way otp/verify does.
+      const idempotencyRow = await prisma.idempotencyKey.findFirst({
+        where: { key, requestPath: '/api/v1/auth/password/reset-confirm' },
+      });
+      expect(idempotencyRow?.status).toBe('COMPLETED');
+      expect(idempotencyRow?.responseBody).toEqual(first.body);
+
+      // A retry with the same key replays that record directly - it
+      // never re-enters the handler at all, so it cannot re-run the
+      // password change or touch the (already-consumed) OTP again.
+      const second = await request(app.getHttpServer())
+        .post('/api/v1/auth/password/reset-confirm')
+        .set('Idempotency-Key', key)
+        .send({ phone, otp_code: code, new_password: 'new-password' })
+        .expect(200);
+      expect(second.headers['idempotent-replayed']).toBe('true');
+      expect(second.body).toEqual(first.body);
+
+      // The OTP itself was only ever consumed once - direct proof the
+      // reset logic ran exactly once, not once per request.
+      const otpRows = await prisma.otpCode.findMany({
+        where: { phone, purpose: 'PASSWORD_RESET' },
+      });
+      expect(otpRows.filter((r) => r.consumedAt !== null)).toHaveLength(1);
+    });
+
     it('does not send a real OTP for an unregistered phone, but still returns the same response shape', async () => {
       const phone = uniquePhone();
       const res = await request(app.getHttpServer())
