@@ -32,6 +32,29 @@ function hashRequest(method: string, path: string, body: unknown): string {
     .digest('hex');
 }
 
+/**
+ * Scope for a mutating, idempotent endpoint that runs before a session
+ * exists (POST /auth/otp/verify, POST /auth/password/reset-confirm -
+ * both carry `phone` in their body). Hashed, not stored as plain text,
+ * for the same reason correlation ids and idempotency keys don't
+ * embed raw PII directly into an index key. Falls back to "anonymous"
+ * only when the body has no phone at all (a route with neither a
+ * session nor an identity-bearing body, e.g. health.echo).
+ */
+function derivePreAuthScope(body: unknown): string {
+  const record = body as { phone?: unknown; purpose?: unknown } | undefined;
+  const rawPhone = typeof record?.phone === 'string' ? record.phone : undefined;
+  if (!rawPhone) {
+    return 'anonymous';
+  }
+  const normalizedPhone = rawPhone.replace(/[\s-]/g, '');
+  const purpose = typeof record?.purpose === 'string' ? record.purpose : '';
+  return (
+    'phone:' +
+    createHash('sha256').update(`${normalizedPhone}:${purpose}`).digest('hex')
+  );
+}
+
 interface IdempotencyRow {
   id: string;
   status: IdempotencyKeyStatus;
@@ -95,14 +118,22 @@ export class IdempotencyInterceptor implements NestInterceptor {
       });
     }
 
-    // Scope is the authenticated user (SessionAuthGuard sets req.user,
-    // Part 4 H.1/EPIC-AUTH) so two different users can never collide on
-    // the same client-chosen key. "anonymous" only applies to a route
-    // with no auth guard at all (e.g. health.echo's demo endpoint) -
-    // every real mutating endpoint sits behind SessionAuthGuard and so
-    // always has a real scope here.
-    const scope =
-      (request as { user?: { id?: string } }).user?.id ?? 'anonymous';
+    // Scope is the authenticated user where one exists (SessionAuthGuard
+    // sets req.user, Part 4 H.1/EPIC-AUTH) so two different users can
+    // never collide on the same client-chosen key. A handful of
+    // mutating, idempotent endpoints run *before* a session exists
+    // (POST /auth/otp/verify, POST /auth/password/reset-confirm) - for
+    // those, falling back to a single "anonymous" scope would let two
+    // unrelated callers who happen to reuse the same client-chosen key
+    // collide with each other, which is exactly the bug Sprint 1's
+    // move away from a global-only key was meant to prevent. derivePreAuthScope()
+    // instead scopes by the request's own phone+purpose, so it isolates
+    // callers by the identity they're establishing even before login.
+    // "anonymous" only remains for a route with neither a session nor a
+    // phone in its body (e.g. health.echo's demo endpoint).
+    const authenticatedUserId = (request as { user?: { id?: string } }).user
+      ?.id;
+    const scope = authenticatedUserId ?? derivePreAuthScope(request.body);
     const requestPath = request.path;
     const requestHash = hashRequest(request.method, requestPath, request.body);
     const ttlMs =

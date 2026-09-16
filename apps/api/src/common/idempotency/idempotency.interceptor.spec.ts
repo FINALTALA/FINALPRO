@@ -322,6 +322,60 @@ describe('IdempotencyInterceptor', () => {
     );
   });
 
+  it('scopes a pre-auth request (no req.user - e.g. otp/verify) by its body phone+purpose, not a shared "anonymous"', async () => {
+    prisma.idempotencyKey.create.mockResolvedValue({ id: 'row-preauth-1' });
+    prisma.idempotencyKey.update.mockResolvedValue({});
+
+    const context = makeContext({
+      headers: { 'idempotency-key': 'shared-key' },
+      body: { phone: '+970591111111', purpose: 'signup', otp_code: '123456' },
+    });
+    await interceptor.intercept(context, handler);
+
+    const scope = prisma.idempotencyKey.create.mock.calls[0][0].data.scope;
+    expect(scope).toMatch(/^phone:[a-f0-9]{64}$/);
+    expect(scope).not.toBe('anonymous');
+  });
+
+  it('gives two different phones in the body different pre-auth scopes for the same client-chosen key', async () => {
+    prisma.idempotencyKey.create.mockResolvedValue({ id: 'row-preauth-2' });
+    prisma.idempotencyKey.update.mockResolvedValue({});
+
+    const contextA = makeContext({
+      headers: { 'idempotency-key': 'shared-key' },
+      body: { phone: '+970591111111', purpose: 'signup' },
+    });
+    await interceptor.intercept(contextA, handler);
+    const scopeA = prisma.idempotencyKey.create.mock.calls[0][0].data.scope;
+
+    prisma.idempotencyKey.create.mockClear();
+    const contextB = makeContext({
+      headers: { 'idempotency-key': 'shared-key' },
+      body: { phone: '+970592222222', purpose: 'signup' },
+    });
+    await interceptor.intercept(contextB, handler);
+    const scopeB = prisma.idempotencyKey.create.mock.calls[0][0].data.scope;
+
+    expect(scopeA).not.toBe(scopeB);
+  });
+
+  it('falls back to "anonymous" only when the body has no phone at all (no session, no identity to scope by)', async () => {
+    prisma.idempotencyKey.create.mockResolvedValue({ id: 'row-preauth-3' });
+    prisma.idempotencyKey.update.mockResolvedValue({});
+
+    const context = makeContext({
+      headers: { 'idempotency-key': 'k-no-phone' },
+      body: { hello: 'world' },
+    });
+    await interceptor.intercept(context, handler);
+
+    expect(prisma.idempotencyKey.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ scope: 'anonymous' }),
+      }),
+    );
+  });
+
   it('marks the claim FAILED (not left IN_PROGRESS forever) if the handler throws', async () => {
     prisma.idempotencyKey.create.mockResolvedValue({ id: 'row-7' });
     prisma.idempotencyKey.update.mockResolvedValue({});

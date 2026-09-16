@@ -6,7 +6,7 @@ import {
   HttpCode,
   HttpException,
   HttpStatus,
-  NotFoundException,
+  Logger,
   Post,
   Req,
   UseInterceptors,
@@ -24,7 +24,7 @@ import { OtpVerifyDto } from './dto/otp-verify.dto';
 import { PasswordResetConfirmDto } from './dto/password-reset-confirm.dto';
 import { PasswordResetRequestDto } from './dto/password-reset-request.dto';
 import { RegisterDto } from './dto/register.dto';
-import { OtpService, OtpVerifyResult } from './otp.service';
+import { OtpCheckResult, OtpService } from './otp.service';
 import { toPrismaOtpPurpose } from './otp-purpose.util';
 import { PhoneVerificationService } from './phone-verification.service';
 import { SessionService } from './session.service';
@@ -32,7 +32,7 @@ import { SessionService } from './session.service';
 const OTP_VERIFY_IDEMPOTENCY_TTL_MS = 5 * 60 * 1000; // Part 4, H.3's "short window (e.g. 5 minutes)"
 
 /** Throws the exact {status, code} pair Part 4, H.3 documents for an OTP failure. */
-function throwForOtpFailure(reason: OtpVerifyResult['reason']): never {
+function throwForOtpFailure(reason: OtpCheckResult['reason']): never {
   switch (reason) {
     case 'expired':
       throw new ConflictException({
@@ -56,8 +56,13 @@ function throwForOtpFailure(reason: OtpVerifyResult['reason']): never {
   }
 }
 
+/** Thrown inside confirmPasswordReset's transaction when consume() loses the atomic race - never reaches a caller. */
+class OtpConsumeRaceLostError extends Error {}
+
 @Controller('auth')
 export class AuthController {
+  private readonly logger = new Logger(AuthController.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly otp: OtpService,
@@ -99,16 +104,35 @@ export class AuthController {
   @UseInterceptors(IdempotencyInterceptor)
   async verifyOtp(@Body() dto: OtpVerifyDto) {
     const purpose = toPrismaOtpPurpose(dto.purpose);
-    const result = await this.otp.verify(dto.phone, purpose, dto.otp_code);
-    if (!result.ok) {
-      throwForOtpFailure(result.reason);
+    const check = await this.otp.checkCode(dto.phone, purpose, dto.otp_code);
+    if (!check.ok) {
+      throwForOtpFailure(check.reason);
     }
 
+    // Create the Redis verification token BEFORE consuming the OTP in
+    // Postgres. If Redis is what fails, nothing in Postgres has
+    // changed yet, so an identical retry (same Idempotency-Key, same
+    // code) finds the OTP still unconsumed and can complete cleanly -
+    // consuming first and creating the token second would burn the
+    // OTP on a Redis hiccup with no way for a retry to recover it.
     const phoneVerifiedAt = new Date();
     const token = await this.phoneVerification.create({
       phone: dto.phone,
       purpose,
     });
+
+    const consumed = await this.otp.consume(check.claim!);
+    if (!consumed) {
+      // Lost the atomic-consume race to a different concurrent verify
+      // for the same code (a different Idempotency-Key - the
+      // interceptor's own claim only protects against a *repeated*
+      // key). That request wins; this one's already-created token is
+      // simply never returned and expires unused.
+      throw new BadRequestException({
+        code: 'OTP_INVALID',
+        message: 'This OTP code is invalid',
+      });
+    }
 
     return {
       session_token: token,
@@ -242,51 +266,85 @@ export class AuthController {
     @Body() dto: PasswordResetConfirmDto,
     @Req() req: Request,
   ) {
-    const result = await this.otp.verify(
+    const check = await this.otp.checkCode(
       dto.phone,
       'PASSWORD_RESET',
       dto.otp_code,
     );
-    if (!result.ok) {
-      throwForOtpFailure(result.reason);
+    if (!check.ok) {
+      throwForOtpFailure(check.reason);
     }
 
-    const user = await this.prisma.user.findUnique({
-      where: { phone: dto.phone },
-    });
-    if (!user) {
-      // Only reachable if a valid PASSWORD_RESET OTP somehow exists for
-      // an unregistered phone, which requestPasswordReset() never
-      // issues - defensive, not a real enumeration path.
-      throw new NotFoundException({
-        code: 'USER_NOT_FOUND',
-        message: 'No account found for this phone number',
-      });
-    }
-
+    // OTP consumption, the password update, and the audit record all
+    // happen in ONE transaction: if any part fails, none of it commits
+    // - the OTP stays unconsumed and an identical retry can genuinely
+    // start over, instead of finding a burned OTP with no completed
+    // password change to show for it.
     const passwordHash = await bcrypt.hash(dto.new_password, 10);
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: { passwordHash },
-    });
+    let user: { id: string; phone: string; phoneVerifiedAt: Date | null };
+    try {
+      user = await this.prisma.$transaction(async (tx) => {
+        const consumed = await this.otp.consume(check.claim!, tx);
+        if (!consumed) {
+          // Lost the atomic-consume race to a different concurrent
+          // reset-confirm for the same code - roll back (nothing to
+          // undo yet) and report it as an invalid code below.
+          throw new OtpConsumeRaceLostError();
+        }
 
-    // Security best practice: a password reset invalidates every other
-    // session for this user, not just the one making this request.
-    await this.sessions.revokeAllForUser(user.id);
+        // Only reachable with a real user - requestPasswordReset()
+        // never issues a PASSWORD_RESET OTP for an unregistered phone,
+        // so a valid, consumable claim implies the user exists.
+        const existing = await tx.user.findUniqueOrThrow({
+          where: { phone: dto.phone },
+        });
+        const updated = await tx.user.update({
+          where: { id: existing.id },
+          data: { passwordHash },
+        });
+        await this.auditLog.record(
+          {
+            actorId: updated.id,
+            correlationId: req.correlationId,
+            action: 'user.password_reset',
+            entityType: 'User',
+            entityId: updated.id,
+          },
+          tx,
+        );
+        return updated;
+      });
+    } catch (err) {
+      if (err instanceof OtpConsumeRaceLostError) {
+        throw new BadRequestException({
+          code: 'OTP_INVALID',
+          message: 'This OTP code is invalid',
+        });
+      }
+      throw err;
+    }
 
-    const token = await this.sessions.create({
-      userId: user.id,
-      phone: user.phone,
-      phoneVerifiedAt: user.phoneVerifiedAt?.toISOString() ?? null,
-    });
-
-    await this.auditLog.record({
-      actorId: user.id,
-      correlationId: req.correlationId,
-      action: 'user.password_reset',
-      entityType: 'User',
-      entityId: user.id,
-    });
+    // The password change above is already durably committed - from
+    // here on, a hiccup must degrade gracefully rather than fail the
+    // request. Throwing here would mark this Idempotency-Key FAILED
+    // and make a same-key retry re-attempt OTP consumption, which can
+    // now only ever fail since the OTP was already, correctly,
+    // consumed above. Security best practice (revoking other sessions)
+    // and issuing a fresh one are both best-effort on top of the
+    // guaranteed core change, not a condition of its success.
+    let token: string | null = null;
+    try {
+      await this.sessions.revokeAllForUser(user.id);
+      token = await this.sessions.create({
+        userId: user.id,
+        phone: user.phone,
+        phoneVerifiedAt: user.phoneVerifiedAt?.toISOString() ?? null,
+      });
+    } catch (err) {
+      this.logger.error(
+        `Password reset for user ${user.id} committed, but session housekeeping failed - client should log in again: ${(err as Error).message}`,
+      );
+    }
 
     return { session_token: token };
   }

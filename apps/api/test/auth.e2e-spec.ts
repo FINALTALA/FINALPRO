@@ -211,6 +211,71 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
       expect(second.body.session_token).toBe(first.body.session_token);
     });
 
+    it('under two concurrent otp/verify calls for the same phone/code but different Idempotency-Keys, exactly one succeeds and the OTP is consumed exactly once', async () => {
+      const phone = uniquePhone();
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/otp/request')
+        .send({ phone, purpose: 'signup' })
+        .expect(202);
+      const code = fakeSms.lastCodeFor(phone);
+
+      const [a, b] = await Promise.all([
+        request(app.getHttpServer())
+          .post('/api/v1/auth/otp/verify')
+          .set('Idempotency-Key', `race-a-${phone}`)
+          .send({ phone, otp_code: code, purpose: 'signup' }),
+        request(app.getHttpServer())
+          .post('/api/v1/auth/otp/verify')
+          .set('Idempotency-Key', `race-b-${phone}`)
+          .send({ phone, otp_code: code, purpose: 'signup' }),
+      ]);
+
+      // The interceptor's own claim doesn't stop this race - the two
+      // requests use different Idempotency-Keys, so both reach
+      // OtpService independently. The atomic consume() compare-and-swap
+      // is what guarantees only one wins.
+      const statuses = [a.status, b.status].sort();
+      expect(statuses).toEqual([200, 400]);
+
+      const rows = await prisma.otpCode.findMany({
+        where: { phone, purpose: 'SIGNUP' },
+      });
+      const consumedRows = rows.filter((r) => r.consumedAt !== null);
+      expect(consumedRows).toHaveLength(1);
+    });
+
+    it('scopes the Idempotency-Key on the pre-auth otp/verify route by phone, so two different users reusing the same key never collide', async () => {
+      const phoneA = uniquePhone();
+      const phoneB = uniquePhone();
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/otp/request')
+        .send({ phone: phoneA, purpose: 'signup' })
+        .expect(202);
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/otp/request')
+        .send({ phone: phoneB, purpose: 'signup' })
+        .expect(202);
+      const codeA = fakeSms.lastCodeFor(phoneA);
+      const codeB = fakeSms.lastCodeFor(phoneB);
+      const sharedKey = 'shared-preauth-key';
+
+      const resA = await request(app.getHttpServer())
+        .post('/api/v1/auth/otp/verify')
+        .set('Idempotency-Key', sharedKey)
+        .send({ phone: phoneA, otp_code: codeA, purpose: 'signup' })
+        .expect(200);
+
+      const resB = await request(app.getHttpServer())
+        .post('/api/v1/auth/otp/verify')
+        .set('Idempotency-Key', sharedKey)
+        .send({ phone: phoneB, otp_code: codeB, purpose: 'signup' })
+        .expect(200);
+
+      expect(resA.body.session_token).not.toBe(resB.body.session_token);
+      expect(resA.headers['idempotent-replayed']).toBeUndefined();
+      expect(resB.headers['idempotent-replayed']).toBeUndefined();
+    });
+
     it('rejects registration with a missing/invalid verification_token (400 PHONE_NOT_VERIFIED)', async () => {
       const phone = uniquePhone();
       const res = await request(app.getHttpServer())

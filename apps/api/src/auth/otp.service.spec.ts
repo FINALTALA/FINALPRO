@@ -12,6 +12,7 @@ describe('OtpService', () => {
       create: jest.Mock;
       findFirst: jest.Mock;
       update: jest.Mock;
+      updateMany: jest.Mock;
     };
   };
   let sms: { sendOtp: jest.Mock };
@@ -23,6 +24,7 @@ describe('OtpService', () => {
         create: jest.fn(),
         findFirst: jest.fn(),
         update: jest.fn(),
+        updateMany: jest.fn(),
       },
     };
     sms = { sendOtp: jest.fn().mockResolvedValue(undefined) };
@@ -49,36 +51,43 @@ describe('OtpService', () => {
     });
   });
 
-  describe('verify', () => {
+  describe('checkCode', () => {
     it('fails with "invalid" when no OTP exists for this phone/purpose', async () => {
       prisma.otpCode.findFirst.mockResolvedValue(null);
 
-      const result = await service.verify('+970000000001', 'SIGNUP', '123456');
+      const result = await service.checkCode(
+        '+970000000001',
+        'SIGNUP',
+        '123456',
+      );
 
       expect(result).toEqual({ ok: false, reason: 'invalid' });
     });
 
-    it('succeeds and consumes the OTP on a matching code', async () => {
+    it('succeeds and returns a claim on a matching code, without consuming it', async () => {
+      const expiresAt = new Date(Date.now() + 60_000);
       prisma.otpCode.findFirst.mockResolvedValue({
         id: 'otp-1',
         codeHash: hashOf('654321'),
         attemptCount: 0,
-        expiresAt: new Date(Date.now() + 60_000),
+        expiresAt,
       });
-      prisma.otpCode.update.mockResolvedValue({});
 
-      const result = await service.verify('+970000000001', 'SIGNUP', '654321');
-
-      expect(result).toEqual({ ok: true });
-      expect(prisma.otpCode.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { id: 'otp-1' },
-          data: expect.objectContaining({ consumedAt: expect.any(Date) }),
-        }),
+      const result = await service.checkCode(
+        '+970000000001',
+        'SIGNUP',
+        '654321',
       );
+
+      expect(result).toEqual({
+        ok: true,
+        claim: { id: 'otp-1', expiresAt, attemptCount: 0 },
+      });
+      expect(prisma.otpCode.update).not.toHaveBeenCalled();
+      expect(prisma.otpCode.updateMany).not.toHaveBeenCalled();
     });
 
-    it('fails with "invalid" and increments attemptCount on a wrong code, without consuming it', async () => {
+    it('fails with "invalid" and increments attemptCount on a wrong code, without returning a claim', async () => {
       prisma.otpCode.findFirst.mockResolvedValue({
         id: 'otp-2',
         codeHash: hashOf('654321'),
@@ -87,7 +96,11 @@ describe('OtpService', () => {
       });
       prisma.otpCode.update.mockResolvedValue({});
 
-      const result = await service.verify('+970000000001', 'SIGNUP', '000000');
+      const result = await service.checkCode(
+        '+970000000001',
+        'SIGNUP',
+        '000000',
+      );
 
       expect(result).toEqual({ ok: false, reason: 'invalid' });
       expect(prisma.otpCode.update).toHaveBeenCalledWith({
@@ -104,7 +117,11 @@ describe('OtpService', () => {
         expiresAt: new Date(Date.now() - 1_000),
       });
 
-      const result = await service.verify('+970000000001', 'SIGNUP', '654321');
+      const result = await service.checkCode(
+        '+970000000001',
+        'SIGNUP',
+        '654321',
+      );
 
       expect(result).toEqual({ ok: false, reason: 'expired' });
       expect(prisma.otpCode.update).not.toHaveBeenCalled();
@@ -118,10 +135,63 @@ describe('OtpService', () => {
         expiresAt: new Date(Date.now() + 60_000),
       });
 
-      const result = await service.verify('+970000000001', 'SIGNUP', '654321');
+      const result = await service.checkCode(
+        '+970000000001',
+        'SIGNUP',
+        '654321',
+      );
 
       expect(result).toEqual({ ok: false, reason: 'too_many_attempts' });
       expect(prisma.otpCode.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('consume', () => {
+    it('atomically consumes a claim, pinning id/expiresAt/attemptCount in the WHERE clause', async () => {
+      const expiresAt = new Date(Date.now() + 60_000);
+      prisma.otpCode.updateMany.mockResolvedValue({ count: 1 });
+
+      const consumed = await service.consume({
+        id: 'otp-5',
+        expiresAt,
+        attemptCount: 0,
+      });
+
+      expect(consumed).toBe(true);
+      expect(prisma.otpCode.updateMany).toHaveBeenCalledWith({
+        where: { id: 'otp-5', consumedAt: null, expiresAt, attemptCount: 0 },
+        data: { consumedAt: expect.any(Date) },
+      });
+    });
+
+    it('returns false when the compare-and-swap loses the race (count 0) - already consumed by someone else', async () => {
+      prisma.otpCode.updateMany.mockResolvedValue({ count: 0 });
+
+      const consumed = await service.consume({
+        id: 'otp-6',
+        expiresAt: new Date(Date.now() + 60_000),
+        attemptCount: 0,
+      });
+
+      expect(consumed).toBe(false);
+    });
+
+    it('uses the provided transaction client instead of the default one when given', async () => {
+      const tx = {
+        otpCode: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      };
+
+      await service.consume(
+        {
+          id: 'otp-7',
+          expiresAt: new Date(Date.now() + 60_000),
+          attemptCount: 0,
+        },
+        tx as never,
+      );
+
+      expect(tx.otpCode.updateMany).toHaveBeenCalled();
+      expect(prisma.otpCode.updateMany).not.toHaveBeenCalled();
     });
   });
 });
