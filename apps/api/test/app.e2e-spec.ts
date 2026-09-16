@@ -1,8 +1,10 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import { createHash } from 'crypto';
 import * as request from 'supertest';
 import { AppModule } from './../src/app.module';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
+import { PrismaService } from './../src/prisma/prisma.service';
 
 describe('Foundation conventions (e2e)', () => {
   let app: INestApplication;
@@ -151,5 +153,64 @@ describe('Foundation conventions (e2e)', () => {
     // level (idempotency.interceptor.spec.ts), since exercising it here
     // would need a real second authenticated identity - not available
     // until EPIC-AUTH (Sprint 2) provides req.user for real.
+
+    it('under two concurrent requests racing to take over the same stale IN_PROGRESS claim, the handler runs exactly once - never twice', async () => {
+      const prisma = app.get(PrismaService);
+      const key = `test-stale-takeover-${Date.now()}`;
+      const requestPath = '/api/v1/health/echo';
+      // A payload unique to this test run, so the audit-log assertion
+      // below can't be confused by another test's echo call.
+      const body = { probe: `stale-takeover-${key}` };
+      const requestHash = createHash('sha256')
+        .update(JSON.stringify({ method: 'POST', path: requestPath, body }))
+        .digest('hex');
+
+      // Simulate a claim abandoned by a crashed request: IN_PROGRESS,
+      // created well past the 30s staleness threshold, matching payload.
+      await prisma.idempotencyKey.create({
+        data: {
+          key,
+          scope: 'anonymous',
+          requestPath,
+          requestHash,
+          status: 'IN_PROGRESS',
+          createdAt: new Date(Date.now() - 60_000),
+          expiresAt: new Date(Date.now() + 60_000),
+        },
+      });
+
+      const agent = request(app.getHttpServer());
+      const [a, b] = await Promise.all([
+        agent
+          .post('/api/v1/health/echo')
+          .set('Idempotency-Key', key)
+          .send(body),
+        agent
+          .post('/api/v1/health/echo')
+          .set('Idempotency-Key', key)
+          .send(body),
+      ]);
+
+      // Whoever wins the compare-and-swap takeover reruns the handler
+      // (201). The loser sees one of two *legitimate* outcomes,
+      // depending only on how far the winner had gotten by the time the
+      // loser re-checks: still IN_PROGRESS -> 409 "already being
+      // processed"; already COMPLETED -> replay of the winner's own
+      // response (also 201). Both are correct - the handler still only
+      // ran once either way. What must never happen is the handler
+      // running twice, or a status this endpoint cannot produce.
+      const statuses = [a.status, b.status].sort();
+      expect(statuses[0]).toBe(201);
+      expect([201, 409]).toContain(statuses[1]);
+
+      // Prove "ran at most once" directly, rather than inferring it
+      // from status codes alone: the handler writes one AuditLog row
+      // per actual execution, so a race that ran it twice would leave
+      // two rows for this distinctive payload instead of one.
+      const auditRows = await prisma.auditLog.findMany({
+        where: { action: 'health.echo', afterState: { equals: body } },
+      });
+      expect(auditRows).toHaveLength(1);
+    });
   });
 });

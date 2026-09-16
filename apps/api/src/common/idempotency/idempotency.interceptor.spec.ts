@@ -51,6 +51,7 @@ describe('IdempotencyInterceptor', () => {
       create: jest.Mock;
       findUnique: jest.Mock;
       update: jest.Mock;
+      updateMany: jest.Mock;
     };
   };
   let handler: CallHandler;
@@ -61,6 +62,7 @@ describe('IdempotencyInterceptor', () => {
         create: jest.fn(),
         findUnique: jest.fn(),
         update: jest.fn(),
+        updateMany: jest.fn(),
       },
     };
     interceptor = new IdempotencyInterceptor(
@@ -158,27 +160,124 @@ describe('IdempotencyInterceptor', () => {
     ).rejects.toBeInstanceOf(ConflictException);
   });
 
-  it('takes over a stale IN_PROGRESS claim (original owner crashed) instead of blocking forever', async () => {
+  it('takes over a stale IN_PROGRESS claim (original owner crashed) instead of blocking forever, via an atomic compare-and-swap', async () => {
     prisma.idempotencyKey.create.mockRejectedValue(uniqueViolation());
+    const staleCreatedAt = new Date(Date.now() - 60_000); // 60s old, past the 30s stale threshold
     prisma.idempotencyKey.findUnique.mockResolvedValue({
       id: 'row-5',
       status: 'IN_PROGRESS',
-      createdAt: new Date(Date.now() - 60_000), // 60s old, past the 30s stale threshold
-      requestHash: 'whatever',
+      createdAt: staleCreatedAt,
+      requestHash: hashOf('POST', '/api/v1/health/echo', {}),
     });
-    prisma.idempotencyKey.update.mockResolvedValue({ id: 'row-5' });
+    prisma.idempotencyKey.updateMany.mockResolvedValue({ count: 1 });
+    prisma.idempotencyKey.update.mockResolvedValue({});
 
     const context = makeContext({ headers: { 'idempotency-key': 'k5' } });
     const result$ = await interceptor.intercept(context, handler);
     const result = await firstValueFrom(result$);
 
     expect(result).toEqual({ echoed: true });
-    expect(prisma.idempotencyKey.update).toHaveBeenCalledWith(
+    // The takeover is a CAS: the WHERE clause pins the exact id, status,
+    // and createdAt just read, so a losing racer's stale WHERE clause
+    // would no longer match and affect zero rows.
+    expect(prisma.idempotencyKey.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 'row-5' },
+        where: {
+          id: 'row-5',
+          status: 'IN_PROGRESS',
+          createdAt: staleCreatedAt,
+        },
         data: expect.objectContaining({ status: 'IN_PROGRESS' }),
       }),
     );
+  });
+
+  it('refuses to take over a stale IN_PROGRESS claim when the new payload differs - returns 409 without ever calling updateMany', async () => {
+    prisma.idempotencyKey.create.mockRejectedValue(uniqueViolation());
+    prisma.idempotencyKey.findUnique.mockResolvedValue({
+      id: 'row-9',
+      status: 'IN_PROGRESS',
+      createdAt: new Date(Date.now() - 60_000),
+      requestHash: hashOf('POST', '/api/v1/health/echo', { hello: 'ORIGINAL' }),
+    });
+    const context = makeContext({
+      headers: { 'idempotency-key': 'k9' },
+      body: { hello: 'DIFFERENT' },
+    });
+
+    await expect(
+      interceptor.intercept(context, handler),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.idempotencyKey.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('retries a FAILED claim when the new payload matches (the earlier attempt crashed after claiming but before finishing)', async () => {
+    prisma.idempotencyKey.create.mockRejectedValue(uniqueViolation());
+    prisma.idempotencyKey.findUnique.mockResolvedValue({
+      id: 'row-11',
+      status: 'FAILED',
+      createdAt: new Date(),
+      requestHash: hashOf('POST', '/api/v1/health/echo', {}),
+    });
+    prisma.idempotencyKey.updateMany.mockResolvedValue({ count: 1 });
+    prisma.idempotencyKey.update.mockResolvedValue({});
+
+    const context = makeContext({ headers: { 'idempotency-key': 'k11' } });
+    const result$ = await interceptor.intercept(context, handler);
+    const result = await firstValueFrom(result$);
+
+    expect(result).toEqual({ echoed: true });
+    expect(prisma.idempotencyKey.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: 'row-11', status: 'FAILED' }),
+        data: expect.objectContaining({ status: 'IN_PROGRESS' }),
+      }),
+    );
+  });
+
+  it('refuses to retry a FAILED claim when the new payload differs - returns 409 without ever calling updateMany', async () => {
+    prisma.idempotencyKey.create.mockRejectedValue(uniqueViolation());
+    prisma.idempotencyKey.findUnique.mockResolvedValue({
+      id: 'row-10',
+      status: 'FAILED',
+      createdAt: new Date(),
+      requestHash: hashOf('POST', '/api/v1/health/echo', { hello: 'ORIGINAL' }),
+    });
+    const context = makeContext({
+      headers: { 'idempotency-key': 'k10' },
+      body: { hello: 'DIFFERENT' },
+    });
+
+    await expect(
+      interceptor.intercept(context, handler),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.idempotencyKey.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('loses the compare-and-swap takeover race to another concurrent takeover attempt, re-reads the row, and rejects instead of assuming it won', async () => {
+    prisma.idempotencyKey.create.mockRejectedValue(uniqueViolation());
+    const matchingHash = hashOf('POST', '/api/v1/health/echo', {});
+    prisma.idempotencyKey.findUnique
+      .mockResolvedValueOnce({
+        id: 'row-8',
+        status: 'IN_PROGRESS',
+        createdAt: new Date(Date.now() - 60_000), // stale, eligible for takeover
+        requestHash: matchingHash,
+      })
+      .mockResolvedValueOnce({
+        id: 'row-8',
+        status: 'IN_PROGRESS',
+        createdAt: new Date(), // another request just won the CAS and re-claimed it
+        requestHash: matchingHash,
+      });
+    prisma.idempotencyKey.updateMany.mockResolvedValue({ count: 0 });
+
+    const context = makeContext({ headers: { 'idempotency-key': 'k8' } });
+
+    await expect(
+      interceptor.intercept(context, handler),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.idempotencyKey.updateMany).toHaveBeenCalledTimes(1);
   });
 
   it('scopes the claim to the acting user, so two different users can reuse the same client key', async () => {
