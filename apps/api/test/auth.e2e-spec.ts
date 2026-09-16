@@ -633,6 +633,59 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
         .expect(200);
     });
 
+    it("never returns ISSUED unless the session is also durably recorded as this exact key's replayable response - if recording it fails even though Redis itself succeeded, both this response and a same-key retry get the same LOGIN_REQUIRED (Sprint 2 review round 7)", async () => {
+      const phone = uniquePhone();
+      await signup(phone, 'old-password');
+
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/password/reset-request')
+        .send({ phone })
+        .expect(202);
+      const code = fakeSms.lastCodeFor(phone);
+      const key = `reset-idempotency-consistency-${phone}`;
+
+      // Redis session creation itself succeeds here - what fails is
+      // the *separate* Postgres write that records that session as
+      // this Idempotency-Key's durable, replayable response. Without
+      // this fix, the first caller would get ISSUED with a real token
+      // while a same-key retry replayed the still-LOGIN_REQUIRED
+      // stored value - two different answers for one key.
+      const updateSpy = jest
+        .spyOn(prisma.idempotencyKey, 'update')
+        .mockRejectedValueOnce(
+          new Error('simulated Postgres blip recording the issued session'),
+        );
+
+      const first = await request(app.getHttpServer())
+        .post('/api/v1/auth/password/reset-confirm')
+        .set('Idempotency-Key', key)
+        .send({ phone, otp_code: code, new_password: 'new-password' })
+        .expect(200);
+
+      updateSpy.mockRestore();
+
+      expect(first.body).toEqual({
+        session_token: null,
+        session_status: 'LOGIN_REQUIRED',
+        password_reset_completed: true,
+      });
+
+      const second = await request(app.getHttpServer())
+        .post('/api/v1/auth/password/reset-confirm')
+        .set('Idempotency-Key', key)
+        .send({ phone, otp_code: code, new_password: 'new-password' })
+        .expect(200);
+      expect(second.headers['idempotent-replayed']).toBe('true');
+      expect(second.body).toEqual(first.body);
+
+      // The password change itself is unaffected by this Redis-adjacent
+      // bookkeeping failure - the new password already works.
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ phone, password: 'new-password' })
+        .expect(200);
+    });
+
     it('when a second PASSWORD_RESET OTP is requested before the first is used, only the latest OTP can succeed - and its session token (if issued) is immediately valid, never minted against a stale predicted sessionVersion (Sprint 2 review round 6)', async () => {
       const phone = uniquePhone();
       await signup(phone, 'old-password');

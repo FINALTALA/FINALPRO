@@ -455,6 +455,19 @@ export class AuthController {
     // succeeded. Revoking old sessions is now purely an optimization
     // (SessionAuthGuard's sessionVersion check already makes them
     // unusable the instant the transaction above committed).
+    // ISSUED is only ever returned to *this* caller once it's also
+    // durably recorded as this exact Idempotency-Key's completed
+    // response (Sprint 2 review round 7) - otherwise a same-key retry
+    // would replay the transaction's still-LOGIN_REQUIRED stored
+    // value while this response claimed ISSUED: two different answers
+    // for one key, breaking the basic Idempotency-Key guarantee (same
+    // key -> same result, always). If session creation succeeds but
+    // recording it fails, this falls through to the LOGIN_REQUIRED
+    // default below - the real session token was still created in
+    // Redis and remains technically valid, but since it's never
+    // disclosed anywhere on this path, that's harmless; it simply
+    // expires unused. (Actively deleting it is possible but not done
+    // here - it costs nothing left sitting unused with its normal TTL.)
     let responseBody: {
       session_token: string | null;
       session_status: 'LOGIN_REQUIRED' | 'ISSUED';
@@ -468,35 +481,23 @@ export class AuthController {
         phoneVerifiedAt: updatedUser.phoneVerifiedAt?.toISOString() ?? null,
         sessionVersion: updatedUser.sessionVersion,
       });
-      responseBody = {
+      const issued = {
         session_token: token,
-        session_status: 'ISSUED',
-        password_reset_completed: true,
+        session_status: 'ISSUED' as const,
+        password_reset_completed: true as const,
       };
-    } catch (err) {
-      this.logger.error(
-        `Password reset for user ${updatedUser.id} committed, but session issuance failed - client should log in manually: ${(err as Error).message}`,
-      );
-    }
 
-    // Keep the durably-completed record in sync with the real outcome,
-    // so a later replay of *this* successful attempt returns it too,
-    // not the transaction's LOGIN_REQUIRED placeholder. Best-effort:
-    // this client already has the correct response below regardless of
-    // whether this specific patch succeeds - only a hypothetical
-    // future replay would see LOGIN_REQUIRED instead of ISSUED if it
-    // doesn't (still an honest, successful answer either way).
-    if (responseBody.session_status === 'ISSUED' && req.idempotencyClaimId) {
-      try {
+      if (req.idempotencyClaimId) {
         await this.prisma.idempotencyKey.update({
           where: { id: req.idempotencyClaimId },
-          data: { responseBody: responseBody as Prisma.InputJsonValue },
+          data: { responseBody: issued as Prisma.InputJsonValue },
         });
-      } catch (err) {
-        this.logger.error(
-          `Password reset for user ${updatedUser.id} succeeded, but updating the replay record with the real session token failed: ${(err as Error).message}`,
-        );
+        responseBody = issued;
       }
+    } catch (err) {
+      this.logger.error(
+        `Password reset for user ${updatedUser.id} committed, but issuing (or durably recording) a session failed - returning the recorded LOGIN_REQUIRED answer so a same-key retry stays consistent: ${(err as Error).message}`,
+      );
     }
 
     return responseBody;
