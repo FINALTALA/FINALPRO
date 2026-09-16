@@ -147,7 +147,7 @@ describe('OtpService', () => {
   });
 
   describe('consume', () => {
-    it('atomically consumes a claim, pinning id/expiresAt/attemptCount in the WHERE clause', async () => {
+    it('atomically consumes a claim, pinning id/attemptCount and requiring expiresAt to still be in the future', async () => {
       const expiresAt = new Date(Date.now() + 60_000);
       prisma.otpCode.updateMany.mockResolvedValue({ count: 1 });
 
@@ -159,8 +159,13 @@ describe('OtpService', () => {
 
       expect(consumed).toBe(true);
       expect(prisma.otpCode.updateMany).toHaveBeenCalledWith({
-        where: { id: 'otp-5', consumedAt: null, expiresAt, attemptCount: 0 },
-        data: { consumedAt: expect.any(Date) },
+        where: {
+          id: 'otp-5',
+          consumedAt: null,
+          expiresAt: { gt: expect.any(Date) },
+          attemptCount: 0,
+        },
+        data: { consumedAt: expect.any(Date), verificationToken: undefined },
       });
     });
 
@@ -176,6 +181,54 @@ describe('OtpService', () => {
       expect(consumed).toBe(false);
     });
 
+    it("returns false for a claim that was still valid at checkCode() time but has since expired (the TOCTOU boundary) - even though the CAS's other pinned fields still match", async () => {
+      // The real enforcement is Postgres evaluating `expiresAt: { gt: now }`
+      // against the CURRENT row at the moment the UPDATE runs, which a
+      // mocked Prisma client can't itself prove - this locks in that
+      // consume() asks for that check on every call, rather than
+      // silently reverting to an exact-equality pin that would let a
+      // now-expired code still be consumed as long as nothing else
+      // touched the row. See the e2e boundary test for the real-DB proof.
+      prisma.otpCode.updateMany.mockResolvedValue({ count: 0 });
+
+      const consumed = await service.consume({
+        id: 'otp-boundary',
+        expiresAt: new Date(Date.now() - 1), // was valid when checked, expired by the time we got here
+        attemptCount: 0,
+      });
+
+      expect(consumed).toBe(false);
+      expect(prisma.otpCode.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            expiresAt: { gt: expect.any(Date) },
+          }),
+        }),
+      );
+    });
+
+    it('persists a durable verificationToken and the consuming Idempotency-Key alongside consumedAt when given', async () => {
+      prisma.otpCode.updateMany.mockResolvedValue({ count: 1 });
+
+      await service.consume(
+        {
+          id: 'otp-token',
+          expiresAt: new Date(Date.now() + 60_000),
+          attemptCount: 0,
+        },
+        { verificationToken: 'tok_abc123', idempotencyKey: 'the-key' },
+      );
+
+      expect(prisma.otpCode.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            verificationToken: 'tok_abc123',
+            consumedByKey: 'the-key',
+          }),
+        }),
+      );
+    });
+
     it('uses the provided transaction client instead of the default one when given', async () => {
       const tx = {
         otpCode: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
@@ -187,11 +240,69 @@ describe('OtpService', () => {
           expiresAt: new Date(Date.now() + 60_000),
           attemptCount: 0,
         },
-        tx as never,
+        { tx: tx as never },
       );
 
       expect(tx.otpCode.updateMany).toHaveBeenCalled();
       expect(prisma.otpCode.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('findRecoverableToken', () => {
+    it('returns the token and consumedAt for a recently-consumed row matching the code hash AND the exact Idempotency-Key', async () => {
+      const consumedAt = new Date(Date.now() - 1_000);
+      prisma.otpCode.findFirst.mockResolvedValue({
+        codeHash: hashOf('654321'),
+        verificationToken: 'tok_recovered',
+        consumedByKey: 'my-retry-key',
+        consumedAt,
+      });
+
+      const result = await service.findRecoverableToken(
+        '+970000000001',
+        'SIGNUP',
+        '654321',
+        'my-retry-key',
+      );
+
+      expect(result).toEqual({ token: 'tok_recovered', consumedAt });
+    });
+
+    it('returns null when no matching consumed row exists', async () => {
+      prisma.otpCode.findFirst.mockResolvedValue(null);
+
+      const result = await service.findRecoverableToken(
+        '+970000000001',
+        'SIGNUP',
+        '654321',
+        'my-retry-key',
+      );
+
+      expect(result).toBeNull();
+    });
+
+    it('queries only recently-consumed rows with a stored token, matched by code hash AND the exact Idempotency-Key - not any past use, and not a different concurrent request for the same code', async () => {
+      prisma.otpCode.findFirst.mockResolvedValue(null);
+
+      await service.findRecoverableToken(
+        '+970000000001',
+        'SIGNUP',
+        '654321',
+        'my-retry-key',
+      );
+
+      expect(prisma.otpCode.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            phone: '+970000000001',
+            purpose: 'SIGNUP',
+            codeHash: hashOf('654321'),
+            consumedByKey: 'my-retry-key',
+            verificationToken: { not: null },
+            consumedAt: expect.objectContaining({ not: null }),
+          }),
+        }),
+      );
     });
   });
 });

@@ -10,6 +10,17 @@ export interface SessionData {
   userId: string;
   phone: string;
   phoneVerifiedAt: string | null;
+  /**
+   * The user's User.sessionVersion at the moment this session was
+   * issued. SessionAuthGuard compares this against the user's CURRENT
+   * version on every request and rejects a mismatch - this is what
+   * makes session invalidation on password reset actually
+   * security-guaranteed rather than best-effort: it holds even if
+   * revokeAllForUser() below never ran (e.g. Redis was down at reset
+   * time), because the guard's check is a Postgres read, not a Redis
+   * lookup for a deleted key.
+   */
+  sessionVersion: number;
 }
 
 /**

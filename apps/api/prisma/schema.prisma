@@ -23,6 +23,14 @@ model User {
   email           String?
   languagePref    String    @default("ar")
   phoneVerifiedAt DateTime?
+  /// Bumped atomically alongside passwordHash on every password reset
+  /// (Sprint 2 review fix). SessionData carries the version a session
+  /// was issued under; SessionAuthGuard rejects a stale one even if the
+  /// matching Redis keys were never actually deleted (e.g. Redis was
+  /// down at reset time) - Postgres, not Redis availability, is the
+  /// actual security boundary for "did a password reset invalidate
+  /// this session."
+  sessionVersion  Int       @default(0)
   createdAt       DateTime  @default(now())
 
   customerProfile CustomerProfile?
@@ -82,15 +90,37 @@ enum OtpPurpose {
 /// documented FYP fallback for the still-unselected SMS/OTP provider.
 /// attemptCount backs the 429 TOO_MANY_ATTEMPTS response Part 4
 /// specifies; consumedAt enforces "consumption happens exactly once."
+///
+/// verificationToken (Sprint 2 review fix): the Redis phone-verification
+/// token issued at the moment this row is consumed, persisted durably
+/// alongside consumedAt in the SAME atomic write. IdempotencyInterceptor's
+/// own completion bookkeeping is a separate Postgres write from the
+/// handler's - if it fails after the handler already consumed the OTP
+/// and returned a token, a retry can no longer find an unconsumed OTP
+/// to re-check. Storing the token here lets that retry recover the
+/// exact same value it already legitimately received, instead of being
+/// stuck behind an OTP that now looks merely "already used."
+///
+/// consumedByKey: the client's Idempotency-Key header value at the
+/// moment of consumption. Recovery (OtpService.findRecoverableToken)
+/// requires an exact match against this, not just a correct code -
+/// without it, a concurrent request that *lost* the atomic consume()
+/// race (a genuinely different logical request, under a different
+/// Idempotency-Key, that also happened to present the right code)
+/// could recover the *winner's* token instead of correctly failing,
+/// defeating single-use under exactly the concurrency scenario this
+/// whole mechanism exists to protect.
 model OtpCode {
-  id           String     @id @default(uuid())
-  phone        String
-  purpose      OtpPurpose
-  codeHash     String
-  expiresAt    DateTime
-  consumedAt   DateTime?
-  attemptCount Int        @default(0)
-  createdAt    DateTime   @default(now())
+  id                String     @id @default(uuid())
+  phone             String
+  purpose           OtpPurpose
+  codeHash          String
+  expiresAt         DateTime
+  consumedAt        DateTime?
+  verificationToken String?
+  consumedByKey     String?
+  attemptCount      Int        @default(0)
+  createdAt         DateTime   @default(now())
 
   @@index([phone, purpose])
   @@map("otp_codes")

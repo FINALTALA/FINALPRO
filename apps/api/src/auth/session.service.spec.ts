@@ -50,6 +50,7 @@ describe('SessionService', () => {
       userId: 'user-1',
       phone: '+970000000001',
       phoneVerifiedAt: '2026-01-01T00:00:00.000Z',
+      sessionVersion: 0,
     });
 
     expect(typeof token).toBe('string');
@@ -60,6 +61,7 @@ describe('SessionService', () => {
       userId: 'user-1',
       phone: '+970000000001',
       phoneVerifiedAt: '2026-01-01T00:00:00.000Z',
+      sessionVersion: 0,
     });
   });
 
@@ -77,6 +79,7 @@ describe('SessionService', () => {
       userId: 'user-2',
       phone: '+970000000002',
       phoneVerifiedAt: null,
+      sessionVersion: 0,
     };
 
     const tokenA = await service.create(data);
@@ -93,16 +96,19 @@ describe('SessionService', () => {
       userId: 'user-3',
       phone: '+970000000003',
       phoneVerifiedAt: null,
+      sessionVersion: 0,
     });
     const tokenB = await service.create({
       userId: 'user-3',
       phone: '+970000000003',
       phoneVerifiedAt: null,
+      sessionVersion: 0,
     });
     const otherUserToken = await service.create({
       userId: 'user-4',
       phone: '+970000000004',
       phoneVerifiedAt: null,
+      sessionVersion: 0,
     });
 
     await service.revokeAllForUser('user-3');

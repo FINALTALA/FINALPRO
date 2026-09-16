@@ -102,10 +102,41 @@ export class AuthController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @IdempotencyTtl(OTP_VERIFY_IDEMPOTENCY_TTL_MS)
   @UseInterceptors(IdempotencyInterceptor)
-  async verifyOtp(@Body() dto: OtpVerifyDto) {
+  async verifyOtp(@Body() dto: OtpVerifyDto, @Req() req: Request) {
+    // Guaranteed present: IdempotencyInterceptor already rejected the
+    // request before this handler ran if it were missing.
+    const idempotencyKey = req.header('Idempotency-Key')!;
     const purpose = toPrismaOtpPurpose(dto.purpose);
     const check = await this.otp.checkCode(dto.phone, purpose, dto.otp_code);
     if (!check.ok) {
+      if (check.reason === 'invalid') {
+        // Could be a genuinely wrong code, OR a retry (same
+        // Idempotency-Key) after this exact code was already consumed
+        // by an earlier attempt of THIS SAME request whose Redis token
+        // and Postgres consumption both succeeded, but whose *separate*
+        // idempotency-completion bookkeeping write then failed
+        // (IdempotencyInterceptor's own COMPLETED/FAILED update is not
+        // part of the same transaction as the handler's work).
+        // checkCode() only ever looks at unconsumed rows, so it can't
+        // tell those two cases apart on its own - recover the
+        // already-issued token instead of failing a request that
+        // actually already succeeded. Scoped to this exact
+        // Idempotency-Key so a *different* concurrent request for the
+        // same code (one that legitimately lost consume()'s atomic
+        // race) can never recover someone else's token this way.
+        const recovered = await this.otp.findRecoverableToken(
+          dto.phone,
+          purpose,
+          dto.otp_code,
+          idempotencyKey,
+        );
+        if (recovered) {
+          return {
+            session_token: recovered.token,
+            phone_verified_at: recovered.consumedAt.toISOString(),
+          };
+        }
+      }
       throwForOtpFailure(check.reason);
     }
 
@@ -121,7 +152,10 @@ export class AuthController {
       purpose,
     });
 
-    const consumed = await this.otp.consume(check.claim!);
+    const consumed = await this.otp.consume(check.claim!, {
+      verificationToken: token,
+      idempotencyKey,
+    });
     if (!consumed) {
       // Lost the atomic-consume race to a different concurrent verify
       // for the same code (a different Idempotency-Key - the
@@ -194,6 +228,7 @@ export class AuthController {
       userId: user.id,
       phone: user.phone,
       phoneVerifiedAt: user.phoneVerifiedAt?.toISOString() ?? null,
+      sessionVersion: user.sessionVersion,
     });
 
     return {
@@ -230,6 +265,7 @@ export class AuthController {
       userId: user.id,
       phone: user.phone,
       phoneVerifiedAt: user.phoneVerifiedAt?.toISOString() ?? null,
+      sessionVersion: user.sessionVersion,
     });
 
     await this.auditLog.record({
@@ -279,12 +315,21 @@ export class AuthController {
     // happen in ONE transaction: if any part fails, none of it commits
     // - the OTP stays unconsumed and an identical retry can genuinely
     // start over, instead of finding a burned OTP with no completed
-    // password change to show for it.
+    // password change to show for it. sessionVersion is bumped in the
+    // SAME write as passwordHash - this is what actually invalidates
+    // every other session (see SessionAuthGuard), not the best-effort
+    // Redis deletion below, so it happens regardless of whether Redis
+    // is even reachable right now.
     const passwordHash = await bcrypt.hash(dto.new_password, 10);
-    let user: { id: string; phone: string; phoneVerifiedAt: Date | null };
+    let user: {
+      id: string;
+      phone: string;
+      phoneVerifiedAt: Date | null;
+      sessionVersion: number;
+    };
     try {
       user = await this.prisma.$transaction(async (tx) => {
-        const consumed = await this.otp.consume(check.claim!, tx);
+        const consumed = await this.otp.consume(check.claim!, { tx });
         if (!consumed) {
           // Lost the atomic-consume race to a different concurrent
           // reset-confirm for the same code - roll back (nothing to
@@ -300,7 +345,7 @@ export class AuthController {
         });
         const updated = await tx.user.update({
           where: { id: existing.id },
-          data: { passwordHash },
+          data: { passwordHash, sessionVersion: { increment: 1 } },
         });
         await this.auditLog.record(
           {
@@ -324,14 +369,16 @@ export class AuthController {
       throw err;
     }
 
-    // The password change above is already durably committed - from
-    // here on, a hiccup must degrade gracefully rather than fail the
-    // request. Throwing here would mark this Idempotency-Key FAILED
-    // and make a same-key retry re-attempt OTP consumption, which can
-    // now only ever fail since the OTP was already, correctly,
-    // consumed above. Security best practice (revoking other sessions)
-    // and issuing a fresh one are both best-effort on top of the
-    // guaranteed core change, not a condition of its success.
+    // The password change (and the sessionVersion bump that actually
+    // invalidates old sessions) is already durably committed above -
+    // from here on, a hiccup must degrade gracefully rather than fail
+    // the request. Throwing here would mark this Idempotency-Key
+    // FAILED and make a same-key retry re-attempt OTP consumption,
+    // which can now only ever fail since the OTP was already,
+    // correctly, consumed above. revokeAllForUser() is now purely an
+    // optimization (frees the old Redis keys immediately instead of
+    // waiting for SessionAuthGuard's version check to reject them one
+    // at a time) - security no longer depends on it succeeding.
     let token: string | null = null;
     try {
       await this.sessions.revokeAllForUser(user.id);
@@ -339,6 +386,7 @@ export class AuthController {
         userId: user.id,
         phone: user.phone,
         phoneVerifiedAt: user.phoneVerifiedAt?.toISOString() ?? null,
+        sessionVersion: user.sessionVersion,
       });
     } catch (err) {
       this.logger.error(

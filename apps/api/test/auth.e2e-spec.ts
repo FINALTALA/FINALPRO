@@ -2,6 +2,8 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
 import { AppModule } from './../src/app.module';
+import { OtpService } from './../src/auth/otp.service';
+import { SessionService } from './../src/auth/session.service';
 import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
 import { PrismaService } from './../src/prisma/prisma.service';
@@ -244,6 +246,71 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
       expect(consumedRows).toHaveLength(1);
     });
 
+    it("consume() refuses to mark an OTP consumed if it's expired at the moment of consumption, even though the claim's other pinned fields still match (TOCTOU boundary, real DB)", async () => {
+      const otpService = app.get(OtpService);
+      const phone = uniquePhone();
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/otp/request')
+        .send({ phone, purpose: 'signup' })
+        .expect(202);
+      const code = fakeSms.lastCodeFor(phone);
+
+      const check = await otpService.checkCode(phone, 'SIGNUP', code);
+      expect(check.ok).toBe(true);
+
+      // Simulate time passing between checkCode() and consume(): the
+      // row's real expiresAt is now in the past, even though the claim
+      // we're about to pass to consume() still remembers the original
+      // (still-future, at the time it was read) value.
+      await prisma.otpCode.updateMany({
+        where: { id: check.claim!.id },
+        data: { expiresAt: new Date(Date.now() - 1_000) },
+      });
+
+      const consumed = await otpService.consume(check.claim!);
+      expect(consumed).toBe(false);
+
+      const row = await prisma.otpCode.findUnique({
+        where: { id: check.claim!.id },
+      });
+      expect(row!.consumedAt).toBeNull();
+    });
+
+    it('recovers the same verification token on a retry whose Idempotency-Key record was left FAILED despite the OTP already having been consumed (simulated interceptor bookkeeping failure)', async () => {
+      const phone = uniquePhone();
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/otp/request')
+        .send({ phone, purpose: 'signup' })
+        .expect(202);
+      const code = fakeSms.lastCodeFor(phone);
+      const key = `verify-recover-${phone}`;
+
+      const first = await request(app.getHttpServer())
+        .post('/api/v1/auth/otp/verify')
+        .set('Idempotency-Key', key)
+        .send({ phone, otp_code: code, purpose: 'signup' })
+        .expect(200);
+
+      // Simulate IdempotencyInterceptor's own completion write having
+      // failed right after the handler's work (Redis token + Postgres
+      // OTP consumption) already committed - a real, if rare, failure
+      // mode: the two are separate Postgres writes, not one transaction.
+      await prisma.idempotencyKey.updateMany({
+        where: { key, requestPath: '/api/v1/auth/otp/verify' },
+        data: { status: 'FAILED' },
+      });
+
+      // An identical retry must recover the same token instead of
+      // failing behind an OTP that now merely looks "already used".
+      const second = await request(app.getHttpServer())
+        .post('/api/v1/auth/otp/verify')
+        .set('Idempotency-Key', key)
+        .send({ phone, otp_code: code, purpose: 'signup' })
+        .expect(200);
+
+      expect(second.body.session_token).toBe(first.body.session_token);
+    });
+
     it('scopes the Idempotency-Key on the pre-auth otp/verify route by phone, so two different users reusing the same key never collide', async () => {
       const phoneA = uniquePhone();
       const phoneB = uniquePhone();
@@ -370,6 +437,43 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
         .post('/api/v1/auth/login')
         .send({ phone, password: 'new-password' })
         .expect(200);
+    });
+
+    it("rejects an old session via sessionVersion even when its Redis key is never deleted at all - the fail-closed guarantee is independent of revokeAllForUser()'s Redis cleanup succeeding", async () => {
+      const phone = uniquePhone();
+      await signup(phone, 'old-password');
+
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/password/reset-request')
+        .send({ phone })
+        .expect(202);
+      const code = fakeSms.lastCodeFor(phone);
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/password/reset-confirm')
+        .set('Idempotency-Key', `reset-failclosed-${phone}`)
+        .send({ phone, otp_code: code, new_password: 'new-password' })
+        .expect(200);
+
+      // Forge a session carrying the STALE (pre-reset) sessionVersion
+      // directly - exactly what would be left behind if Redis deletion
+      // had failed or been skipped entirely, regardless of whether the
+      // real revokeAllForUser() call above actually succeeded. If the
+      // guard's only protection were "the Redis key happens to be
+      // gone," this forged session would still work; the sessionVersion
+      // check must reject it purely from the Postgres side.
+      const sessions = app.get(SessionService);
+      const user = await prisma.user.findUniqueOrThrow({ where: { phone } });
+      const forgedStaleToken = await sessions.create({
+        userId: user.id,
+        phone,
+        phoneVerifiedAt: new Date().toISOString(),
+        sessionVersion: 0, // the pre-reset version
+      });
+
+      await request(app.getHttpServer())
+        .get('/api/v1/customers/me')
+        .set('Authorization', `Bearer ${forgedStaleToken}`)
+        .expect(401);
     });
 
     it('does not send a real OTP for an unregistered phone, but still returns the same response shape', async () => {
