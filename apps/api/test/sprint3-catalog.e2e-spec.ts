@@ -137,13 +137,15 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
     return { vendorId: res.body.id, branchId: res.body.branches[0].id };
   }
 
-  /** Full happy-path onboarding: apply -> evidence -> approve -> subscribe -> ACTIVE. */
-  async function activateVendor(
+  /** Evidence -> approve -> subscribe -> ACTIVE, for an already-applied
+   * vendor/branch pair (lets tests keep the same branchId to act on
+   * afterwards). */
+  async function activateVendorGivenBranch(
     ownerToken: string,
     reviewerToken: string,
-  ): Promise<string> {
-    const { vendorId, branchId } =
-      await createVendorWithPhysicalBranch(ownerToken);
+    vendorId: string,
+    branchId: string,
+  ): Promise<void> {
     await request(app.getHttpServer())
       .post(
         `/api/v1/vendors/${vendorId}/branches/${branchId}/verification-evidence`,
@@ -170,6 +172,21 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
       .set('Idempotency-Key', unique('sub'))
       .send({ plan: 'BASIC' })
       .expect(201);
+  }
+
+  /** Full happy-path onboarding: apply -> evidence -> approve -> subscribe -> ACTIVE. */
+  async function activateVendor(
+    ownerToken: string,
+    reviewerToken: string,
+  ): Promise<string> {
+    const { vendorId, branchId } =
+      await createVendorWithPhysicalBranch(ownerToken);
+    await activateVendorGivenBranch(
+      ownerToken,
+      reviewerToken,
+      vendorId,
+      branchId,
+    );
     return vendorId;
   }
 
@@ -441,8 +458,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
       });
       expect(vendor.status).toBe('REJECTED');
 
-      // A rejected/already-decided branch can't be decided again without
-      // a fresh resubmission first (BRANCH_NOT_PENDING).
+      // An already-decided branch can't be decided again (BRANCH_NOT_PENDING).
       await request(app.getHttpServer())
         .post(
           `/api/v1/vendors/${vendorId}/branches/${branchId}/verification-decision`,
@@ -451,6 +467,87 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .set('Idempotency-Key', unique('decision-again'))
         .send({ decision: 'approve' })
         .expect(409);
+    });
+
+    it('refuses to resubmit evidence once the vendor application has been rejected - the branch and vendor states are left unchanged (no reapplication flow)', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const reviewer = await signupWithPlatformRole('VERIFICATION_REVIEWER');
+      const { vendorId, branchId } =
+        await createVendorWithPhysicalBranch(owner);
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/branches/${branchId}/verification-evidence`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('evidence'))
+        .send({
+          lat: 32.0,
+          lng: 35.0,
+          verification_photo_url: 'https://example.com/fake.jpg',
+        })
+        .expect(201);
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/branches/${branchId}/verification-decision`,
+        )
+        .set('Authorization', `Bearer ${reviewer}`)
+        .set('Idempotency-Key', unique('decision'))
+        .send({ decision: 'reject', reason: 'Fraudulent evidence' })
+        .expect(201);
+
+      const resubmit = await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/branches/${branchId}/verification-evidence`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('resubmit-after-reject'))
+        .send({
+          lat: 32.1,
+          lng: 35.1,
+          verification_photo_url: 'https://example.com/new.jpg',
+        })
+        .expect(409);
+      expect(resubmit.body.error.code).toBe('VENDOR_NOT_REVIEWABLE');
+
+      const branchRow = await prisma.storeBranch.findUniqueOrThrow({
+        where: { id: branchId },
+      });
+      expect(branchRow.verificationStatus).toBe('REJECTED');
+      const vendor = await prisma.vendor.findUniqueOrThrow({
+        where: { id: vendorId },
+      });
+      expect(vendor.status).toBe('REJECTED');
+    });
+
+    it('refuses to resubmit evidence for a branch already APPROVED once the vendor itself is ACTIVE - it cannot be reset back to PENDING', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const reviewer = await signupWithPlatformRole('VERIFICATION_REVIEWER');
+      const { vendorId, branchId } =
+        await createVendorWithPhysicalBranch(owner);
+      await activateVendorGivenBranch(owner, reviewer, vendorId, branchId);
+
+      const resubmit = await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/branches/${branchId}/verification-evidence`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('resubmit-after-approve'))
+        .send({
+          lat: 32.2,
+          lng: 35.2,
+          verification_photo_url: 'https://example.com/newer.jpg',
+        })
+        .expect(409);
+      expect(resubmit.body.error.code).toBe('VENDOR_NOT_REVIEWABLE');
+
+      const branchRow = await prisma.storeBranch.findUniqueOrThrow({
+        where: { id: branchId },
+      });
+      expect(branchRow.verificationStatus).toBe('APPROVED');
+      const vendor = await prisma.vendor.findUniqueOrThrow({
+        where: { id: vendorId },
+      });
+      expect(vendor.status).toBe('ACTIVE');
     });
 
     it('rejects a decision from a plain customer (no platform role) with 403', async () => {

@@ -63,10 +63,20 @@ export class VendorVerificationController {
   ) {}
 
   // BL-VEND-002 (FR-VEND-002): the vendor's own owner submits (or
-  // resubmits, after REJECTED/RESUBMISSION_REQUESTED) evidence for a
-  // physical branch. Resubmission is just calling this again - it
-  // resets verificationStatus back to PENDING and clears the prior
-  // reviewer's decision.
+  // resubmits, after RESUBMISSION_REQUESTED) evidence for a physical
+  // branch. Resubmission is just calling this again - it resets
+  // verificationStatus back to PENDING and clears the prior reviewer's
+  // decision. Only allowed for the two states where re-submission
+  // actually makes sense: the vendor's application is still open
+  // (APPLIED or UNDER_REVIEW) *and* this specific branch hasn't already
+  // been decided (PENDING or RESUBMISSION_REQUESTED). Submitting once
+  // the vendor is REJECTED/APPROVED/ACTIVE/... or once this exact
+  // branch is already APPROVED/REJECTED is refused outright - there is
+  // no reapplication/re-verification flow in Sprint 3 scope, so letting
+  // a resubmission silently reset an already-decided branch back to
+  // PENDING would leave it stuck (the decision endpoint only acts on a
+  // vendor that's UNDER_REVIEW) or would let a vendor un-approve a
+  // branch after the vendor itself already advanced past review.
   @Post('verification-evidence')
   @UseInterceptors(IdempotencyInterceptor)
   async submitEvidence(
@@ -106,8 +116,37 @@ export class VendorVerificationController {
     const updated = await this.prisma.$transaction(async (tx) => {
       // Same vendor-row lock as the decision endpoint below - a
       // concurrent decision (which also locks this vendor) must not
-      // interleave with the vendor's APPLIED -> UNDER_REVIEW transition.
+      // interleave with the checks or the APPLIED -> UNDER_REVIEW
+      // transition below.
       await tx.$queryRaw`SELECT id FROM vendors WHERE id = ${vendorId} FOR UPDATE`;
+
+      // Both reads are fresh, taken under the lock - the vendor's
+      // status and this branch's own decision can both have changed
+      // since the pre-transaction reads above (a concurrent decision).
+      const vendor = await tx.vendor.findUniqueOrThrow({
+        where: { id: vendorId },
+      });
+      if (vendor.status !== 'APPLIED' && vendor.status !== 'UNDER_REVIEW') {
+        throw new ConflictException({
+          code: 'VENDOR_NOT_REVIEWABLE',
+          message:
+            'This vendor application has already been decided; there is no resubmission/reapplication flow',
+        });
+      }
+
+      const freshBranch = await tx.storeBranch.findUniqueOrThrow({
+        where: { id: branchId },
+      });
+      if (
+        freshBranch.verificationStatus !== 'PENDING' &&
+        freshBranch.verificationStatus !== 'RESUBMISSION_REQUESTED'
+      ) {
+        throw new ConflictException({
+          code: 'BRANCH_ALREADY_DECIDED',
+          message:
+            'This branch has already been approved or rejected and cannot be resubmitted',
+        });
+      }
 
       const updatedBranch = await tx.storeBranch.update({
         where: { id: branchId },
@@ -128,8 +167,8 @@ export class VendorVerificationController {
           correlationId: req.correlationId,
           action: 'store_branch.evidence_submitted',
           entityType: 'StoreBranch',
-          entityId: branch.id,
-          beforeState: branchToDto(branch),
+          entityId: freshBranch.id,
+          beforeState: branchToDto(freshBranch),
           afterState: branchToDto(updatedBranch),
         },
         tx,
@@ -139,11 +178,7 @@ export class VendorVerificationController {
       // vendor become reviewable at all - the first evidence submission
       // advances the vendor's own lifecycle. A vendor already
       // UNDER_REVIEW (a second branch's evidence, or a resubmission)
-      // stays as-is; a vendor that's since moved past review (APPROVED/
-      // REJECTED/...) is also left untouched here.
-      const vendor = await tx.vendor.findUniqueOrThrow({
-        where: { id: vendorId },
-      });
+      // stays as-is.
       if (vendor.status === 'APPLIED') {
         await tx.vendor.update({
           where: { id: vendorId },
