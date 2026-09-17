@@ -73,7 +73,7 @@ Consolidates OPEN-001–007 (first raised in Part 0) plus two items formalized h
 | OPEN-002 | FX-rate source/refresh frequency for cross-currency comparison | Part 0 (Q7) | Open |
 | OPEN-003 | Monthly subscription price tier(s) and grace-period/suspension policy | Part 0 (Q10) | Open |
 | OPEN-004 | SMS/OTP provider for Palestinian phone numbers | Part 0 (Q12, Q4) | Open |
-| OPEN-005 | Vendor storefront-verification reviewer assignment and rejection criteria | Part 0 (Q8) | Open |
+| OPEN-005 | Vendor storefront-verification reviewer assignment and rejection criteria | Part 0 (Q8) | Partially resolved 2026-09-17: rejection *criteria/consequence* decided (BDR-016, Part 3 BR-026 — reject on any physical branch rejects the whole application, no reapplication in the FYP scope). Reviewer **assignment** (who is eligible/assigned to review) remains open. |
 | OPEN-006 | Sign-off on the FYP Delivery Increment slice (Part 1, D.4) | Part 0 (Q14) | **✅ Approved 2026-09-16.** Product owner formally approved the FYP Delivery Increment as documented in Part 1 §D.4 and Part 8. Implementation begins at Sprint 1 (EPIC-FOUND) on this basis. |
 | OPEN-007 | Mixed-currency parent-order payment settlement (checkout charging, refund currency/amount) | Part 0 (Q7, Q1/Q2) | Open — BR-013/BR-021's checkout-currency clause remains a labeled proposed default, not binding (Part 3 review) |
 | OPEN-008 (new) | Policy for an uncollected pickup order past a configured window (auto-cancel? escalate to vendor? hold indefinitely?) | Part 2, E.13 (flagged in passing as "not yet an OPEN-item") | Open — formalized here |
@@ -123,6 +123,7 @@ Every BDR below traces to the product owner's confirmed answer in Part 0, Sectio
 | BDR-013 | No guest checkout | Guests browse/compare freely; login required at the point of purchase | Q13 |
 | BDR-014 | 2-person team, 3-month delivery window | The real constraint the entire delivery plan is built around | Q14 |
 | BDR-015 | **✅ Approved** FYP Delivery Increment as the build-scope reconciliation | The full confirmed scope (BDR-001–013) remains the documented target design; the narrower, explicitly-scoped increment (Part 1 §D.4, Part 8) is what the 2-person/3-month team builds first — formally accepted by the product owner 2026-09-16, alongside the FR-SUP informal-support decision (`EPIC-SUP`/`BL-SUP-001`, Part 8) and the instruction to begin implementation at Sprint 1 with OPEN-001/003/004 left open, using the documented sandbox/fallback behavior until those are resolved | Part 1, D.4; Part 8 — status was OPEN-006, now resolved (above) |
+| BDR-016 | **✅ Approved** Branch-rejection rejects the whole vendor application (no reapplication in the FYP scope) | Sprint 3 (BL-VEND-003) needed a concrete rejection-consequence policy to implement FR-VEND-003's `reject` decision, and OPEN-005 left it undecided. Engineering's implementation (a `reject` decision on any one physical branch transitions the vendor `UNDER_REVIEW` → `REJECTED` unconditionally, with no per-branch partial state and no reapplication flow) was confirmed as the intended policy by the product owner on review of the implementing commit, rather than assumed unilaterally — formally accepted 2026-09-17 | Part 3, BR-026; emergent from the Sprint 3 review process (same pattern as BDR-015), not from a Part 0 Q-answer |
 
 ---
 

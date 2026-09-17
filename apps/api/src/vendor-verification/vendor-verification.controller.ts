@@ -220,10 +220,13 @@ export class VendorVerificationController {
   // trusted from the pre-transaction reads above. The vendor's own
   // lifecycle (FR-VEND-008) advances from a branch decision as follows:
   // approving the last pending physical branch -> APPROVED; rejecting
-  // any physical branch's evidence -> REJECTED (there's no per-branch
-  // partial state at the vendor level, and no reapplication flow in
-  // Sprint 3 scope); requesting resubmission leaves the vendor
-  // UNDER_REVIEW so it can be resubmitted and decided again.
+  // any physical branch's evidence -> REJECTED (BR-026/BDR-016: no
+  // per-branch partial state at the vendor level, and no reapplication
+  // flow in the FYP scope - a product decision confirmed by the product
+  // owner on review of this endpoint, resolving OPEN-005's rejection-
+  // criteria half; reviewer assignment, the other half, is still open);
+  // requesting resubmission leaves the vendor UNDER_REVIEW so it can be
+  // resubmitted and decided again.
   @Post('verification-decision')
   @UseGuards(PlatformRoleGuard)
   @RequirePlatformRole(
@@ -328,12 +331,10 @@ export class VendorVerificationController {
       // FR-VEND-008 lifecycle mapping for a branch decision:
       //  - approve, and no physical branch is left pending -> vendor
       //    UNDER_REVIEW -> APPROVED.
-      //  - reject -> vendor UNDER_REVIEW -> REJECTED unconditionally.
-      //    There is no per-branch partial-rejection state at the
-      //    vendor level and no reapplication flow in Sprint 3 scope -
-      //    rejecting evidence for any one physical branch rejects the
-      //    whole application (documented here since the SRS doesn't
-      //    spell out this mapping explicitly).
+      //  - reject -> vendor UNDER_REVIEW -> REJECTED unconditionally
+      //    (BR-026/BDR-016 - rejecting evidence for any one physical
+      //    branch rejects the whole application; no per-branch partial
+      //    state, no reapplication flow in the FYP scope).
       //  - request_resubmission -> no vendor transition; the vendor
       //    stays UNDER_REVIEW and can resubmit evidence for this
       //    branch (verification-evidence resets it to PENDING).
