@@ -10,6 +10,7 @@ import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { randomUUID } from 'crypto';
 import { AuditLogService } from '../audit/audit-log.service';
+import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -20,13 +21,19 @@ import { PrismaService } from '../prisma/prisma.service';
  * the error-response format (trigger it by hitting an unknown route,
  * or stopping the DB and hitting /health), rate limiting (the demo
  * route below, plus the global default in app.module.ts), and the
- * Idempotency-Key convention (the /echo route).
+ * Idempotency-Key convention (the /echo route) - including, since
+ * Sprint 3 review round 4, the *atomic-completion* half of that
+ * convention (IdempotencyCompletionService), not just the claim/replay
+ * half Sprint 1 originally demonstrated. Keeping this route on the same
+ * pattern every real business endpoint uses is the point: it's meant to
+ * stay a faithful, current example, not a frozen historical one.
  */
 @Controller('health')
 export class HealthController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
+    private readonly idempotencyCompletion: IdempotencyCompletionService,
   ) {}
 
   @Get()
@@ -38,14 +45,26 @@ export class HealthController {
   @Post('echo')
   @UseInterceptors(IdempotencyInterceptor)
   async echo(@Body() body: Record<string, unknown>, @Req() req: Request) {
-    await this.auditLog.record({
-      correlationId: req.correlationId,
-      action: 'health.echo',
-      entityType: 'HealthCheck',
-      entityId: randomUUID(),
-      afterState: body,
+    return this.prisma.$transaction(async (tx) => {
+      await this.auditLog.record(
+        {
+          correlationId: req.correlationId,
+          action: 'health.echo',
+          entityType: 'HealthCheck',
+          entityId: randomUUID(),
+          afterState: body,
+        },
+        tx,
+      );
+      const responseBody = { echoed: body, correlationId: req.correlationId };
+      await this.idempotencyCompletion.complete(
+        tx,
+        req.idempotencyClaimId,
+        responseBody,
+        201,
+      );
+      return responseBody;
     });
-    return { echoed: body, correlationId: req.correlationId };
   }
 
   /**
