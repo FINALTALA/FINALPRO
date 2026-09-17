@@ -240,6 +240,62 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .set('Authorization', `Bearer ${admin}`)
         .expect(409);
     });
+
+    it('rejects updating a category with a parent_id that does not exist (404, not a raw DB 500)', async () => {
+      const admin = await signupWithPlatformRole('PLATFORM_ADMIN');
+      const categoryId = await createCategory(admin, unique('LonelyCategory'));
+
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/categories/${categoryId}`)
+        .set('Authorization', `Bearer ${admin}`)
+        .send({ parent_id: '00000000-0000-0000-0000-000000000000' })
+        .expect(404);
+      expect(res.body.error.code).toBe('PARENT_CATEGORY_NOT_FOUND');
+
+      const unchanged = await prisma.category.findUniqueOrThrow({
+        where: { id: categoryId },
+      });
+      expect(unchanged.parentId).toBeNull();
+    });
+
+    it('rejects an update that would create a cycle in the category tree - direct self-parenting and an indirect ancestor loop', async () => {
+      const admin = await signupWithPlatformRole('PLATFORM_ADMIN');
+      const a = await createCategory(admin, unique('A'));
+      const b = await request(app.getHttpServer())
+        .post('/api/v1/categories')
+        .set('Authorization', `Bearer ${admin}`)
+        .set('Idempotency-Key', unique('cat-b'))
+        .send({ name_ar: 'ب', name_en: unique('B'), parent_id: a })
+        .expect(201);
+      const bId = b.body.id;
+
+      // Direct: A can't become its own parent.
+      const directRes = await request(app.getHttpServer())
+        .patch(`/api/v1/categories/${a}`)
+        .set('Authorization', `Bearer ${admin}`)
+        .send({ parent_id: a })
+        .expect(400);
+      expect(directRes.body.error.code).toBe('CATEGORY_CYCLE');
+
+      // Indirect: A is B's parent (A -> B). Making B the parent of A
+      // would close the loop A -> B -> A.
+      const indirectRes = await request(app.getHttpServer())
+        .patch(`/api/v1/categories/${a}`)
+        .set('Authorization', `Bearer ${admin}`)
+        .send({ parent_id: bId })
+        .expect(400);
+      expect(indirectRes.body.error.code).toBe('CATEGORY_CYCLE');
+
+      // Neither rejected attempt actually changed the tree.
+      const aRow = await prisma.category.findUniqueOrThrow({
+        where: { id: a },
+      });
+      expect(aRow.parentId).toBeNull();
+      const bRow = await prisma.category.findUniqueOrThrow({
+        where: { id: bId },
+      });
+      expect(bRow.parentId).toBe(a);
+    });
   });
 
   describe('brands (FK-satisfying minimum for BL-MATCH-001)', () => {

@@ -137,6 +137,48 @@ export class CategoriesController {
     });
   }
 
+  /**
+   * Walks the proposed-parent's ancestor chain looking for `categoryId`
+   * itself - catches both direct self-parenting (`categoryId ===
+   * proposedParentId`) and indirect cycles (e.g. A is currently B's
+   * parent; setting A's own parent to B would close a loop). A `visited`
+   * guard bounds the walk even against a pre-existing corrupt chain,
+   * rather than looping forever.
+   */
+  private async wouldCreateCycle(
+    tx: {
+      category: {
+        findUnique: (args: {
+          where: { id: string };
+          select: { parentId: true };
+        }) => Promise<{ parentId: string | null } | null>;
+      };
+    },
+    categoryId: string,
+    proposedParentId: string,
+  ): Promise<boolean> {
+    if (categoryId === proposedParentId) {
+      return true;
+    }
+    const visited = new Set<string>();
+    let current: string | null = proposedParentId;
+    while (current) {
+      if (current === categoryId) {
+        return true;
+      }
+      if (visited.has(current)) {
+        break;
+      }
+      visited.add(current);
+      const node = await tx.category.findUnique({
+        where: { id: current },
+        select: { parentId: true },
+      });
+      current = node?.parentId ?? null;
+    }
+    return false;
+  }
+
   @Patch(':id')
   @UseGuards(SessionAuthGuard, PlatformRoleGuard)
   @RequirePlatformRole(PlatformRole.PLATFORM_ADMIN)
@@ -146,40 +188,69 @@ export class CategoriesController {
     @Body() dto: UpdateCategoryDto,
     @Req() req: Request,
   ) {
-    const existing = await this.prisma.category.findUnique({ where: { id } });
-    if (!existing) {
-      throw new NotFoundException({
-        code: 'CATEGORY_NOT_FOUND',
-        message: 'Category not found',
+    return this.prisma.$transaction(async (tx) => {
+      // Row lock on the category being edited - cheap insurance against
+      // two concurrent edits of *this same* category, consistent with
+      // this codebase's established pattern elsewhere. It does not by
+      // itself serialize two concurrent edits of two *different*
+      // categories that could jointly close a cycle neither request's
+      // own ancestor-chain read would see - an admin-only, low-
+      // frequency operation where that residual race is an accepted,
+      // not silently ignored, trade-off rather than one worth a full
+      // table-level lock.
+      await tx.$queryRaw`SELECT id FROM categories WHERE id = ${id} FOR UPDATE`;
+
+      const existing = await tx.category.findUnique({ where: { id } });
+      if (!existing) {
+        throw new NotFoundException({
+          code: 'CATEGORY_NOT_FOUND',
+          message: 'Category not found',
+        });
+      }
+
+      if (dto.parent_id !== undefined && dto.parent_id !== null) {
+        const parent = await tx.category.findUnique({
+          where: { id: dto.parent_id },
+        });
+        if (!parent) {
+          throw new NotFoundException({
+            code: 'PARENT_CATEGORY_NOT_FOUND',
+            message: 'parent_id does not reference an existing category',
+          });
+        }
+        if (await this.wouldCreateCycle(tx, id, dto.parent_id)) {
+          throw new BadRequestException({
+            code: 'CATEGORY_CYCLE',
+            message:
+              'This parent_id would make the category an ancestor of itself',
+          });
+        }
+      }
+
+      const category = await tx.category.update({
+        where: { id },
+        data: {
+          nameAr: dto.name_ar,
+          nameEn: dto.name_en,
+          ...(dto.parent_id !== undefined ? { parentId: dto.parent_id } : {}),
+        },
       });
-    }
-    if (dto.parent_id === id) {
-      throw new BadRequestException({
-        code: 'INVALID_PARENT',
-        message: 'A category cannot be its own parent',
-      });
-    }
 
-    const category = await this.prisma.category.update({
-      where: { id },
-      data: {
-        nameAr: dto.name_ar,
-        nameEn: dto.name_en,
-        ...(dto.parent_id !== undefined ? { parentId: dto.parent_id } : {}),
-      },
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'category.updated',
+          entityType: 'Category',
+          entityId: category.id,
+          beforeState: this.toDto(existing),
+          afterState: this.toDto(category),
+        },
+        tx,
+      );
+
+      return this.toDto(category);
     });
-
-    await this.auditLog.record({
-      actorId: user.id,
-      correlationId: req.correlationId,
-      action: 'category.updated',
-      entityType: 'Category',
-      entityId: category.id,
-      beforeState: this.toDto(existing),
-      afterState: this.toDto(category),
-    });
-
-    return this.toDto(category);
   }
 
   @Delete(':id')
