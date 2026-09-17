@@ -184,7 +184,11 @@ export class VendorOffersController {
       });
     }
 
-    let match: {
+    // The identifier lookup itself is a pure read of CanonicalProductVariant,
+    // which this endpoint never writes to - safe to resolve before the
+    // transaction. What is NOT safe outside the transaction is deciding
+    // *compatibility* against offer.canonicalProductId (see below).
+    let rawMatch: {
       canonicalVariantId: string | null;
       canonicalProductId: string | null;
     } = {
@@ -192,27 +196,37 @@ export class VendorOffersController {
       canonicalProductId: null,
     };
     if (dto.identifier_type && dto.identifier_value) {
-      match = await this.matching.findExactMatch(
+      rawMatch = await this.matching.findExactMatch(
         dto.identifier_type,
         dto.identifier_value,
       );
-      // Part 3's tightened invariant: a VendorOffer must never point at
-      // one canonical product while one of its variants links to a
-      // different one. If this offer is already linked elsewhere,
-      // don't auto-link an incompatible match - leave it unmatched
-      // rather than corrupt the invariant.
-      if (
-        match.canonicalProductId &&
-        offer.canonicalProductId &&
-        offer.canonicalProductId !== match.canonicalProductId
-      ) {
-        match = { canonicalVariantId: null, canonicalProductId: null };
-      }
     }
 
     let variant;
     try {
       variant = await this.prisma.$transaction(async (tx) => {
+        // Serializes concurrent variant-creations under the SAME offer:
+        // without this lock, two requests each matching a *different*
+        // canonical product could both read offer.canonicalProductId as
+        // still null, both decide their match is "compatible", and both
+        // commit - leaving the offer pointing at one product while one
+        // of its own variants links to a different one (Part 3's
+        // tightened invariant). Re-reading the offer fresh after the
+        // lock makes the second request see the first's already-
+        // committed link and correctly treat an incompatible match as
+        // unmatched instead.
+        await tx.$queryRaw`SELECT id FROM vendor_offers WHERE id = ${offerId} FOR UPDATE`;
+        const freshOffer = await tx.vendorOffer.findUniqueOrThrow({
+          where: { id: offerId },
+        });
+
+        const match =
+          rawMatch.canonicalProductId &&
+          freshOffer.canonicalProductId &&
+          freshOffer.canonicalProductId !== rawMatch.canonicalProductId
+            ? { canonicalVariantId: null, canonicalProductId: null }
+            : rawMatch;
+
         const created = await tx.offerVariant.create({
           data: {
             vendorId,
@@ -230,7 +244,7 @@ export class VendorOffersController {
           },
         });
 
-        if (match.canonicalProductId && !offer.canonicalProductId) {
+        if (match.canonicalProductId && !freshOffer.canonicalProductId) {
           await tx.vendorOffer.update({
             where: { id: offerId },
             data: { canonicalProductId: match.canonicalProductId },

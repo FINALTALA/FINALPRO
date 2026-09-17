@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
   ForbiddenException,
   NotFoundException,
@@ -102,38 +103,83 @@ export class VendorVerificationController {
       });
     }
 
-    const updated = await this.prisma.storeBranch.update({
-      where: { id: branchId },
-      data: {
-        lat: dto.lat,
-        lng: dto.lng,
-        verificationPhotoUrl: dto.verification_photo_url,
-        verificationStatus: 'PENDING',
-        reviewedBy: null,
-        reviewedAt: null,
-        reviewNote: null,
-      },
-    });
+    const updated = await this.prisma.$transaction(async (tx) => {
+      // Same vendor-row lock as the decision endpoint below - a
+      // concurrent decision (which also locks this vendor) must not
+      // interleave with the vendor's APPLIED -> UNDER_REVIEW transition.
+      await tx.$queryRaw`SELECT id FROM vendors WHERE id = ${vendorId} FOR UPDATE`;
 
-    await this.auditLog.record({
-      actorId: user.id,
-      correlationId: req.correlationId,
-      action: 'store_branch.evidence_submitted',
-      entityType: 'StoreBranch',
-      entityId: branch.id,
-      beforeState: branchToDto(branch),
-      afterState: branchToDto(updated),
+      const updatedBranch = await tx.storeBranch.update({
+        where: { id: branchId },
+        data: {
+          lat: dto.lat,
+          lng: dto.lng,
+          verificationPhotoUrl: dto.verification_photo_url,
+          verificationStatus: 'PENDING',
+          reviewedBy: null,
+          reviewedAt: null,
+          reviewNote: null,
+        },
+      });
+
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'store_branch.evidence_submitted',
+          entityType: 'StoreBranch',
+          entityId: branch.id,
+          beforeState: branchToDto(branch),
+          afterState: branchToDto(updatedBranch),
+        },
+        tx,
+      );
+
+      // FR-VEND-008: evidence for a branch is what makes a still-Applied
+      // vendor become reviewable at all - the first evidence submission
+      // advances the vendor's own lifecycle. A vendor already
+      // UNDER_REVIEW (a second branch's evidence, or a resubmission)
+      // stays as-is; a vendor that's since moved past review (APPROVED/
+      // REJECTED/...) is also left untouched here.
+      const vendor = await tx.vendor.findUniqueOrThrow({
+        where: { id: vendorId },
+      });
+      if (vendor.status === 'APPLIED') {
+        await tx.vendor.update({
+          where: { id: vendorId },
+          data: { status: 'UNDER_REVIEW' },
+        });
+        await this.auditLog.record(
+          {
+            actorId: user.id,
+            correlationId: req.correlationId,
+            action: 'vendor.under_review',
+            entityType: 'Vendor',
+            entityId: vendorId,
+            beforeState: { status: 'APPLIED' },
+            afterState: { status: 'UNDER_REVIEW' },
+          },
+          tx,
+        );
+      }
+
+      return updatedBranch;
     });
 
     return branchToDto(updated);
   }
 
   // BL-VEND-003 (FR-VEND-003): a vendor-verification-reviewer approves,
-  // rejects, or requests resubmission of that evidence. An approval
-  // that leaves every one of the vendor's physical branches APPROVED
-  // also advances the vendor's own lifecycle to APPROVED (FR-VEND-008) -
-  // see the row-lock note below for why that check has to happen inside
-  // the same transaction as the branch write.
+  // rejects, or requests resubmission of that evidence. Only applies to
+  // a branch currently PENDING for a vendor currently UNDER_REVIEW - see
+  // the fresh in-lock reads below for why both are re-checked instead of
+  // trusted from the pre-transaction reads above. The vendor's own
+  // lifecycle (FR-VEND-008) advances from a branch decision as follows:
+  // approving the last pending physical branch -> APPROVED; rejecting
+  // any physical branch's evidence -> REJECTED (there's no per-branch
+  // partial state at the vendor level, and no reapplication flow in
+  // Sprint 3 scope); requesting resubmission leaves the vendor
+  // UNDER_REVIEW so it can be resubmitted and decided again.
   @Post('verification-decision')
   @UseGuards(PlatformRoleGuard)
   @RequirePlatformRole(
@@ -183,6 +229,49 @@ export class VendorVerificationController {
         // Different vendors never contend for this lock.
         await tx.$queryRaw`SELECT id FROM vendors WHERE id = ${vendorId} FOR UPDATE`;
 
+        // Every check below reads *fresh*, inside the lock - the
+        // vendor's review state and this branch's own evidence/status
+        // can both have changed since the pre-transaction reads above
+        // (another decision, or a concurrent resubmission).
+        const vendor = await tx.vendor.findUniqueOrThrow({
+          where: { id: vendorId },
+        });
+        if (vendor.status !== 'UNDER_REVIEW') {
+          throw new ConflictException({
+            code: 'VENDOR_NOT_UNDER_REVIEW',
+            message:
+              'This vendor has no branch evidence awaiting review (submit evidence first, or its application has already been decided)',
+          });
+        }
+
+        const freshBranch = await tx.storeBranch.findUniqueOrThrow({
+          where: { id: branchId },
+        });
+        if (freshBranch.verificationStatus !== 'PENDING') {
+          throw new ConflictException({
+            code: 'BRANCH_NOT_PENDING',
+            message:
+              'This branch has already been decided - the vendor must resubmit evidence before it can be decided again',
+          });
+        }
+        // BR-022: a physical branch cannot be approved without an
+        // attached geolocation pin and storefront photo. Rejecting or
+        // requesting resubmission of *incomplete* evidence is exactly
+        // the intended path for evidence that never met this bar -
+        // only 'approve' is blocked here.
+        if (
+          dto.decision === 'approve' &&
+          (freshBranch.lat === null ||
+            freshBranch.lng === null ||
+            !freshBranch.verificationPhotoUrl)
+        ) {
+          throw new BadRequestException({
+            code: 'BRANCH_EVIDENCE_INCOMPLETE',
+            message:
+              'Cannot approve a branch missing a geolocation pin or storefront photo (BR-022)',
+          });
+        }
+
         const updated = await tx.storeBranch.update({
           where: { id: branchId },
           data: {
@@ -194,11 +283,20 @@ export class VendorVerificationController {
           },
         });
 
-        let approved = false;
+        // FR-VEND-008 lifecycle mapping for a branch decision:
+        //  - approve, and no physical branch is left pending -> vendor
+        //    UNDER_REVIEW -> APPROVED.
+        //  - reject -> vendor UNDER_REVIEW -> REJECTED unconditionally.
+        //    There is no per-branch partial-rejection state at the
+        //    vendor level and no reapplication flow in Sprint 3 scope -
+        //    rejecting evidence for any one physical branch rejects the
+        //    whole application (documented here since the SRS doesn't
+        //    spell out this mapping explicitly).
+        //  - request_resubmission -> no vendor transition; the vendor
+        //    stays UNDER_REVIEW and can resubmit evidence for this
+        //    branch (verification-evidence resets it to PENDING).
+        let vendorNextStatus: 'APPROVED' | 'REJECTED' | null = null;
         if (dto.decision === 'approve') {
-          const vendor = await tx.vendor.findUniqueOrThrow({
-            where: { id: vendorId },
-          });
           const pendingPhysical = await tx.storeBranch.findFirst({
             where: {
               vendorId,
@@ -207,16 +305,18 @@ export class VendorVerificationController {
             },
             select: { id: true },
           });
-          if (
-            !pendingPhysical &&
-            (vendor.status === 'APPLIED' || vendor.status === 'UNDER_REVIEW')
-          ) {
-            await tx.vendor.update({
-              where: { id: vendorId },
-              data: { status: 'APPROVED' },
-            });
-            approved = true;
+          if (!pendingPhysical) {
+            vendorNextStatus = 'APPROVED';
           }
+        } else if (dto.decision === 'reject') {
+          vendorNextStatus = 'REJECTED';
+        }
+
+        if (vendorNextStatus) {
+          await tx.vendor.update({
+            where: { id: vendorId },
+            data: { status: vendorNextStatus },
+          });
         }
 
         await this.auditLog.record(
@@ -226,26 +326,33 @@ export class VendorVerificationController {
             action: 'store_branch.verification_decided',
             entityType: 'StoreBranch',
             entityId: updated.id,
-            beforeState: branchToDto(branch),
+            beforeState: branchToDto(freshBranch),
             afterState: branchToDto(updated),
           },
           tx,
         );
-        if (approved) {
+        if (vendorNextStatus) {
           await this.auditLog.record(
             {
               actorId: user.id,
               correlationId: req.correlationId,
-              action: 'vendor.approved',
+              action:
+                vendorNextStatus === 'APPROVED'
+                  ? 'vendor.approved'
+                  : 'vendor.rejected',
               entityType: 'Vendor',
               entityId: vendorId,
-              afterState: { status: 'APPROVED' },
+              beforeState: { status: 'UNDER_REVIEW' },
+              afterState: { status: vendorNextStatus },
             },
             tx,
           );
         }
 
-        return { updatedBranch: updated, vendorApproved: approved };
+        return {
+          updatedBranch: updated,
+          vendorApproved: vendorNextStatus === 'APPROVED',
+        };
       },
     );
 

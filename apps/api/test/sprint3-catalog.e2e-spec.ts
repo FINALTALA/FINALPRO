@@ -329,6 +329,11 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         })
         .expect(201);
 
+      const afterEvidence = await prisma.vendor.findUniqueOrThrow({
+        where: { id: vendorId },
+      });
+      expect(afterEvidence.status).toBe('UNDER_REVIEW');
+
       const decision = await request(app.getHttpServer())
         .post(
           `/api/v1/vendors/${vendorId}/branches/${branchId}/verification-decision`,
@@ -345,6 +350,107 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         where: { id: vendorId },
       });
       expect(vendor.status).toBe('APPROVED');
+    });
+
+    it('rejects approving a physical branch that never received evidence (BR-022) even while the vendor is under review via a sibling branch', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const reviewer = await signupWithPlatformRole('VERIFICATION_REVIEWER');
+
+      const applyRes = await request(app.getHttpServer())
+        .post('/api/v1/vendors')
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('vendor-no-evidence'))
+        .send({
+          legal_name: unique('NoEvidenceVendor'),
+          branches: [
+            { name: 'Branch A', is_physical: true },
+            { name: 'Branch B (no evidence)', is_physical: true },
+          ],
+        })
+        .expect(201);
+      const vendorId = applyRes.body.id;
+      const [branchA, branchB] = applyRes.body.branches;
+
+      // Only branch A ever gets evidence - this is what moves the
+      // vendor to UNDER_REVIEW at all. Branch B stays PENDING with no
+      // pin/photo, exactly the state BR-022 says must never be approved.
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/branches/${branchA.id}/verification-evidence`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('evidence-a'))
+        .send({
+          lat: 32.0,
+          lng: 35.0,
+          verification_photo_url: 'https://example.com/a.jpg',
+        })
+        .expect(201);
+
+      const rejected = await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/branches/${branchB.id}/verification-decision`,
+        )
+        .set('Authorization', `Bearer ${reviewer}`)
+        .set('Idempotency-Key', unique('decision-no-evidence'))
+        .send({ decision: 'approve' })
+        .expect(400);
+      expect(rejected.body.error.code).toBe('BRANCH_EVIDENCE_INCOMPLETE');
+
+      const branchBRow = await prisma.storeBranch.findUniqueOrThrow({
+        where: { id: branchB.id },
+      });
+      expect(branchBRow.verificationStatus).toBe('PENDING');
+      const vendor = await prisma.vendor.findUniqueOrThrow({
+        where: { id: vendorId },
+      });
+      expect(vendor.status).toBe('UNDER_REVIEW');
+    });
+
+    it('rejecting a branch rejects the whole vendor application (UNDER_REVIEW -> REJECTED)', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const reviewer = await signupWithPlatformRole('VERIFICATION_REVIEWER');
+      const { vendorId, branchId } =
+        await createVendorWithPhysicalBranch(owner);
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/branches/${branchId}/verification-evidence`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('evidence'))
+        .send({
+          lat: 32.0,
+          lng: 35.0,
+          verification_photo_url: 'https://example.com/fake.jpg',
+        })
+        .expect(201);
+
+      const decision = await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/branches/${branchId}/verification-decision`,
+        )
+        .set('Authorization', `Bearer ${reviewer}`)
+        .set('Idempotency-Key', unique('decision'))
+        .send({ decision: 'reject', reason: 'Photo does not match the pin' })
+        .expect(201);
+      expect(decision.body.verification_status).toBe('REJECTED');
+      expect(decision.body.vendor_approved).toBe(false);
+
+      const vendor = await prisma.vendor.findUniqueOrThrow({
+        where: { id: vendorId },
+      });
+      expect(vendor.status).toBe('REJECTED');
+
+      // A rejected/already-decided branch can't be decided again without
+      // a fresh resubmission first (BRANCH_NOT_PENDING).
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/branches/${branchId}/verification-decision`,
+        )
+        .set('Authorization', `Bearer ${reviewer}`)
+        .set('Idempotency-Key', unique('decision-again'))
+        .send({ decision: 'approve' })
+        .expect(409);
     });
 
     it('rejects a decision from a plain customer (no platform role) with 403', async () => {
@@ -693,6 +799,113 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .set('Idempotency-Key', unique('variant-2'))
         .send({ seller_sku: sku, base_price: 20 })
         .expect(409);
+    });
+
+    it('under two concurrent variants for the same offer matching different canonical products, the offer never ends up linked to a product one of its own variants disagrees with', async () => {
+      const admin = await signupWithPlatformRole('PLATFORM_ADMIN');
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const reviewer = await signupWithPlatformRole('VERIFICATION_REVIEWER');
+      const vendorId = await activateVendor(owner, reviewer);
+
+      const categoryId = await createCategory(admin, unique('Cat'));
+      const brandId = await createBrand(admin, unique('Brand'));
+      const [productA, productB] = await Promise.all(
+        ['A', 'B'].map((label) =>
+          request(app.getHttpServer())
+            .post('/api/v1/canonical-products')
+            .set('Authorization', `Bearer ${admin}`)
+            .set('Idempotency-Key', unique(`cp-race-${label}`))
+            .send({
+              brand_id: brandId,
+              category_id: categoryId,
+              model_name: `Race Model ${label}`,
+            })
+            .expect(201),
+        ),
+      );
+      const gtinA = unique('gtin-a')
+        .replace(/[^0-9]/g, '')
+        .padEnd(12, '0');
+      const gtinB = unique('gtin-b')
+        .replace(/[^0-9]/g, '')
+        .padEnd(12, '1');
+      const [variantA, variantB] = await Promise.all([
+        request(app.getHttpServer())
+          .post(`/api/v1/canonical-products/${productA.body.id}/variants`)
+          .set('Authorization', `Bearer ${admin}`)
+          .set('Idempotency-Key', unique('cv-race-a'))
+          .send({ structural_attributes: {}, gtin: gtinA })
+          .expect(201),
+        request(app.getHttpServer())
+          .post(`/api/v1/canonical-products/${productB.body.id}/variants`)
+          .set('Authorization', `Bearer ${admin}`)
+          .set('Idempotency-Key', unique('cv-race-b'))
+          .send({ structural_attributes: {}, gtin: gtinB })
+          .expect(201),
+      ]);
+
+      const offer = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/offers`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('offer-race'))
+        .send({ title_ar: 'منتج للسباق', title_en: 'Race Offer' })
+        .expect(201);
+
+      const [resA, resB] = await Promise.all([
+        request(app.getHttpServer())
+          .post(`/api/v1/vendors/${vendorId}/offers/${offer.body.id}/variants`)
+          .set('Authorization', `Bearer ${owner}`)
+          .set('Idempotency-Key', unique('variant-race-a'))
+          .send({
+            seller_sku: unique('sku-race-a'),
+            base_price: 10,
+            identifier_type: 'GTIN',
+            identifier_value: gtinA,
+          }),
+        request(app.getHttpServer())
+          .post(`/api/v1/vendors/${vendorId}/offers/${offer.body.id}/variants`)
+          .set('Authorization', `Bearer ${owner}`)
+          .set('Idempotency-Key', unique('variant-race-b'))
+          .send({
+            seller_sku: unique('sku-race-b'),
+            base_price: 20,
+            identifier_type: 'GTIN',
+            identifier_value: gtinB,
+          }),
+      ]);
+
+      expect(resA.status).toBe(201);
+      expect(resB.status).toBe(201);
+
+      const finalOffer = await prisma.vendorOffer.findUniqueOrThrow({
+        where: { id: offer.body.id },
+      });
+      // Whichever request's transaction committed first "wins" the
+      // offer's canonicalProductId - the invariant under test isn't
+      // which one wins, it's that every variant actually linked to a
+      // canonical variant agrees with that outcome. A variant whose own
+      // match disagreed with the (by-then-fresh) offer must have been
+      // left unmatched instead of forced onto the wrong product -
+      // exactly what corrupts Part 3's tightened invariant if the
+      // offer's row isn't locked during this decision.
+      expect(finalOffer.canonicalProductId).not.toBeNull();
+      const linkedProductIds = [resA, resB]
+        .map((r) => r.body.canonical_variant_id)
+        .map((canonicalVariantId) =>
+          canonicalVariantId === variantA.body.id
+            ? productA.body.id
+            : canonicalVariantId === variantB.body.id
+              ? productB.body.id
+              : null,
+        )
+        .filter((id): id is string => id !== null);
+      for (const linkedProductId of linkedProductIds) {
+        expect(linkedProductId).toBe(finalOffer.canonicalProductId);
+      }
+      // Exactly one of the two variants should have won the auto-link -
+      // the other, matching a different product than the offer ended up
+      // on, must be unmatched rather than silently forced through.
+      expect(linkedProductIds).toHaveLength(1);
     });
   });
 });
