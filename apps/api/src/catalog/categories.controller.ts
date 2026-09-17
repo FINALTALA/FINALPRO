@@ -189,16 +189,28 @@ export class CategoriesController {
     @Req() req: Request,
   ) {
     return this.prisma.$transaction(async (tx) => {
-      // Row lock on the category being edited - cheap insurance against
-      // two concurrent edits of *this same* category, consistent with
-      // this codebase's established pattern elsewhere. It does not by
-      // itself serialize two concurrent edits of two *different*
-      // categories that could jointly close a cycle neither request's
-      // own ancestor-chain read would see - an admin-only, low-
-      // frequency operation where that residual race is an accepted,
-      // not silently ignored, trade-off rather than one worth a full
-      // table-level lock.
-      await tx.$queryRaw`SELECT id FROM categories WHERE id = ${id} FOR UPDATE`;
+      // Sprint 3 review round 6: a per-row FOR UPDATE lock (the earlier
+      // version of this method) only serializes two concurrent edits of
+      // *this same* category - it does nothing for two concurrent edits
+      // of two *different* categories that jointly close a cycle
+      // neither request's own ancestor-chain read would see (e.g. X's
+      // parent -> Y and, at the same time, Y's parent -> X: each
+      // transaction's read of the other's current ancestor chain still
+      // shows no cycle, since neither has committed yet). A single
+      // transaction-scoped Postgres advisory lock, shared by every
+      // category-tree-mutating transaction (keyed by a fixed constant,
+      // not by any specific row), fixes this properly: only one such
+      // transaction can hold it at a time, so the second of two
+      // concurrent re-parenting requests always evaluates its cycle
+      // check against the first's already-committed result, not a
+      // stale pre-commit snapshot. Released automatically at commit/
+      // rollback - no manual unlock needed.
+      // $executeRaw, not $queryRaw: pg_advisory_xact_lock() returns void,
+      // and Prisma's $queryRaw can't deserialize a void result column
+      // ("Failed to deserialize column of type 'void'") - $executeRaw
+      // doesn't attempt to, so it's the correct call for a statement run
+      // purely for its side effect.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('finalpro:category_tree'))`;
 
       const existing = await tx.category.findUnique({ where: { id } });
       if (!existing) {

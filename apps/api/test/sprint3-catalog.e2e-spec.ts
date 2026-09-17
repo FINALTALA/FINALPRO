@@ -296,6 +296,47 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
       });
       expect(bRow.parentId).toBe(a);
     });
+
+    it('under two concurrent, mutually-opposite re-parenting requests (X -> parent Y and Y -> parent X, fired at once), exactly one succeeds and the tree never ends up with a 2-node cycle', async () => {
+      const admin = await signupWithPlatformRole('PLATFORM_ADMIN');
+      // Two independent roots - neither is an ancestor of the other
+      // when both requests start, so a *non-serialized* cycle check on
+      // either side would read "no cycle" and let both through.
+      const x = await createCategory(admin, unique('X'));
+      const y = await createCategory(admin, unique('Y'));
+
+      const [resXtoY, resYtoX] = await Promise.all([
+        request(app.getHttpServer())
+          .patch(`/api/v1/categories/${x}`)
+          .set('Authorization', `Bearer ${admin}`)
+          .send({ parent_id: y }),
+        request(app.getHttpServer())
+          .patch(`/api/v1/categories/${y}`)
+          .set('Authorization', `Bearer ${admin}`)
+          .send({ parent_id: x }),
+      ]);
+
+      const statuses = [resXtoY.status, resYtoX.status].sort();
+      // Whichever request's transaction wins the advisory lock commits
+      // first; the other, evaluated strictly after under the same lock,
+      // sees the winner's already-committed change and correctly
+      // detects the cycle it would otherwise close.
+      expect(statuses).toEqual([200, 400]);
+      const failed = resXtoY.status === 400 ? resXtoY : resYtoX;
+      expect(failed.body.error.code).toBe('CATEGORY_CYCLE');
+
+      const xRow = await prisma.category.findUniqueOrThrow({
+        where: { id: x },
+      });
+      const yRow = await prisma.category.findUniqueOrThrow({
+        where: { id: y },
+      });
+      // Never both - that would be the 2-node cycle this test exists to
+      // rule out.
+      expect(xRow.parentId === y && yRow.parentId === x).toBe(false);
+      // Exactly one direction actually applied.
+      expect(xRow.parentId === y || yRow.parentId === x).toBe(true);
+    });
   });
 
   describe('brands (FK-satisfying minimum for BL-MATCH-001)', () => {
