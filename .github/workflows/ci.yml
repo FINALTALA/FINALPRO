@@ -22,8 +22,23 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      # Sessions and OTP claims are Redis-backed (RedisService throws
+      # immediately if REDIS_URL isn't set) - e2e exercises both
+      # heavily. .env is local-only and untracked, so nothing set it for
+      # CI at all; this was masked locally because Docker always had a
+      # real .env file to read.
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       DATABASE_URL: postgresql://finalpro:finalpro_ci_only@localhost:5432/finalpro?schema=public
+      REDIS_URL: redis://localhost:6379
       API_PORT: 3001
       JWT_SECRET: ci-only-not-a-secret
     steps:
