@@ -21,6 +21,7 @@ import {
   AuthenticatedUser,
   SessionAuthGuard,
 } from '../auth/session-auth.guard';
+import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCanonicalProductDto } from './dto/create-canonical-product.dto';
@@ -34,6 +35,7 @@ export class CanonicalProductsController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
+    private readonly idempotencyCompletion: IdempotencyCompletionService,
   ) {}
 
   private toDto(product: {
@@ -121,25 +123,37 @@ export class CanonicalProductsController {
       });
     }
 
-    const product = await this.prisma.canonicalProduct.create({
-      data: {
-        brandId: dto.brand_id,
-        categoryId: dto.category_id,
-        modelName: dto.model_name,
-        status: dto.status,
-      },
-    });
+    return this.prisma.$transaction(async (tx) => {
+      const product = await tx.canonicalProduct.create({
+        data: {
+          brandId: dto.brand_id,
+          categoryId: dto.category_id,
+          modelName: dto.model_name,
+          status: dto.status,
+        },
+      });
 
-    await this.auditLog.record({
-      actorId: user.id,
-      correlationId: req.correlationId,
-      action: 'canonical_product.created',
-      entityType: 'CanonicalProduct',
-      entityId: product.id,
-      afterState: this.toDto(product),
-    });
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'canonical_product.created',
+          entityType: 'CanonicalProduct',
+          entityId: product.id,
+          afterState: this.toDto(product),
+        },
+        tx,
+      );
 
-    return this.toDto(product);
+      const body = this.toDto(product);
+      await this.idempotencyCompletion.complete(
+        tx,
+        req.idempotencyClaimId,
+        body,
+        201,
+      );
+      return body;
+    });
   }
 
   @Post(':id/variants')
@@ -163,16 +177,38 @@ export class CanonicalProductsController {
       });
     }
 
-    let variant;
     try {
-      variant = await this.prisma.canonicalProductVariant.create({
-        data: {
-          canonicalProductId: productId,
-          structuralAttributes:
-            dto.structural_attributes as Prisma.InputJsonValue,
-          mpn: dto.mpn,
-          gtin: dto.gtin,
-        },
+      return await this.prisma.$transaction(async (tx) => {
+        const variant = await tx.canonicalProductVariant.create({
+          data: {
+            canonicalProductId: productId,
+            structuralAttributes:
+              dto.structural_attributes as Prisma.InputJsonValue,
+            mpn: dto.mpn,
+            gtin: dto.gtin,
+          },
+        });
+
+        await this.auditLog.record(
+          {
+            actorId: user.id,
+            correlationId: req.correlationId,
+            action: 'canonical_product_variant.created',
+            entityType: 'CanonicalProductVariant',
+            entityId: variant.id,
+            afterState: this.variantToDto(variant),
+          },
+          tx,
+        );
+
+        const body = this.variantToDto(variant);
+        await this.idempotencyCompletion.complete(
+          tx,
+          req.idempotencyClaimId,
+          body,
+          201,
+        );
+        return body;
       });
     } catch (err) {
       if (
@@ -186,17 +222,6 @@ export class CanonicalProductsController {
       }
       throw err;
     }
-
-    await this.auditLog.record({
-      actorId: user.id,
-      correlationId: req.correlationId,
-      action: 'canonical_product_variant.created',
-      entityType: 'CanonicalProductVariant',
-      entityId: variant.id,
-      afterState: this.variantToDto(variant),
-    });
-
-    return this.variantToDto(variant);
   }
 
   @Get(':id/variants')

@@ -19,6 +19,7 @@ import {
   AuthenticatedUser,
   SessionAuthGuard,
 } from '../auth/session-auth.guard';
+import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateBrandDto } from './dto/create-brand.dto';
@@ -35,6 +36,7 @@ export class BrandsController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
+    private readonly idempotencyCompletion: IdempotencyCompletionService,
   ) {}
 
   @Get()
@@ -55,10 +57,32 @@ export class BrandsController {
     @Body() dto: CreateBrandDto,
     @Req() req: Request,
   ) {
-    let brand;
     try {
-      brand = await this.prisma.brand.create({
-        data: { name: dto.name, normalizedName: normalize(dto.name) },
+      return await this.prisma.$transaction(async (tx) => {
+        const brand = await tx.brand.create({
+          data: { name: dto.name, normalizedName: normalize(dto.name) },
+        });
+
+        await this.auditLog.record(
+          {
+            actorId: user.id,
+            correlationId: req.correlationId,
+            action: 'brand.created',
+            entityType: 'Brand',
+            entityId: brand.id,
+            afterState: { name: brand.name },
+          },
+          tx,
+        );
+
+        const body = { id: brand.id, name: brand.name };
+        await this.idempotencyCompletion.complete(
+          tx,
+          req.idempotencyClaimId,
+          body,
+          201,
+        );
+        return body;
       });
     } catch (err) {
       if (
@@ -72,16 +96,5 @@ export class BrandsController {
       }
       throw err;
     }
-
-    await this.auditLog.record({
-      actorId: user.id,
-      correlationId: req.correlationId,
-      action: 'brand.created',
-      entityType: 'Brand',
-      entityId: brand.id,
-      afterState: { name: brand.name },
-    });
-
-    return { id: brand.id, name: brand.name };
   }
 }

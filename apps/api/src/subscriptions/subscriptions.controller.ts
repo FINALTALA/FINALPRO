@@ -19,6 +19,7 @@ import {
   AuthenticatedUser,
   SessionAuthGuard,
 } from '../auth/session-auth.guard';
+import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
 import { SelectSubscriptionPlanDto } from './dto/select-subscription-plan.dto';
@@ -42,6 +43,7 @@ export class SubscriptionsController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
+    private readonly idempotencyCompletion: IdempotencyCompletionService,
   ) {}
 
   private async requireOwner(vendorId: string, userId: string) {
@@ -132,7 +134,7 @@ export class SubscriptionsController {
             orderBy: { createdAt: 'desc' },
           });
           if (existing) {
-            return { subscription: existing, alreadyActive: true };
+            return { subscription: this.toDto(existing), alreadyActive: true };
           }
         }
 
@@ -187,7 +189,14 @@ export class SubscriptionsController {
           tx,
         );
 
-        return { subscription: created, alreadyActive: false };
+        const body = this.toDto(created);
+        await this.idempotencyCompletion.complete(
+          tx,
+          req.idempotencyClaimId,
+          body,
+          201,
+        );
+        return { subscription: body, alreadyActive: false };
       },
     );
 
@@ -198,6 +207,6 @@ export class SubscriptionsController {
       });
     }
 
-    return this.toDto(subscription);
+    return subscription;
   }
 }

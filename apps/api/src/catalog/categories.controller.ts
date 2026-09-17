@@ -24,6 +24,7 @@ import {
   AuthenticatedUser,
   SessionAuthGuard,
 } from '../auth/session-auth.guard';
+import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCategoryDto } from './dto/create-category.dto';
@@ -39,6 +40,7 @@ export class CategoriesController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
+    private readonly idempotencyCompletion: IdempotencyCompletionService,
   ) {}
 
   private toDto(category: {
@@ -103,24 +105,36 @@ export class CategoriesController {
       }
     }
 
-    const category = await this.prisma.category.create({
-      data: {
-        nameAr: dto.name_ar,
-        nameEn: dto.name_en,
-        parentId: dto.parent_id ?? null,
-      },
-    });
+    return this.prisma.$transaction(async (tx) => {
+      const category = await tx.category.create({
+        data: {
+          nameAr: dto.name_ar,
+          nameEn: dto.name_en,
+          parentId: dto.parent_id ?? null,
+        },
+      });
 
-    await this.auditLog.record({
-      actorId: user.id,
-      correlationId: req.correlationId,
-      action: 'category.created',
-      entityType: 'Category',
-      entityId: category.id,
-      afterState: this.toDto(category),
-    });
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'category.created',
+          entityType: 'Category',
+          entityId: category.id,
+          afterState: this.toDto(category),
+        },
+        tx,
+      );
 
-    return this.toDto(category);
+      const body = this.toDto(category);
+      await this.idempotencyCompletion.complete(
+        tx,
+        req.idempotencyClaimId,
+        body,
+        201,
+      );
+      return body;
+    });
   }
 
   @Patch(':id')

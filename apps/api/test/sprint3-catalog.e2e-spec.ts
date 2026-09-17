@@ -4,6 +4,7 @@ import * as request from 'supertest';
 import { AppModule } from './../src/app.module';
 import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
+import { IdempotencyCompletionService } from './../src/common/idempotency/idempotency-completion.service';
 import { PrismaService } from './../src/prisma/prisma.service';
 
 /** Test double for the OPEN-004 SMS fallback - captures codes instead of logging them. */
@@ -1003,6 +1004,64 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
       // the other, matching a different product than the offer ended up
       // on, must be unmatched rather than silently forced through.
       expect(linkedProductIds).toHaveLength(1);
+    });
+
+    it('when the idempotency-completion write fails right after a real offer creation, nothing is left half-done - the failed attempt creates no offer, and a same-key retry creates exactly one (Sprint 3 review round 3)', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const reviewer = await signupWithPlatformRole('VERIFICATION_REVIEWER');
+      const vendorId = await activateVendor(owner, reviewer);
+
+      // IdempotencyCompletionService.complete() is called *inside* the
+      // same transaction as the resource create (see
+      // vendor-offers.controller.ts's create()) - failing it here must
+      // roll back the whole transaction, not just skip the completion
+      // bookkeeping. Before this fix, the resource create and the
+      // interceptor's own completion write were two separate Postgres
+      // statements, so a failure here left the offer created but the
+      // Idempotency-Key claim FAILED/re-claimable - a same-key retry
+      // would re-run the handler and create a *second* offer, since
+      // VendorOffer has no uniqueness constraint of its own to catch it.
+      const completeSpy = jest
+        .spyOn(app.get(IdempotencyCompletionService), 'complete')
+        .mockRejectedValueOnce(
+          new Error('simulated Postgres blip recording completion'),
+        );
+
+      const key = unique('offer-completion-blip');
+      const distinctiveTitle = unique('CompletionBlipOffer');
+      const body = { title_ar: 'عرض الاختبار', title_en: distinctiveTitle };
+
+      const first = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/offers`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', key)
+        .send(body);
+
+      completeSpy.mockRestore();
+
+      // The transaction rolled back - the handler's own error (not an
+      // HttpException) surfaces as a 500, and *nothing* was created.
+      expect(first.status).toBe(500);
+      const afterFirstAttempt = await prisma.vendorOffer.findMany({
+        where: { vendorId, titleEn: distinctiveTitle },
+      });
+      expect(afterFirstAttempt).toHaveLength(0);
+
+      // A same-key retry (identical payload) re-claims the now-FAILED
+      // key and re-runs the handler cleanly - this time it succeeds.
+      const second = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/offers`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', key)
+        .send(body)
+        .expect(201);
+      expect(second.body.title_en).toBe(distinctiveTitle);
+
+      const offers = await prisma.vendorOffer.findMany({
+        where: { vendorId, titleEn: distinctiveTitle },
+      });
+      expect(offers).toHaveLength(1);
+      expect(offers[0].id).toBe(second.body.id);
     });
   });
 });

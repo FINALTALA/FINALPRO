@@ -20,6 +20,7 @@ import {
   AuthenticatedUser,
   SessionAuthGuard,
 } from '../auth/session-auth.guard';
+import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { MatchingService } from '../matching/matching.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -39,6 +40,7 @@ export class VendorOffersController {
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
     private readonly matching: MatchingService,
+    private readonly idempotencyCompletion: IdempotencyCompletionService,
   ) {}
 
   private async requireOwner(vendorId: string, userId: string) {
@@ -146,20 +148,32 @@ export class VendorOffersController {
       });
     }
 
-    const offer = await this.prisma.vendorOffer.create({
-      data: { vendorId, titleAr: dto.title_ar, titleEn: dto.title_en },
-    });
+    return this.prisma.$transaction(async (tx) => {
+      const offer = await tx.vendorOffer.create({
+        data: { vendorId, titleAr: dto.title_ar, titleEn: dto.title_en },
+      });
 
-    await this.auditLog.record({
-      actorId: user.id,
-      correlationId: req.correlationId,
-      action: 'vendor_offer.created',
-      entityType: 'VendorOffer',
-      entityId: offer.id,
-      afterState: this.offerToDto(offer),
-    });
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'vendor_offer.created',
+          entityType: 'VendorOffer',
+          entityId: offer.id,
+          afterState: this.offerToDto(offer),
+        },
+        tx,
+      );
 
-    return this.offerToDto(offer);
+      const body = this.offerToDto(offer);
+      await this.idempotencyCompletion.complete(
+        tx,
+        req.idempotencyClaimId,
+        body,
+        201,
+      );
+      return body;
+    });
   }
 
   @Post(':offerId/variants')
@@ -265,7 +279,14 @@ export class VendorOffersController {
           tx,
         );
 
-        return created;
+        const body = this.variantToDto(created);
+        await this.idempotencyCompletion.complete(
+          tx,
+          req.idempotencyClaimId,
+          body,
+          201,
+        );
+        return body;
       });
     } catch (err) {
       if (
@@ -280,7 +301,7 @@ export class VendorOffersController {
       throw err;
     }
 
-    return this.variantToDto(variant);
+    return variant;
   }
 
   @Get(':offerId/variants')

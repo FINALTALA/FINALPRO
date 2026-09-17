@@ -21,6 +21,7 @@ import {
   AuthenticatedUser,
   SessionAuthGuard,
 } from '../auth/session-auth.guard';
+import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
 import { BranchVerificationDecisionDto } from './dto/branch-verification-decision.dto';
@@ -60,6 +61,7 @@ export class VendorVerificationController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
+    private readonly idempotencyCompletion: IdempotencyCompletionService,
   ) {}
 
   // BL-VEND-002 (FR-VEND-002): the vendor's own owner submits (or
@@ -198,10 +200,17 @@ export class VendorVerificationController {
         );
       }
 
-      return updatedBranch;
+      const body = branchToDto(updatedBranch);
+      await this.idempotencyCompletion.complete(
+        tx,
+        req.idempotencyClaimId,
+        body,
+        201,
+      );
+      return body;
     });
 
-    return branchToDto(updated);
+    return updated;
   }
 
   // BL-VEND-003 (FR-VEND-003): a vendor-verification-reviewer approves,
@@ -253,144 +262,148 @@ export class VendorVerificationController {
           ? 'REJECTED'
           : 'RESUBMISSION_REQUESTED';
 
-    const { updatedBranch, vendorApproved } = await this.prisma.$transaction(
-      async (tx) => {
-        // Serializes concurrent decisions for the SAME vendor so the
-        // "are all physical branches now approved" read below can't
-        // race with another reviewer's concurrent approval of a
-        // sibling branch (classic lost-update: both read the sibling
-        // as still-pending before either commits, so neither promotes
-        // the vendor even though both approvals together should have).
-        // Different vendors never contend for this lock.
-        await tx.$queryRaw`SELECT id FROM vendors WHERE id = ${vendorId} FOR UPDATE`;
+    const responseBody = await this.prisma.$transaction(async (tx) => {
+      // Serializes concurrent decisions for the SAME vendor so the
+      // "are all physical branches now approved" read below can't
+      // race with another reviewer's concurrent approval of a
+      // sibling branch (classic lost-update: both read the sibling
+      // as still-pending before either commits, so neither promotes
+      // the vendor even though both approvals together should have).
+      // Different vendors never contend for this lock.
+      await tx.$queryRaw`SELECT id FROM vendors WHERE id = ${vendorId} FOR UPDATE`;
 
-        // Every check below reads *fresh*, inside the lock - the
-        // vendor's review state and this branch's own evidence/status
-        // can both have changed since the pre-transaction reads above
-        // (another decision, or a concurrent resubmission).
-        const vendor = await tx.vendor.findUniqueOrThrow({
-          where: { id: vendorId },
+      // Every check below reads *fresh*, inside the lock - the
+      // vendor's review state and this branch's own evidence/status
+      // can both have changed since the pre-transaction reads above
+      // (another decision, or a concurrent resubmission).
+      const vendor = await tx.vendor.findUniqueOrThrow({
+        where: { id: vendorId },
+      });
+      if (vendor.status !== 'UNDER_REVIEW') {
+        throw new ConflictException({
+          code: 'VENDOR_NOT_UNDER_REVIEW',
+          message:
+            'This vendor has no branch evidence awaiting review (submit evidence first, or its application has already been decided)',
         });
-        if (vendor.status !== 'UNDER_REVIEW') {
-          throw new ConflictException({
-            code: 'VENDOR_NOT_UNDER_REVIEW',
-            message:
-              'This vendor has no branch evidence awaiting review (submit evidence first, or its application has already been decided)',
-          });
-        }
+      }
 
-        const freshBranch = await tx.storeBranch.findUniqueOrThrow({
-          where: { id: branchId },
+      const freshBranch = await tx.storeBranch.findUniqueOrThrow({
+        where: { id: branchId },
+      });
+      if (freshBranch.verificationStatus !== 'PENDING') {
+        throw new ConflictException({
+          code: 'BRANCH_NOT_PENDING',
+          message:
+            'This branch has already been decided - the vendor must resubmit evidence before it can be decided again',
         });
-        if (freshBranch.verificationStatus !== 'PENDING') {
-          throw new ConflictException({
-            code: 'BRANCH_NOT_PENDING',
-            message:
-              'This branch has already been decided - the vendor must resubmit evidence before it can be decided again',
-          });
-        }
-        // BR-022: a physical branch cannot be approved without an
-        // attached geolocation pin and storefront photo. Rejecting or
-        // requesting resubmission of *incomplete* evidence is exactly
-        // the intended path for evidence that never met this bar -
-        // only 'approve' is blocked here.
-        if (
-          dto.decision === 'approve' &&
-          (freshBranch.lat === null ||
-            freshBranch.lng === null ||
-            !freshBranch.verificationPhotoUrl)
-        ) {
-          throw new BadRequestException({
-            code: 'BRANCH_EVIDENCE_INCOMPLETE',
-            message:
-              'Cannot approve a branch missing a geolocation pin or storefront photo (BR-022)',
-          });
-        }
+      }
+      // BR-022: a physical branch cannot be approved without an
+      // attached geolocation pin and storefront photo. Rejecting or
+      // requesting resubmission of *incomplete* evidence is exactly
+      // the intended path for evidence that never met this bar -
+      // only 'approve' is blocked here.
+      if (
+        dto.decision === 'approve' &&
+        (freshBranch.lat === null ||
+          freshBranch.lng === null ||
+          !freshBranch.verificationPhotoUrl)
+      ) {
+        throw new BadRequestException({
+          code: 'BRANCH_EVIDENCE_INCOMPLETE',
+          message:
+            'Cannot approve a branch missing a geolocation pin or storefront photo (BR-022)',
+        });
+      }
 
-        const updated = await tx.storeBranch.update({
-          where: { id: branchId },
-          data: {
-            verificationStatus: nextStatus,
-            reviewedBy: user.id,
-            reviewedAt: new Date(),
-            reviewNote:
-              dto.decision === 'approve' ? null : (dto.reason ?? null),
+      const updated = await tx.storeBranch.update({
+        where: { id: branchId },
+        data: {
+          verificationStatus: nextStatus,
+          reviewedBy: user.id,
+          reviewedAt: new Date(),
+          reviewNote: dto.decision === 'approve' ? null : (dto.reason ?? null),
+        },
+      });
+
+      // FR-VEND-008 lifecycle mapping for a branch decision:
+      //  - approve, and no physical branch is left pending -> vendor
+      //    UNDER_REVIEW -> APPROVED.
+      //  - reject -> vendor UNDER_REVIEW -> REJECTED unconditionally.
+      //    There is no per-branch partial-rejection state at the
+      //    vendor level and no reapplication flow in Sprint 3 scope -
+      //    rejecting evidence for any one physical branch rejects the
+      //    whole application (documented here since the SRS doesn't
+      //    spell out this mapping explicitly).
+      //  - request_resubmission -> no vendor transition; the vendor
+      //    stays UNDER_REVIEW and can resubmit evidence for this
+      //    branch (verification-evidence resets it to PENDING).
+      let vendorNextStatus: 'APPROVED' | 'REJECTED' | null = null;
+      if (dto.decision === 'approve') {
+        const pendingPhysical = await tx.storeBranch.findFirst({
+          where: {
+            vendorId,
+            isPhysical: true,
+            verificationStatus: { not: 'APPROVED' },
           },
+          select: { id: true },
         });
-
-        // FR-VEND-008 lifecycle mapping for a branch decision:
-        //  - approve, and no physical branch is left pending -> vendor
-        //    UNDER_REVIEW -> APPROVED.
-        //  - reject -> vendor UNDER_REVIEW -> REJECTED unconditionally.
-        //    There is no per-branch partial-rejection state at the
-        //    vendor level and no reapplication flow in Sprint 3 scope -
-        //    rejecting evidence for any one physical branch rejects the
-        //    whole application (documented here since the SRS doesn't
-        //    spell out this mapping explicitly).
-        //  - request_resubmission -> no vendor transition; the vendor
-        //    stays UNDER_REVIEW and can resubmit evidence for this
-        //    branch (verification-evidence resets it to PENDING).
-        let vendorNextStatus: 'APPROVED' | 'REJECTED' | null = null;
-        if (dto.decision === 'approve') {
-          const pendingPhysical = await tx.storeBranch.findFirst({
-            where: {
-              vendorId,
-              isPhysical: true,
-              verificationStatus: { not: 'APPROVED' },
-            },
-            select: { id: true },
-          });
-          if (!pendingPhysical) {
-            vendorNextStatus = 'APPROVED';
-          }
-        } else if (dto.decision === 'reject') {
-          vendorNextStatus = 'REJECTED';
+        if (!pendingPhysical) {
+          vendorNextStatus = 'APPROVED';
         }
+      } else if (dto.decision === 'reject') {
+        vendorNextStatus = 'REJECTED';
+      }
 
-        if (vendorNextStatus) {
-          await tx.vendor.update({
-            where: { id: vendorId },
-            data: { status: vendorNextStatus },
-          });
-        }
+      if (vendorNextStatus) {
+        await tx.vendor.update({
+          where: { id: vendorId },
+          data: { status: vendorNextStatus },
+        });
+      }
 
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'store_branch.verification_decided',
+          entityType: 'StoreBranch',
+          entityId: updated.id,
+          beforeState: branchToDto(freshBranch),
+          afterState: branchToDto(updated),
+        },
+        tx,
+      );
+      if (vendorNextStatus) {
         await this.auditLog.record(
           {
             actorId: user.id,
             correlationId: req.correlationId,
-            action: 'store_branch.verification_decided',
-            entityType: 'StoreBranch',
-            entityId: updated.id,
-            beforeState: branchToDto(freshBranch),
-            afterState: branchToDto(updated),
+            action:
+              vendorNextStatus === 'APPROVED'
+                ? 'vendor.approved'
+                : 'vendor.rejected',
+            entityType: 'Vendor',
+            entityId: vendorId,
+            beforeState: { status: 'UNDER_REVIEW' },
+            afterState: { status: vendorNextStatus },
           },
           tx,
         );
-        if (vendorNextStatus) {
-          await this.auditLog.record(
-            {
-              actorId: user.id,
-              correlationId: req.correlationId,
-              action:
-                vendorNextStatus === 'APPROVED'
-                  ? 'vendor.approved'
-                  : 'vendor.rejected',
-              entityType: 'Vendor',
-              entityId: vendorId,
-              beforeState: { status: 'UNDER_REVIEW' },
-              afterState: { status: vendorNextStatus },
-            },
-            tx,
-          );
-        }
+      }
 
-        return {
-          updatedBranch: updated,
-          vendorApproved: vendorNextStatus === 'APPROVED',
-        };
-      },
-    );
+      const body = {
+        ...branchToDto(updated),
+        vendor_approved: vendorNextStatus === 'APPROVED',
+      };
+      await this.idempotencyCompletion.complete(
+        tx,
+        req.idempotencyClaimId,
+        body,
+        201,
+      );
+      return body;
+    });
 
-    return { ...branchToDto(updatedBranch), vendor_approved: vendorApproved };
+    return responseBody;
   }
 }
