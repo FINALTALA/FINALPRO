@@ -2,6 +2,8 @@
 
 Consolidates every provisional item flagged across Parts 0–6 into the six registers the master prompt requires: risk register, assumption register, dependency register, open-question register, Architecture Decision Records (ADRs), and Business Decision Records (BDRs). This part is a *consolidation*, not a new source of truth — every entry links back to where it was actually decided or raised.
 
+> **September 2026 change-control update:** The product owner approved a later set of detailed decisions in [`docs/approved-product-decisions-2026-09.md`](../approved-product-decisions-2026-09.md). The registers below are amended by Q.4 and Q.6a in this revision; that decision record takes precedence over any remaining contradictory historical text in Parts 0–9 while the full SRS revision is completed.
+
 ---
 
 ## Q.1 Risk register
@@ -38,7 +40,7 @@ Consolidates Part 0's `ASM-001`–`ASM-015`. Most were converted to **confirmed 
 |---|---|---|---|
 | ASM-001–ASM-009, ASM-011–ASM-015 | The original MVP-scope, currency, geography, mobile, commission, auth, guest-checkout, timeline, and ingestion defaults proposed in Part 0 | **Confirmed** — superseded by the product owner's answers (Part 0, Section 2); kept here only for traceability, not as live assumptions | N/A — no longer assumptions |
 | ASM-010 | No confirmed Palestinian legal/tax/data-protection framework; general-practice defaults used, every legal/financial rule flagged | **Still assumed** — this is Q11's confirmed *approach*, but the underlying legal uncertainty itself (RISK-013) is not resolved | Shipped defaults (retention periods, return windows, tax handling) may need rework once real legal confirmation lands |
-| ASM-016 (new) | The FX-normalization approach (BR-021: native price + ILS-normalized comparison price) is an adequate resolution of Q7's per-vendor-currency requirement, pending only the FX-rate *source* (⚠ OPEN-002), not the mechanism itself | Assumed, not yet validated against a real second currency in production data | If real cross-currency vendor pairs are rarer or more complex (e.g., three currencies, not two) than assumed, the normalization UI/logic may need revisiting |
+| ASM-016 (retired) | The FX-normalization approach was considered an adequate resolution of per-vendor currency. | **Retired 2026-09-19 — PDR-001 makes ILS the sole platform currency.** | No FX mechanism is required. |
 | ASM-017 (new) | A 2-person team can realistically execute the FYP Delivery Increment (Part 1, D.4) within 3 months | Assumed, tracked via RISK-011/RISK-016 | If wrong, the increment itself needs re-scoping, not just individual features |
 
 ---
@@ -49,7 +51,7 @@ Consolidates Part 0's `ASM-001`–`ASM-015`. Most were converted to **confirmed 
 |---|---|---|---|---|---|
 | DEP-001 | Licensed, integrable online-payment gateway for the West Bank | External service | ⚠ Open (OPEN-001) | Online payment scope (Q3) cannot ship for real; FYP uses a sandbox/simulated flow (Part 1, D.4) | Product owner |
 | DEP-002 | SMS/OTP provider covering Palestinian phone numbers | External service | ⚠ Open (OPEN-004) | Blocks real OTP-based auth (FR-AUTH-003) and BR-DELIVERY-CONFIRM's SMS legs; FYP falls back to a logged/visible admin view (Part 1, D.4) | Product owner / Engineering |
-| DEP-003 | FX-rate source for cross-currency comparison normalization | External service or manual admin process | ⚠ Open (OPEN-002) | Comparison-price normalization (BR-021) cannot run for real; demo can use a manually entered rate as a stopgap | Engineering |
+| DEP-003 | FX-rate source for cross-currency comparison normalization | External service or manual admin process | **Retired — PDR-001** | All monetary amounts use ILS; no FX conversion is in scope. | N/A |
 | DEP-004 | Managed hosting platform (Railway/Render/Fly.io — final pick during setup) | External service | Not yet selected | Deployment/CI-CD pipeline (Part 6, Section P) cannot stand up until chosen | Engineering |
 | DEP-005 | Cloudflare (CDN) + R2 (object storage) accounts | External service | Not yet provisioned | Image/media serving and CDN benefits unavailable until set up; low switching cost if deferred briefly | Engineering |
 | DEP-006 | Professional Palestinian legal/tax review | Professional/external | Not engaged | Every item flagged "requires legal confirmation" across Parts 2–6 (retention, tax, consumer-protection return windows) stays provisional indefinitely without this | Product owner |
@@ -70,14 +72,18 @@ Consolidates OPEN-001–007 (first raised in Part 0) plus two items formalized h
 | ID | Pending decision | First raised | Status |
 |---|---|---|---|
 | OPEN-001 | Licensed, integrable online-payment gateway for the West Bank | Part 0 (Q3) | Open |
-| OPEN-002 | FX-rate source/refresh frequency for cross-currency comparison | Part 0 (Q7) | Open |
-| OPEN-003 | Monthly subscription price tier(s) and grace-period/suspension policy | Part 0 (Q10) | Open |
+| OPEN-002 | FX-rate source/refresh frequency for cross-currency comparison | Part 0 (Q7) | **✅ Closed 2026-09-19 — PDR-001: ILS is the sole platform currency; FX is removed.** |
+| OPEN-003 | Production subscription price after the FYP sandbox/trial | Part 0 (Q10) | Open — PDR-033 settles the FYP behaviour: one-month unified sandbox/trial and mock monthly renewal, with no Basic/Pro tiers. A real production price remains a business decision. |
 | OPEN-004 | SMS/OTP provider for Palestinian phone numbers | Part 0 (Q12, Q4) | Open |
-| OPEN-005 | Vendor storefront-verification reviewer assignment and rejection criteria | Part 0 (Q8) | Open |
+| OPEN-005 | Vendor storefront-verification reviewer assignment and rejection criteria | Part 0 (Q8) | **✅ Closed 2026-09-19 — platform administrators review evidence; correctable evidence issues use resubmission, and a rejection rejects the whole application. See PDR-010 and BR-026.** |
 | OPEN-006 | Sign-off on the FYP Delivery Increment slice (Part 1, D.4) | Part 0 (Q14) | **✅ Approved 2026-09-16.** Product owner formally approved the FYP Delivery Increment as documented in Part 1 §D.4 and Part 8. Implementation begins at Sprint 1 (EPIC-FOUND) on this basis. |
-| OPEN-007 | Mixed-currency parent-order payment settlement (checkout charging, refund currency/amount) | Part 0 (Q7, Q1/Q2) | Open — BR-013/BR-021's checkout-currency clause remains a labeled proposed default, not binding (Part 3 review) |
+| OPEN-007 | Mixed-currency parent-order payment settlement (checkout charging, refund currency/amount) | Part 0 (Q7, Q1/Q2) | **✅ Closed 2026-09-19 — PDR-001/PDR-005: ILS-only platform, with one sandbox electronic transaction for all electronically-paid BranchOrders in a checkout.** |
 | OPEN-008 (new) | Policy for an uncollected pickup order past a configured window (auto-cancel? escalate to vendor? hold indefinitely?) | Part 2, E.13 (flagged in passing as "not yet an OPEN-item") | Open — formalized here |
 | OPEN-009 (new) | Specific legal/tax/retention/consumer-protection parameter values (exact retention periods, return-window minimums, tax-invoice fields) once professional confirmation (DEP-006) is obtained | Scattered across Parts 2–4 (FR-AUTH-010, FR-RET-001, FR-PRICE-005, NFR-RETAIN-001) | Open — the *approach* (flag, don't assert) is confirmed via Q11; the specific numbers are not |
+| OPEN-010 | Whether and when a rejected physical-store applicant may reapply | Part 7 / Sprint-3 review | **✅ Closed 2026-09-19 — corrected application may be submitted immediately; old application/audit is retained (PDR-010).** |
+| OPEN-011 | Minimum onboarding evidence for online-only stores | PDR-010 | Open — model is approved, but legal/business document requirements need explicit confirmation. |
+| OPEN-012 | Defensible boundary/service-coverage source for West Bank, Jerusalem and Inside delivery zones | PDR-022 | Open — commercial regions are approved; their technical/geographic boundary needs an operational source. |
+| OPEN-013 | The five required matching/search fields for every category template | PDR-013 | Open — the five-field rule is approved, but per-category definitions require a taxonomy workshop. |
 
 None of these block proceeding — every tagged item carries an explicit "pending" marker everywhere it's referenced, per the master prompt's requirement not to silently assert unconfirmed facts.
 
@@ -123,6 +129,23 @@ Every BDR below traces to the product owner's confirmed answer in Part 0, Sectio
 | BDR-013 | No guest checkout | Guests browse/compare freely; login required at the point of purchase | Q13 |
 | BDR-014 | 2-person team, 3-month delivery window | The real constraint the entire delivery plan is built around | Q14 |
 | BDR-015 | **✅ Approved** FYP Delivery Increment as the build-scope reconciliation | The full confirmed scope (BDR-001–013) remains the documented target design; the narrower, explicitly-scoped increment (Part 1 §D.4, Part 8) is what the 2-person/3-month team builds first — formally accepted by the product owner 2026-09-16, alongside the FR-SUP informal-support decision (`EPIC-SUP`/`BL-SUP-001`, Part 8) and the instruction to begin implementation at Sprint 1 with OPEN-001/003/004 left open, using the documented sandbox/fallback behavior until those are resolved | Part 1, D.4; Part 8 — status was OPEN-006, now resolved (above) |
+
+### Q.6a September 2026 approved product decisions
+
+The following consolidated decisions are binding additions/amendments to the historical BDR list. Their full wording and implementation-impact register is maintained in the [approved product-decision baseline](../approved-product-decisions-2026-09.md); the compact entries here make them discoverable from the SRS decision register.
+
+| ID | Title | Decision | Source |
+|---|---|---|---|
+| BDR-016 | ILS-only monetary model | ILS is the only platform currency; FX and mixed-currency settlement are removed. | PDR-001 |
+| BDR-017 | BranchOrder fulfilment model | Retain a parent order, but group all selected items fulfilled by one branch into one BranchOrder with its own fulfilment, fee, status and payment choice. | PDR-003–005 |
+| BDR-018 | Unified account with least-privilege workspaces | Customer, owner and employee capabilities can coexist on one account; employee is one assigned branch only and has no owner analytics/configuration privileges. | PDR-008–009 |
+| BDR-019 | Physical, online-only and hybrid stores | Online-only stores use a hidden warehouse and public pickup points that do not carry stock. | PDR-010 |
+| BDR-020 | Social-commerce discovery and storefronts | Public All/Women/Men/Kids/Accessories surfaces, configurable one-level store sections, following feed, store cards and comparison navigation are core product requirements. | PDR-011–017 |
+| BDR-021 | Barcode and inventory boundary | Shared platform product barcode is internal; store inventory barcode is local/unique, required and scanner-facing. No branch stock transfers in phase 1. | PDR-018–021 |
+| BDR-022 | Checkout and delivery operational model | Checkout groups BranchOrders, proposes eligible branch/slots, applies ILS sandbox payment/COD rules, and branch staff—not an internal courier role—operates delivery state. | PDR-022–029 |
+| BDR-023 | Store-defined returns and verified reviews | Store policy is snapshotted at purchase; return/exception workflow and purchaser-only product/store reviews operate as PDR-030–032. | PDR-030–032 |
+| BDR-024 | Single trial subscription | One-month sandbox/trial, mock renewal, expiry visibility restrictions, and no Basic/Pro logic in the FYP. | PDR-033 |
+| BDR-025 | Deactivation rather than destructive account deletion | Active unreceived orders block deletion; deactivation preserves necessary order/audit records and permits 30-day OTP recovery. | PDR-034 |
 
 ---
 

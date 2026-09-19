@@ -6,6 +6,26 @@ Builds on [Part 1](01-executive-summary-vision-scope.md) (roles), [Part 2](02-fu
 
 ## K.1 Screen inventory
 
+### K.1a Approved September 2026 UX amendment
+
+The [approved product-decision baseline](../approved-product-decisions-2026-09.md) adds the following required screens and interactions. These entries supersede conflicting historical inventory rows (notably guest cart, vendor-only checkout partitioning, delivery-driver UI, and generic vendor portal). They are the UX source for the revised API/data-model work.
+
+| Screen / surface | Primary user | Required content and actions |
+|---|---|---|
+| Public home and segment pages | Guest/customer | Public All, Women, Men, Kids and Accessories views; hero carousel of up to five eligible stores; Arabic-first responsive product cards; immediate product/store search suggestions; segment/category/price/colour/size/availability/condition/discount/brand filters. |
+| Global product card and compare view | Guest/customer | Lowest available ILS price, up to five cheapest store-logo circles, availability state, favourite control for signed-in users and Compare Prices action. Logo opens the exact offer inside that store; card opens cheapest eligible offer. Compare view has low-to-high store cards and variant filtering, but no direct add-to-cart. |
+| Public store page | Guest/customer | Stable store URL, editable store identity/cover/bio/contacts, Follow action, one-level All/New/Discounts/custom sections, featured products, temporary-unavailable state and physical/pickup-point map information where public. |
+| Following / `أتابعه` | Guest/customer | Public-navigation page, not account settings: horizontally scrollable followed-store identities with arrow affordance and global-style product feed. Empty state suggests stores. Inactive store stays faded. |
+| Store offer detail | Guest/customer | Store-specific images/video, translated/original content, variant selection, branch availability statuses, price/discount, store identity and add-to-cart. No delivery/pickup/branch commitment occurs here. |
+| Cart and checkout | Signed-in customer | Cart uses manual item selection; unselected lines remain. Checkout explains resulting BranchOrders, proposes eligible branch, allows farther eligible branch, gathers delivery/pickup choice and slot, shows ILS subtotal/fee/total per BranchOrder and overall electronic payment; retains dimmed sold-out lines with remove action. |
+| Customer Orders | Signed-in customer | Separate BranchOrder cards across all stores with live status, preparation/delivery/pickup actions, delivery confirmation/report, cancellation/return/refund actions and clear action-required notices. |
+| Owner workspace | Store owner | Store appearance/sections/contacts/types; products/media/pricing/discounts; all branches/warehouse/pickup points; staff; policy/subscription; branch orders; inventory movements; analytics. Workspace switcher preserves customer access. |
+| Branch employee workspace | Assigned employee | Today/all branch orders, preparation/Sent/Delivered actions, pickup-code handover, scanner/manual stock sale, additions/adjustments and reasons. It must not expose owner configuration, prices/media/catalog text, cross-branch data or analytics. |
+| Inventory scanner and import | Owner/employee according to permission | Barcode scan or manual lookup, then explicit colour/size/quantity. Excel/CSV submission reports valid, rejected and manual-review rows; media is added later through product editor. |
+| Administrator workspace | Platform admin | Physical/online-only verification, canonical/match/name-change queue, reported reviews/products, vendor suspension/appeal, and audit views. |
+
+**Interaction and visual principles:** Every status-changing action must have a clear confirmation/result and preserve RTL/mobile accessibility. Notifications deep-link to the exact order, item, store or action. Use strong empty/unavailable/error states rather than blank panels. The social-media inspiration applies to discovery, follows, profile identity, cards and notifications—not to unapproved chat, reels or stories.
+
 Legend: **Empty/Loading/Error** = the three required states; **Perms** = permission restriction; **RTL/Resp/A11y** = combined note.
 
 ### Customer web/mobile experience

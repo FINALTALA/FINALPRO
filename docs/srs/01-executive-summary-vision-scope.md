@@ -24,6 +24,20 @@ Covers Sections **A–D** of the structure required by [`docs/master-prompt.md`]
 
 **Recommended future expansion.** Live courier/third-party delivery integration, a production payment-gateway integration (beyond the sandbox used in the FYP increment), automated/confidence-based product matching at scale, seller ads and sponsored placement, loyalty/referral programs, and POS/ERP vendor integrations — see Phase 2/Phase 3 in Section D.
 
+### A.1 Current approved product baseline (September 2026 amendment)
+
+The platform remains a multi-vendor marketplace and comparison product, but its current approved operating model is more specific than the original executive summary:
+
+- **ILS only:** all prices, fees, payment, refund, comparison and reporting amounts use ILS. There is no FX conversion or mixed-currency settlement.
+- **Storefront-first discovery:** customers use public All, Women, Men, Kids and Accessories pages, store pages with configurable one-level sections, global comparison cards, a public `أتابعه` following feed, favourite alerts, and Arabic-first/English-switchable UI.
+- **Parent order plus BranchOrders:** a customer chooses cart lines at checkout. Lines that one eligible branch can fulfil together form a BranchOrder; each BranchOrder owns its delivery/pickup choice, fee, payment choice, calendar slot and status. The customer sees all of these clearly in one Orders experience.
+- **One payment transaction only for electronic groups:** all electronically paid BranchOrders in one checkout are charged in one ILS sandbox transaction. COD/pay-at-pickup is handled by its branch.
+- **Three store operating models:** physical, online-only (hidden warehouse + public pickup points) and hybrid. A pickup point is not stock-holding inventory.
+- **One account, separate workspaces:** the same account may be a customer and a store owner/employee. Owners see their store-wide operations and analytics; branch employees see only their one assigned branch’s inventory and orders.
+- **Branch staff operate delivery state:** no internal delivery-driver account or internal chat is included in phase 1. Stores provide an Instagram, Facebook or WhatsApp contact route for external questions/resolution.
+
+The authoritative detail is the [approved product-decision baseline](../approved-product-decisions-2026-09.md). This subsection supersedes conflicting statements in A–D until the remaining Part 1 tables are fully rewritten.
+
 ---
 
 ## B. Product vision and objectives
@@ -57,6 +71,8 @@ Covers Sections **A–D** of the structure required by [`docs/master-prompt.md`]
 ---
 
 ## C. Stakeholders and user roles
+
+> **Revision note:** The historical role table below is retained for traceability only. It is superseded where it conflicts with the approved owner/employee workspace model in C.2. In particular, there is no internal delivery-driver role in phase 1, and the old separate vendor administrator/catalog/order-processing roles are not the approved product role model.
 
 | Role | Responsibilities | Key permissions | Prohibited actions | Data visibility | Key workflows |
 |---|---|---|---|---|---|
@@ -105,9 +121,23 @@ Covers Sections **A–D** of the structure required by [`docs/master-prompt.md`]
 ¹ Vendor Staff = branch manager, vendor catalog employee, vendor order-processing employee — each further scoped to their specific function per the role table above; this column shows their combined ceiling of access.
 ² Platform Admin = super administrator, catalog administrator, and operations manager combined; the role table above lists their individual boundaries (e.g. catalog admin does not see vendor financials in practice even though platform-admin-tier accounts technically could).
 
+### C.2 Approved operational role model (September 2026 amendment)
+
+| Actor / workspace | Scope and permitted work | Explicit boundary |
+|---|---|---|
+| Customer workspace | Public discovery, store pages, follow/favourite, own cart, checkout, Orders, addresses, return/review actions. | Cart and checkout require sign-in; only own personal/order data. |
+| Store owner workspace | Own store profile/sections/contacts, catalog/media/prices/discounts, staff, all own branches and their stock/orders, policies/subscription, and store analytics. One owner may own several stores. | Never sees another store’s non-public data. |
+| Branch employee workspace | Exactly one assigned branch at a time. That branch’s stock, physical-sale/movement actions, preparation, pickup and delivery-state actions. | Cannot edit price, discount, media, description, store settings, analytics, another branch, or financial/store-wide configuration. |
+| Platform administrator workspace | Verification, canonical products/brands/matches, reports/moderation, suspension/reactivation and appeals. | Every decision is audited; no unlogged bypass. |
+| External delivery/contact actor | Outside the system. The branch employee records hand-off and outcome after the store’s external coordination. | No platform login/driver role in phase 1. |
+
+An account may switch between every workspace legitimately granted to it; this is not a second customer account. Owner-to-employee assignment uses phone plus OTP and disabling an employee immediately ends active access while preserving audit history.
+
 ---
 
 ## D. Scope and release strategy
+
+> **Capacity-reset notice:** The FYP Delivery Increment table and sprint plan predate the September baseline. The prior 65-Must-item/12-sprint calculation must not be used as a delivery commitment. Part 8 will be re-estimated after Part 2’s revised functional requirements and Part 3’s revised data model are complete.
 
 ### D.1 The nine platform areas (per master-prompt Section D)
 

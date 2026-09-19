@@ -38,7 +38,41 @@ Builds on [Part 0](00-phase0-scope-and-clarifications.md), [Part 1](01-executive
 
 ---
 
+### F.1 September 2026 business-rule amendment
+
+The following rules supersede conflicting earlier rules in this table. Their product-owner source is the [approved decision baseline](../approved-product-decisions-2026-09.md); they are deliberately stated here so implementation cannot treat the baseline as optional design commentary.
+
+| ID | Rule |
+|---|---|
+| BR-026 | A physical-store application is one unit. Correctable branch evidence issues use resubmission. Rejection of a branch rejects the whole application and activates no branch; the vendor may submit a corrected new application immediately, while the original/audit remains retained. |
+| BR-027 | All monetary amounts are ILS. No FX rate, vendor currency, foreign-currency refund, or mixed-currency payment settlement exists in the target model. This supersedes BR-021 and closes OPEN-002/OPEN-007. |
+| BR-028 | A checkout has one parent `CustomerOrder` and one or more `BranchOrder`s. Every item in a BranchOrder is fulfilled together by the same stock-holding branch/execution location and shares that BranchOrder’s fulfilment method, fee, payment choice, slot and lifecycle. |
+| BR-029 | A signed-in customer explicitly selects cart lines for checkout. The system may propose only branches that contain every selected variant in the prospective group; it proposes the nearest, but the customer may choose a farther eligible one. |
+| BR-030 | Store inventory barcode is unique within a store and is scanner-facing. Shared `platform_product_barcode` is internal, stable and never overwrites the local barcode. A physical sale/decrease cannot take stock below zero. |
+| BR-031 | A manual non-sale stock decrease always has a reason and triggers an owner notification, irrespective of quantity. No stock transfer between branches is supported in phase 1. |
+| BR-032 | Public availability is derived from aggregate eligible branch stock but exposes only Available, Low stock (1–3), or Sold out. Exact quantity is private except the maximum quantity shown during cart validation. |
+| BR-033 | A store’s configured return policy and fees are snapshotted on purchase; it can change only every six months. If the store accepts returns, all its physical branches—or all pickup points for an online-only store—accept them. |
+| BR-034 | Delivery is operated by branch employees. Customer confirmation is requested after a staff-delivered update; reminder is at 48 hours and automatic confirmation is at 72 hours. There is no platform delivery-driver identity or internal dispute workflow in phase 1. |
+
+---
+
 ## G. Data model
+
+### G.0 September 2026 target-model delta (binding)
+
+The ERDs and entity reference below describe the previous model. The following target delta supersedes any conflicting entity/relationship definition while the diagrams are redrawn. It is intentionally explicit enough to guide a schema migration review; no code migration is authorised until that review is complete.
+
+| Area | Target model requirement |
+|---|---|
+| Store identity | `Vendor` gains stable `slug`, editable `display_name`, `bio`, logo/cover/background settings, `store_types`, availability state and external contact records. `StoreSection` and many-to-many `StoreSectionOffer` represent one-level custom sections; fixed All/New/Discounts are computed, not deletable rows. `StoreFollow` records a customer following a vendor. |
+| Roles | `VendorUser` has one of `OWNER`/`BRANCH_EMPLOYEE`, with employee `branch_id` mandatory and unique per user across active assignments. The same `User` retains customer capabilities. Owner access is vendor-wide; employee access is branch-only. |
+| Locations | Replace physical-only branch assumptions with explicit `StoreBranch` (public physical stock location), `Warehouse` (hidden online-only stock location), and `PickupPoint` (public non-stock location). A hybrid vendor may have both branch and warehouse as appropriate. A pickup point includes map/text/hours/slots but never `OfferBranchInventory`. |
+| Catalog and money | `OfferVariant` price and `PriceHistory` fields are ILS-only and carry no currency field. `FxRate` is removed. Add local `store_inventory_barcode` and internal immutable `platform_product_barcode` at the appropriate offer/canonical linkage; enforce local barcode uniqueness within vendor. Media supports up to ten images and three videos; one image is primary. |
+| Inventory | `OfferBranchInventory` only links a variant to a stock-holding physical branch/warehouse. `InventoryMovement` records sale, import/addition, damage, loss, count correction, return-restock and owner restoration, with actor, reason when mandatory, before/after quantities and audit link. No transfer movement type exists in phase 1. |
+| Cart and order | `Cart` belongs to an authenticated customer only. `CartItem` holds offer/variant and quantity, but not pre-checkout branch or fulfilment choice. `CustomerOrder` has one or more `BranchOrder`s; `OrderItem` belongs to a `BranchOrder`. `BranchOrder` records vendor, stock-holding execution location, optional pickup point, method, payment method, ILS subtotal/fee/total, selected slot and status. |
+| Fulfilment and payment | `Fulfillment` is one per `BranchOrder`; a delivery record has no driver FK. One checkout may create one sandbox `Payment` covering several online-paid BranchOrders, with ILS allocations by `branch_order_id`. COD/pay-at-pickup payments are per BranchOrder. |
+| Scheduling and returns | `DeliverySlot` belongs to a stock-holding branch and holds time/capacity/exception metadata. `ReturnPolicy` is vendor-owned and versioned/snapshotted on `BranchOrder`/`OrderItem`; `ReturnRequest` includes requested outcome, reason, optional photos and approved return code. |
+| Notifications/reviews | `Notification` includes read state and deep-link target. `Review` has product or vendor target only in phase 1 (no driver review), is immutable after publication, and requires verified delivered/picked-up purchase. |
 
 ### G.1 Structural anti-pattern prevention (explicit master-prompt requirement)
 
