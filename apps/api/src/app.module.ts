@@ -7,6 +7,7 @@ import { CatalogModule } from './catalog/catalog.module';
 import { CorrelationIdMiddleware } from './common/middleware/correlation-id.middleware';
 import { CustomersModule } from './customers/customers.module';
 import { HealthModule } from './health/health.module';
+import { InventoryModule } from './inventory/inventory.module';
 import { MatchingModule } from './matching/matching.module';
 import { OffersModule } from './offers/offers.module';
 import { OutboxModule } from './outbox/outbox.module';
@@ -36,6 +37,7 @@ import { VendorsModule } from './vendors/vendors.module';
     OffersModule,
     VendorVerificationModule,
     SubscriptionsModule,
+    InventoryModule,
   ],
   providers: [
     {
