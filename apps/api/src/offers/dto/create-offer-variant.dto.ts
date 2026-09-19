@@ -65,4 +65,17 @@ export class CreateOfferVariantDto {
   @IsOptional()
   @IsString()
   identifier_value?: string;
+
+  // Sprint 5 (RB-INV-001, PDR-018): "A seller must provide a barcode
+  // for every product. If no manufacturer code exists, the platform
+  // generates a printable store-internal inventory barcode." Optional
+  // here for exactly that reason - a vendor with a real manufacturer
+  // barcode supplies it; otherwise VendorOffersController.createVariant
+  // auto-generates one. Never the same field as identifier_value above
+  // (that one drives platform-wide matching; this one is store-scoped
+  // and scanner-facing only - see OfferVariant.storeInventoryBarcode's
+  // schema comment).
+  @IsOptional()
+  @IsString()
+  store_inventory_barcode?: string;
 }

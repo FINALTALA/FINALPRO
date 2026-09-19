@@ -225,11 +225,29 @@ enum SubscriptionStatus {
   EXPIRED
 }
 
+/// Sprint 5 (RB-STORE-001, PDR-010): "A verified store can be physical,
+/// online-only, or hybrid." Defaults to PHYSICAL so every Sprint 1-4
+/// vendor row (which only ever modeled physical branches via
+/// StoreBranch.isPhysical) keeps its existing meaning unchanged - this
+/// is a purely additive classification, not a migration of existing
+/// branch data. ONLINE_ONLY/HYBRID stores get one hidden Warehouse (see
+/// that model) and may add PickupPoints; nothing in the schema forces a
+/// vendor to actually have one before switching storeType - RB-STORE-001
+/// is the data model only, not an enforced setup wizard (see the
+/// replan's own FYP-demo-scope note for RB-STORE-001/004).
+enum StoreType {
+  PHYSICAL
+  ONLINE_ONLY
+  HYBRID
+}
+
 model Vendor {
   id                 String             @id @default(uuid())
   legalName          String
   status             VendorStatus       @default(APPLIED)
   subscriptionStatus SubscriptionStatus @default(NONE)
+  /// Sprint 5 (RB-STORE-001, PDR-010). See StoreType's own doc comment.
+  storeType          StoreType          @default(PHYSICAL)
   createdAt          DateTime           @default(now())
 
   vendorUsers     VendorUser[]
@@ -238,8 +256,96 @@ model Vendor {
   canonicalOffers VendorOffer[]
   offerVariants   OfferVariant[]
   staffInvites    StaffInvite[]
+  warehouse       Warehouse?
+  pickupPoints    PickupPoint[]
+  deliveryZones   VendorDeliveryZone[]
 
   @@map("vendors")
+}
+
+/// Sprint 5 (RB-STORE-001, PDR-010): "An online-only store has one
+/// hidden warehouse execution location." One-to-one with Vendor
+/// (vendorId is @unique below) - a store has at most one.
+///
+/// "Hidden" (review-round clarification) means hidden from customers,
+/// from a BRANCH_EMPLOYEE, and from anyone who isn't a member of this
+/// vendor at all - never from the vendor's own OWNER, who has to be
+/// able to read back an operational setting they configured. There IS
+/// a real read path: VendorsController's GET :vendorId/warehouse,
+/// owner-only via VendorMembershipGuard + @RequireVendorRole('OWNER').
+/// What must never happen is this model appearing in vendorSummaryDto()
+/// or any other general-membership/public serializer - unlike
+/// StoreBranch/PickupPoint (meant to eventually be customer-visible),
+/// a warehouse is an internal fulfilment detail PDR-010 explicitly
+/// calls "hidden" from everyone except the one role that manages it.
+model Warehouse {
+  id          String   @id @default(uuid())
+  vendorId    String   @unique
+  vendor      Vendor   @relation(fields: [vendorId], references: [id])
+  lat         Float?
+  lng         Float?
+  addressNote String?
+  createdAt   DateTime @default(now())
+
+  @@map("warehouses")
+}
+
+/// Sprint 5 (RB-STORE-001, PDR-010): "may configure multiple public
+/// pickup points; pickup points hold no stock." No relation to any
+/// inventory/stock table exists on this model by design - branch-level
+/// stock (RB-INV-002, not built this sprint) attaches only to
+/// StoreBranch, never here. RB-STORE-003 (temporarily close / archive,
+/// Should, not built this sprint) will eventually manage isActive's
+/// lifecycle beyond a simple toggle; the public discovery/pickup
+/// *workflow* itself (customer-facing listing, slot booking) is also
+/// explicitly out of Sprint 5 scope - this is schema plus owner-facing
+/// CRUD only.
+model PickupPoint {
+  id          String   @id @default(uuid())
+  vendorId    String
+  vendor      Vendor   @relation(fields: [vendorId], references: [id])
+  name        String
+  lat         Float?
+  lng         Float?
+  addressNote String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  @@index([vendorId])
+  @@map("pickup_points")
+}
+
+/// Sprint 5 (RB-STORE-002, PDR-022): "Delivery fees are store-wide by
+/// region: West Bank, Jerusalem, and Inside. A store may disable
+/// zones." A deliberate static placeholder enum, not a geocoded
+/// boundary lookup - OPEN-012 (the real boundary source) is still
+/// unresolved; see the replan's §7 table. No fee-amount field: this
+/// sprint's approved scope is explicitly the enable/disable
+/// configuration only (checkout-time fee application is RB-ORD-003,
+/// a later sprint).
+enum DeliveryZoneRegion {
+  WEST_BANK
+  JERUSALEM
+  INSIDE
+}
+
+/// Sprint 5 (RB-STORE-002). No row for a given (vendorId, region) pair
+/// means that zone is enabled - a store starts with every zone on and
+/// only gets a row once an owner explicitly disables (or re-enables
+/// after disabling) one, the same lazy-default convention this
+/// codebase already uses elsewhere (e.g. VendorSubscription's lazy
+/// expiry check) rather than seeding three rows for every vendor at
+/// creation time.
+model VendorDeliveryZone {
+  id        String             @id @default(uuid())
+  vendorId  String
+  vendor    Vendor             @relation(fields: [vendorId], references: [id])
+  region    DeliveryZoneRegion
+  enabled   Boolean            @default(true)
+  createdAt DateTime           @default(now())
+
+  @@unique([vendorId, region])
+  @@map("vendor_delivery_zones")
 }
 
 /// branchId (Sprint 4, RB-ROLE-001): null for OWNER (vendor-wide access),
@@ -580,16 +686,30 @@ model CanonicalProduct {
 /// within one product), and BL-MATCH-002's exact-match auto-link needs
 /// a clean global index to query against.
 model CanonicalProductVariant {
-  id                   String           @id @default(uuid())
-  canonicalProductId   String
-  canonicalProduct     CanonicalProduct @relation(fields: [canonicalProductId], references: [id])
+  id                     String           @id @default(uuid())
+  canonicalProductId     String
+  canonicalProduct       CanonicalProduct @relation(fields: [canonicalProductId], references: [id])
   /// JSON: storage/color/size etc., only for dimensions the manufacturer
   /// treats as a distinct model/MPN (FR-MATCH-008). Free-shape by design
   /// - Sprint 3 does not build AttributeDefinition/AttributeOption.
-  structuralAttributes Json
-  mpn                  String?
-  gtin                 String?          @unique
-  createdAt            DateTime         @default(now())
+  structuralAttributes   Json
+  mpn                    String?
+  gtin                   String?          @unique
+  /// Sprint 5 (RB-INV-001, PDR-018): the internal, platform-wide,
+  /// permanently-stable identifier for this matched product variant -
+  /// distinct from gtin/mpn (external, manufacturer-issued, optional)
+  /// and from every vendor's own OfferVariant.storeInventoryBarcode
+  /// (store-scoped, scanner-facing, editable by the vendor). Always
+  /// auto-generated by the platform at creation time (CanonicalProductsController.
+  /// createVariant), regardless of whether gtin/mpn exist - see
+  /// common/barcode.util.ts for the same id-derived scheme
+  /// storeInventoryBarcode's backfill uses. "Survives the first offer
+  /// being archived/deleted/unmatched" because it lives here, on the
+  /// shared canonical row, never on any one vendor's OfferVariant.
+  /// Never returned by any public endpoint - CanonicalProductsController's
+  /// variantToDto() deliberately omits it; do not add it there.
+  platformProductBarcode String           @unique
+  createdAt              DateTime         @default(now())
 
   confirmedOfferVariants OfferVariant[] @relation("ConfirmedMatch")
   proposedOfferVariants  OfferVariant[] @relation("ProposedMatch")
@@ -714,9 +834,25 @@ model OfferVariant {
   specsTextEn                String?
   identifierType             OfferIdentifierType?
   identifierValue            String?
+  /// Sprint 5 (RB-INV-001, PDR-018): "A seller must provide a barcode
+  /// for every product... unique within a store. It is not
+  /// automatically overwritten by the internal shared platform-product
+  /// barcode." This is the scanner-facing, store-scoped identifier -
+  /// deliberately a *different* field from identifierType/
+  /// identifierValue above (the platform-matching identifier, checked
+  /// against CanonicalProductVariant.gtin/mpn) and from
+  /// CanonicalProductVariant.platformProductBarcode (internal, shared
+  /// across vendors, never customer-facing - see that field's own
+  /// comment). A vendor may submit their own manufacturer barcode here;
+  /// if omitted, the platform auto-generates a printable one
+  /// (VendorOffersController.createVariant / the backfill migration use
+  /// the same deterministic id-derived scheme - see
+  /// common/barcode.util.ts).
+  storeInventoryBarcode      String
   createdAt                  DateTime                 @default(now())
 
   @@unique([vendorId, sellerSku])
+  @@unique([vendorId, storeInventoryBarcode])
   @@index([vendorOfferId])
   @@index([canonicalVariantId])
   @@index([proposedCanonicalVariantId])

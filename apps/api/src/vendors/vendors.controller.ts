@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   ConflictException,
   Controller,
@@ -8,6 +9,7 @@ import {
   NotFoundException,
   Param,
   Post,
+  Put,
   Req,
   UseGuards,
   UseInterceptors,
@@ -26,14 +28,26 @@ import {
   VendorMembershipGuard,
 } from '../auth/vendor-membership.guard';
 import { RequireVendorRole } from '../auth/vendor-role.decorator';
-import { Prisma } from '../../generated/prisma/client';
+import { DeliveryZoneRegion, Prisma } from '../../generated/prisma/client';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
+import { CreatePickupPointDto } from './dto/create-pickup-point.dto';
 import { CreateVendorDto } from './dto/create-vendor.dto';
 import { InviteStaffDto } from './dto/invite-staff.dto';
+import { UpdateDeliveryZoneDto } from './dto/update-delivery-zone.dto';
+import { UpdateStoreTypeDto } from './dto/update-store-type.dto';
+import { UpsertWarehouseDto } from './dto/upsert-warehouse.dto';
 
 const STAFF_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+// Sprint 5 (RB-STORE-002, PDR-022): the static placeholder zone list -
+// see VendorDeliveryZone's schema comment for why this is not a
+// geocoded lookup (OPEN-012 is still unresolved).
+const ALL_DELIVERY_ZONE_REGIONS: DeliveryZoneRegion[] = [
+  'WEST_BANK',
+  'JERUSALEM',
+  'INSIDE',
+];
 
 function branchSummaryDto(branch: {
   id: string;
@@ -48,6 +62,63 @@ function branchSummaryDto(branch: {
     name: branch.name,
     is_physical: branch.isPhysical,
     verification_status: branch.verificationStatus,
+  };
+}
+
+// Sprint 5 (RB-STORE-001): deliberately excludes Warehouse entirely -
+// PDR-010 calls it "hidden," and this is the one vendor-summary
+// serializer every vendor-scoped read in this controller funnels
+// through. Do not add a warehouse field here.
+function vendorSummaryDto(vendor: {
+  id: string;
+  legalName: string;
+  status: string;
+  storeType: string;
+}) {
+  return {
+    id: vendor.id,
+    legal_name: vendor.legalName,
+    status: vendor.status,
+    store_type: vendor.storeType,
+  };
+}
+
+// Sprint 5 review-round fix: only ever returned by the owner-only
+// GET :vendorId/warehouse route below - never mixed into
+// vendorSummaryDto() or any other general-membership/public response.
+function warehouseDto(warehouse: {
+  id: string;
+  vendorId: string;
+  lat: number | null;
+  lng: number | null;
+  addressNote: string | null;
+}) {
+  return {
+    id: warehouse.id,
+    vendor_id: warehouse.vendorId,
+    lat: warehouse.lat,
+    lng: warehouse.lng,
+    address_note: warehouse.addressNote,
+  };
+}
+
+function pickupPointDto(point: {
+  id: string;
+  vendorId: string;
+  name: string;
+  lat: number | null;
+  lng: number | null;
+  addressNote: string | null;
+  isActive: boolean;
+}) {
+  return {
+    id: point.id,
+    vendor_id: point.vendorId,
+    name: point.name,
+    lat: point.lat,
+    lng: point.lng,
+    address_note: point.addressNote,
+    is_active: point.isActive,
   };
 }
 
@@ -378,5 +449,293 @@ export class VendorsController {
     await this.otp.issue(dto.phone, 'STAFF_INVITE');
 
     return body;
+  }
+
+  // Sprint 5 (RB-STORE-001, PDR-010): any member may read - store type
+  // is not on PDR-009's employee-forbidden list (unlike writing it,
+  // below), and other Sprint 5 endpoints/tests need a simple way to
+  // confirm the current value. vendorSummaryDto() never includes
+  // Warehouse - see its own comment.
+  @Get(':vendorId')
+  @UseGuards(VendorMembershipGuard)
+  async getVendor(@Param('vendorId') vendorId: string) {
+    const vendor = await this.prisma.vendor.findUnique({
+      where: { id: vendorId },
+    });
+    if (!vendor) {
+      throw new NotFoundException({
+        code: 'VENDOR_NOT_FOUND',
+        message: 'Vendor not found',
+      });
+    }
+    return vendorSummaryDto(vendor);
+  }
+
+  // PDR-010/PDR-009: store type is store configuration - owner-only,
+  // same as every other store-configuration write in this controller.
+  // Naturally idempotent (a PUT of the same value twice is a no-op), so
+  // unlike the POST endpoints above this does not need
+  // IdempotencyInterceptor - matches CategoriesController's PATCH,
+  // the only other pre-existing non-POST mutating endpoint in this
+  // codebase.
+  @Put(':vendorId/store-type')
+  @UseGuards(VendorMembershipGuard)
+  @RequireVendorRole('OWNER')
+  async updateStoreType(
+    @Param('vendorId') vendorId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: UpdateStoreTypeDto,
+    @Req() req: Request,
+  ) {
+    const vendor = await this.prisma.vendor.findUnique({
+      where: { id: vendorId },
+    });
+    if (!vendor) {
+      throw new NotFoundException({
+        code: 'VENDOR_NOT_FOUND',
+        message: 'Vendor not found',
+      });
+    }
+
+    const updated = await this.prisma.vendor.update({
+      where: { id: vendorId },
+      data: { storeType: dto.store_type },
+    });
+    await this.auditLog.record({
+      actorId: user.id,
+      correlationId: req.correlationId,
+      action: 'vendor.store_type_updated',
+      entityType: 'Vendor',
+      entityId: vendorId,
+      beforeState: { store_type: vendor.storeType },
+      afterState: { store_type: updated.storeType },
+    });
+    return vendorSummaryDto(updated);
+  }
+
+  // Sprint 5 review-round fix (RB-STORE-001, PDR-010): "hidden" means
+  // hidden from customers, from a BRANCH_EMPLOYEE, and from anyone who
+  // isn't a member at all - it does NOT mean the OWNER can't read back
+  // an operational setting they themselves configured. The original
+  // version of this endpoint only ever returned a minimal ack with no
+  // way to reload the address afterwards, which would have made the
+  // warehouse effectively write-only for the one person who is
+  // supposed to manage it. Fixed by adding an explicit owner-only GET
+  // below; this PUT's own response stays the same minimal ack (that
+  // part was never the problem, and the caller who just sent the
+  // values doesn't need them echoed back).
+  //
+  // Deliberately requires storeType to already be ONLINE_ONLY/HYBRID: a
+  // warehouse is meaningless for a purely physical store, and this
+  // keeps the two fields from silently drifting out of sync.
+  @Put(':vendorId/warehouse')
+  @UseGuards(VendorMembershipGuard)
+  @RequireVendorRole('OWNER')
+  async upsertWarehouse(
+    @Param('vendorId') vendorId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: UpsertWarehouseDto,
+    @Req() req: Request,
+  ) {
+    const vendor = await this.prisma.vendor.findUnique({
+      where: { id: vendorId },
+    });
+    if (!vendor) {
+      throw new NotFoundException({
+        code: 'VENDOR_NOT_FOUND',
+        message: 'Vendor not found',
+      });
+    }
+    if (vendor.storeType === 'PHYSICAL') {
+      throw new BadRequestException({
+        code: 'STORE_NOT_ONLINE_CAPABLE',
+        message:
+          'Set store_type to online_only or hybrid before configuring a warehouse',
+      });
+    }
+
+    const warehouse = await this.prisma.warehouse.upsert({
+      where: { vendorId },
+      create: {
+        vendorId,
+        lat: dto.lat,
+        lng: dto.lng,
+        addressNote: dto.address_note,
+      },
+      update: {
+        lat: dto.lat,
+        lng: dto.lng,
+        addressNote: dto.address_note,
+      },
+    });
+    await this.auditLog.record({
+      actorId: user.id,
+      correlationId: req.correlationId,
+      action: 'vendor.warehouse_upserted',
+      entityType: 'Warehouse',
+      entityId: warehouse.id,
+      afterState: { vendor_id: vendorId },
+    });
+    // Deliberately does NOT echo lat/lng/addressNote back - not a
+    // privacy measure (see getWarehouse below, which does return them
+    // to the owner), just an unnecessary round-trip: the caller who
+    // just sent these values doesn't need them read back in the same
+    // response.
+    return { id: warehouse.id, vendor_id: warehouse.vendorId };
+  }
+
+  // Sprint 5 review-round fix: the owner-only read path upsertWarehouse's
+  // own comment refers to - returns the real address fields so a
+  // reopened dashboard can actually load what was previously set.
+  // VendorMembershipGuard + @RequireVendorRole('OWNER') reject a
+  // BRANCH_EMPLOYEE (VENDOR_ROLE_FORBIDDEN) and a non-member
+  // (NOT_VENDOR_MEMBER) the same way every other owner-only route here
+  // does; this is never wired into vendorSummaryDto() or any other
+  // public/general-membership endpoint.
+  @Get(':vendorId/warehouse')
+  @UseGuards(VendorMembershipGuard)
+  @RequireVendorRole('OWNER')
+  async getWarehouse(@Param('vendorId') vendorId: string) {
+    const warehouse = await this.prisma.warehouse.findUnique({
+      where: { vendorId },
+    });
+    if (!warehouse) {
+      throw new NotFoundException({
+        code: 'WAREHOUSE_NOT_FOUND',
+        message: 'This vendor has not configured a warehouse yet',
+      });
+    }
+    return warehouseDto(warehouse);
+  }
+
+  @Post(':vendorId/pickup-points')
+  @HttpCode(201)
+  @UseGuards(VendorMembershipGuard)
+  @RequireVendorRole('OWNER')
+  @UseInterceptors(IdempotencyInterceptor)
+  async createPickupPoint(
+    @Param('vendorId') vendorId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CreatePickupPointDto,
+    @Req() req: Request,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const point = await tx.pickupPoint.create({
+        data: {
+          vendorId,
+          name: dto.name,
+          lat: dto.lat,
+          lng: dto.lng,
+          addressNote: dto.address_note,
+        },
+      });
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'pickup_point.created',
+          entityType: 'PickupPoint',
+          entityId: point.id,
+          afterState: pickupPointDto(point),
+        },
+        tx,
+      );
+
+      const body = pickupPointDto(point);
+      await this.idempotencyCompletion.complete(
+        tx,
+        req.idempotencyClaimId,
+        body,
+        201,
+      );
+      return body;
+    });
+  }
+
+  // Any member may list/read - not on PDR-009's employee-forbidden list
+  // (only creating/managing store configuration is owner-only). No
+  // public/unauthenticated read path exists yet - RB-STORE-001 is the
+  // data model plus owner-facing CRUD; the customer-facing pickup
+  // *workflow* (public listing, slot booking) is explicitly out of
+  // Sprint 5 scope.
+  @Get(':vendorId/pickup-points')
+  @UseGuards(VendorMembershipGuard)
+  async listPickupPoints(@Param('vendorId') vendorId: string) {
+    const points = await this.prisma.pickupPoint.findMany({
+      where: { vendorId },
+      orderBy: { createdAt: 'asc' },
+    });
+    return points.map(pickupPointDto);
+  }
+
+  @Get(':vendorId/pickup-points/:pickupPointId')
+  @UseGuards(VendorMembershipGuard)
+  async getPickupPoint(
+    @Param('vendorId') vendorId: string,
+    @Param('pickupPointId') pickupPointId: string,
+  ) {
+    const point = await this.prisma.pickupPoint.findUnique({
+      where: { id: pickupPointId },
+    });
+    if (!point || point.vendorId !== vendorId) {
+      throw new NotFoundException({
+        code: 'PICKUP_POINT_NOT_FOUND',
+        message: 'Pickup point not found for this vendor',
+      });
+    }
+    return pickupPointDto(point);
+  }
+
+  // Sprint 5 (RB-STORE-002, PDR-022): any member may read. A region
+  // with no row is reported enabled=true - see VendorDeliveryZone's
+  // schema comment for the lazy-default convention this follows.
+  @Get(':vendorId/delivery-zones')
+  @UseGuards(VendorMembershipGuard)
+  async listDeliveryZones(@Param('vendorId') vendorId: string) {
+    const rows = await this.prisma.vendorDeliveryZone.findMany({
+      where: { vendorId },
+    });
+    const byRegion = new Map(rows.map((r) => [r.region, r.enabled]));
+    return ALL_DELIVERY_ZONE_REGIONS.map((region) => ({
+      region,
+      enabled: byRegion.get(region) ?? true,
+    }));
+  }
+
+  // Owner-only write (store-wide delivery configuration, PDR-009).
+  // Naturally idempotent (see updateStoreType's own note) - no
+  // IdempotencyInterceptor needed.
+  @Put(':vendorId/delivery-zones/:region')
+  @UseGuards(VendorMembershipGuard)
+  @RequireVendorRole('OWNER')
+  async updateDeliveryZone(
+    @Param('vendorId') vendorId: string,
+    @Param('region') region: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: UpdateDeliveryZoneDto,
+    @Req() req: Request,
+  ) {
+    if (!ALL_DELIVERY_ZONE_REGIONS.includes(region as DeliveryZoneRegion)) {
+      throw new BadRequestException({
+        code: 'INVALID_DELIVERY_ZONE_REGION',
+        message: `region must be one of ${ALL_DELIVERY_ZONE_REGIONS.join(', ')}`,
+      });
+    }
+    const typedRegion = region as DeliveryZoneRegion;
+
+    const zone = await this.prisma.vendorDeliveryZone.upsert({
+      where: { vendorId_region: { vendorId, region: typedRegion } },
+      create: { vendorId, region: typedRegion, enabled: dto.enabled },
+      update: { enabled: dto.enabled },
+    });
+    await this.auditLog.record({
+      actorId: user.id,
+      correlationId: req.correlationId,
+      action: 'vendor_delivery_zone.updated',
+      entityType: 'VendorDeliveryZone',
+      entityId: zone.id,
+      afterState: { region: zone.region, enabled: zone.enabled },
+    });
+    return { region: zone.region, enabled: zone.enabled };
   }
 }

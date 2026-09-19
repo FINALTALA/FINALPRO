@@ -12,6 +12,7 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { Request } from 'express';
 import { AuditLogService } from '../audit/audit-log.service';
 import { CurrentUser } from '../auth/current-user.decorator';
@@ -20,6 +21,9 @@ import {
   AuthenticatedUser,
   SessionAuthGuard,
 } from '../auth/session-auth.guard';
+import { VendorMembershipGuard } from '../auth/vendor-membership.guard';
+import { RequireVendorRole } from '../auth/vendor-role.decorator';
+import { generateStoreInventoryBarcode } from '../common/barcode.util';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { MatchingService } from '../matching/matching.service';
@@ -30,15 +34,36 @@ import { CreateOfferVariantDto } from './dto/create-offer-variant.dto';
 import { CreateVendorOfferDto } from './dto/create-vendor-offer.dto';
 
 // FR-MATCH-001/BL-VEND-004/BR-014: a vendor's offers, nested under
-// their vendor record. Only that vendor's own OWNER may create/manage
-// them (VendorUser check below) - there is no public browse/search
-// endpoint in Sprint 3 scope, so "vendor status gates offer visibility"
-// (BR-014) is enforced at *creation* time: an offer cannot be created
-// at all until the vendor's subscription is ACTIVE (FR-VEND-004,
-// PDR-033's sandbox trial - see SubscriptionGateService for the lazy
-// expiry check this gate now runs first).
+// their vendor record. Catalog/pricing is owner-only, full stop
+// (PDR-009: "cannot edit prices, media, descriptions... store
+// configuration" is explicitly an employee's forbidden list, and
+// nothing in the current scope gives an employee a legitimate reason to
+// even read it) - enforced via VendorMembershipGuard (class-level) +
+// @RequireVendorRole('OWNER') on every individual route (see below for
+// why that part can't be class-level). There is no
+// public browse/search endpoint in Sprint 3 scope, so "vendor status
+// gates offer visibility" (BR-014) is enforced at *creation* time: an
+// offer cannot be created at all until the vendor's subscription is
+// ACTIVE (FR-VEND-004, PDR-033's sandbox trial - see
+// SubscriptionGateService for the lazy expiry check this gate now runs
+// first).
+//
+// Sprint 5 review-round finding (RB-ROLE-006): every route here used to
+// be guarded by a private requireOwner() that only checked *membership*
+// (any role), not role itself - a BRANCH_EMPLOYEE could reach every
+// method below, including price/catalog writes, a direct PDR-009
+// violation pre-dating this sprint. Replaced with the same
+// VendorMembershipGuard/@RequireVendorRole('OWNER') pattern already
+// proven in VendorsController (Sprint 4) - see the regression test
+// added alongside this fix. @RequireVendorRole is applied per-method,
+// not at the class level: VendorMembershipGuard reads its metadata via
+// `Reflector.get(KEY, context.getHandler())`, which only ever sees
+// method-level SetMetadata, never a class-level decorator - the same
+// per-method convention VendorsController's own owner-only routes
+// already use, kept here rather than changing the shared guard's
+// reflection behavior for every one of its other call sites.
 @Controller('vendors/:vendorId/offers')
-@UseGuards(SessionAuthGuard)
+@UseGuards(SessionAuthGuard, VendorMembershipGuard)
 export class VendorOffersController {
   constructor(
     private readonly prisma: PrismaService,
@@ -47,18 +72,6 @@ export class VendorOffersController {
     private readonly idempotencyCompletion: IdempotencyCompletionService,
     private readonly subscriptionGate: SubscriptionGateService,
   ) {}
-
-  private async requireOwner(vendorId: string, userId: string) {
-    const membership = await this.prisma.vendorUser.findUnique({
-      where: { userId_vendorId: { userId, vendorId } },
-    });
-    if (!membership) {
-      throw new ForbiddenException({
-        code: 'NOT_VENDOR_OWNER',
-        message: 'You are not a member of this vendor account',
-      });
-    }
-  }
 
   private offerToDto(offer: {
     id: string;
@@ -92,6 +105,7 @@ export class VendorOffersController {
     specsTextEn: string | null;
     identifierType: string | null;
     identifierValue: string | null;
+    storeInventoryBarcode: string;
   }) {
     return {
       id: variant.id,
@@ -118,15 +132,17 @@ export class VendorOffersController {
       specs_text_en: variant.specsTextEn,
       identifier_type: variant.identifierType,
       identifier_value: variant.identifierValue,
+      // Sprint 5 (RB-INV-001, PDR-018): the store-scoped, scanner-facing
+      // barcode - never the internal platformProductBarcode, which this
+      // DTO has no access to in the first place (it lives on
+      // CanonicalProductVariant, not here) and must never be exposed.
+      store_inventory_barcode: variant.storeInventoryBarcode,
     };
   }
 
   @Get()
-  async list(
-    @Param('vendorId') vendorId: string,
-    @CurrentUser() user: AuthenticatedUser,
-  ) {
-    await this.requireOwner(vendorId, user.id);
+  @RequireVendorRole('OWNER')
+  async list(@Param('vendorId') vendorId: string) {
     const offers = await this.prisma.vendorOffer.findMany({
       where: { vendorId },
       orderBy: { createdAt: 'asc' },
@@ -137,14 +153,13 @@ export class VendorOffersController {
   @Post()
   @HttpCode(201)
   @UseInterceptors(IdempotencyInterceptor)
+  @RequireVendorRole('OWNER')
   async create(
     @Param('vendorId') vendorId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreateVendorOfferDto,
     @Req() req: Request,
   ) {
-    await this.requireOwner(vendorId, user.id);
-
     const vendorExists = await this.prisma.vendor.findUnique({
       where: { id: vendorId },
     });
@@ -214,6 +229,7 @@ export class VendorOffersController {
   @Post(':offerId/variants')
   @HttpCode(201)
   @UseInterceptors(IdempotencyInterceptor)
+  @RequireVendorRole('OWNER')
   async createVariant(
     @Param('vendorId') vendorId: string,
     @Param('offerId') offerId: string,
@@ -221,8 +237,6 @@ export class VendorOffersController {
     @Body() dto: CreateOfferVariantDto,
     @Req() req: Request,
   ) {
-    await this.requireOwner(vendorId, user.id);
-
     const offer = await this.prisma.vendorOffer.findUnique({
       where: { id: offerId },
     });
@@ -247,8 +261,15 @@ export class VendorOffersController {
     let variant;
     try {
       variant = await this.prisma.$transaction(async (tx) => {
+        // Sprint 5 (RB-INV-001): the id is generated up front so a
+        // missing store_inventory_barcode can be deterministically
+        // derived from it before insert - see barcode.util.ts. A vendor
+        // who supplies their own (their product's real manufacturer
+        // barcode, per PDR-018) keeps it as-is.
+        const id = randomUUID();
         const created = await tx.offerVariant.create({
           data: {
+            id,
             vendorId,
             vendorOfferId: offerId,
             proposedCanonicalVariantId: proposed.canonicalVariantId,
@@ -263,6 +284,8 @@ export class VendorOffersController {
             specsTextEn: dto.specs_text_en,
             identifierType: dto.identifier_type,
             identifierValue: dto.identifier_value,
+            storeInventoryBarcode:
+              dto.store_inventory_barcode ?? generateStoreInventoryBarcode(id),
           },
         });
 
@@ -294,6 +317,30 @@ export class VendorOffersController {
         err instanceof Prisma.PrismaClientKnownRequestError &&
         err.code === 'P2002'
       ) {
+        // Sprint 5 (RB-INV-001): two distinct per-vendor unique
+        // constraints can now fire here (sellerSku, storeInventoryBarcode)
+        // - the response should tell the vendor which one actually
+        // conflicted instead of always blaming seller_sku. Classic
+        // Prisma reports this as a flat `err.meta.target` field-name
+        // array, but this project's Prisma 7 + @prisma/adapter-pg
+        // driver-adapter setup does NOT populate that field at all -
+        // confirmed empirically (a debug dump of a real P2002 here shows
+        // no `target` key whatsoever). Instead the Postgres constraint
+        // name only shows up nested, at
+        // `err.meta.driverAdapterError.cause.constraint.index`. Rather
+        // than hard-coding that specific nested path (liable to change
+        // again with the next driver-adapter version), this just
+        // stringifies the whole `meta` object and checks it for the
+        // column name as a substring - works regardless of exactly
+        // where in the shape it ends up.
+        const metaText = JSON.stringify(err.meta ?? {});
+        if (metaText.includes('storeInventoryBarcode')) {
+          throw new ConflictException({
+            code: 'STORE_INVENTORY_BARCODE_ALREADY_EXISTS',
+            message:
+              'You already have an offer variant with this store_inventory_barcode',
+          });
+        }
         throw new ConflictException({
           code: 'SELLER_SKU_ALREADY_EXISTS',
           message: 'You already have an offer variant with this seller_sku',
@@ -336,6 +383,7 @@ export class VendorOffersController {
   @Post(':offerId/variants/:variantId/match-confirmation')
   @HttpCode(200)
   @UseInterceptors(IdempotencyInterceptor)
+  @RequireVendorRole('OWNER')
   async confirmMatch(
     @Param('vendorId') vendorId: string,
     @Param('offerId') offerId: string,
@@ -344,8 +392,6 @@ export class VendorOffersController {
     @Body() dto: ConfirmMatchDto,
     @Req() req: Request,
   ) {
-    await this.requireOwner(vendorId, user.id);
-
     const offerExists = await this.prisma.vendorOffer.findUnique({
       where: { id: offerId },
     });
@@ -445,12 +491,11 @@ export class VendorOffersController {
   }
 
   @Get(':offerId/variants')
+  @RequireVendorRole('OWNER')
   async listVariants(
     @Param('vendorId') vendorId: string,
     @Param('offerId') offerId: string,
-    @CurrentUser() user: AuthenticatedUser,
   ) {
-    await this.requireOwner(vendorId, user.id);
     const offer = await this.prisma.vendorOffer.findUnique({
       where: { id: offerId },
     });
