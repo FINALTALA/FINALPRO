@@ -1,5 +1,6 @@
 import {
   IsEnum,
+  IsIn,
   IsNumber,
   IsOptional,
   IsPositive,
@@ -18,9 +19,16 @@ export class CreateOfferVariantDto {
   @IsEnum(OfferCondition)
   condition?: OfferCondition;
 
+  // Sprint 3 remediation (PDR-001): ILS is the only platform currency -
+  // there is no FX conversion or vendor-native checkout currency. This
+  // field is deliberately NOT a free-text currency selector; omit it
+  // (the only real use case) or send exactly "ILS" - anything else is
+  // rejected outright (400), not silently coerced or dropped.
   @IsOptional()
-  @IsString()
-  currency?: string;
+  @IsIn(['ILS'], {
+    message: 'currency must be ILS - this platform is ILS-only (PDR-001)',
+  })
+  currency?: 'ILS';
 
   @IsNumber()
   @IsPositive()
@@ -39,10 +47,15 @@ export class CreateOfferVariantDto {
   @IsString()
   specs_text_en?: string;
 
-  // FR-MATCH-002 / BL-MATCH-002: submitting both fields together
-  // attempts an exact-match auto-link (BR-001) - see
-  // MatchingService.findExactMatch(). Neither field is required: an
-  // offer with no identifier stays unmatched/unique (FR-MATCH-009).
+  // FR-MATCH-002 / BL-MATCH-002, Sprint 3 remediation (PDR-012):
+  // submitting both fields together makes MatchingService.findExactMatch()
+  // look for a candidate, but an exact match is only ever stored as a
+  // *pending proposal* now - it never links immediately, however exact
+  // the identifier is. See VendorOffersController's match-confirmation
+  // endpoint for the store owner's explicit confirm/reject step, which
+  // is the only thing that can set canonicalVariantId. Neither field is
+  // required: an offer with no identifier (or no match found) stays
+  // unmatched/unique (FR-MATCH-009).
   @IsOptional()
   @IsEnum(OfferIdentifierType)
   identifier_type?: OfferIdentifierType;

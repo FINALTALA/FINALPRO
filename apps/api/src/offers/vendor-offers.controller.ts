@@ -24,6 +24,8 @@ import { IdempotencyCompletionService } from '../common/idempotency/idempotency-
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { MatchingService } from '../matching/matching.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { SubscriptionGateService } from '../subscriptions/subscription-gate.service';
+import { ConfirmMatchDto } from './dto/confirm-match.dto';
 import { CreateOfferVariantDto } from './dto/create-offer-variant.dto';
 import { CreateVendorOfferDto } from './dto/create-vendor-offer.dto';
 
@@ -32,7 +34,9 @@ import { CreateVendorOfferDto } from './dto/create-vendor-offer.dto';
 // them (VendorUser check below) - there is no public browse/search
 // endpoint in Sprint 3 scope, so "vendor status gates offer visibility"
 // (BR-014) is enforced at *creation* time: an offer cannot be created
-// at all until the vendor's subscription is ACTIVE (FR-VEND-004).
+// at all until the vendor's subscription is ACTIVE (FR-VEND-004,
+// PDR-033's sandbox trial - see SubscriptionGateService for the lazy
+// expiry check this gate now runs first).
 @Controller('vendors/:vendorId/offers')
 @UseGuards(SessionAuthGuard)
 export class VendorOffersController {
@@ -41,6 +45,7 @@ export class VendorOffersController {
     private readonly auditLog: AuditLogService,
     private readonly matching: MatchingService,
     private readonly idempotencyCompletion: IdempotencyCompletionService,
+    private readonly subscriptionGate: SubscriptionGateService,
   ) {}
 
   private async requireOwner(vendorId: string, userId: string) {
@@ -77,9 +82,10 @@ export class VendorOffersController {
     id: string;
     vendorOfferId: string;
     canonicalVariantId: string | null;
+    proposedCanonicalVariantId: string | null;
+    matchProposalStatus: string;
     sellerSku: string;
     condition: string;
-    currency: string;
     basePrice: Prisma.Decimal;
     salePrice: Prisma.Decimal | null;
     specsTextAr: string | null;
@@ -90,10 +96,21 @@ export class VendorOffersController {
     return {
       id: variant.id,
       vendor_offer_id: variant.vendorOfferId,
+      // Sprint 3 remediation (PDR-012): canonical_variant_id is set
+      // *only* once the store owner confirms - see
+      // match_proposal_status/proposed_canonical_variant_id for a
+      // pending exact-identifier match still awaiting that decision.
+      // Comparison (or anything that would treat this offer as matched)
+      // must key off canonical_variant_id, never the proposed one.
       canonical_variant_id: variant.canonicalVariantId,
+      proposed_canonical_variant_id: variant.proposedCanonicalVariantId,
+      match_proposal_status: variant.matchProposalStatus,
       seller_sku: variant.sellerSku,
       condition: variant.condition,
-      currency: variant.currency,
+      // Sprint 3 remediation (PDR-001): ILS is the only platform
+      // currency - there is no per-offer currency to report; every
+      // price on this platform is implicitly ILS.
+      currency: 'ILS' as const,
       base_price: variant.basePrice.toString(),
       sale_price: variant.salePrice?.toString() ?? null,
       specs_text_ar: variant.specsTextAr,
@@ -127,10 +144,10 @@ export class VendorOffersController {
   ) {
     await this.requireOwner(vendorId, user.id);
 
-    const vendor = await this.prisma.vendor.findUnique({
+    const vendorExists = await this.prisma.vendor.findUnique({
       where: { id: vendorId },
     });
-    if (!vendor) {
+    if (!vendorExists) {
       throw new NotFoundException({
         code: 'VENDOR_NOT_FOUND',
         message: 'Vendor not found',
@@ -138,10 +155,18 @@ export class VendorOffersController {
     }
 
     // FR-VEND-004 / BR-014: catalog publication gated on an ACTIVE
-    // subscription. OPEN-003 leaves real plan/grace-period policy
-    // undecided - see VendorSubscription's schema comment - but the
-    // gate itself is real, not simulated.
-    if (vendor.subscriptionStatus !== 'ACTIVE') {
+    // subscription - refreshed lazily first (PDR-033's trial may have
+    // just elapsed past its periodEnd without anything having checked
+    // yet; see SubscriptionGateService). Run as its own, separate,
+    // committing transaction: if the gate finds the trial has lapsed
+    // and needs marking EXPIRED, that write must durably land even
+    // though this request goes on to be rejected - it must not roll
+    // back alongside the offer-creation transaction below just because
+    // the gate says no.
+    const subscriptionStatus = await this.prisma.$transaction((tx) =>
+      this.subscriptionGate.refreshStatus(tx, vendorId),
+    );
+    if (subscriptionStatus !== 'ACTIVE') {
       throw new ForbiddenException({
         code: 'SUBSCRIPTION_INACTIVE',
         message: 'An active subscription is required before creating offers',
@@ -176,6 +201,14 @@ export class VendorOffersController {
     });
   }
 
+  // Sprint 3 remediation (PDR-012, S3-B03): an exact-identifier match
+  // (BR-001/FR-MATCH-002) is now only ever a *proposal* - it never sets
+  // canonicalVariantId here, however unambiguous the identifier is. No
+  // cross-offer locking is needed at creation time any more either:
+  // unlike the pre-remediation auto-link, nothing here writes to the
+  // parent VendorOffer or risks the "offer disagrees with its own
+  // variant's link" invariant - that write only ever happens in
+  // confirmMatch() below, which is where the lock now lives.
   @Post(':offerId/variants')
   @HttpCode(201)
   @UseInterceptors(IdempotencyInterceptor)
@@ -198,57 +231,30 @@ export class VendorOffersController {
       });
     }
 
-    // The identifier lookup itself is a pure read of CanonicalProductVariant,
-    // which this endpoint never writes to - safe to resolve before the
-    // transaction. What is NOT safe outside the transaction is deciding
-    // *compatibility* against offer.canonicalProductId (see below).
-    let rawMatch: {
-      canonicalVariantId: string | null;
-      canonicalProductId: string | null;
-    } = {
+    let proposed: { canonicalVariantId: string | null } = {
       canonicalVariantId: null,
-      canonicalProductId: null,
     };
     if (dto.identifier_type && dto.identifier_value) {
-      rawMatch = await this.matching.findExactMatch(
+      const match = await this.matching.findExactMatch(
         dto.identifier_type,
         dto.identifier_value,
       );
+      proposed = { canonicalVariantId: match.canonicalVariantId };
     }
 
     let variant;
     try {
       variant = await this.prisma.$transaction(async (tx) => {
-        // Serializes concurrent variant-creations under the SAME offer:
-        // without this lock, two requests each matching a *different*
-        // canonical product could both read offer.canonicalProductId as
-        // still null, both decide their match is "compatible", and both
-        // commit - leaving the offer pointing at one product while one
-        // of its own variants links to a different one (Part 3's
-        // tightened invariant). Re-reading the offer fresh after the
-        // lock makes the second request see the first's already-
-        // committed link and correctly treat an incompatible match as
-        // unmatched instead.
-        await tx.$queryRaw`SELECT id FROM vendor_offers WHERE id = ${offerId} FOR UPDATE`;
-        const freshOffer = await tx.vendorOffer.findUniqueOrThrow({
-          where: { id: offerId },
-        });
-
-        const match =
-          rawMatch.canonicalProductId &&
-          freshOffer.canonicalProductId &&
-          freshOffer.canonicalProductId !== rawMatch.canonicalProductId
-            ? { canonicalVariantId: null, canonicalProductId: null }
-            : rawMatch;
-
         const created = await tx.offerVariant.create({
           data: {
             vendorId,
             vendorOfferId: offerId,
-            canonicalVariantId: match.canonicalVariantId,
+            proposedCanonicalVariantId: proposed.canonicalVariantId,
+            matchProposalStatus: proposed.canonicalVariantId
+              ? 'PENDING'
+              : 'NONE',
             sellerSku: dto.seller_sku,
             condition: dto.condition,
-            currency: dto.currency,
             basePrice: dto.base_price,
             salePrice: dto.sale_price,
             specsTextAr: dto.specs_text_ar,
@@ -258,19 +264,12 @@ export class VendorOffersController {
           },
         });
 
-        if (match.canonicalProductId && !freshOffer.canonicalProductId) {
-          await tx.vendorOffer.update({
-            where: { id: offerId },
-            data: { canonicalProductId: match.canonicalProductId },
-          });
-        }
-
         await this.auditLog.record(
           {
             actorId: user.id,
             correlationId: req.correlationId,
-            action: match.canonicalVariantId
-              ? 'offer_variant.auto_linked'
+            action: proposed.canonicalVariantId
+              ? 'offer_variant.match_proposed'
               : 'offer_variant.created',
             entityType: 'OfferVariant',
             entityId: created.id,
@@ -302,6 +301,126 @@ export class VendorOffersController {
     }
 
     return variant;
+  }
+
+  // Sprint 3 remediation (PDR-012, S3-B03): the store owner's explicit
+  // confirm/reject of a pending match proposal - the only thing that
+  // can ever set canonicalVariantId (and, transitively, the parent
+  // VendorOffer's canonicalProductId). Locks the VendorOffer row for
+  // the same reason createVariant() used to: two different variants
+  // under the same offer being confirmed to two *different* canonical
+  // products concurrently could otherwise both read the offer as
+  // unlinked and both "win" - see the e2e concurrency test for this
+  // exact race.
+  @Post(':offerId/variants/:variantId/match-confirmation')
+  @HttpCode(200)
+  @UseInterceptors(IdempotencyInterceptor)
+  async confirmMatch(
+    @Param('vendorId') vendorId: string,
+    @Param('offerId') offerId: string,
+    @Param('variantId') variantId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: ConfirmMatchDto,
+    @Req() req: Request,
+  ) {
+    await this.requireOwner(vendorId, user.id);
+
+    const offerExists = await this.prisma.vendorOffer.findUnique({
+      where: { id: offerId },
+    });
+    if (!offerExists || offerExists.vendorId !== vendorId) {
+      throw new NotFoundException({
+        code: 'VENDOR_OFFER_NOT_FOUND',
+        message: 'Offer not found for this vendor',
+      });
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM vendor_offers WHERE id = ${offerId} FOR UPDATE`;
+
+      const freshOffer = await tx.vendorOffer.findUniqueOrThrow({
+        where: { id: offerId },
+      });
+      const variant = await tx.offerVariant.findUnique({
+        where: { id: variantId },
+      });
+      if (!variant || variant.vendorOfferId !== offerId) {
+        throw new NotFoundException({
+          code: 'OFFER_VARIANT_NOT_FOUND',
+          message: 'Offer variant not found for this offer',
+        });
+      }
+      if (variant.matchProposalStatus !== 'PENDING') {
+        throw new ConflictException({
+          code: 'NO_PENDING_MATCH_PROPOSAL',
+          message:
+            'This offer variant has no pending match proposal to confirm or reject',
+        });
+      }
+
+      let updated;
+      if (dto.decision === 'reject') {
+        updated = await tx.offerVariant.update({
+          where: { id: variantId },
+          data: { matchProposalStatus: 'REJECTED' },
+        });
+      } else {
+        const proposedVariant =
+          await tx.canonicalProductVariant.findUniqueOrThrow({
+            where: { id: variant.proposedCanonicalVariantId! },
+          });
+        if (
+          freshOffer.canonicalProductId &&
+          freshOffer.canonicalProductId !== proposedVariant.canonicalProductId
+        ) {
+          throw new ConflictException({
+            code: 'MATCH_CONFLICTS_WITH_OFFER',
+            message:
+              'This offer is already linked to a different canonical product via another confirmed variant - reject this proposal or resolve the conflict first',
+          });
+        }
+
+        updated = await tx.offerVariant.update({
+          where: { id: variantId },
+          data: {
+            canonicalVariantId: variant.proposedCanonicalVariantId,
+            matchProposalStatus: 'CONFIRMED',
+          },
+        });
+
+        if (!freshOffer.canonicalProductId) {
+          await tx.vendorOffer.update({
+            where: { id: offerId },
+            data: { canonicalProductId: proposedVariant.canonicalProductId },
+          });
+        }
+      }
+
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action:
+            dto.decision === 'confirm'
+              ? 'offer_variant.match_confirmed'
+              : 'offer_variant.match_rejected',
+          entityType: 'OfferVariant',
+          entityId: updated.id,
+          beforeState: this.variantToDto(variant),
+          afterState: this.variantToDto(updated),
+        },
+        tx,
+      );
+
+      const body = this.variantToDto(updated);
+      await this.idempotencyCompletion.complete(
+        tx,
+        req.idempotencyClaimId,
+        body,
+        200,
+      );
+      return body;
+    });
   }
 
   @Get(':offerId/variants')

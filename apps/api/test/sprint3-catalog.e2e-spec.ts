@@ -171,7 +171,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
       .post(`/api/v1/vendors/${vendorId}/subscription`)
       .set('Authorization', `Bearer ${ownerToken}`)
       .set('Idempotency-Key', unique('sub'))
-      .send({ plan: 'BASIC' })
+      .send({})
       .expect(201);
   }
 
@@ -784,8 +784,8 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
     });
   });
 
-  describe('vendor subscription (BL-VEND-004, sandboxed - OPEN-003)', () => {
-    it('rejects plan selection before the vendor is APPROVED', async () => {
+  describe('vendor subscription (BL-VEND-004, PDR-033 unified sandbox trial)', () => {
+    it('rejects trial activation before the vendor is APPROVED', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithPhysicalBranch(owner);
 
@@ -793,11 +793,11 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .post(`/api/v1/vendors/${vendorId}/subscription`)
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('sub-too-early'))
-        .send({ plan: 'BASIC' })
+        .send({})
         .expect(403);
     });
 
-    it('an approved vendor selecting a plan activates immediately (simulated) and flips vendor.status to ACTIVE', async () => {
+    it('an approved vendor activating its trial (no plan parameter) activates immediately (simulated) and flips vendor.status to ACTIVE', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const reviewer = await signupWithPlatformRole('VERIFICATION_REVIEWER');
       const vendorId = await activateVendor(owner, reviewer);
@@ -813,10 +813,12 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .set('Authorization', `Bearer ${owner}`)
         .expect(200);
       expect(current.body.simulated).toBe(true);
-      expect(current.body.plan).toBe('BASIC');
+      expect(current.body.status).toBe('ACTIVE');
+      // PDR-033: no Basic/Pro/tier logic - the response has no plan field.
+      expect(current.body.plan).toBeUndefined();
     });
 
-    it('under two concurrent plan-selection requests for the same approved vendor, exactly one VendorSubscription row is created', async () => {
+    it('under two concurrent activation requests for the same approved vendor, exactly one VendorSubscription row is created', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const reviewer = await signupWithPlatformRole('VERIFICATION_REVIEWER');
       const { vendorId, branchId } =
@@ -847,12 +849,12 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
           .post(`/api/v1/vendors/${vendorId}/subscription`)
           .set('Authorization', `Bearer ${owner}`)
           .set('Idempotency-Key', unique('sub-race-a'))
-          .send({ plan: 'BASIC' }),
+          .send({}),
         request(app.getHttpServer())
           .post(`/api/v1/vendors/${vendorId}/subscription`)
           .set('Authorization', `Bearer ${owner}`)
           .set('Idempotency-Key', unique('sub-race-b'))
-          .send({ plan: 'STANDARD' }),
+          .send({}),
       ]);
 
       const statuses = [resA.status, resB.status].sort();
@@ -865,6 +867,86 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         where: { vendorId },
       });
       expect(subs).toHaveLength(1);
+    });
+
+    it('a trial past its periodEnd lazily expires on read, blocks new offers, and mock-renewal (PDR-033) restores it', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const reviewer = await signupWithPlatformRole('VERIFICATION_REVIEWER');
+      const vendorId = await activateVendor(owner, reviewer);
+
+      // Simulate the one-month trial having elapsed - directly, the
+      // same way this test suite already simulates other kinds of
+      // elapsed time (there is no real clock to fast-forward).
+      const sub = await prisma.vendorSubscription.findFirstOrThrow({
+        where: { vendorId },
+      });
+      await prisma.vendorSubscription.update({
+        where: { id: sub.id },
+        data: { periodEnd: new Date(Date.now() - 1000) },
+      });
+
+      // Lazily discovered on read - GET itself triggers the transition.
+      const expired = await request(app.getHttpServer())
+        .get(`/api/v1/vendors/${vendorId}/subscription`)
+        .set('Authorization', `Bearer ${owner}`)
+        .expect(200);
+      expect(expired.body.status).toBe('EXPIRED');
+      const vendorAfterExpiry = await prisma.vendor.findUniqueOrThrow({
+        where: { id: vendorId },
+      });
+      expect(vendorAfterExpiry.subscriptionStatus).toBe('EXPIRED');
+      // PDR-033: the vendor's own account/lifecycle is unaffected by an
+      // expired trial - only new-listing creation is blocked.
+      expect(vendorAfterExpiry.status).toBe('ACTIVE');
+
+      // New offer creation is blocked while expired (BR-014).
+      await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/offers`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('offer-while-expired'))
+        .send({ title_ar: 'عرض', title_en: 'Offer' })
+        .expect(403);
+
+      // Mock renewal (PDR-033: "renewal restores automatically" - here,
+      // simulated as an explicit sandbox action) restores ACTIVE with a
+      // fresh one-month period.
+      const renewed = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/subscription/renew`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('renew'))
+        .send({})
+        .expect(200);
+      expect(renewed.body.status).toBe('ACTIVE');
+      expect(new Date(renewed.body.period_end).getTime()).toBeGreaterThan(
+        Date.now(),
+      );
+
+      const vendorAfterRenewal = await prisma.vendor.findUniqueOrThrow({
+        where: { id: vendorId },
+      });
+      expect(vendorAfterRenewal.subscriptionStatus).toBe('ACTIVE');
+
+      // Offer creation works again post-renewal.
+      await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/offers`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('offer-after-renewal'))
+        .send({ title_ar: 'عرض', title_en: 'Offer' })
+        .expect(201);
+    });
+
+    it('refuses to renew a trial that is not expired (409)', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const reviewer = await signupWithPlatformRole('VERIFICATION_REVIEWER');
+      const vendorId = await activateVendor(owner, reviewer);
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/subscription/renew`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('renew-too-early'))
+        .send({})
+        .expect(409);
+      expect(res.body.error.code).toBe('SUBSCRIPTION_NOT_EXPIRED');
     });
   });
 
@@ -881,7 +963,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .expect(403);
     });
 
-    it('auto-links an offer variant whose gtin exactly matches an existing canonical variant (TC-MATCH-001)', async () => {
+    it('an exact gtin match is stored as a pending proposal, never an immediate link - the offer does not enter comparison until the store owner confirms it (PDR-012, TC-MATCH-001, S3-B03)', async () => {
       const admin = await signupWithPlatformRole('PLATFORM_ADMIN');
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const reviewer = await signupWithPlatformRole('VERIFICATION_REVIEWER');
@@ -929,7 +1011,37 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         })
         .expect(201);
 
-      expect(variant.body.canonical_variant_id).toBe(canonicalVariant.body.id);
+      // The exact match is a *proposal* only - not entered comparison
+      // yet (no canonical_variant_id), and the parent offer is still
+      // unlinked too.
+      expect(variant.body.canonical_variant_id).toBeNull();
+      expect(variant.body.proposed_canonical_variant_id).toBe(
+        canonicalVariant.body.id,
+      );
+      expect(variant.body.match_proposal_status).toBe('PENDING');
+      const offerStillUnlinked = await request(app.getHttpServer())
+        .get(`/api/v1/vendors/${vendorId}/offers`)
+        .set('Authorization', `Bearer ${owner}`)
+        .expect(200);
+      expect(
+        offerStillUnlinked.body.find(
+          (o: { id: string }) => o.id === offer.body.id,
+        ).canonical_product_id,
+      ).toBeNull();
+
+      // The store owner explicitly confirms it - only now does it link.
+      const confirmed = await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/offers/${offer.body.id}/variants/${variant.body.id}/match-confirmation`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('confirm'))
+        .send({ decision: 'confirm' })
+        .expect(200);
+      expect(confirmed.body.canonical_variant_id).toBe(
+        canonicalVariant.body.id,
+      );
+      expect(confirmed.body.match_proposal_status).toBe('CONFIRMED');
 
       const offerAfter = await request(app.getHttpServer())
         .get(`/api/v1/vendors/${vendorId}/offers`)
@@ -939,6 +1051,75 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         (o: { id: string }) => o.id === offer.body.id,
       );
       expect(linked.canonical_product_id).toBe(product.body.id);
+    });
+
+    it('a rejected match proposal stays unmatched permanently and cannot be re-confirmed (PDR-012)', async () => {
+      const admin = await signupWithPlatformRole('PLATFORM_ADMIN');
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const reviewer = await signupWithPlatformRole('VERIFICATION_REVIEWER');
+      const vendorId = await activateVendor(owner, reviewer);
+
+      const categoryId = await createCategory(admin, unique('Cat'));
+      const brandId = await createBrand(admin, unique('Brand'));
+      const product = await request(app.getHttpServer())
+        .post('/api/v1/canonical-products')
+        .set('Authorization', `Bearer ${admin}`)
+        .set('Idempotency-Key', unique('cp-reject'))
+        .send({
+          brand_id: brandId,
+          category_id: categoryId,
+          model_name: 'Reject Model',
+        })
+        .expect(201);
+      const gtin = unique('gtin-reject')
+        .replace(/[^0-9]/g, '')
+        .padEnd(12, '0');
+      await request(app.getHttpServer())
+        .post(`/api/v1/canonical-products/${product.body.id}/variants`)
+        .set('Authorization', `Bearer ${admin}`)
+        .set('Idempotency-Key', unique('variant-reject'))
+        .send({ structural_attributes: {}, gtin })
+        .expect(201);
+
+      const offer = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/offers`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('offer-reject'))
+        .send({ title_ar: 'منتج', title_en: 'Product' })
+        .expect(201);
+      const variant = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/offers/${offer.body.id}/variants`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('offer-variant-reject'))
+        .send({
+          seller_sku: unique('sku'),
+          base_price: 100,
+          identifier_type: 'GTIN',
+          identifier_value: gtin,
+        })
+        .expect(201);
+
+      const rejected = await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/offers/${offer.body.id}/variants/${variant.body.id}/match-confirmation`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('reject'))
+        .send({ decision: 'reject' })
+        .expect(200);
+      expect(rejected.body.canonical_variant_id).toBeNull();
+      expect(rejected.body.match_proposal_status).toBe('REJECTED');
+
+      // Already decided - cannot confirm after rejecting.
+      const reconfirm = await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/offers/${offer.body.id}/variants/${variant.body.id}/match-confirmation`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('reconfirm'))
+        .send({ decision: 'confirm' })
+        .expect(409);
+      expect(reconfirm.body.error.code).toBe('NO_PENDING_MATCH_PROPOSAL');
     });
 
     it('leaves an offer variant unmatched when its identifier matches nothing (FR-MATCH-009)', async () => {
@@ -966,6 +1147,38 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .expect(201);
 
       expect(variant.body.canonical_variant_id).toBeNull();
+      expect(variant.body.match_proposal_status).toBe('NONE');
+    });
+
+    it('rejects a non-ILS currency outright (PDR-001, S3-B01)', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const reviewer = await signupWithPlatformRole('VERIFICATION_REVIEWER');
+      const vendorId = await activateVendor(owner, reviewer);
+
+      const offer = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/offers`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('offer-ils'))
+        .send({ title_ar: 'منتج', title_en: 'Product' })
+        .expect(201);
+
+      const rejected = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/offers/${offer.body.id}/variants`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('offer-variant-usd'))
+        .send({ seller_sku: unique('sku'), base_price: 10, currency: 'USD' })
+        .expect(400);
+      expect(rejected.body.error.details.join(' ')).toContain('ILS');
+
+      // Omitting currency (the only real use case) still works and is
+      // always ILS.
+      const ok = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/offers/${offer.body.id}/variants`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('offer-variant-ils'))
+        .send({ seller_sku: unique('sku'), base_price: 10 })
+        .expect(201);
+      expect(ok.body.currency).toBe('ILS');
     });
 
     it('rejects a second offer variant reusing the same seller_sku for the same vendor (409)', async () => {
@@ -996,7 +1209,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .expect(409);
     });
 
-    it('under two concurrent variants for the same offer matching different canonical products, the offer never ends up linked to a product one of its own variants disagrees with', async () => {
+    it('under two concurrent match confirmations for the same offer proposing different canonical products, the offer never ends up linked to a product one of its own variants disagrees with', async () => {
       const admin = await signupWithPlatformRole('PLATFORM_ADMIN');
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const reviewer = await signupWithPlatformRole('VERIFICATION_REVIEWER');
@@ -1046,61 +1259,87 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .send({ title_ar: 'منتج للسباق', title_en: 'Race Offer' })
         .expect(201);
 
+      // Both variants are created first (sequentially - creation itself
+      // no longer contends for any lock, see createVariant()'s comment)
+      // with different proposed matches, each still PENDING.
+      const variantOfferA = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/offers/${offer.body.id}/variants`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('variant-race-a'))
+        .send({
+          seller_sku: unique('sku-race-a'),
+          base_price: 10,
+          identifier_type: 'GTIN',
+          identifier_value: gtinA,
+        })
+        .expect(201);
+      const variantOfferB = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/offers/${offer.body.id}/variants`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('variant-race-b'))
+        .send({
+          seller_sku: unique('sku-race-b'),
+          base_price: 20,
+          identifier_type: 'GTIN',
+          identifier_value: gtinB,
+        })
+        .expect(201);
+      expect(variantOfferA.body.match_proposal_status).toBe('PENDING');
+      expect(variantOfferB.body.match_proposal_status).toBe('PENDING');
+
+      // The race is at *confirmation* time now - both proposals
+      // confirmed concurrently, proposing different canonical products.
       const [resA, resB] = await Promise.all([
         request(app.getHttpServer())
-          .post(`/api/v1/vendors/${vendorId}/offers/${offer.body.id}/variants`)
+          .post(
+            `/api/v1/vendors/${vendorId}/offers/${offer.body.id}/variants/${variantOfferA.body.id}/match-confirmation`,
+          )
           .set('Authorization', `Bearer ${owner}`)
-          .set('Idempotency-Key', unique('variant-race-a'))
-          .send({
-            seller_sku: unique('sku-race-a'),
-            base_price: 10,
-            identifier_type: 'GTIN',
-            identifier_value: gtinA,
-          }),
+          .set('Idempotency-Key', unique('confirm-race-a'))
+          .send({ decision: 'confirm' }),
         request(app.getHttpServer())
-          .post(`/api/v1/vendors/${vendorId}/offers/${offer.body.id}/variants`)
+          .post(
+            `/api/v1/vendors/${vendorId}/offers/${offer.body.id}/variants/${variantOfferB.body.id}/match-confirmation`,
+          )
           .set('Authorization', `Bearer ${owner}`)
-          .set('Idempotency-Key', unique('variant-race-b'))
-          .send({
-            seller_sku: unique('sku-race-b'),
-            base_price: 20,
-            identifier_type: 'GTIN',
-            identifier_value: gtinB,
-          }),
+          .set('Idempotency-Key', unique('confirm-race-b'))
+          .send({ decision: 'confirm' }),
       ]);
 
-      expect(resA.status).toBe(201);
-      expect(resB.status).toBe(201);
+      const statuses = [resA.status, resB.status].sort();
+      // Whichever request's transaction wins the advisory-style
+      // VendorOffer row lock commits first; the other, evaluated
+      // strictly after under that same lock, sees the winner's already-
+      // committed canonicalProductId and correctly refuses the conflict
+      // (409 MATCH_CONFLICTS_WITH_OFFER) instead of forcing it through -
+      // exactly what would corrupt Part 3's tightened invariant if the
+      // offer's row weren't locked during this decision.
+      expect(statuses).toEqual([200, 409]);
+      const conflicted = resA.status === 409 ? resA : resB;
+      expect(conflicted.body.error.code).toBe('MATCH_CONFLICTS_WITH_OFFER');
 
       const finalOffer = await prisma.vendorOffer.findUniqueOrThrow({
         where: { id: offer.body.id },
       });
-      // Whichever request's transaction committed first "wins" the
-      // offer's canonicalProductId - the invariant under test isn't
-      // which one wins, it's that every variant actually linked to a
-      // canonical variant agrees with that outcome. A variant whose own
-      // match disagreed with the (by-then-fresh) offer must have been
-      // left unmatched instead of forced onto the wrong product -
-      // exactly what corrupts Part 3's tightened invariant if the
-      // offer's row isn't locked during this decision.
       expect(finalOffer.canonicalProductId).not.toBeNull();
-      const linkedProductIds = [resA, resB]
-        .map((r) => r.body.canonical_variant_id)
-        .map((canonicalVariantId) =>
-          canonicalVariantId === variantA.body.id
-            ? productA.body.id
-            : canonicalVariantId === variantB.body.id
-              ? productB.body.id
-              : null,
-        )
-        .filter((id): id is string => id !== null);
-      for (const linkedProductId of linkedProductIds) {
-        expect(linkedProductId).toBe(finalOffer.canonicalProductId);
-      }
-      // Exactly one of the two variants should have won the auto-link -
-      // the other, matching a different product than the offer ended up
-      // on, must be unmatched rather than silently forced through.
-      expect(linkedProductIds).toHaveLength(1);
+      const winningVariantId =
+        resA.status === 200 ? variantA.body.id : variantB.body.id;
+      const winningProductId =
+        winningVariantId === variantA.body.id
+          ? productA.body.id
+          : productB.body.id;
+      expect(finalOffer.canonicalProductId).toBe(winningProductId);
+
+      // The conflicted proposal was never confirmed - it stays exactly
+      // as it was (PENDING), not silently forced or auto-rejected.
+      const losingVariant = await prisma.offerVariant.findUniqueOrThrow({
+        where: {
+          id:
+            resA.status === 409 ? variantOfferA.body.id : variantOfferB.body.id,
+        },
+      });
+      expect(losingVariant.matchProposalStatus).toBe('PENDING');
+      expect(losingVariant.canonicalVariantId).toBeNull();
     });
 
     it('when the idempotency-completion write fails right after a real offer creation, nothing is left half-done - the failed attempt creates no offer, and a same-key retry creates exactly one (Sprint 3 review round 3)', async () => {

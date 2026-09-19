@@ -1,5 +1,4 @@
 import {
-  Body,
   ConflictException,
   Controller,
   ForbiddenException,
@@ -22,20 +21,19 @@ import {
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
-import { SelectSubscriptionPlanDto } from './dto/select-subscription-plan.dto';
-
-const SANDBOX_PERIOD_DAYS = 30;
+import { SubscriptionGateService } from './subscription-gate.service';
 
 /**
- * FR-VEND-004 / BR-SUBSCRIPTION - ⚠ OPEN-003 is explicitly still open
- * (Part 9, line 135: "blocks real vendor billing; FYP simulates it
- * regardless"). This is a sandbox flow, the same pattern already used
- * for OPEN-001 (payment) and OPEN-004 (SMS): no real payment is taken,
- * selecting a plan activates it immediately. Real plan pricing tiers
- * and the grace-period length remain undecided - only the
- * Approved -> (plan selected) -> Active transition BL-VEND-004 needs is
- * built here, not the automated Active -> PastDue -> Suspended sweep
- * (needs a scheduled-job worker this codebase doesn't have yet).
+ * Sprint 3 remediation (PDR-033, approved-product-decisions-2026-09.md):
+ * "a unified sandbox/trial subscription begins after verification,
+ * lasts one month and has mock monthly renewal. No Basic/Pro logic
+ * now." Replaces the pre-remediation Basic/Standard/Premium plan
+ * selection (S3-B02) - `activate()` takes no plan parameter at all.
+ * No real payment gateway is built here, the same sandbox pattern
+ * already used for OPEN-001 (payment) and OPEN-004 (SMS): `renew()` is
+ * an explicit, visible, simulated action standing in for what a real
+ * monthly billing cron would do invisibly - this codebase has no
+ * scheduled-job worker to do that for real.
  */
 @Controller('vendors/:vendorId/subscription')
 @UseGuards(SessionAuthGuard)
@@ -44,6 +42,7 @@ export class SubscriptionsController {
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
     private readonly idempotencyCompletion: IdempotencyCompletionService,
+    private readonly subscriptionGate: SubscriptionGateService,
   ) {}
 
   private async requireOwner(vendorId: string, userId: string) {
@@ -61,20 +60,16 @@ export class SubscriptionsController {
   private toDto(sub: {
     id: string;
     vendorId: string;
-    plan: string;
     status: string;
     periodStart: Date;
     periodEnd: Date;
-    graceDeadline: Date | null;
   }) {
     return {
       id: sub.id,
       vendor_id: sub.vendorId,
-      plan: sub.plan,
       status: sub.status,
       period_start: sub.periodStart.toISOString(),
       period_end: sub.periodEnd.toISOString(),
-      grace_deadline: sub.graceDeadline?.toISOString() ?? null,
       simulated: true as const,
     };
   }
@@ -85,36 +80,38 @@ export class SubscriptionsController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     await this.requireOwner(vendorId, user.id);
-    const sub = await this.prisma.vendorSubscription.findFirst({
-      where: { vendorId },
-      orderBy: { createdAt: 'desc' },
-    });
-    if (!sub) {
-      throw new NotFoundException({
-        code: 'NO_SUBSCRIPTION',
-        message: 'This vendor has not selected a subscription plan yet',
+    return this.prisma.$transaction(async (tx) => {
+      await this.subscriptionGate.refreshStatus(tx, vendorId);
+      const sub = await tx.vendorSubscription.findFirst({
+        where: { vendorId },
+        orderBy: { createdAt: 'desc' },
       });
-    }
-    return this.toDto(sub);
+      if (!sub) {
+        throw new NotFoundException({
+          code: 'NO_SUBSCRIPTION',
+          message: 'This vendor has not activated a trial yet',
+        });
+      }
+      return this.toDto(sub);
+    });
   }
 
   @Post()
   @HttpCode(201)
   @UseInterceptors(IdempotencyInterceptor)
-  async select(
+  async activate(
     @Param('vendorId') vendorId: string,
     @CurrentUser() user: AuthenticatedUser,
-    @Body() dto: SelectSubscriptionPlanDto,
     @Req() req: Request,
   ) {
     await this.requireOwner(vendorId, user.id);
 
     const { subscription, alreadyActive } = await this.prisma.$transaction(
       async (tx) => {
-        // Serializes concurrent plan-selection requests for the same
-        // vendor - without this, two concurrent requests could both
-        // read status=APPROVED and both create a VendorSubscription row
-        // (a real duplicate, not just a harmless idempotent repeat).
+        // Serializes concurrent activation requests for the same vendor -
+        // without this, two concurrent requests could both read
+        // status=APPROVED and both create a VendorSubscription row (a
+        // real duplicate, not just a harmless idempotent repeat).
         await tx.$queryRaw`SELECT id FROM vendors WHERE id = ${vendorId} FOR UPDATE`;
 
         const vendor = await tx.vendor.findUnique({ where: { id: vendorId } });
@@ -142,23 +139,18 @@ export class SubscriptionsController {
           throw new ForbiddenException({
             code: 'VENDOR_NOT_APPROVED',
             message:
-              'Only an approved vendor may select a subscription plan (FR-VEND-004)',
+              'Only an approved vendor may activate its trial subscription (FR-VEND-004)',
           });
         }
 
         const periodStart = new Date();
         const periodEnd = new Date(
-          periodStart.getTime() + SANDBOX_PERIOD_DAYS * 24 * 60 * 60 * 1000,
+          periodStart.getTime() +
+            SubscriptionGateService.SANDBOX_PERIOD_DAYS * 24 * 60 * 60 * 1000,
         );
 
         const created = await tx.vendorSubscription.create({
-          data: {
-            vendorId,
-            plan: dto.plan,
-            status: 'ACTIVE',
-            periodStart,
-            periodEnd,
-          },
+          data: { vendorId, status: 'ACTIVE', periodStart, periodEnd },
         });
 
         await tx.vendor.update({
@@ -170,10 +162,10 @@ export class SubscriptionsController {
           {
             actorId: user.id,
             correlationId: req.correlationId,
-            action: 'vendor_subscription.selected',
+            action: 'vendor_subscription.activated',
             entityType: 'VendorSubscription',
             entityId: created.id,
-            afterState: { plan: created.plan, status: created.status },
+            afterState: { status: created.status },
           },
           tx,
         );
@@ -203,10 +195,81 @@ export class SubscriptionsController {
     if (alreadyActive) {
       throw new ConflictException({
         code: 'SUBSCRIPTION_ALREADY_ACTIVE',
-        message: 'This vendor already has an active subscription',
+        message: 'This vendor already has an active trial subscription',
       });
     }
 
     return subscription;
+  }
+
+  // PDR-033's "mock monthly renewal... renewal restores automatically" -
+  // simulated here as an explicit sandbox action (see the class-level
+  // comment for why) rather than an invisible scheduled job. Only valid
+  // once the trial has actually lapsed (EXPIRED) - renewing one that's
+  // still ACTIVE isn't a real-world action a monthly billing cycle would
+  // ever take early.
+  @Post('renew')
+  @HttpCode(200)
+  @UseInterceptors(IdempotencyInterceptor)
+  async renew(
+    @Param('vendorId') vendorId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
+  ) {
+    await this.requireOwner(vendorId, user.id);
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM vendors WHERE id = ${vendorId} FOR UPDATE`;
+
+      const status = await this.subscriptionGate.refreshStatus(tx, vendorId);
+      if (status !== 'EXPIRED') {
+        throw new ConflictException({
+          code: 'SUBSCRIPTION_NOT_EXPIRED',
+          message:
+            "Only an expired trial can be renewed - this vendor's subscription is not expired",
+        });
+      }
+
+      const current = await tx.vendorSubscription.findFirstOrThrow({
+        where: { vendorId },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      const periodStart = new Date();
+      const periodEnd = new Date(
+        periodStart.getTime() +
+          SubscriptionGateService.SANDBOX_PERIOD_DAYS * 24 * 60 * 60 * 1000,
+      );
+      const renewed = await tx.vendorSubscription.update({
+        where: { id: current.id },
+        data: { status: 'ACTIVE', periodStart, periodEnd },
+      });
+      await tx.vendor.update({
+        where: { id: vendorId },
+        data: { subscriptionStatus: 'ACTIVE' },
+      });
+
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'vendor_subscription.mock_renewed',
+          entityType: 'VendorSubscription',
+          entityId: renewed.id,
+          beforeState: { status: 'EXPIRED' },
+          afterState: { status: 'ACTIVE', period_end: periodEnd.toISOString() },
+        },
+        tx,
+      );
+
+      const body = this.toDto(renewed);
+      await this.idempotencyCompletion.complete(
+        tx,
+        req.idempotencyClaimId,
+        body,
+        200,
+      );
+      return body;
+    });
   }
 }
