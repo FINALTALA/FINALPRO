@@ -301,7 +301,7 @@ describe('Sprint 5 - store type/warehouse/pickup points, delivery zones, barcode
     });
   });
 
-  describe('RB-STORE-001: hidden warehouse (PDR-010) - never exposed in any vendor-facing response', () => {
+  describe('RB-STORE-001: hidden warehouse (PDR-010) - hidden from customers/employees/non-members, readable by the OWNER', () => {
     it('refuses to set a warehouse while store type is still PHYSICAL', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithBranch(owner);
@@ -314,7 +314,7 @@ describe('Sprint 5 - store type/warehouse/pickup points, delivery zones, barcode
       expect(res.body.error.code).toBe('STORE_NOT_ONLINE_CAPABLE');
     });
 
-    it('lets the owner set a warehouse once ONLINE_ONLY, saves it, but the response never echoes back its address - and the vendor summary/offers surfaces never include it either', async () => {
+    it('lets the owner set a warehouse once ONLINE_ONLY; the PUT ack stays minimal, but the owner-only GET reads back the real values - and the vendor summary never includes it either way', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithBranch(owner);
       await request(app.getHttpServer())
@@ -328,18 +328,26 @@ describe('Sprint 5 - store type/warehouse/pickup points, delivery zones, barcode
         .set('Authorization', `Bearer ${owner}`)
         .send({ lat: 31.9, lng: 35.2, address_note: 'Behind the old mill' })
         .expect(200);
-      // Privacy requirement (PDR-010: "hidden"): the ack confirms the
-      // write happened but never echoes the address back over HTTP.
+      // The PUT ack itself stays minimal (not a privacy measure - see
+      // the GET below, which does return the address to the owner;
+      // this response just doesn't bother echoing back what the
+      // caller itself just sent).
       expect(Object.keys(putRes.body).sort()).toEqual(['id', 'vendor_id']);
-      const bodyText = JSON.stringify(putRes.body);
-      expect(bodyText).not.toContain('old mill');
-      expect(bodyText).not.toContain('31.9');
 
-      // It really was saved though - proven by reading straight from
-      // the database, never through any HTTP response.
-      const stored = await prisma.warehouse.findUnique({ where: { vendorId } });
-      expect(stored?.addressNote).toBe('Behind the old mill');
-      expect(stored?.lat).toBe(31.9);
+      // Review-round fix: the owner must be able to load this back -
+      // "hidden" means hidden from everyone else, not write-only for
+      // the one role that manages it.
+      const getRes = await request(app.getHttpServer())
+        .get(`/api/v1/vendors/${vendorId}/warehouse`)
+        .set('Authorization', `Bearer ${owner}`)
+        .expect(200);
+      expect(getRes.body).toEqual({
+        id: putRes.body.id,
+        vendor_id: vendorId,
+        lat: 31.9,
+        lng: 35.2,
+        address_note: 'Behind the old mill',
+      });
 
       // And the vendor summary endpoint - the one general-purpose
       // vendor read in this controller - never leaks it either.
@@ -351,7 +359,23 @@ describe('Sprint 5 - store type/warehouse/pickup points, delivery zones, barcode
       expect(vendorRes.body.warehouse).toBeUndefined();
     });
 
-    it('refuses a BRANCH_EMPLOYEE from setting the warehouse', async () => {
+    it('404s the owner-only GET when no warehouse has been configured yet', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId } = await createVendorWithBranch(owner);
+      await request(app.getHttpServer())
+        .put(`/api/v1/vendors/${vendorId}/store-type`)
+        .set('Authorization', `Bearer ${owner}`)
+        .send({ store_type: 'ONLINE_ONLY' })
+        .expect(200);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/vendors/${vendorId}/warehouse`)
+        .set('Authorization', `Bearer ${owner}`)
+        .expect(404);
+      expect(res.body.error.code).toBe('WAREHOUSE_NOT_FOUND');
+    });
+
+    it('refuses a BRANCH_EMPLOYEE from setting OR reading the warehouse', async () => {
       const { vendorId, employeeToken, owner } =
         await createOwnerVendorAndEmployee();
       await request(app.getHttpServer())
@@ -359,13 +383,46 @@ describe('Sprint 5 - store type/warehouse/pickup points, delivery zones, barcode
         .set('Authorization', `Bearer ${owner}`)
         .send({ store_type: 'HYBRID' })
         .expect(200);
+      await request(app.getHttpServer())
+        .put(`/api/v1/vendors/${vendorId}/warehouse`)
+        .set('Authorization', `Bearer ${owner}`)
+        .send({ lat: 31.9, lng: 35.2 })
+        .expect(200);
 
-      const res = await request(app.getHttpServer())
+      const putRes = await request(app.getHttpServer())
         .put(`/api/v1/vendors/${vendorId}/warehouse`)
         .set('Authorization', `Bearer ${employeeToken}`)
         .send({ lat: 31.9, lng: 35.2 })
         .expect(403);
-      expect(res.body.error.code).toBe('VENDOR_ROLE_FORBIDDEN');
+      expect(putRes.body.error.code).toBe('VENDOR_ROLE_FORBIDDEN');
+
+      const getRes = await request(app.getHttpServer())
+        .get(`/api/v1/vendors/${vendorId}/warehouse`)
+        .set('Authorization', `Bearer ${employeeToken}`)
+        .expect(403);
+      expect(getRes.body.error.code).toBe('VENDOR_ROLE_FORBIDDEN');
+    });
+
+    it('refuses a non-member entirely from reading the warehouse (BOLA)', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId } = await createVendorWithBranch(owner);
+      await request(app.getHttpServer())
+        .put(`/api/v1/vendors/${vendorId}/store-type`)
+        .set('Authorization', `Bearer ${owner}`)
+        .send({ store_type: 'ONLINE_ONLY' })
+        .expect(200);
+      await request(app.getHttpServer())
+        .put(`/api/v1/vendors/${vendorId}/warehouse`)
+        .set('Authorization', `Bearer ${owner}`)
+        .send({ lat: 31.9, lng: 35.2, address_note: 'Behind the old mill' })
+        .expect(200);
+
+      const outsider = await signup(uniquePhone(), 'outsider-password');
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/vendors/${vendorId}/warehouse`)
+        .set('Authorization', `Bearer ${outsider}`)
+        .expect(403);
+      expect(res.body.error.code).toBe('NOT_VENDOR_MEMBER');
     });
 
     it('rejects a direct write giving the same vendor two warehouses (one hidden execution location per store)', async () => {

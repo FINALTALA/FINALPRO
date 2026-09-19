@@ -81,11 +81,15 @@ ALTER TABLE "vendor_delivery_zones" ADD CONSTRAINT "vendor_delivery_zones_vendor
 ALTER TABLE "canonical_product_variants" ADD COLUMN "platformProductBarcode" TEXT;
 
 -- Backfill (RB-INV-001): every pre-existing row gets a stable,
--- deterministic code derived from its own id - see
--- common/barcode.util.ts's generatePlatformProductBarcode for the
--- identical TypeScript-side computation new rows use.
+-- deterministic code derived from its own FULL id (dashes stripped,
+-- uppercased - a lossless re-encoding, not a truncated prefix; review-
+-- round fix: an earlier version of this migration and
+-- barcode.util.ts's generatePlatformProductBarcode both truncated to
+-- the first 10 hex characters, which two different ids could share -
+-- see that file's own comment) - see generatePlatformProductBarcode
+-- for the identical TypeScript-side computation new rows use.
 UPDATE "canonical_product_variants"
-SET "platformProductBarcode" = 'PPB-' || upper(substr(replace(id, '-', ''), 1, 10))
+SET "platformProductBarcode" = 'PPB-' || upper(replace(id, '-', ''))
 WHERE "platformProductBarcode" IS NULL;
 
 ALTER TABLE "canonical_product_variants" ALTER COLUMN "platformProductBarcode" SET NOT NULL;
@@ -96,10 +100,11 @@ CREATE UNIQUE INDEX "canonical_product_variants_platformProductBarcode_key" ON "
 -- AlterTable: offer_variants.storeInventoryBarcode
 ALTER TABLE "offer_variants" ADD COLUMN "storeInventoryBarcode" TEXT;
 
--- Backfill (RB-INV-001): same id-derived scheme, see
--- common/barcode.util.ts's generateStoreInventoryBarcode.
+-- Backfill (RB-INV-001): same full-id-derived scheme, see
+-- generateStoreInventoryBarcode and this migration's other backfill
+-- above for why it's the full id, not a truncated prefix.
 UPDATE "offer_variants"
-SET "storeInventoryBarcode" = 'SIB-' || upper(substr(replace(id, '-', ''), 1, 10))
+SET "storeInventoryBarcode" = 'SIB-' || upper(replace(id, '-', ''))
 WHERE "storeInventoryBarcode" IS NULL;
 
 ALTER TABLE "offer_variants" ALTER COLUMN "storeInventoryBarcode" SET NOT NULL;

@@ -265,12 +265,19 @@ model Vendor {
 
 /// Sprint 5 (RB-STORE-001, PDR-010): "An online-only store has one
 /// hidden warehouse execution location." One-to-one with Vendor
-/// (vendorId is @unique below) - a store has at most one. Deliberately
-/// has NO public read path anywhere in this codebase: unlike
+/// (vendorId is @unique below) - a store has at most one.
+///
+/// "Hidden" (review-round clarification) means hidden from customers,
+/// from a BRANCH_EMPLOYEE, and from anyone who isn't a member of this
+/// vendor at all - never from the vendor's own OWNER, who has to be
+/// able to read back an operational setting they configured. There IS
+/// a real read path: VendorsController's GET :vendorId/warehouse,
+/// owner-only via VendorMembershipGuard + @RequireVendorRole('OWNER').
+/// What must never happen is this model appearing in vendorSummaryDto()
+/// or any other general-membership/public serializer - unlike
 /// StoreBranch/PickupPoint (meant to eventually be customer-visible),
 /// a warehouse is an internal fulfilment detail PDR-010 explicitly
-/// calls "hidden." Every controller exposing vendor data must keep it
-/// that way - never add a public serializer that includes this model.
+/// calls "hidden" from everyone except the one role that manages it.
 model Warehouse {
   id          String   @id @default(uuid())
   vendorId    String   @unique

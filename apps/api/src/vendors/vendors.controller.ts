@@ -83,6 +83,25 @@ function vendorSummaryDto(vendor: {
   };
 }
 
+// Sprint 5 review-round fix: only ever returned by the owner-only
+// GET :vendorId/warehouse route below - never mixed into
+// vendorSummaryDto() or any other general-membership/public response.
+function warehouseDto(warehouse: {
+  id: string;
+  vendorId: string;
+  lat: number | null;
+  lng: number | null;
+  addressNote: string | null;
+}) {
+  return {
+    id: warehouse.id,
+    vendor_id: warehouse.vendorId,
+    lat: warehouse.lat,
+    lng: warehouse.lng,
+    address_note: warehouse.addressNote,
+  };
+}
+
 function pickupPointDto(point: {
   id: string;
   vendorId: string;
@@ -494,11 +513,21 @@ export class VendorsController {
     return vendorSummaryDto(updated);
   }
 
-  // Sprint 5 (RB-STORE-001, PDR-010): the hidden warehouse execution
-  // location - owner-only both ways (read and write). Deliberately
-  // requires storeType to already be ONLINE_ONLY/HYBRID: a warehouse is
-  // meaningless for a purely physical store, and this keeps the two
-  // fields from silently drifting out of sync.
+  // Sprint 5 review-round fix (RB-STORE-001, PDR-010): "hidden" means
+  // hidden from customers, from a BRANCH_EMPLOYEE, and from anyone who
+  // isn't a member at all - it does NOT mean the OWNER can't read back
+  // an operational setting they themselves configured. The original
+  // version of this endpoint only ever returned a minimal ack with no
+  // way to reload the address afterwards, which would have made the
+  // warehouse effectively write-only for the one person who is
+  // supposed to manage it. Fixed by adding an explicit owner-only GET
+  // below; this PUT's own response stays the same minimal ack (that
+  // part was never the problem, and the caller who just sent the
+  // values doesn't need them echoed back).
+  //
+  // Deliberately requires storeType to already be ONLINE_ONLY/HYBRID: a
+  // warehouse is meaningless for a purely physical store, and this
+  // keeps the two fields from silently drifting out of sync.
   @Put(':vendorId/warehouse')
   @UseGuards(VendorMembershipGuard)
   @RequireVendorRole('OWNER')
@@ -545,20 +574,38 @@ export class VendorsController {
       action: 'vendor.warehouse_upserted',
       entityType: 'Warehouse',
       entityId: warehouse.id,
-      // Never logging lat/lng/addressNote in afterState would be
-      // pointless secrecy (AuditLog is not a public surface - only
-      // PLATFORM_ADMIN/the vendor's own owner can ever read it via
-      // direct DB access), but the HTTP *response* below is deliberately
-      // the minimal id/vendor_id ack, not the address - see this
-      // endpoint's own doc comment on Warehouse never having a public
-      // read path.
       afterState: { vendor_id: vendorId },
     });
-    // Deliberately does NOT echo lat/lng/addressNote back - see
-    // Warehouse's schema comment ("hidden... never add a public
-    // serializer"). The owner who just set it already knows the values
-    // they sent; this ack only confirms the write happened.
+    // Deliberately does NOT echo lat/lng/addressNote back - not a
+    // privacy measure (see getWarehouse below, which does return them
+    // to the owner), just an unnecessary round-trip: the caller who
+    // just sent these values doesn't need them read back in the same
+    // response.
     return { id: warehouse.id, vendor_id: warehouse.vendorId };
+  }
+
+  // Sprint 5 review-round fix: the owner-only read path upsertWarehouse's
+  // own comment refers to - returns the real address fields so a
+  // reopened dashboard can actually load what was previously set.
+  // VendorMembershipGuard + @RequireVendorRole('OWNER') reject a
+  // BRANCH_EMPLOYEE (VENDOR_ROLE_FORBIDDEN) and a non-member
+  // (NOT_VENDOR_MEMBER) the same way every other owner-only route here
+  // does; this is never wired into vendorSummaryDto() or any other
+  // public/general-membership endpoint.
+  @Get(':vendorId/warehouse')
+  @UseGuards(VendorMembershipGuard)
+  @RequireVendorRole('OWNER')
+  async getWarehouse(@Param('vendorId') vendorId: string) {
+    const warehouse = await this.prisma.warehouse.findUnique({
+      where: { vendorId },
+    });
+    if (!warehouse) {
+      throw new NotFoundException({
+        code: 'WAREHOUSE_NOT_FOUND',
+        message: 'This vendor has not configured a warehouse yet',
+      });
+    }
+    return warehouseDto(warehouse);
   }
 
   @Post(':vendorId/pickup-points')
