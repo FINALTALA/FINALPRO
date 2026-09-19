@@ -2,6 +2,8 @@
 
 Covers Sections **A–D** of the structure required by [`docs/master-prompt.md`](../master-prompt.md). Built on the confirmed answers in [`00-phase0-scope-and-clarifications.md`](00-phase0-scope-and-clarifications.md). Requirement IDs introduced here (`FR-*`, `BR-*`, `NFR-*` where referenced) are stable and will be reused unchanged in later parts.
 
+> **Change-control notice (2026-09-19):** This Part 1 predates approved decisions about ILS-only pricing, BranchOrder fulfilment, storefronts, roles, inventory, online-only vendors, and delivery/return flows. Until its planned revision is complete, the approved [September product-decision baseline](../approved-product-decisions-2026-09.md) takes precedence over conflicting text here and in Parts 0–9.
+
 ---
 
 ## A. Executive summary
