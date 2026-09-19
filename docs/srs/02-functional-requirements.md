@@ -18,6 +18,46 @@ Covers Section **E** of the structure required by [`docs/master-prompt.md`](../m
 
 ---
 
+## E.0 Approved September 2026 requirements amendment
+
+The product owner subsequently approved the [September product-decision baseline](../approved-product-decisions-2026-09.md). The following requirements are binding and supersede conflicting historical rows below. `OPEN-002` and `OPEN-007` are closed by the ILS-only decision; their old tags must not be interpreted as open implementation work. Detailed state-machine, API, data-model, UX, test and backlog revisions follow in Parts 3–9.
+
+| ID | Requirement | Supersedes / notes |
+|---|---|---|
+| FR-AUTH-013 | The system must permit unauthenticated browse/search/compare only. Creating or retaining a cart, favourites, follows, checkout, reviews and alerts requires a signed-in account. Cart data is server-side and follows the account across devices. | Supersedes FR-AUTH-007 guest-cart merge. |
+| FR-AUTH-014 | Account deletion must be a deactivation workflow: block it while an unreceived order exists; revoke sessions; hide nonessential PII; retain necessary order/audit data; and allow OTP reactivation for 30 days. | Refines FR-AUTH-010. |
+| FR-VEND-012 | The platform must support physical, online-only and hybrid store operating models. An online-only store has one hidden stock-holding warehouse and zero or more public pickup points; pickup points never own inventory. | Supersedes physical-branch-only onboarding assumption. |
+| FR-VEND-013 | Store-owner and branch-employee access must be role grants on the same account that can also use the customer workspace. An employee is assigned to exactly one branch at a time; an owner may own multiple stores. | Supersedes FR-VEND-007’s old staff-role split. |
+| FR-VEND-014 | A store must publish at least one external customer contact route—Instagram, Facebook or WhatsApp. Internal chat and stories are out of scope for phase 1. | New. |
+| FR-CAT-015 | Before an offer may publish, it must have a title, primary image, general category, regular ILS price, stock and five category-template matching/search fields; `N/A` is allowed where applicable. | The exact five fields per category are ⚠ OPEN-013. |
+| FR-CAT-016 | Storefront sections must be one level: fixed All; automatic New arrivals and Discounts; and up to 20 vendor custom sections. Products may belong to multiple custom sections; deleting a section never deletes its offers. | New. |
+| FR-MATCH-011 | Every offer must have a store-inventory barcode unique within that store. If no manufacturer barcode is supplied, generate a printable internal label. The shared internal platform-product barcode is distinct, stable, never customer-visible and never overwrites a store barcode. | Supersedes one-code-for-all interpretations. |
+| FR-MATCH-012 | Matching must evaluate structured attributes first, text similarity second and image similarity third. A vendor explicitly confirms a proposed match; rejected/ignored results may publish unmatched and support a re-search request. | Refines FR-MATCH-002–004. |
+| FR-IMPORT-008 | A CSV/Excel row with the same store barcode and a new colour/size adds that variant/stock. It must enter manual review—not silently update—when brand, base product type, or present MPN/model conflicts. Valid rows import while invalid/review rows report their row-specific reason. | New. |
+| FR-SEARCH-013 | Public discovery must provide All, Women, Men, Kids and Accessories pages; stores select one or more applicable types at onboarding and may edit them. Search must cover stores and products with immediate suggestions and Arabic/English tolerance. | New. |
+| FR-SEARCH-014 | Store and product view ranking must count no more than one view per account/device per two-hour period. | New. |
+| FR-COMP-010 | A global canonical-product card must show the lowest eligible available ILS price and up to five logos of the cheapest eligible stores. Selecting a logo opens that specific store offer; selecting the card opens the cheapest eligible offer, using rating then permitted distance to break a price tie. | Supersedes FX/native price display. |
+| FR-COMP-011 | Comparison must list every eligible offer low-to-high in responsive offer cards. A selected colour/size restricts offers to that variant, and cart addition requires navigating into a store’s product detail page. | New. |
+| FR-PRICE-008 | Every monetary value in the platform—including product/discount prices, fees, payments, refunds, subscriptions, comparison and analytics—must be stored and presented in ILS. FX tables, conversion and mixed-currency settlement must not be implemented. | Supersedes FR-PRICE-001/007 and OPEN-002/007 dependency. |
+| FR-PRICE-009 | An offer may have variant-specific ILS base prices but has one active percentage discount across its physical branches. Only owner access may change prices/discounts; discount is 0–100 exclusive and has start/end dates. | New. |
+| FR-INV-008 | Inventory is per branch and offer variant. Public users see Available, Low stock (1–3), or Sold out, never exact counts; checkout validation may disclose the maximum purchasable quantity. No inventory transfer between branches is supported in phase 1. | Refines FR-INV-004. |
+| FR-INV-009 | A branch employee physical sale must scan a barcode, select colour/size, enter quantity, atomically decrement stock and audit the movement. It must reject zero/negative stock and records no receipt/payment details. | New. |
+| FR-INV-010 | Every manual non-sale stock reduction requires a reason (damage, loss or count correction) and immediately notifies the store owner with employee and branch identity. | New. |
+| FR-CART-017 | The cart must require explicit item selection for checkout; unselected lines remain. Checkout groups selected lines by a single eligible stock-holding branch. If no one branch can fulfil all such lines, create separate groups. | Supersedes vendor-only partition language. |
+| FR-CART-018 | At checkout, delivery first proposes the nearest branch capable of every selected variant in a group; the customer may choose another eligible branch. The customer then chooses a capacity-available slot in that branch’s three-day calendar. Pickup is selected at checkout, not item addition. | New. |
+| FR-ORD-009 | A completed checkout creates one `CustomerOrder` and one or more `BranchOrder`s. A BranchOrder contains all items from its branch, travels together and independently owns fulfilment choice, fee, payment choice, slot and lifecycle. | Supersedes FR-ORD-001/002 VendorSuborder boundary. |
+| FR-PAY-010 | Electronically paid BranchOrders in a checkout must be charged together in one ILS sandbox transaction. COD/pay-at-pickup is handled per BranchOrder by the branch; sandbox flows must never store real card data. | Supersedes mixed-currency allocation assumptions. |
+| FR-FUL-008 | Delivery/pickup capability and calendar belong to each branch. Slots have non-overlapping times, capacity, standard hours and dated exceptions. A booked slot cannot be changed/deleted without resolving affected BranchOrders. | New. |
+| FR-FUL-009 | Branch staff explicitly starts preparation, marks Sent on courier hand-off and marks Delivered after external confirmation. There is no internal courier account. Delivery confirmation, reminders, failed-delivery retry and no-response rules must follow PDR-025–027. | Supersedes delivery-driver workflow. |
+| FR-RET-008 | Every store configures return days, permitted outcomes, product exceptions and separate fixed ILS return/exchange fees. The policy is snapshotted at purchase and may change only once every six months. | New. |
+| FR-RET-009 | An approved return has a six-digit code valid seven days. If a store accepts returns, all its physical branches—or all pickup points for an online-only store—accept them. | New. |
+| FR-REV-008 | Only verified delivered/picked-up purchasers may submit separate immutable product and store reviews, each with rating and mandatory comment. Seller replies are deferred. | Supersedes generic review behaviour. |
+| FR-FAV-005 | The public `أتابعه` page must show horizontally scrolling followed-store identities and a public-card product feed. Store follow generates separate new-product/discount notifications; inactive follows remain visibly faded. | New. |
+| FR-NOTIF-008 | The notification centre must have read/unread state and deep links. Send in-app notifications for action-required events, cancellations and refunds; ordinary preparation/sent state belongs in the Orders view. | New. |
+| FR-VPORTAL-007 | Owner and employee dashboards must enforce the approved workspace boundaries. Owner has store-wide operations/analytics; employee has only assigned branch stock/order operations and no price/catalog/configuration/analytics access. | New. |
+
+---
+
 ## E.1 Identity and customer accounts — `FR-AUTH`
 
 | ID | Requirement | Notes |

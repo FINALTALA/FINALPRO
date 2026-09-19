@@ -56,6 +56,23 @@ Representative surface area per domain (`✓` = idempotent by design or via the 
 
 ## H.3 Representative endpoints, fully specified
 
+### H.3a September 2026 API amendment
+
+The endpoint inventory and representative contracts above predate the approved ILS-only, BranchOrder and workspace model. The following target surface is binding; old `/suborders` and FX/currency routes must be deprecated rather than extended for new work.
+
+| Domain | Required target endpoints / contract boundaries |
+|---|---|
+| Public discovery | `GET /discover/{all|women|men|kids|accessories}` · `GET /stores/{slug}` · `GET /products/{canonicalId}` · `GET /stores/{slug}/offers/{offerId}` · `GET /products/{canonicalId}/compare`. Public card endpoints return only public availability state, lowest eligible ILS price and no exact stock. |
+| Storefront and following | `PATCH /vendors/{id}/storefront` · `POST/PATCH/DELETE /vendors/{id}/sections` · `POST/DELETE /stores/{id}/follow` · `GET /following`. Section deletion must not delete offers. |
+| Roles and locations | `POST /vendors/{id}/employees` (phone + OTP invite) · `PATCH /vendor-employees/{id}` (assign/transfer/disable) · `POST/PATCH /vendors/{id}/warehouses` · `POST/PATCH /vendors/{id}/pickup-points`. All employee operations enforce one active assigned branch; public pickup-point response never reveals warehouse data. |
+| Inventory | `POST /branch-inventory/sales` · `POST /branch-inventory/adjustments` · `POST /inventory/imports`. Sale/adjustment requests include barcode, selected variant and quantity; manual adjustment requires reason. No transfer endpoint exists. |
+| Checkout | `POST /checkout/quote` calculates selected cart-line BranchOrder groups, eligible locations, ILS fees/total and slots without mutation. `POST /checkout` receives selected lines plus a per-BranchOrder fulfilment/payment decision and creates the parent order/BranchOrders atomically. |
+| Branch orders | `GET /orders` · `GET /orders/{id}` · `GET /branches/{id}/orders?view=today|all` · `PATCH /branch-orders/{id}/actions`. Allowed actions include start preparation, revert with reason, sent, delivered, pickup handover, item cancellation, delivery retry and refund approval as permitted by the BranchOrder state. |
+| Calendar/addresses | `GET /branches/{id}/delivery-slots` · `POST/PATCH/DELETE /branches/{id}/delivery-slots` · `POST /branch-orders/{id}/reschedule` · `PATCH /orders/{id}/address` (only before preparation). Slot mutation must identify affected orders; address response provides cancel/pickup/supported-address choices where required. |
+| Returns/reviews/alerts | `POST /order-items/{id}/returns` · `PATCH /returns/{id}/decision` · `POST /reviews` (no customer edit/delete endpoint) · `GET/PATCH /notifications` (read state/deep link). |
+
+All mutating endpoints in this amendment require the existing correlation/audit convention, and order/payment/inventory mutations require `Idempotency-Key`. Requests must use ILS values only. A client must never be able to choose another vendor, owner workspace, employee branch, hidden warehouse, or unavailable branch by submitting an identifier.
+
 ### `POST /auth/otp/verify`
 - **Purpose / Actor:** Complete phone verification (FR-AUTH-003); Guest (pre-account) or Customer.
 - **Request:** `{ phone, otp_code, purpose: "signup" | "password_reset" | "phone_change" }`, with a required `Idempotency-Key` header.

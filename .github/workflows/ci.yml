@@ -22,39 +22,64 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      # Sessions and OTP claims are Redis-backed (RedisService throws
+      # immediately if REDIS_URL isn't set) - e2e exercises both
+      # heavily. .env is local-only and untracked, so nothing set it for
+      # CI at all; this was masked locally because Docker always had a
+      # real .env file to read.
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       DATABASE_URL: postgresql://finalpro:finalpro_ci_only@localhost:5432/finalpro?schema=public
+      REDIS_URL: redis://localhost:6379
       API_PORT: 3001
       JWT_SECRET: ci-only-not-a-secret
-    defaults:
-      run:
-        working-directory: apps/api
     steps:
       - uses: actions/checkout@v4
+      # This is an npm-workspaces monorepo (apps/api and apps/web are
+      # both declared as workspace members of the root package.json) -
+      # `npm ci` must run from the repo root against the root
+      # package-lock.json, not scoped into a workspace directory.
+      # Scoping it into apps/api (the previous setup) makes npm look
+      # for a lockfile at the workspace root once it detects the
+      # ancestor `workspaces` field, which doesn't exist there without
+      # this - it fails outright on a genuinely fresh checkout, and can
+      # silently install an incomplete node_modules otherwise.
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: apps/api/package-lock.json
+          cache-dependency-path: package-lock.json
       - run: npm ci
+      # apps/api/generated/ (the Prisma client output) is gitignored -
+      # a fresh checkout has none of it, and build/lint/test all import
+      # from it (../../generated/prisma/client). Without this, none of
+      # the later steps could even compile.
+      - run: npx prisma generate
+        working-directory: apps/api
       - run: npx prisma migrate deploy
-      - run: npm run lint
-      - run: npm test
-      - run: npm run build
-      - run: npm run test:e2e
+        working-directory: apps/api
+      - run: npm run lint --workspace=apps/api
+      - run: npm test --workspace=apps/api
+      - run: npm run build --workspace=apps/api
+      - run: npm run test:e2e --workspace=apps/api
 
   web:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/web
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: apps/web/package-lock.json
+          cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: npm run lint
-      - run: npm run build
+      - run: npm run lint --workspace=apps/web
+      - run: npm run build --workspace=apps/web

@@ -2,6 +2,8 @@
 
 Builds directly on the FYP Delivery Increment (Part 1, D.4 — proposed, tracked as OPEN-006/BDR-015 pending formal sign-off) and the full confirmed scope (BDR-001–013) as its post-FYP roadmap. Organized in **implementation order**, per the master prompt's explicit sequence — not merely by FR module.
 
+> **September 2026 replan gate:** This historical plan’s 65-Must-item / 18.6-person-week calculation predates the approved [product-decision baseline](../approved-product-decisions-2026-09.md). It is therefore **not an authorised Sprint 4+ commitment**. Sprint 1–3 completed work remains subject to a compatibility audit; no new implementation sprint may be opened until the new BranchOrder, storefront, role, inventory, online-store, delivery, return and ILS-only backlog items are decomposed, estimated and scheduled with reserve.
+
 **Revision note:** this part was substantially re-scoped after review. The first draft listed ~90 backlog items at roughly 40+ person-weeks of estimated effort against a 24-gross-person-week team, and sequenced sprints in an order that created circular dependencies (checkout needed payment/order/notification/inventory infrastructure the plan hadn't built yet). Both are fixed below: Q.0 shows the capacity math and which items were demoted or shrunk as a direct result (not merely rescheduled), and the sprint plan pulls the minimal core infrastructure forward into its own sprint, ahead of checkout, per the fix required.
 
 **Backlog conventions:** each **Epic** carries the fields that are genuinely epic-level once — Phase, business value, common Definition of Done, and relevant risks (cited by `RISK-*` ID from Part 7) — and its child backlog items inherit them, adding what varies per item: ID, title/user story, FR/BR coverage, dependencies, acceptance criteria, priority, estimate, and its own **Phase/Release** tag (since an item's actual build phase can differ from its epic's overall phase — e.g., a Must item built in the FYP Increment sitting in an epic that's otherwise mostly deferred). This is a representative decomposition sufficient to plan and estimate against, not an exhaustive task breakdown. Priority uses MoSCoW **against the FYP Delivery Increment**; a `Should`/`Could`/`Won't` item is still fully specified in Parts 1–7, just not committed inside the 3-month window unless time allows. Estimates are T-shirt sizes calibrated to the 2-person team's 1-week sprints (S ≈ 1 day = 0.2 person-weeks, M ≈ 2.5 days = 0.5 person-weeks, L ≈ 1 week = 1.0 person-week).
@@ -9,6 +11,20 @@ Builds directly on the FYP Delivery Increment (Part 1, D.4 — proposed, tracked
 ---
 
 ## Q.0 Capacity reality check (read before the backlog)
+
+### Q.0a September 2026 re-estimation requirements
+
+The following work did not exist or was materially smaller in the historical count and must be estimated explicitly before a new schedule is approved:
+
+1. BranchOrder data model/state-machine migration; checkout grouping/quote/slot selection; ILS payment allocation/refund migration.
+2. Owner/employee workspace switcher, OTP staff invite/disable/transfer, least-privilege API tests, scanner and audited inventory movements.
+3. Storefront profile/sections/types, public segment pages, following feed, card/logo navigation and filters.
+4. Physical/online-only/hybrid onboarding, hidden warehouse, public pickup points and their operational rules.
+5. Branch calendar capacity, delayed-preparation, customer confirmation, failed-delivery and address-change flows.
+6. Store policy snapshotting, return/exchange workflow and notification centre/deep links.
+7. Regression migration of any Sprint 1–3 code whose current schemas/contracts conflict with PDR-001–034.
+
+The revised plan must retain at least 20% capacity for integration, verification and pilot fixes. It must identify which approved full-product behaviours are demonstrated in the FYP increment and which are specified but deferred; it may not silently drop them. Until then, this document’s old per-sprint tables are historical evidence, not a work authorization.
 
 **Gross capacity:** 2 people × 12 weeks = **24 person-weeks**. That number is not the usable budget — it includes no allowance for integration friction, bug-fixing against real pilot/beta data, sprint planning/review overhead, or the vendor-pilot and customer-beta support work that runs *inside* the same 12 weeks (see the Sprint & release plan, below).
 
