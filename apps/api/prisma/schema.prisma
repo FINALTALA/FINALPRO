@@ -56,6 +56,7 @@ model User {
   auditLogs        AuditLog[]
   reviewedBranches StoreBranch[]    @relation("BranchReviewer")
   sentStaffInvites StaffInvite[]    @relation("StaffInviter")
+  stockMovements   StockMovement[]
 
   @@map("users")
 }
@@ -259,6 +260,10 @@ model Vendor {
   warehouse       Warehouse?
   pickupPoints    PickupPoint[]
   deliveryZones   VendorDeliveryZone[]
+  branchStocks    BranchStock[]
+  stockMovements  StockMovement[]
+  offerVariantMedia      OfferVariantMedia[]
+  matchReviewCandidates  MatchReviewCandidate[]
 
   @@map("vendors")
 }
@@ -416,8 +421,10 @@ model StoreBranch {
   reviewNote           String?
   createdAt            DateTime                 @default(now())
 
-  vendorUsers  VendorUser[]
-  staffInvites StaffInvite[]
+  vendorUsers    VendorUser[]
+  staffInvites   StaffInvite[]
+  branchStocks   BranchStock[]
+  stockMovements StockMovement[]
 
   /// Backs the composite FKs on VendorUser/StaffInvite (vendorId,
   /// branchId) -> (vendorId, id) - a plain PK-only unique on `id`
@@ -713,6 +720,7 @@ model CanonicalProductVariant {
 
   confirmedOfferVariants OfferVariant[] @relation("ConfirmedMatch")
   proposedOfferVariants  OfferVariant[] @relation("ProposedMatch")
+  matchReviewCandidates  MatchReviewCandidate[]
 
   @@unique([canonicalProductId, mpn])
   @@map("canonical_product_variants")
@@ -851,8 +859,20 @@ model OfferVariant {
   storeInventoryBarcode      String
   createdAt                  DateTime                 @default(now())
 
+  branchStocks           BranchStock[]
+  stockMovements         StockMovement[]
+  media                  OfferVariantMedia[]
+  matchReviewCandidates  MatchReviewCandidate[]
+
   @@unique([vendorId, sellerSku])
   @@unique([vendorId, storeInventoryBarcode])
+  /// Sprint 6 (RB-INV-002/003, RB-MATCH-001/002): backs the composite
+  /// FKs from BranchStock/StockMovement/OfferVariantMedia/
+  /// MatchReviewCandidate (vendorId, offerVariantId) -> (vendorId, id) -
+  /// same reasoning as StoreBranch's own @@unique([vendorId, id])
+  /// (Sprint 4): a plain id-only FK would only prove the variant row
+  /// exists *somewhere*, not that it belongs to *this* vendorId.
+  @@unique([vendorId, id])
   @@index([vendorOfferId])
   @@index([canonicalVariantId])
   @@index([proposedCanonicalVariantId])
@@ -881,4 +901,183 @@ model VendorSubscription {
 
   @@index([vendorId])
   @@map("vendor_subscriptions")
+}
+
+// ---------------------------------------------------------------------
+// Sprint 6 (RB-INV-002/003/005, RB-MATCH-001/002). Branch-level stock,
+// its audit-complete movement log, basic offer-variant media, and the
+// non-exact match review queue. Deliberately NOT built this sprint (see
+// the post-sprint3 replan's own item list): cross-branch stock
+// transfer, the barcode-scanner physical-sale flow (RB-INV-004), full
+// media breadth (10 images/3 videos/reorder, RB-MATCH-001b),
+// image-similarity ranking (RB-MATCH-002b), canonical-name adoption
+// (RB-MATCH-003), and CSV/Excel import (RB-MATCH-004) - all explicitly
+// deferred to a later sprint.
+// ---------------------------------------------------------------------
+
+/// Sprint 6 (RB-INV-002, PDR-020): "Physical stock is per branch/
+/// variant. No transfer between branches is supported in phase 1."
+/// This table is the only source of truth for a branch's on-hand
+/// quantity - it is never written to directly by any endpoint; every
+/// change goes through StockMovement (RB-INV-003/005) so the movement
+/// log is genuinely complete, not just best-effort. A row is created
+/// lazily by the first movement against a given (branchId,
+/// offerVariantId) pair - there is no separate "initialize stock"
+/// endpoint, since an explicit COUNT_CORRECTION movement from zero
+/// already covers that case without a second write path.
+model BranchStock {
+  id             String       @id @default(uuid())
+  vendorId       String
+  vendor         Vendor       @relation(fields: [vendorId], references: [id])
+  branchId       String
+  /// Composite FK (vendorId, branchId) -> StoreBranch(vendorId, id) -
+  /// same cross-vendor-integrity reasoning as VendorUser/StaffInvite's
+  /// own composite FKs to StoreBranch (Sprint 4): a plain branchId ->
+  /// StoreBranch.id FK would only prove the branch exists somewhere,
+  /// not that it belongs to this same vendorId.
+  branch         StoreBranch  @relation(fields: [vendorId, branchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  offerVariantId String
+  /// Composite FK (vendorId, offerVariantId) -> OfferVariant(vendorId,
+  /// id) - same reasoning, against OfferVariant's own @@unique([vendorId, id]).
+  offerVariant   OfferVariant @relation(fields: [vendorId, offerVariantId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  /// Never written directly - see this model's own comment. A DB-level
+  /// CHECK (quantity >= 0), hand-written in this model's migration (not
+  /// representable in Prisma's schema DSL, same already-established
+  /// pattern as VendorUser's role/branchId CHECK), is the last line of
+  /// defense against ever going negative - the real enforcement is the
+  /// atomic conditional UPDATE in InventoryController's movement
+  /// endpoint (RB-INV-005), which never even attempts a write that
+  /// would violate it.
+  quantity       Int          @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([branchId, offerVariantId])
+  @@index([vendorId])
+  @@map("branch_stock")
+}
+
+/// Sprint 6 (RB-INV-003, PDR-021): the three non-sale adjustment
+/// reasons PDR-021 names. Physical-sale decrements (RB-INV-004, not
+/// built this sprint - no scanner/checkout flow exists yet) would be a
+/// separate reason if/when that flow lands; this enum deliberately only
+/// covers the manual, non-sale case this sprint actually builds.
+enum StockMovementReason {
+  DAMAGE
+  LOSS
+  COUNT_CORRECTION
+}
+
+/// Sprint 6 (RB-INV-003, PDR-021): "Manual non-sale stock reductions
+/// (damage, loss, count correction) need a mandatory reason and
+/// immediately notify the owner, regardless of amount." Immutable,
+/// append-only - the same convention AuditLog already established in
+/// this codebase (Part 3, G.3/G.4): no controller in this codebase ever
+/// updates or deletes a row here, full stop. `reasonNote` is required,
+/// not optional - PDR-021's "mandatory reason" is satisfied by both the
+/// required `reason` enum (the category) and this free-text field (the
+/// actual explanation an owner reviewing the log would need - "why was
+/// this damaged," not just "damage" again). `resultingQuantity` is the
+/// BranchStock.quantity immediately after this movement was applied -
+/// captured at write time so the log reads correctly even if later
+/// movements change the current value.
+model StockMovement {
+  id                String              @id @default(uuid())
+  vendorId          String
+  vendor            Vendor              @relation(fields: [vendorId], references: [id])
+  branchId          String
+  branch            StoreBranch         @relation(fields: [vendorId, branchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  offerVariantId    String
+  offerVariant      OfferVariant        @relation(fields: [vendorId, offerVariantId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  quantityDelta     Int
+  resultingQuantity Int
+  reason            StockMovementReason
+  reasonNote        String
+  actorId           String
+  actor             User                @relation(fields: [actorId], references: [id])
+  createdAt         DateTime            @default(now())
+
+  @@index([vendorId, branchId, offerVariantId])
+  @@index([createdAt])
+  @@map("stock_movements")
+}
+
+/// Sprint 6 (RB-MATCH-001, PDR-011's later storefront use, current
+/// scope basic-media-only): a primary image plus additional images per
+/// offer variant. No video kind, no 10-image/3-video cap, no reorder
+/// endpoint (RB-MATCH-001b, Should, not built this sprint) - `kind`
+/// alone (PRIMARY vs ADDITIONAL) is enough to distinguish the hero
+/// image; additional images are otherwise just ordered by createdAt.
+/// No upload pipeline exists in this codebase - `url` is a plain,
+/// already-hosted URL the vendor supplies (the same minimal pattern
+/// StoreBranch.verificationPhotoUrl already uses).
+enum MediaKind {
+  PRIMARY
+  ADDITIONAL
+}
+
+model OfferVariantMedia {
+  id             String       @id @default(uuid())
+  vendorId       String
+  vendor         Vendor       @relation(fields: [vendorId], references: [id])
+  offerVariantId String
+  offerVariant   OfferVariant @relation(fields: [vendorId, offerVariantId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  url            String
+  kind           MediaKind    @default(ADDITIONAL)
+  createdAt      DateTime     @default(now())
+
+  /// At most one PRIMARY image per variant. A partial unique index -
+  /// not representable in Prisma's schema DSL, hand-written in this
+  /// model's migration (same already-established pattern as
+  /// StaffInvite's pending-invite index) - additional images are
+  /// unrestricted in count this sprint (RB-MATCH-001b's 10-image cap is
+  /// Should, deferred).
+  @@index([offerVariantId])
+  @@map("offer_variant_media")
+}
+
+/// Sprint 6 (RB-MATCH-002): the non-exact-match review queue -
+/// candidates ranked by MatchingService.searchNonExactCandidates()
+/// (structured-attribute + text-similarity scoring, no image-similarity
+/// this sprint - RB-MATCH-002b) for an OfferVariant that has no exact-
+/// identifier match (MatchProposalStatus.NONE on the offer variant
+/// itself - this is a genuinely separate mechanism from that one, not a
+/// replacement for it). PENDING candidates are what the review queue
+/// shows; the store owner's approve/reject decision is the only thing
+/// that ever changes `status`, the same "propose, never auto-link"
+/// principle FR-MATCH-012 already established for exact matches.
+/// "Request re-search" is simply calling the search endpoint again,
+/// which re-scores and may surface new/updated candidates - no
+/// separate re-search entity needed.
+enum MatchReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model MatchReviewCandidate {
+  id                 String                  @id @default(uuid())
+  vendorId           String
+  vendor             Vendor                  @relation(fields: [vendorId], references: [id])
+  offerVariantId     String
+  offerVariant       OfferVariant            @relation(fields: [vendorId, offerVariantId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  canonicalVariantId String
+  canonicalVariant   CanonicalProductVariant @relation(fields: [canonicalVariantId], references: [id])
+  /// Deterministic, documented scoring (see MatchingService) - 0.0-1.0,
+  /// not a random/ML-derived value. Combines a text-similarity signal
+  /// (offer title/specs vs. brand + model name) and a structured-
+  /// attribute-overlap signal (does the offer's free text mention the
+  /// canonical variant's structuralAttributes values) - see that
+  /// method's own comment for the exact formula.
+  score              Float
+  status             MatchReviewStatus       @default(PENDING)
+  createdAt          DateTime                @default(now())
+  decidedAt          DateTime?
+
+  /// Re-running search for the same offer variant against the same
+  /// canonical variant refreshes this row (score/status) rather than
+  /// creating a duplicate - see MatchingService.searchNonExactCandidates().
+  @@unique([offerVariantId, canonicalVariantId])
+  @@index([vendorId, status])
+  @@map("match_review_candidates")
 }

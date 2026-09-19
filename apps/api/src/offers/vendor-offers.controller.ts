@@ -2,6 +2,7 @@ import {
   Body,
   ConflictException,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
   HttpCode,
@@ -31,6 +32,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SubscriptionGateService } from '../subscriptions/subscription-gate.service';
 import { ConfirmMatchDto } from './dto/confirm-match.dto';
 import { CreateOfferVariantDto } from './dto/create-offer-variant.dto';
+import { CreateOfferVariantMediaDto } from './dto/create-offer-variant-media.dto';
 import { CreateVendorOfferDto } from './dto/create-vendor-offer.dto';
 
 // FR-MATCH-001/BL-VEND-004/BR-014: a vendor's offers, nested under
@@ -510,5 +512,185 @@ export class VendorOffersController {
       orderBy: { createdAt: 'asc' },
     });
     return variants.map((v) => this.variantToDto(v));
+  }
+
+  private mediaToDto(media: {
+    id: string;
+    offerVariantId: string;
+    url: string;
+    kind: string;
+    createdAt: Date;
+  }) {
+    return {
+      id: media.id,
+      offer_variant_id: media.offerVariantId,
+      url: media.url,
+      kind: media.kind,
+      created_at: media.createdAt.toISOString(),
+    };
+  }
+
+  private async requireVariant(
+    vendorId: string,
+    offerId: string,
+    variantId: string,
+  ) {
+    const variant = await this.prisma.offerVariant.findUnique({
+      where: { id: variantId },
+    });
+    if (
+      !variant ||
+      variant.vendorId !== vendorId ||
+      variant.vendorOfferId !== offerId
+    ) {
+      throw new NotFoundException({
+        code: 'OFFER_VARIANT_NOT_FOUND',
+        message: 'Offer variant not found for this offer',
+      });
+    }
+  }
+
+  // Sprint 6 (RB-MATCH-001): "صلاحيات الوسائط Owner-only" (media
+  // permissions are owner-only) - @RequireVendorRole('OWNER'), same as
+  // every other route on this controller. A new PRIMARY replaces any
+  // existing one atomically (delete-then-insert in one transaction)
+  // rather than requiring the vendor to delete the old one first -
+  // the partial unique index (offer_variant_media_primary_per_variant_key)
+  // is what this would otherwise conflict against if done as a plain
+  // insert.
+  @Post(':offerId/variants/:variantId/media')
+  @HttpCode(201)
+  @UseInterceptors(IdempotencyInterceptor)
+  @RequireVendorRole('OWNER')
+  async addVariantMedia(
+    @Param('vendorId') vendorId: string,
+    @Param('offerId') offerId: string,
+    @Param('variantId') variantId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CreateOfferVariantMediaDto,
+    @Req() req: Request,
+  ) {
+    await this.requireVariant(vendorId, offerId, variantId);
+    const kind = dto.kind ?? 'ADDITIONAL';
+
+    let body;
+    try {
+      body = await this.prisma.$transaction(async (tx) => {
+        if (kind === 'PRIMARY') {
+          // Review-round finding: two concurrent PRIMARY requests for
+          // the same variant could both pass deleteMany() (each seeing
+          // the same pre-race state, or no existing row at all) and
+          // then race each other's create() against the partial unique
+          // index (offer_variant_media_primary_per_variant_key) - the
+          // index correctly stops a second PRIMARY row from ever
+          // existing, but the *loser* of that race got there via a
+          // raw P2002/500, not the atomic replace this endpoint's own
+          // contract promises. Locking the OfferVariant row itself
+          // first (a fixed, per-variant key - ADDITIONAL inserts never
+          // take this lock and stay fully concurrent) serializes the
+          // two delete-then-insert sequences, so the second transaction
+          // always sees the first's already-committed delete before it
+          // deletes/inserts anything itself.
+          await tx.$queryRaw`SELECT id FROM offer_variants WHERE id = ${variantId} FOR UPDATE`;
+          await tx.offerVariantMedia.deleteMany({
+            where: { offerVariantId: variantId, kind: 'PRIMARY' },
+          });
+        }
+        const media = await tx.offerVariantMedia.create({
+          data: { vendorId, offerVariantId: variantId, url: dto.url, kind },
+        });
+
+        await this.auditLog.record(
+          {
+            actorId: user.id,
+            correlationId: req.correlationId,
+            action: 'offer_variant_media.added',
+            entityType: 'OfferVariantMedia',
+            entityId: media.id,
+            afterState: this.mediaToDto(media),
+          },
+          tx,
+        );
+
+        const responseBody = this.mediaToDto(media);
+        await this.idempotencyCompletion.complete(
+          tx,
+          req.idempotencyClaimId,
+          responseBody,
+          201,
+        );
+        return responseBody;
+      });
+    } catch (err) {
+      // Defensive only - the FOR UPDATE lock above already makes this
+      // unreachable for PRIMARY under normal operation; kept in case a
+      // future caller ever creates ADDITIONAL/PRIMARY rows through a
+      // path that bypasses this lock (e.g. a direct write).
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        throw new ConflictException({
+          code: 'PRIMARY_MEDIA_ALREADY_EXISTS',
+          message: 'This offer variant already has a primary image',
+        });
+      }
+      throw err;
+    }
+
+    return body;
+  }
+
+  @Get(':offerId/variants/:variantId/media')
+  @RequireVendorRole('OWNER')
+  async listVariantMedia(
+    @Param('vendorId') vendorId: string,
+    @Param('offerId') offerId: string,
+    @Param('variantId') variantId: string,
+  ) {
+    await this.requireVariant(vendorId, offerId, variantId);
+    const media = await this.prisma.offerVariantMedia.findMany({
+      where: { offerVariantId: variantId },
+      orderBy: { createdAt: 'asc' },
+    });
+    return media.map((m) => this.mediaToDto(m));
+  }
+
+  @Delete(':offerId/variants/:variantId/media/:mediaId')
+  @HttpCode(204)
+  @RequireVendorRole('OWNER')
+  async removeVariantMedia(
+    @Param('vendorId') vendorId: string,
+    @Param('offerId') offerId: string,
+    @Param('variantId') variantId: string,
+    @Param('mediaId') mediaId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
+  ) {
+    await this.requireVariant(vendorId, offerId, variantId);
+    const media = await this.prisma.offerVariantMedia.findUnique({
+      where: { id: mediaId },
+    });
+    if (!media || media.offerVariantId !== variantId) {
+      throw new NotFoundException({
+        code: 'OFFER_VARIANT_MEDIA_NOT_FOUND',
+        message: 'Media not found for this offer variant',
+      });
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.offerVariantMedia.delete({ where: { id: mediaId } });
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'offer_variant_media.removed',
+          entityType: 'OfferVariantMedia',
+          entityId: mediaId,
+          beforeState: this.mediaToDto(media),
+        },
+        tx,
+      );
+    });
   }
 }
