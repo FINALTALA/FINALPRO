@@ -55,6 +55,7 @@ model User {
   vendorUsers      VendorUser[]
   auditLogs        AuditLog[]
   reviewedBranches StoreBranch[]    @relation("BranchReviewer")
+  sentStaffInvites StaffInvite[]    @relation("StaffInviter")
 
   @@map("users")
 }
@@ -100,6 +101,12 @@ enum OtpPurpose {
   SIGNUP
   PASSWORD_RESET
   PHONE_CHANGE
+  /// Sprint 4 (RB-ROLE-002, PDR-008): proves phone ownership before a
+  /// StaffInvite is accepted - the same `POST /auth/otp/request` /
+  /// `POST /auth/otp/verify` pair every other purpose uses, gated the
+  /// same way PASSWORD_RESET is (only issued when something real is
+  /// waiting on the other end - see AuthController.requestOtp).
+  STAFF_INVITE
 }
 
 /// Backs `POST /auth/otp/request` / `POST /auth/otp/verify` (Part 4,
@@ -158,12 +165,19 @@ enum VendorStatus {
   CANCELLED
 }
 
-/// Only OWNER exists for the FYP window (BL-VEND-005b: "owner-only
-/// vendor account, no sub-roles" is the Must-scope fallback for the
-/// full admin/branch-manager/catalog/order-processing role set in
-/// FR-VEND-007/BL-VEND-005, which is a Should/stretch item).
+/// Sprint 4 (RB-ROLE-001, PDR-008/009): BRANCH_EMPLOYEE replaces the old
+/// Sprint 2 "owner-only, no sub-roles" fallback (BL-VEND-005b) - PDR-008
+/// explicitly requires owner + branch-employee, not the full
+/// admin/catalog/order-processing sub-role set FR-VEND-007/BL-VEND-005
+/// describes (that remains out of scope). OWNER controls the whole
+/// vendor - configuration, catalog, prices, staff, every branch's
+/// orders/stock, subscription, analytics. BRANCH_EMPLOYEE is scoped to
+/// exactly one branch's orders/stock only, per VendorUser.branchId -
+/// see that field's comment for the invariant this enum's two values
+/// impose on it.
 enum VendorUserRole {
   OWNER
+  BRANCH_EMPLOYEE
 }
 
 /// Part 3, G.3. Sprint 2 (BL-VEND-001) captures just enough to submit
@@ -223,10 +237,17 @@ model Vendor {
   subscriptions   VendorSubscription[]
   canonicalOffers VendorOffer[]
   offerVariants   OfferVariant[]
+  staffInvites    StaffInvite[]
 
   @@map("vendors")
 }
 
+/// branchId (Sprint 4, RB-ROLE-001): null for OWNER (vendor-wide access),
+/// required for BRANCH_EMPLOYEE (scoped to exactly this one branch) -
+/// enforced by this table's own CHECK constraint (see the migration),
+/// not just application code, so the invariant holds even against a
+/// direct write. VendorMembershipGuard reads this alongside role on
+/// every vendor-scoped route to decide access (see its own doc comment).
 model VendorUser {
   id       String         @id @default(uuid())
   userId   String
@@ -234,8 +255,37 @@ model VendorUser {
   vendorId String
   vendor   Vendor         @relation(fields: [vendorId], references: [id])
   role     VendorUserRole @default(OWNER)
+  branchId String?
+  /// Composite FK (vendorId, branchId) -> StoreBranch(vendorId, id), not
+  /// a plain branchId -> StoreBranch.id FK (review-round finding): a
+  /// single-column FK only proves the branch row *exists*, not that it
+  /// belongs to *this* VendorUser's own vendorId - nothing stopped a
+  /// direct write from linking an employee to a different vendor's
+  /// branch. Sharing the vendorId column with the `vendor` relation
+  /// above is deliberate and valid (a scalar column can participate in
+  /// more than one FK); MATCH SIMPLE means this constraint is simply
+  /// not checked when branchId is null (OWNER rows), matching this
+  /// table's own role/branchId CHECK constraint exactly.
+  branch   StoreBranch?   @relation(fields: [vendorId, branchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
 
   @@unique([userId, vendorId])
+  @@index([branchId])
+  /// Review-round finding (round 4): PDR-008 and SRS Part 3 G.0 - "a
+  /// branch employee is assigned to exactly one branch **at a time**"
+  /// means across every vendor, not per vendor. `@@unique([userId,
+  /// vendorId])` above only ever stopped a duplicate row for the *same*
+  /// vendor; it never stopped the same account becoming BRANCH_EMPLOYEE
+  /// at a *different* vendor too. A partial unique index -
+  /// `UNIQUE(userId) WHERE role = 'BRANCH_EMPLOYEE'`, hand-written in
+  /// this model's migration, not representable in Prisma's schema DSL
+  /// (same already-established pattern as this table's own
+  /// role/branchId CHECK constraint) - closes that: an account may
+  /// still OWNER any number of vendors (untouched, that role is
+  /// excluded by the index's WHERE clause) and always remains a
+  /// customer regardless, but may only ever hold one BRANCH_EMPLOYEE
+  /// row at a time, full stop. Reassigning an employee to a different
+  /// branch/vendor is RB-ROLE-003 (disable/transfer, Should, not built
+  /// this sprint) - until then this is a one-way assignment.
   @@map("vendor_users")
 }
 
@@ -260,8 +310,75 @@ model StoreBranch {
   reviewNote           String?
   createdAt            DateTime                 @default(now())
 
+  vendorUsers  VendorUser[]
+  staffInvites StaffInvite[]
+
+  /// Backs the composite FKs on VendorUser/StaffInvite (vendorId,
+  /// branchId) -> (vendorId, id) - a plain PK-only unique on `id`
+  /// already exists, but a composite FK's referenced side must be
+  /// itself unique on the exact column pair it's referenced by.
+  @@unique([vendorId, id])
   @@index([vendorId])
   @@map("store_branches")
+}
+
+enum StaffInviteStatus {
+  PENDING
+  ACCEPTED
+}
+
+/// Sprint 4 (RB-ROLE-002, PDR-008): an owner-initiated invite for a
+/// phone number to join one specific branch as BRANCH_EMPLOYEE - "same
+/// pattern as signup" (OtpPurpose.STAFF_INVITE, the same
+/// issue/check/consume/PhoneVerificationService-token flow SIGNUP
+/// already uses) rather than a new mechanism. No EXPIRED status is
+/// stored: expiry is computed lazily from expiresAt at accept time
+/// (the same lazy-expiry pattern VendorSubscription uses), not written
+/// by a background sweep this project has no worker for.
+model StaffInvite {
+  id          String            @id @default(uuid())
+  vendorId    String
+  vendor      Vendor            @relation(fields: [vendorId], references: [id])
+  branchId    String
+  /// Same composite-FK reasoning as VendorUser.branch above - a plain
+  /// branchId -> StoreBranch.id FK never verified the branch belonged
+  /// to this same vendorId.
+  branch      StoreBranch       @relation(fields: [vendorId, branchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  phone       String
+  invitedById String
+  invitedBy   User              @relation("StaffInviter", fields: [invitedById], references: [id])
+  status      StaffInviteStatus @default(PENDING)
+  createdAt   DateTime          @default(now())
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+
+  @@index([phone, status])
+  @@index([vendorId])
+  /// Review-round finding (round 4): at most one PENDING invite per
+  /// *phone*, globally - not per (vendorId, phone). AuthController.
+  /// acceptStaffInvite() has no invite_id parameter and no UI to pick
+  /// among several candidates; it always resolves "the" invite to
+  /// accept via a plain most-recent-PENDING lookup by phone alone. Two
+  /// PENDING invites for the same phone from two *different* vendors
+  /// would make that resolution genuinely ambiguous - and since
+  /// VendorUser's own employee-uniqueness constraint below means at
+  /// most one of them could ever actually be accepted anyway, the
+  /// other would be left permanently dangling, the exact class of bug
+  /// this whole line of fixes exists to prevent. A partial unique
+  /// index, not a plain `@@unique`, only so a *historical* ACCEPTED row
+  /// (a real audit record, per PDR-010's "retain the old record") never
+  /// blocks the index itself - this index says nothing about whether
+  /// inviting an already-employed phone again afterward is actually
+  /// allowed; it is not, but that is `VendorsController.inviteStaff()`'s
+  /// `ALREADY_VENDOR_MEMBER`/`EMPLOYEE_ALREADY_ASSIGNED` checks' job
+  /// (phone-scoped advisory-lock-guarded, see that method's own
+  /// comment), not this index's. Prisma's schema DSL cannot express a
+  /// partial index, so this is declared here for documentation only -
+  /// the actual index is created by hand in this model's migration
+  /// (the same already-established pattern as VendorUser's role/branch
+  /// CHECK constraint, which is likewise invisible to `schema.prisma`
+  /// but real in the database).
+  @@map("staff_invites")
 }
 
 /// Immutable, append-only audit trail - the source of truth for every
