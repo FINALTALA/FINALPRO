@@ -14,6 +14,7 @@ import {
   AuthenticatedUser,
   SessionAuthGuard,
 } from '../auth/session-auth.guard';
+import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateVendorDto } from './dto/create-vendor.dto';
@@ -34,6 +35,7 @@ export class VendorsController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
+    private readonly idempotencyCompletion: IdempotencyCompletionService,
   ) {}
 
   @Post()
@@ -44,22 +46,34 @@ export class VendorsController {
     @Body() dto: CreateVendorDto,
     @Req() req: Request,
   ) {
-    const vendor = await this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
       const created = await tx.vendor.create({
         data: { legalName: dto.legal_name },
       });
       await tx.vendorUser.create({
         data: { userId: user.id, vendorId: created.id, role: 'OWNER' },
       });
-      await tx.storeBranch.createMany({
-        data: dto.branches.map((branch) => ({
-          vendorId: created.id,
-          name: branch.name,
-          isPhysical: branch.is_physical,
-          lat: branch.lat,
-          lng: branch.lng,
-        })),
-      });
+      // Sprint 3 review round 4: createMany() only returns a row count,
+      // not the created rows - the response body (which must include
+      // each branch's id) can't be built from it without a *separate*,
+      // post-transaction findMany(), which is exactly what left this
+      // endpoint unable to call IdempotencyCompletionService.complete()
+      // from inside the transaction. Individual create() calls give
+      // back each row, so the full response can be assembled - and the
+      // completion recorded - before the transaction ever commits.
+      const branches = await Promise.all(
+        dto.branches.map((branch) =>
+          tx.storeBranch.create({
+            data: {
+              vendorId: created.id,
+              name: branch.name,
+              isPhysical: branch.is_physical,
+              lat: branch.lat,
+              lng: branch.lng,
+            },
+          }),
+        ),
+      );
       await this.auditLog.record(
         {
           actorId: user.id,
@@ -71,24 +85,26 @@ export class VendorsController {
         },
         tx,
       );
-      return created;
-    });
 
-    const branches = await this.prisma.storeBranch.findMany({
-      where: { vendorId: vendor.id },
+      const body = {
+        id: created.id,
+        legal_name: created.legalName,
+        status: created.status,
+        branches: branches.map((b) => ({
+          id: b.id,
+          name: b.name,
+          is_physical: b.isPhysical,
+          lat: b.lat,
+          lng: b.lng,
+        })),
+      };
+      await this.idempotencyCompletion.complete(
+        tx,
+        req.idempotencyClaimId,
+        body,
+        201,
+      );
+      return body;
     });
-
-    return {
-      id: vendor.id,
-      legal_name: vendor.legalName,
-      status: vendor.status,
-      branches: branches.map((b) => ({
-        id: b.id,
-        name: b.name,
-        is_physical: b.isPhysical,
-        lat: b.lat,
-        lng: b.lng,
-      })),
-    };
   }
 }

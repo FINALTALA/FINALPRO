@@ -6,6 +6,7 @@ import { OtpService } from './../src/auth/otp.service';
 import { SessionService } from './../src/auth/session.service';
 import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
+import { IdempotencyCompletionService } from './../src/common/idempotency/idempotency-completion.service';
 import { PrismaService } from './../src/prisma/prisma.service';
 
 /** Test double for the OPEN-004 SMS fallback - captures codes instead of logging them. */
@@ -864,6 +865,67 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
       expect(resA.body.id).not.toBe(resB.body.id);
       expect(resA.headers['idempotent-replayed']).toBeUndefined();
       expect(resB.headers['idempotent-replayed']).toBeUndefined();
+    });
+
+    it('when the idempotency-completion write fails right after a real vendor application, nothing is left half-done - zero Vendor/VendorUser/StoreBranch rows exist after the failed attempt, and a same-key retry creates exactly one of each (Sprint 3 review round 4)', async () => {
+      const phone = uniquePhone();
+      const token = await signup(phone, 'a-strong-password');
+
+      // Same pattern as vendor-offers' equivalent test
+      // (sprint3-catalog.e2e-spec.ts): IdempotencyCompletionService.
+      // complete() is called *inside* the same transaction as
+      // vendor.create()/vendorUser.create()/storeBranch.create() (see
+      // VendorsController.apply()) - failing it here must roll back the
+      // whole transaction, not leave a dangling Vendor with no
+      // completed Idempotency-Key record to show for it.
+      const completeSpy = jest
+        .spyOn(app.get(IdempotencyCompletionService), 'complete')
+        .mockRejectedValueOnce(
+          new Error('simulated Postgres blip recording completion'),
+        );
+
+      const key = `vendor-apply-completion-blip-${phone}`;
+      const distinctiveLegalName = `CompletionBlipVendor-${phone}`;
+      const body = {
+        legal_name: distinctiveLegalName,
+        branches: [{ name: 'Main branch', is_physical: true }],
+      };
+
+      const first = await request(app.getHttpServer())
+        .post('/api/v1/vendors')
+        .set('Authorization', `Bearer ${token}`)
+        .set('Idempotency-Key', key)
+        .send(body);
+
+      completeSpy.mockRestore();
+
+      expect(first.status).toBe(500);
+      const vendorsAfterFirst = await prisma.vendor.findMany({
+        where: { legalName: distinctiveLegalName },
+      });
+      expect(vendorsAfterFirst).toHaveLength(0);
+
+      const second = await request(app.getHttpServer())
+        .post('/api/v1/vendors')
+        .set('Authorization', `Bearer ${token}`)
+        .set('Idempotency-Key', key)
+        .send(body)
+        .expect(201);
+      expect(second.body.legal_name).toBe(distinctiveLegalName);
+      expect(second.body.branches).toHaveLength(1);
+
+      const vendors = await prisma.vendor.findMany({
+        where: { legalName: distinctiveLegalName },
+      });
+      expect(vendors).toHaveLength(1);
+      const vendorUsers = await prisma.vendorUser.findMany({
+        where: { vendorId: vendors[0].id },
+      });
+      expect(vendorUsers).toHaveLength(1);
+      const branches = await prisma.storeBranch.findMany({
+        where: { vendorId: vendors[0].id },
+      });
+      expect(branches).toHaveLength(1);
     });
   });
 });

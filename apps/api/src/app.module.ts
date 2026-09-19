@@ -3,12 +3,17 @@ import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
+import { CatalogModule } from './catalog/catalog.module';
 import { CorrelationIdMiddleware } from './common/middleware/correlation-id.middleware';
 import { CustomersModule } from './customers/customers.module';
 import { HealthModule } from './health/health.module';
+import { MatchingModule } from './matching/matching.module';
+import { OffersModule } from './offers/offers.module';
 import { OutboxModule } from './outbox/outbox.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
+import { SubscriptionsModule } from './subscriptions/subscriptions.module';
+import { VendorVerificationModule } from './vendor-verification/vendor-verification.module';
 import { VendorsModule } from './vendors/vendors.module';
 
 @Module({
@@ -26,6 +31,11 @@ import { VendorsModule } from './vendors/vendors.module';
     AuthModule,
     CustomersModule,
     VendorsModule,
+    CatalogModule,
+    MatchingModule,
+    OffersModule,
+    VendorVerificationModule,
+    SubscriptionsModule,
   ],
   providers: [
     {

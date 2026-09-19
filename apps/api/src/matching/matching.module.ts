@@ -2,10 +2,13 @@ import { Module } from '@nestjs/common';
 import { AuditModule } from '../audit/audit.module';
 import { AuthModule } from '../auth/auth.module';
 import { IdempotencyModule } from '../common/idempotency/idempotency.module';
-import { VendorsController } from './vendors.controller';
+import { CanonicalProductsController } from './canonical-products.controller';
+import { MatchingService } from './matching.service';
 
 @Module({
   imports: [AuditModule, AuthModule, IdempotencyModule],
-  controllers: [VendorsController],
+  controllers: [CanonicalProductsController],
+  providers: [MatchingService],
+  exports: [MatchingService],
 })
-export class VendorsModule {}
+export class MatchingModule {}

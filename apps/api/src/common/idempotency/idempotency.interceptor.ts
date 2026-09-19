@@ -13,9 +13,9 @@ import { Observable, from } from 'rxjs';
 import { catchError, switchMap } from 'rxjs/operators';
 import { IdempotencyKeyStatus, Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { DEFAULT_IDEMPOTENCY_TTL_MS } from './idempotency-completion.service';
 import { IDEMPOTENCY_TTL_KEY } from './idempotency-ttl.decorator';
 
-const DEFAULT_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000; // 24h, per Part 4 H.1
 const STALE_IN_PROGRESS_MS = 30_000; // abandon a claim if its owner never finished (e.g. crashed)
 const MAX_TAKEOVER_ATTEMPTS = 5; // bound retries if takeover attempts keep losing the CAS race
 

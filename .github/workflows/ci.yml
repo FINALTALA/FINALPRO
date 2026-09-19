@@ -51,7 +51,8 @@ jobs:
       # for a lockfile at the workspace root once it detects the
       # ancestor `workspaces` field, which doesn't exist there without
       # this - it fails outright on a genuinely fresh checkout, and can
-      # silently install an incomplete node_modules otherwise.
+      # silently install an incomplete node_modules otherwise (see
+      # Sprint 3 review round 5/6 for how this was found).
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -60,8 +61,9 @@ jobs:
       - run: npm ci
       # apps/api/generated/ (the Prisma client output) is gitignored -
       # a fresh checkout has none of it, and build/lint/test all import
-      # from it (../../generated/prisma/client). Without this, none of
-      # the later steps could even compile.
+      # from it (../../generated/prisma/client). Pre-existing gap in
+      # this workflow, found while fixing the lockfile issue above -
+      # without this, none of the later steps could even compile.
       - run: npx prisma generate
         working-directory: apps/api
       - run: npx prisma migrate deploy

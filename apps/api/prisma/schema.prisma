@@ -11,17 +11,32 @@ datasource db {
   provider = "postgresql"
 }
 
+/// Part 1, Section C's platform-side roles (Platform Admin,
+/// Matching/Verification Reviewer, ...). The SRS defines these roles'
+/// permission boundaries but never specifies a data-model mechanism for
+/// them (Part 3 has no platform-role entity at all) - this is Sprint 3's
+/// minimal, deliberately narrow addition: just enough to gate
+/// FR-VEND-003's reviewer-decision endpoint, not the full staff-role
+/// system (content moderator/support/finance/marketing are out of
+/// scope). There is no self-service way to acquire this role - it is
+/// assigned out-of-band (seed script / direct DB access), the same way
+/// a real deployment would restrict it to vetted platform staff.
+enum PlatformRole {
+  VERIFICATION_REVIEWER
+  PLATFORM_ADMIN
+}
+
 /// Part 3, G.3 identity domain. phone is the primary credential
 /// (FR-AUTH-002); email is optional (Q12). phoneVerifiedAt is set once,
 /// at registration, after a successful OTP verify - never cleared by a
 /// later password reset or login (those re-prove the password, not
 /// phone ownership).
 model User {
-  id              String    @id @default(uuid())
-  phone           String    @unique
+  id              String        @id @default(uuid())
+  phone           String        @unique
   passwordHash    String
   email           String?
-  languagePref    String    @default("ar")
+  languagePref    String        @default("ar")
   phoneVerifiedAt DateTime?
   /// Bumped atomically alongside passwordHash on every password reset
   /// (Sprint 2 review fix). SessionData carries the version a session
@@ -30,12 +45,16 @@ model User {
   /// down at reset time) - Postgres, not Redis availability, is the
   /// actual security boundary for "did a password reset invalidate
   /// this session."
-  sessionVersion  Int       @default(0)
-  createdAt       DateTime  @default(now())
+  sessionVersion  Int           @default(0)
+  /// Sprint 3 addition - see PlatformRole. Null (the default) for every
+  /// regular customer/vendor account.
+  platformRole    PlatformRole?
+  createdAt       DateTime      @default(now())
 
-  customerProfile CustomerProfile?
-  vendorUsers     VendorUser[]
-  auditLogs       AuditLog[]
+  customerProfile  CustomerProfile?
+  vendorUsers      VendorUser[]
+  auditLogs        AuditLog[]
+  reviewedBranches StoreBranch[]    @relation("BranchReviewer")
 
   @@map("users")
 }
@@ -155,20 +174,55 @@ enum VendorUserRole {
 /// verificationPhotoUrl/verificationStatus exist here now because
 /// they're intrinsic to this entity per Part 3, not because Sprint 2
 /// enforces them yet.
+///
+/// RESUBMISSION_REQUESTED (Sprint 3 addition) is distinct from REJECTED:
+/// FR-VEND-003 names "approve, reject, or request resubmission" as three
+/// separate reviewer outcomes, not two - a rejection is meant to be
+/// terminal-ish, a resubmission request invites the vendor to try again
+/// (BL-VEND-002's evidence-submission endpoint accepts a resubmission by
+/// simply being callable again on the same branch, resetting status back
+/// to PENDING).
 enum BranchVerificationStatus {
   PENDING
   APPROVED
   REJECTED
+  RESUBMISSION_REQUESTED
+}
+
+/// Sprint 3 remediation (PDR-033, approved-product-decisions-2026-09.md):
+/// "a unified sandbox/trial subscription begins after verification,
+/// lasts one month and has mock monthly renewal... on expiry,
+/// listings/page are unavailable for new orders but the owner can see
+/// the account and work existing pre-expiry orders; renewal restores
+/// automatically." No Basic/Pro/tier logic - see `SubscriptionPlan`'s
+/// removal note on `VendorSubscription`. Replaces the pre-remediation
+/// NONE/ACTIVE/PAST_DUE/SUSPENDED/CANCELLED enum, which modeled a
+/// grace-period billing lifecycle PDR-033 doesn't call for.
+///
+/// NONE: no trial ever activated (FR-VEND-004 gates offer creation on
+/// reaching ACTIVE). ACTIVE: within its one-month window, or already
+/// mock-renewed. EXPIRED: past `periodEnd` and not yet mock-renewed -
+/// blocks *new* offer/listing creation (the gate this enum drives) but
+/// never affects the vendor's own account access or already-placed
+/// orders, which this enum doesn't model at all.
+enum SubscriptionStatus {
+  NONE
+  ACTIVE
+  EXPIRED
 }
 
 model Vendor {
-  id        String       @id @default(uuid())
-  legalName String
-  status    VendorStatus @default(APPLIED)
-  createdAt DateTime     @default(now())
+  id                 String             @id @default(uuid())
+  legalName          String
+  status             VendorStatus       @default(APPLIED)
+  subscriptionStatus SubscriptionStatus @default(NONE)
+  createdAt          DateTime           @default(now())
 
-  vendorUsers   VendorUser[]
-  storeBranches StoreBranch[]
+  vendorUsers     VendorUser[]
+  storeBranches   StoreBranch[]
+  subscriptions   VendorSubscription[]
+  canonicalOffers VendorOffer[]
+  offerVariants   OfferVariant[]
 
   @@map("vendors")
 }
@@ -195,6 +249,15 @@ model StoreBranch {
   lng                  Float?
   verificationPhotoUrl String?
   verificationStatus   BranchVerificationStatus @default(PENDING)
+  /// Set by the reviewer's decision (BL-VEND-003, FR-VEND-003) alongside
+  /// verificationStatus. Nullable: never set for a branch still PENDING.
+  reviewedBy           String?
+  reviewer             User?                    @relation("BranchReviewer", fields: [reviewedBy], references: [id])
+  reviewedAt           DateTime?
+  /// The reviewer's reason on a REJECTED or RESUBMISSION_REQUESTED
+  /// decision (FR-VEND-003) - what the vendor needs to know to fix and
+  /// resubmit. Not set on APPROVED.
+  reviewNote           String?
   createdAt            DateTime                 @default(now())
 
   @@index([vendorId])
@@ -293,4 +356,276 @@ model IdempotencyKey {
   @@unique([key, scope, requestPath], name: "idempotency_lookup")
   @@index([expiresAt])
   @@map("idempotency_keys")
+}
+
+// ---------------------------------------------------------------------
+// Sprint 3 (EPIC-CAT / EPIC-MATCH / EPIC-VEND subset). Part 3, G.3's
+// "Catalog & matching domain" table. Deliberately NOT built this sprint
+// (see Part 8's sprint plan / 09-acceptance-traceability's OPEN items):
+// AttributeDefinition/AttributeOption (BL-CAT-004, full attribute
+// templates - BL-CAT-004b's specsText below is the FYP fallback),
+// ProductMedia, OfferBranchInventory, PriceHistory, ProductMatch
+// (BL-MATCH-003, queued/human-reviewed matches - this sprint only ships
+// the exact-match auto-link path, BL-MATCH-002), ImportJob/ImportRow,
+// FxRate. CanonicalProduct.product_type/warranty/tags are BL-CAT-003
+// (Should/stretch) and are also deliberately omitted.
+// ---------------------------------------------------------------------
+
+/// Part 3, G.3 (FR-CAT-001): hierarchical category/subcategory tree,
+/// AR/EN labels on every node. Self-referencing parentId; null means a
+/// root category.
+model Category {
+  id        String     @id @default(uuid())
+  nameAr    String
+  nameEn    String
+  parentId  String?
+  parent    Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children  Category[] @relation("CategoryTree")
+  createdAt DateTime   @default(now())
+
+  canonicalProducts CanonicalProduct[]
+
+  @@index([parentId])
+  @@map("categories")
+}
+
+/// Part 3, G.3 (FR-CAT-002). Sprint 3 ships only the FK-satisfying
+/// minimum a `CanonicalProduct` needs - a governed, non-duplicate name
+/// list - not the full BL-CAT-002 feature (fuzzy duplicate-detection
+/// UI/warnings), which Part 8's sprint plan marks Should/stretch and
+/// defers past this sprint. `normalizedName` (lowercased/trimmed at
+/// write time) gets a hard unique constraint, a mechanical collision
+/// guard; it is not the fuzzy-similarity check FR-CAT-002 ultimately
+/// wants.
+model Brand {
+  id             String   @id @default(uuid())
+  name           String
+  normalizedName String   @unique
+  createdAt      DateTime @default(now())
+
+  canonicalProducts CanonicalProduct[]
+
+  @@map("brands")
+}
+
+/// Part 3, G.3: Draft -> PendingReview -> Published -> Archived
+/// (listed as part of CanonicalProduct's own "Key fields" row, distinct
+/// from the deferred product_type/warranty/tags of BL-CAT-003). Sprint 3
+/// creates products directly at DRAFT/PUBLISHED (catalog-admin-authored,
+/// no separate review workflow yet) - PENDING_REVIEW exists in the enum
+/// because Part 3 specifies it, not because anything in this sprint
+/// transitions a product into it.
+enum CanonicalProductStatus {
+  DRAFT
+  PENDING_REVIEW
+  PUBLISHED
+  ARCHIVED
+}
+
+/// Part 3, G.3 / FR-MATCH-008: level 1 of the four-level model - model
+/// family identity (brand + category + model name). Never itself
+/// buyable; a `CanonicalProduct` is never linked to directly by an
+/// offer (see VendorOffer.canonicalProductId's comment) except as a
+/// derived/display convenience of its variants' links.
+///
+/// (brandId, modelName) is deliberately NOT a hard unique constraint -
+/// Part 3 explicitly calls for duplicate detection via ProductMatch
+/// review (FR-CAT-009), not a DB constraint, since model names alone
+/// aren't always unique across categories.
+model CanonicalProduct {
+  id         String                 @id @default(uuid())
+  brandId    String
+  brand      Brand                  @relation(fields: [brandId], references: [id])
+  categoryId String
+  category   Category               @relation(fields: [categoryId], references: [id])
+  modelName  String
+  status     CanonicalProductStatus @default(DRAFT)
+  createdAt  DateTime               @default(now())
+
+  variants     CanonicalProductVariant[]
+  vendorOffers VendorOffer[]
+
+  @@index([brandId])
+  @@index([categoryId])
+  @@map("canonical_products")
+}
+
+/// Part 3, G.3 / FR-MATCH-008: level 2 - the manufacturer-distinct SKU-
+/// defining variant (storage/color/size *when the manufacturer treats
+/// it as a distinct model/MPN*), used for canonical-to-canonical
+/// comparison. Never holds vendor-specific data (that's OfferVariant).
+///
+/// mpn is scoped-unique per Part 3 ((canonicalProductId, mpn) unique
+/// where mpn present - Postgres's standard NULLs-don't-collide behavior
+/// makes "where present" implicit). gtin gets an additional *global*
+/// unique constraint beyond what Part 3's table literally lists: a GTIN
+/// is a universal barcode standard (unique by definition, not just
+/// within one product), and BL-MATCH-002's exact-match auto-link needs
+/// a clean global index to query against.
+model CanonicalProductVariant {
+  id                   String           @id @default(uuid())
+  canonicalProductId   String
+  canonicalProduct     CanonicalProduct @relation(fields: [canonicalProductId], references: [id])
+  /// JSON: storage/color/size etc., only for dimensions the manufacturer
+  /// treats as a distinct model/MPN (FR-MATCH-008). Free-shape by design
+  /// - Sprint 3 does not build AttributeDefinition/AttributeOption.
+  structuralAttributes Json
+  mpn                  String?
+  gtin                 String?          @unique
+  createdAt            DateTime         @default(now())
+
+  confirmedOfferVariants OfferVariant[] @relation("ConfirmedMatch")
+  proposedOfferVariants  OfferVariant[] @relation("ProposedMatch")
+
+  @@unique([canonicalProductId, mpn])
+  @@map("canonical_product_variants")
+}
+
+/// Part 3, G.3: a specific vendor's sellable listing. canonicalProductId
+/// is nullable (null = unmatched/unique offer, FR-MATCH-001/009) and is
+/// a **derived display convenience, never an independent source of
+/// truth** (Part 3's tightened invariant): it must always equal the
+/// canonicalProductId of every one of its OfferVariants' matched
+/// canonical variant. The variant-level link (OfferVariant.
+/// canonicalVariantId) is authoritative; this field is only ever
+/// set/cleared by the same code path that sets/clears that one -
+/// starting with BL-MATCH-002's auto-link, never independently.
+enum OfferStatus {
+  DRAFT
+  ACTIVE
+  INACTIVE
+}
+
+model VendorOffer {
+  id                 String            @id @default(uuid())
+  vendorId           String
+  vendor             Vendor            @relation(fields: [vendorId], references: [id])
+  canonicalProductId String?
+  canonicalProduct   CanonicalProduct? @relation(fields: [canonicalProductId], references: [id])
+  titleAr            String
+  titleEn            String
+  status             OfferStatus       @default(DRAFT)
+  createdAt          DateTime          @default(now())
+
+  variants OfferVariant[]
+
+  @@index([vendorId])
+  @@index([canonicalProductId])
+  @@map("vendor_offers")
+}
+
+enum OfferCondition {
+  NEW
+  USED
+  REFURBISHED
+  OPEN_BOX
+}
+
+/// FR-MATCH-002/BR-001's exact-identifier auto-link needs the vendor to
+/// submit *some* raw identifier value to check - Part 3's "Key fields"
+/// row for OfferVariant doesn't list one explicitly, but the table is a
+/// summary, not exhaustive (it also omits every timestamp). identifierType
+/// mirrors the identifier kinds BR-001 names; GTIN/EAN/UPC/ISBN are
+/// treated as the same "global barcode" matching path (checked against
+/// CanonicalProductVariant.gtin), MPN against .mpn.
+enum OfferIdentifierType {
+  GTIN
+  EAN
+  UPC
+  ISBN
+  MPN
+}
+
+/// Sprint 3 remediation (FR-MATCH-012, approved-product-decisions-2026-09.md
+/// Sec 3.2 - not PDR-012, which is unrelated/covers store sections):
+/// "the vendor must explicitly confirm a proposed match... Exact
+/// identifier matches can be proposed automatically" - even BR-001's
+/// exact-identifier match is now a *proposal*, never an immediate link,
+/// so it can never affect comparison before the store owner acts on it
+/// (FR-MATCH-009-style: an unconfirmed proposal must never be presented
+/// as a canonical link). See MatchingService.findExactMatch() (renamed
+/// conceptually to "propose", not "auto-link") and the
+/// match-confirmation endpoint on VendorOffersController.
+enum MatchProposalStatus {
+  /// No exact-identifier match was found (or none was submitted) - a
+  /// normal unmatched/unique offer, nothing to confirm.
+  NONE
+  /// An exact match was found at creation time and is awaiting the
+  /// store owner's confirm/reject decision. canonicalVariantId is still
+  /// null in this state - the offer has not entered comparison.
+  PENDING
+  /// The store owner confirmed the proposal - canonicalVariantId (and
+  /// the parent VendorOffer's canonicalProductId) are now set.
+  CONFIRMED
+  /// The store owner rejected the proposal - the offer stays unmatched/
+  /// unique (FR-MATCH-009); it is not re-proposed automatically.
+  REJECTED
+}
+
+/// Part 3, G.3: level 3/4 - a vendor's specific sellable SKU. Never
+/// redefines what the product structurally *is* (FR-MATCH-008); price,
+/// condition, seller SKU and (until/unless matched) its own vendor-
+/// authored specs live here.
+///
+/// specsText (BL-CAT-004b): the FYP fallback for the full attribute-
+/// template system (BL-CAT-004, deferred) - one free-text field for
+/// vendor-authored specs on an offer, AR/EN.
+///
+/// Sprint 3 remediation: `currency` removed entirely (PDR-001, ILS is
+/// the only platform currency - see the removed-currency migration's
+/// comment for what this column used to be). `canonicalVariantId` is
+/// now set *only* on the store owner's explicit confirmation
+/// (FR-MATCH-012/S3-B03) - `proposedCanonicalVariantId` +
+/// `matchProposalStatus` hold an exact-identifier match found at
+/// creation time until that confirmation happens.
+model OfferVariant {
+  id                         String                   @id @default(uuid())
+  vendorId                   String
+  vendor                     Vendor                   @relation(fields: [vendorId], references: [id])
+  vendorOfferId              String
+  vendorOffer                VendorOffer              @relation(fields: [vendorOfferId], references: [id])
+  canonicalVariantId         String?
+  canonicalVariant           CanonicalProductVariant? @relation("ConfirmedMatch", fields: [canonicalVariantId], references: [id])
+  proposedCanonicalVariantId String?
+  proposedCanonicalVariant   CanonicalProductVariant? @relation("ProposedMatch", fields: [proposedCanonicalVariantId], references: [id])
+  matchProposalStatus        MatchProposalStatus      @default(NONE)
+  sellerSku                  String
+  condition                  OfferCondition           @default(NEW)
+  basePrice                  Decimal                  @db.Decimal(10, 2)
+  salePrice                  Decimal?                 @db.Decimal(10, 2)
+  specsTextAr                String?
+  specsTextEn                String?
+  identifierType             OfferIdentifierType?
+  identifierValue            String?
+  createdAt                  DateTime                 @default(now())
+
+  @@unique([vendorId, sellerSku])
+  @@index([vendorOfferId])
+  @@index([canonicalVariantId])
+  @@index([proposedCanonicalVariantId])
+  @@map("offer_variants")
+}
+
+/// Part 3, G.2 (FR-VEND-004, BR-SUBSCRIPTION). Sprint 3 remediation
+/// (PDR-033): replaces the removed `SubscriptionPlan` tier selection
+/// with a single unified sandbox/trial - one month, mock monthly
+/// renewal, no real payment. `SubscriptionStatus` (on `Vendor`) tracks
+/// whether the trial is currently ACTIVE or has lapsed into EXPIRED
+/// (checked lazily, wherever the gate is evaluated - see
+/// SubscriptionsController); this row records the trial period itself
+/// and is mock-renewed via an explicit sandbox endpoint, the same
+/// simulated-action pattern already used for OPEN-001 (payment) and
+/// OPEN-004 (SMS) - there is no real billing, and no scheduled-job
+/// worker in this codebase to renew it invisibly.
+model VendorSubscription {
+  id          String             @id @default(uuid())
+  vendorId    String
+  vendor      Vendor             @relation(fields: [vendorId], references: [id])
+  status      SubscriptionStatus @default(ACTIVE)
+  periodStart DateTime           @default(now())
+  periodEnd   DateTime
+  createdAt   DateTime           @default(now())
+
+  @@index([vendorId])
+  @@map("vendor_subscriptions")
 }
