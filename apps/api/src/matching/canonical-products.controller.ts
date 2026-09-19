@@ -11,6 +11,7 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { Request } from 'express';
 import { AuditLogService } from '../audit/audit-log.service';
 import { CurrentUser } from '../auth/current-user.decorator';
@@ -21,6 +22,7 @@ import {
   AuthenticatedUser,
   SessionAuthGuard,
 } from '../auth/session-auth.guard';
+import { generatePlatformProductBarcode } from '../common/barcode.util';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
@@ -179,13 +181,20 @@ export class CanonicalProductsController {
 
     try {
       return await this.prisma.$transaction(async (tx) => {
+        // Sprint 5 (RB-INV-001): the id is generated up front (rather
+        // than left to the column's own @default(uuid())) so
+        // platformProductBarcode can be derived from it deterministically
+        // before the row is inserted - see barcode.util.ts.
+        const id = randomUUID();
         const variant = await tx.canonicalProductVariant.create({
           data: {
+            id,
             canonicalProductId: productId,
             structuralAttributes:
               dto.structural_attributes as Prisma.InputJsonValue,
             mpn: dto.mpn,
             gtin: dto.gtin,
+            platformProductBarcode: generatePlatformProductBarcode(id),
           },
         });
 

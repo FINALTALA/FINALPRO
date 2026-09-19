@@ -979,4 +979,131 @@ describe('Sprint 4 - roles, staff invites, workspace switcher (e2e)', () => {
       ]);
     });
   });
+
+  // Sprint 5 (RB-ROLE-006): completes the RB-ROLE-004 regression suite
+  // above. This block's first two tests cover a real gap found while
+  // writing it - VendorOffersController's every route used to be
+  // guarded by a private requireOwner() that only checked *membership*
+  // (any role), not role - a BRANCH_EMPLOYEE could reach catalog/price
+  // writes, a direct PDR-009 violation. Fixed alongside these tests by
+  // switching that controller to the same VendorMembershipGuard/
+  // @RequireVendorRole('OWNER') pattern already proven here.
+  describe('RB-ROLE-006: regression tests completing employee/owner permission coverage', () => {
+    it("refuses a BRANCH_EMPLOYEE from listing a vendor's offers - catalog is owner-only (PDR-009), not just price-editing", async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const employeePhone = uniquePhone();
+      const accepted = await inviteAndAcceptAsNewUser(
+        owner,
+        vendorId,
+        branchId,
+        employeePhone,
+        'employee-password',
+      );
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/vendors/${vendorId}/offers`)
+        .set('Authorization', `Bearer ${accepted.session_token}`)
+        .expect(403);
+      expect(res.body.error.code).toBe('VENDOR_ROLE_FORBIDDEN');
+    });
+
+    it('refuses a BRANCH_EMPLOYEE from creating a vendor offer (price/catalog write) - the exact PDR-009 violation this round found and fixed', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const employeePhone = uniquePhone();
+      const accepted = await inviteAndAcceptAsNewUser(
+        owner,
+        vendorId,
+        branchId,
+        employeePhone,
+        'employee-password',
+      );
+
+      // The guard runs before the handler body, so this is rejected
+      // before the (unrelated) subscription-active gate is ever
+      // reached - no need to activate a subscription for this test.
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/offers`)
+        .set('Authorization', `Bearer ${accepted.session_token}`)
+        .set('Idempotency-Key', unique('offer-as-employee'))
+        .send({ title_ar: 'منتج', title_en: 'Product' })
+        .expect(403);
+      expect(res.body.error.code).toBe('VENDOR_ROLE_FORBIDDEN');
+
+      const offers = await prisma.vendorOffer.findMany({ where: { vendorId } });
+      expect(offers).toHaveLength(0);
+    });
+
+    it('still lets the OWNER list their own (empty) offers - the fix must not also lock out legitimate owner access', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId } = await createVendorWithBranch(owner);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/vendors/${vendorId}/offers`)
+        .set('Authorization', `Bearer ${owner}`)
+        .expect(200);
+      expect(res.body).toEqual([]);
+    });
+
+    it("refuses a BRANCH_EMPLOYEE of vendor A from reading vendor B's offers at all (cross-tenant BOLA, not just cross-role)", async () => {
+      const ownerA = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId: vendorAId, branchId: branchAId } =
+        await createVendorWithBranch(ownerA);
+      const employeePhone = uniquePhone();
+      const accepted = await inviteAndAcceptAsNewUser(
+        ownerA,
+        vendorAId,
+        branchAId,
+        employeePhone,
+        'employee-password',
+      );
+
+      const ownerB = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId: vendorBId } = await createVendorWithBranch(ownerB);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/vendors/${vendorBId}/offers`)
+        .set('Authorization', `Bearer ${accepted.session_token}`)
+        .expect(403);
+      expect(res.body.error.code).toBe('NOT_VENDOR_MEMBER');
+    });
+
+    // SubscriptionsController had the exact same requireOwner()-only-
+    // checks-membership bug as VendorOffersController above - found and
+    // fixed alongside it (subscription is explicitly on PDR-009's
+    // owner-only list too).
+    it('refuses a BRANCH_EMPLOYEE from reading or activating the vendor subscription - PDR-009 lists it as owner-only', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const employeePhone = uniquePhone();
+      const accepted = await inviteAndAcceptAsNewUser(
+        owner,
+        vendorId,
+        branchId,
+        employeePhone,
+        'employee-password',
+      );
+      const employeeToken = accepted.session_token as string;
+
+      const readRes = await request(app.getHttpServer())
+        .get(`/api/v1/vendors/${vendorId}/subscription`)
+        .set('Authorization', `Bearer ${employeeToken}`)
+        .expect(403);
+      expect(readRes.body.error.code).toBe('VENDOR_ROLE_FORBIDDEN');
+
+      const activateRes = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/subscription`)
+        .set('Authorization', `Bearer ${employeeToken}`)
+        .set('Idempotency-Key', unique('sub-as-employee'))
+        .send({})
+        .expect(403);
+      expect(activateRes.body.error.code).toBe('VENDOR_ROLE_FORBIDDEN');
+
+      const sub = await prisma.vendorSubscription.findFirst({
+        where: { vendorId },
+      });
+      expect(sub).toBeNull();
+    });
+  });
 });

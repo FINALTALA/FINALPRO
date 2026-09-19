@@ -18,6 +18,8 @@ import {
   AuthenticatedUser,
   SessionAuthGuard,
 } from '../auth/session-auth.guard';
+import { VendorMembershipGuard } from '../auth/vendor-membership.guard';
+import { RequireVendorRole } from '../auth/vendor-role.decorator';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
@@ -34,9 +36,18 @@ import { SubscriptionGateService } from './subscription-gate.service';
  * an explicit, visible, simulated action standing in for what a real
  * monthly billing cron would do invisibly - this codebase has no
  * scheduled-job worker to do that for real.
+ *
+ * Sprint 5 review-round finding (RB-ROLE-006): every route here used to
+ * be guarded by a private requireOwner() that only checked *membership*
+ * (any role), not role itself - a BRANCH_EMPLOYEE could reach
+ * subscription activation/renewal/status, a direct PDR-009 violation
+ * ("subscription" is explicitly on the owner-only list) pre-dating this
+ * sprint. Found and fixed the same way as the identical bug in
+ * VendorOffersController - see that controller's own comment for why
+ * @RequireVendorRole is applied per-method, not at the class level.
  */
 @Controller('vendors/:vendorId/subscription')
-@UseGuards(SessionAuthGuard)
+@UseGuards(SessionAuthGuard, VendorMembershipGuard)
 export class SubscriptionsController {
   constructor(
     private readonly prisma: PrismaService,
@@ -44,18 +55,6 @@ export class SubscriptionsController {
     private readonly idempotencyCompletion: IdempotencyCompletionService,
     private readonly subscriptionGate: SubscriptionGateService,
   ) {}
-
-  private async requireOwner(vendorId: string, userId: string) {
-    const membership = await this.prisma.vendorUser.findUnique({
-      where: { userId_vendorId: { userId, vendorId } },
-    });
-    if (!membership) {
-      throw new ForbiddenException({
-        code: 'NOT_VENDOR_OWNER',
-        message: 'You are not a member of this vendor account',
-      });
-    }
-  }
 
   private toDto(sub: {
     id: string;
@@ -75,12 +74,12 @@ export class SubscriptionsController {
   }
 
   @Get()
+  @RequireVendorRole('OWNER')
   async current(
     @Param('vendorId') vendorId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Req() req: Request,
   ) {
-    await this.requireOwner(vendorId, user.id);
     return this.prisma.$transaction(async (tx) => {
       await this.subscriptionGate.refreshStatus(
         tx,
@@ -104,13 +103,12 @@ export class SubscriptionsController {
   @Post()
   @HttpCode(201)
   @UseInterceptors(IdempotencyInterceptor)
+  @RequireVendorRole('OWNER')
   async activate(
     @Param('vendorId') vendorId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Req() req: Request,
   ) {
-    await this.requireOwner(vendorId, user.id);
-
     const { subscription, alreadyActive } = await this.prisma.$transaction(
       async (tx) => {
         // Serializes concurrent activation requests for the same vendor -
@@ -216,13 +214,12 @@ export class SubscriptionsController {
   @Post('renew')
   @HttpCode(200)
   @UseInterceptors(IdempotencyInterceptor)
+  @RequireVendorRole('OWNER')
   async renew(
     @Param('vendorId') vendorId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Req() req: Request,
   ) {
-    await this.requireOwner(vendorId, user.id);
-
     return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM vendors WHERE id = ${vendorId} FOR UPDATE`;
 
