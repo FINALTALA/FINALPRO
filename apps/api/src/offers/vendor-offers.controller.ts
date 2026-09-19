@@ -96,7 +96,8 @@ export class VendorOffersController {
     return {
       id: variant.id,
       vendor_offer_id: variant.vendorOfferId,
-      // Sprint 3 remediation (PDR-012): canonical_variant_id is set
+      // Sprint 3 remediation (FR-MATCH-012, Sec 3.2 - not PDR-012, which
+      // is unrelated/covers store sections): canonical_variant_id is set
       // *only* once the store owner confirms - see
       // match_proposal_status/proposed_canonical_variant_id for a
       // pending exact-identifier match still awaiting that decision.
@@ -201,7 +202,8 @@ export class VendorOffersController {
     });
   }
 
-  // Sprint 3 remediation (PDR-012, S3-B03): an exact-identifier match
+  // Sprint 3 remediation (FR-MATCH-012, Sec 3.2, S3-B03 - not PDR-012,
+  // which is unrelated/covers store sections): an exact-identifier match
   // (BR-001/FR-MATCH-002) is now only ever a *proposal* - it never sets
   // canonicalVariantId here, however unambiguous the identifier is. No
   // cross-offer locking is needed at creation time any more either:
@@ -303,20 +305,21 @@ export class VendorOffersController {
     return variant;
   }
 
-  // Sprint 3 remediation (PDR-012, S3-B03): the store owner's explicit
-  // confirm/reject of a pending match proposal - the only thing that
-  // can ever set canonicalVariantId (and, transitively, the parent
-  // VendorOffer's canonicalProductId). Locks the VendorOffer row for
-  // the same reason createVariant() used to: two different variants
+  // Sprint 3 remediation (FR-MATCH-012, Sec 3.2, S3-B03 - not PDR-012,
+  // which is unrelated/covers store sections): the store owner's
+  // explicit confirm/reject of a pending match proposal - the only
+  // thing that can ever set canonicalVariantId (and, transitively, the
+  // parent VendorOffer's canonicalProductId). Locks the VendorOffer row
+  // for the same reason createVariant() used to: two different variants
   // under the same offer being confirmed to two *different* canonical
   // products concurrently could otherwise both read the offer as
   // unlinked and both "win" - see the e2e concurrency test for this
   // exact race.
   //
-  // Review-round finding, deliberately NOT implemented here (tracked as
-  // OPEN-014, docs/srs/07-risks-and-decisions.md): this method only
-  // covers the *matching* half of PDR-012 (BR-001/FR-MATCH-002). It does
-  // not implement the *naming* half of Part 3.2 - "the first confirmed
+  // Review-round finding, deliberately NOT implemented here: this
+  // method only covers the *matching* half of Sec 3.2 (BR-001/
+  // FR-MATCH-002/FR-MATCH-012). It does not implement that section's
+  // separate, already-decided naming rule - "the first confirmed
   // matched offer supplies a provisional canonical name... a later
   // matching vendor must adopt the canonical name if it accepts the
   // product is identical... any matched vendor may request a
@@ -326,8 +329,10 @@ export class VendorOffersController {
   // entity for a requested rename - that is real, substantial new scope
   // (new fields, a first-confirmer-sets-the-name mechanic, a whole
   // approval flow) that this remediation's three named blockers
-  // (S3-B01/B02/B03) did not include. PDR-012 is NOT complete; do not
-  // treat confirmed matches as having a synchronized display name.
+  // (S3-B01/B02/B03) did not include. This deferred requirement belongs
+  // in the docs/product-decisions-2026-09 branch's backlog, not this
+  // SRS/PR - it is NOT built here; do not treat confirmed matches as
+  // having a synchronized display name.
   @Post(':offerId/variants/:variantId/match-confirmation')
   @HttpCode(200)
   @UseInterceptors(IdempotencyInterceptor)

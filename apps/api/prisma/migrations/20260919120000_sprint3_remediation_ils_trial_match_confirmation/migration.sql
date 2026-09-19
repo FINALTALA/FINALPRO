@@ -1,5 +1,5 @@
 -- Sprint 3 remediation (approved-product-decisions-2026-09.md,
--- PDR-001/PDR-012/PDR-033; docs/sprint-1-3-compatibility-audit-2026-09.md
+-- PDR-001/PDR-033/FR-MATCH-012 (Sec 3.2); docs/sprint-1-3-compatibility-audit-2026-09.md
 -- S3-B01/S3-B02/S3-B03). Three changes, each tied to one blocker:
 --
 -- 1. PDR-001 (ILS-only): drops offer_variants.currency entirely - there
@@ -11,8 +11,9 @@
 --    no Basic/Pro tiers, no grace-period billing lifecycle. SubscriptionStatus
 --    is narrowed from NONE/ACTIVE/PAST_DUE/SUSPENDED/CANCELLED to
 --    NONE/ACTIVE/EXPIRED.
--- 3. PDR-012 (match confirmation required): adds
---    offer_variants.matchProposalStatus/proposedCanonicalVariantId - an
+-- 3. FR-MATCH-012 (match confirmation required, approved-product-decisions-2026-09.md
+--    Sec 3.2 - NOT PDR-012, which is unrelated and covers store sections):
+--    adds offer_variants.matchProposalStatus/proposedCanonicalVariantId - an
 --    exact-identifier match is now stored as a pending proposal, never
 --    an immediate link, until the store owner explicitly confirms it.
 --

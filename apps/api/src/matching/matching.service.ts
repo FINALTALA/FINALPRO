@@ -11,11 +11,12 @@ export interface MatchCandidateResult {
  * BR-001 / FR-MATCH-002: finds the unambiguous `CanonicalProductVariant`
  * an exact product identifier match on a vendor offer would link to.
  *
- * Sprint 3 remediation (PDR-012, S3-B03): even an exact identifier
+ * Sprint 3 remediation (FR-MATCH-012, S3-B03): even an exact identifier
  * match is only ever a *proposal* now, never an immediate link with no
  * human review - "the vendor must explicitly confirm a proposed match...
  * Exact identifier matches can be proposed automatically" (approved-
- * product-decisions-2026-09.md). This method still only *finds* the
+ * product-decisions-2026-09.md, Sec 3.2 - not PDR-012, which is
+ * unrelated/covers store sections). This method still only *finds* the
  * candidate; VendorOffersController.createVariant() stores it as a
  * pending proposal, and confirmMatch() is the only place that ever
  * turns it into a real `canonicalVariantId` link, on the store owner's

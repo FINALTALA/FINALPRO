@@ -1016,7 +1016,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .expect(403);
     });
 
-    it('an exact gtin match is stored as a pending proposal, never an immediate link - the offer does not enter comparison until the store owner confirms it (PDR-012, TC-MATCH-001, S3-B03)', async () => {
+    it('an exact gtin match is stored as a pending proposal, never an immediate link - the offer does not enter comparison until the store owner confirms it (FR-MATCH-012, TC-MATCH-001, S3-B03)', async () => {
       const admin = await signupWithPlatformRole('PLATFORM_ADMIN');
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const reviewer = await signupWithPlatformRole('VERIFICATION_REVIEWER');
@@ -1106,7 +1106,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
       expect(linked.canonical_product_id).toBe(product.body.id);
     });
 
-    it('a rejected match proposal stays unmatched permanently and cannot be re-confirmed (PDR-012)', async () => {
+    it('a rejected match proposal stays unmatched permanently and cannot be re-confirmed (FR-MATCH-012)', async () => {
       const admin = await signupWithPlatformRole('PLATFORM_ADMIN');
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const reviewer = await signupWithPlatformRole('VERIFICATION_REVIEWER');

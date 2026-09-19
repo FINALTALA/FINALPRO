@@ -47,7 +47,9 @@ export class CreateOfferVariantDto {
   @IsString()
   specs_text_en?: string;
 
-  // FR-MATCH-002 / BL-MATCH-002, Sprint 3 remediation (PDR-012):
+  // FR-MATCH-002 / BL-MATCH-002, Sprint 3 remediation (FR-MATCH-012,
+  // approved-product-decisions-2026-09.md Sec 3.2 - not PDR-012, which
+  // is unrelated/covers store sections):
   // submitting both fields together makes MatchingService.findExactMatch()
   // look for a candidate, but an exact match is only ever stored as a
   // *pending proposal* now - it never links immediately, however exact
