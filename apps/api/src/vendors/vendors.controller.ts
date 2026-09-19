@@ -1,5 +1,6 @@
 import {
   Body,
+  ConflictException,
   Controller,
   ForbiddenException,
   Get,
@@ -25,6 +26,7 @@ import {
   VendorMembershipGuard,
 } from '../auth/vendor-membership.guard';
 import { RequireVendorRole } from '../auth/vendor-role.decorator';
+import { Prisma } from '../../generated/prisma/client';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
@@ -226,48 +228,84 @@ export class VendorsController {
       });
     }
 
-    const body = await this.prisma.$transaction(async (tx) => {
-      const invite = await tx.staffInvite.create({
-        data: {
-          vendorId,
-          branchId,
-          phone: dto.phone,
-          invitedById: user.id,
-          expiresAt: new Date(Date.now() + STAFF_INVITE_TTL_MS),
-        },
-      });
-      await this.auditLog.record(
-        {
-          actorId: user.id,
-          correlationId: req.correlationId,
-          action: 'staff_invite.created',
-          entityType: 'StaffInvite',
-          entityId: invite.id,
-          afterState: {
-            vendor_id: vendorId,
-            branch_id: branchId,
-            phone: dto.phone,
-          },
-        },
-        tx,
-      );
-
-      const responseBody = {
-        id: invite.id,
-        vendor_id: vendorId,
-        branch_id: branchId,
-        phone: invite.phone,
-        status: invite.status,
-        expires_at: invite.expiresAt.toISOString(),
-      };
-      await this.idempotencyCompletion.complete(
-        tx,
-        req.idempotencyClaimId,
-        responseBody,
-        201,
-      );
-      return responseBody;
+    // Review-round finding: a plain pre-check here (findFirst then
+    // create, two separate statements) is only a fast, friendly
+    // rejection for the common case - it cannot by itself prevent two
+    // concurrent invites for the same (vendorId, phone) racing each
+    // other, since both could pass this check before either commits.
+    // The `staff_invites_vendor_phone_pending_key` partial unique index
+    // (this sprint's own migration) is what actually closes that race
+    // atomically at the database layer; the catch block below is what
+    // turns *that* into the same clean 409 for whichever request loses
+    // it, so a concurrent caller sees a consistent error either way.
+    const existingPending = await this.prisma.staffInvite.findFirst({
+      where: { vendorId, phone: dto.phone, status: 'PENDING' },
     });
+    if (existingPending) {
+      throw new ConflictException({
+        code: 'STAFF_INVITE_ALREADY_PENDING',
+        message:
+          'This phone number already has a pending invite for this vendor account',
+      });
+    }
+
+    let body;
+    try {
+      body = await this.prisma.$transaction(async (tx) => {
+        const invite = await tx.staffInvite.create({
+          data: {
+            vendorId,
+            branchId,
+            phone: dto.phone,
+            invitedById: user.id,
+            expiresAt: new Date(Date.now() + STAFF_INVITE_TTL_MS),
+          },
+        });
+        await this.auditLog.record(
+          {
+            actorId: user.id,
+            correlationId: req.correlationId,
+            action: 'staff_invite.created',
+            entityType: 'StaffInvite',
+            entityId: invite.id,
+            afterState: {
+              vendor_id: vendorId,
+              branch_id: branchId,
+              phone: dto.phone,
+            },
+          },
+          tx,
+        );
+
+        const responseBody = {
+          id: invite.id,
+          vendor_id: vendorId,
+          branch_id: branchId,
+          phone: invite.phone,
+          status: invite.status,
+          expires_at: invite.expiresAt.toISOString(),
+        };
+        await this.idempotencyCompletion.complete(
+          tx,
+          req.idempotencyClaimId,
+          responseBody,
+          201,
+        );
+        return responseBody;
+      });
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        throw new ConflictException({
+          code: 'STAFF_INVITE_ALREADY_PENDING',
+          message:
+            'This phone number already has a pending invite for this vendor account',
+        });
+      }
+      throw err;
+    }
 
     // Issued after the transaction commits - OtpService.issue() writes
     // through the top-level PrismaService, not this method's `tx`, so it

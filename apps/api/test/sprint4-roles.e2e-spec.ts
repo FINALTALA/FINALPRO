@@ -292,6 +292,165 @@ describe('Sprint 4 - roles, staff invites, workspace switcher (e2e)', () => {
     });
   });
 
+  describe('Review-round fix: cross-vendor branch integrity and conflicting pending invites', () => {
+    it('rejects a direct write linking a VendorUser to a branch belonging to a DIFFERENT vendor (composite FK, not just a plain existence check)', async () => {
+      const ownerA = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId: vendorAId } = await createVendorWithBranch(ownerA);
+      const ownerB = await signup(uniquePhone(), 'a-strong-password');
+      const { branchId: branchBId } = await createVendorWithBranch(ownerB);
+      const rogueUser = await prisma.user.create({
+        data: { phone: uniquePhone(), passwordHash: 'x' },
+      });
+
+      await expect(
+        prisma.vendorUser.create({
+          data: {
+            userId: rogueUser.id,
+            vendorId: vendorAId,
+            role: 'BRANCH_EMPLOYEE',
+            branchId: branchBId,
+          },
+        }),
+      ).rejects.toThrow();
+    });
+
+    it('rejects a direct write linking a StaffInvite to a branch belonging to a DIFFERENT vendor (composite FK)', async () => {
+      const ownerA = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId: vendorAId } = await createVendorWithBranch(ownerA);
+      const ownerB = await signup(uniquePhone(), 'a-strong-password');
+      const { branchId: branchBId } = await createVendorWithBranch(ownerB);
+      const someUser = await prisma.user.create({
+        data: { phone: uniquePhone(), passwordHash: 'x' },
+      });
+
+      await expect(
+        prisma.staffInvite.create({
+          data: {
+            vendorId: vendorAId,
+            branchId: branchBId,
+            phone: uniquePhone(),
+            invitedById: someUser.id,
+            expiresAt: new Date(Date.now() + 1000 * 60 * 60),
+          },
+        }),
+      ).rejects.toThrow();
+    });
+
+    it('refuses a second pending invite for the same phone in the same vendor even when it targets a DIFFERENT branch - acceptance must never be ambiguous about which branch wins', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const applyRes = await request(app.getHttpServer())
+        .post('/api/v1/vendors')
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('vendor-apply'))
+        .send({
+          legal_name: unique('Vendor'),
+          branches: [
+            { name: 'Branch A', is_physical: true },
+            { name: 'Branch B', is_physical: true },
+          ],
+        })
+        .expect(201);
+      const vendorId = applyRes.body.id;
+      const branchAId = applyRes.body.branches[0].id;
+      const branchBId = applyRes.body.branches[1].id;
+      const targetPhone = uniquePhone();
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/branches/${branchAId}/staff-invites`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('invite-a'))
+        .send({ phone: targetPhone })
+        .expect(201);
+
+      const second = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/branches/${branchBId}/staff-invites`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('invite-b'))
+        .send({ phone: targetPhone })
+        .expect(409);
+      expect(second.body.error.code).toBe('STAFF_INVITE_ALREADY_PENDING');
+
+      const pendingInvites = await prisma.staffInvite.findMany({
+        where: { vendorId, phone: targetPhone, status: 'PENDING' },
+      });
+      expect(pendingInvites).toHaveLength(1);
+      expect(pendingInvites[0].branchId).toBe(branchAId);
+    });
+
+    it('still allows a new invite to the same phone from a DIFFERENT vendor - the pending-invite uniqueness is per-vendor, not global', async () => {
+      const ownerA = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId: vendorAId, branchId: branchAId } =
+        await createVendorWithBranch(ownerA);
+      const ownerB = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId: vendorBId, branchId: branchBId } =
+        await createVendorWithBranch(ownerB);
+      const sharedPhone = uniquePhone();
+
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorAId}/branches/${branchAId}/staff-invites`,
+        )
+        .set('Authorization', `Bearer ${ownerA}`)
+        .set('Idempotency-Key', unique('invite-a'))
+        .send({ phone: sharedPhone })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorBId}/branches/${branchBId}/staff-invites`,
+        )
+        .set('Authorization', `Bearer ${ownerB}`)
+        .set('Idempotency-Key', unique('invite-b'))
+        .send({ phone: sharedPhone })
+        .expect(201);
+    });
+
+    it('under two concurrent invite requests for the same phone in the same vendor targeting two different branches, exactly one succeeds and exactly one PENDING row survives', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const applyRes = await request(app.getHttpServer())
+        .post('/api/v1/vendors')
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('vendor-apply'))
+        .send({
+          legal_name: unique('Vendor'),
+          branches: [
+            { name: 'Branch A', is_physical: true },
+            { name: 'Branch B', is_physical: true },
+          ],
+        })
+        .expect(201);
+      const vendorId = applyRes.body.id;
+      const branchAId = applyRes.body.branches[0].id;
+      const branchBId = applyRes.body.branches[1].id;
+      const targetPhone = uniquePhone();
+
+      const [resA, resB] = await Promise.all([
+        request(app.getHttpServer())
+          .post(
+            `/api/v1/vendors/${vendorId}/branches/${branchAId}/staff-invites`,
+          )
+          .set('Authorization', `Bearer ${owner}`)
+          .set('Idempotency-Key', unique('invite-race-a'))
+          .send({ phone: targetPhone }),
+        request(app.getHttpServer())
+          .post(
+            `/api/v1/vendors/${vendorId}/branches/${branchBId}/staff-invites`,
+          )
+          .set('Authorization', `Bearer ${owner}`)
+          .set('Idempotency-Key', unique('invite-race-b'))
+          .send({ phone: targetPhone }),
+      ]);
+
+      const statuses = [resA.status, resB.status].sort();
+      expect(statuses).toEqual([201, 409]);
+
+      const pendingInvites = await prisma.staffInvite.findMany({
+        where: { vendorId, phone: targetPhone, status: 'PENDING' },
+      });
+      expect(pendingInvites).toHaveLength(1);
+    });
+  });
+
   describe('RB-ROLE-004: least-privilege authorization (BOLA and cross-branch access)', () => {
     async function setupVendorWithTwoBranchesAndEmployee() {
       const owner = await signup(uniquePhone(), 'a-strong-password');

@@ -256,7 +256,17 @@ model VendorUser {
   vendor   Vendor         @relation(fields: [vendorId], references: [id])
   role     VendorUserRole @default(OWNER)
   branchId String?
-  branch   StoreBranch?   @relation(fields: [branchId], references: [id])
+  /// Composite FK (vendorId, branchId) -> StoreBranch(vendorId, id), not
+  /// a plain branchId -> StoreBranch.id FK (review-round finding): a
+  /// single-column FK only proves the branch row *exists*, not that it
+  /// belongs to *this* VendorUser's own vendorId - nothing stopped a
+  /// direct write from linking an employee to a different vendor's
+  /// branch. Sharing the vendorId column with the `vendor` relation
+  /// above is deliberate and valid (a scalar column can participate in
+  /// more than one FK); MATCH SIMPLE means this constraint is simply
+  /// not checked when branchId is null (OWNER rows), matching this
+  /// table's own role/branchId CHECK constraint exactly.
+  branch   StoreBranch?   @relation(fields: [vendorId, branchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
 
   @@unique([userId, vendorId])
   @@index([branchId])
@@ -287,6 +297,11 @@ model StoreBranch {
   vendorUsers  VendorUser[]
   staffInvites StaffInvite[]
 
+  /// Backs the composite FKs on VendorUser/StaffInvite (vendorId,
+  /// branchId) -> (vendorId, id) - a plain PK-only unique on `id`
+  /// already exists, but a composite FK's referenced side must be
+  /// itself unique on the exact column pair it's referenced by.
+  @@unique([vendorId, id])
   @@index([vendorId])
   @@map("store_branches")
 }
@@ -309,7 +324,10 @@ model StaffInvite {
   vendorId    String
   vendor      Vendor            @relation(fields: [vendorId], references: [id])
   branchId    String
-  branch      StoreBranch       @relation(fields: [branchId], references: [id])
+  /// Same composite-FK reasoning as VendorUser.branch above - a plain
+  /// branchId -> StoreBranch.id FK never verified the branch belonged
+  /// to this same vendorId.
+  branch      StoreBranch       @relation(fields: [vendorId, branchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
   phone       String
   invitedById String
   invitedBy   User              @relation("StaffInviter", fields: [invitedById], references: [id])
@@ -320,6 +338,19 @@ model StaffInvite {
 
   @@index([phone, status])
   @@index([vendorId])
+  /// Review-round finding: at most one PENDING invite per
+  /// (vendorId, phone), regardless of branch - prevents an owner
+  /// (or a race) from creating two PENDING invites for the same
+  /// person to two different branches of the same vendor, which would
+  /// make acceptance ambiguous. A partial unique index, not a plain
+  /// `@@unique`, since ACCEPTED rows for the same vendor/phone must
+  /// stay allowed to exist (a real audit history, per PDR-010's
+  /// "retain the old record"). Prisma's schema DSL cannot express a
+  /// partial index, so this is declared here for documentation only -
+  /// the actual index is created by hand in this model's migration
+  /// (the same already-established pattern as VendorUser's role/branch
+  /// CHECK constraint, which is likewise invisible to `schema.prisma`
+  /// but real in the database).
   @@map("staff_invites")
 }
 
