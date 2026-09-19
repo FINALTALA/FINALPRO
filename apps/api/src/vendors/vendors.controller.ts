@@ -220,13 +220,9 @@ export class VendorsController {
     // Fast, friendly, non-authoritative fail-fast for the common case -
     // avoids starting a transaction/lock at all for a request that's
     // obviously going to be rejected. Not load-bearing for correctness
-    // on its own; see the fresh re-checks under the vendor lock below,
-    // which are what actually closes the race this review round found
-    // (see this method's own comment further down for the exact
-    // scenario: inviteStaff's checks running interleaved with a
-    // concurrent acceptStaffInvite() for an older invite to the same
-    // phone/vendor could otherwise create a new PENDING invite for a
-    // phone that has, in the meantime, already become a member).
+    // on its own; see the fresh re-checks under the advisory lock
+    // below, which are what actually close every race this method's
+    // own review-round comments describe.
     const existingMember = await this.prisma.vendorUser.findFirst({
       where: { vendorId, user: { phone: dto.phone } },
     });
@@ -237,39 +233,54 @@ export class VendorsController {
           'This phone number already belongs to a member of this vendor account',
       });
     }
+    // Review-round finding (round 4): PDR-008/SRS Part 3 G.0 - a
+    // BRANCH_EMPLOYEE is assigned to one branch *at a time*, across
+    // every vendor, not just within this one. Distinct from
+    // ALREADY_VENDOR_MEMBER above, which only covers *this* vendor;
+    // this covers the phone already being staff *anywhere else*.
+    const existingEmployeeElsewhere = await this.prisma.vendorUser.findFirst({
+      where: { role: 'BRANCH_EMPLOYEE', user: { phone: dto.phone } },
+    });
+    if (existingEmployeeElsewhere) {
+      throw new ForbiddenException({
+        code: 'EMPLOYEE_ALREADY_ASSIGNED',
+        message:
+          'This phone number is already assigned as a branch employee elsewhere - reassignment is not supported yet',
+      });
+    }
+    // Global, not vendor-scoped (round 4): acceptStaffInvite() has no
+    // invite_id parameter and resolves "the" invite for a phone by a
+    // plain most-recent-PENDING lookup - two PENDING invites for the
+    // same phone from different vendors would make that ambiguous.
     const existingPending = await this.prisma.staffInvite.findFirst({
-      where: { vendorId, phone: dto.phone, status: 'PENDING' },
+      where: { phone: dto.phone, status: 'PENDING' },
     });
     if (existingPending) {
       throw new ConflictException({
         code: 'STAFF_INVITE_ALREADY_PENDING',
-        message:
-          'This phone number already has a pending invite for this vendor account',
+        message: 'This phone number already has a pending staff invite',
       });
     }
 
     let body;
     try {
       body = await this.prisma.$transaction(async (tx) => {
-        // Review-round finding: locks this vendor's row for the
-        // duration of this transaction, serializing against
-        // AuthController.acceptStaffInvite()'s own lock on the same
-        // row (it locks by the invite's own vendorId - the same
-        // vendorId this route already has). Without this, the two
-        // pre-checks above (member? pending?) could straddle a
-        // concurrent accept() that runs its *entire* invite-to-member
-        // conversion in between them: existingMember reads false
-        // (before accept() commits), accept() then commits (creates
-        // the VendorUser, flips the OLD invite to ACCEPTED),
-        // existingPending then *also* reads false (the old invite is
-        // no longer PENDING) - neither check ever catches that the
-        // phone is now genuinely a member, and a new, permanently
-        // unacceptable PENDING invite gets created for someone who's
-        // already staff. Re-checking both fresh, inside the same
-        // transaction that holds this lock, closes that gap: whichever
-        // of inviteStaff()/acceptStaffInvite() commits first is fully
-        // visible to the other before it reads anything.
-        await tx.$queryRaw`SELECT id FROM vendors WHERE id = ${vendorId} FOR UPDATE`;
+        // Review-round finding (round 3, widened in round 4): a
+        // Postgres advisory lock keyed by the phone number itself -
+        // not a row lock on this one vendor - so it serializes against
+        // *every* concurrent inviteStaff()/acceptStaffInvite() call for
+        // this exact phone, regardless of which vendor(s) are
+        // involved. A vendor-row lock (this method's round-3 version)
+        // only closed the race within a single vendor; PDR-008's
+        // cross-vendor employee-uniqueness invariant (added round 4)
+        // needs the wider key, since two concurrent inviteStaff() calls
+        // for two *different* vendors would otherwise never contend on
+        // the same row at all and could both pass their pre-checks
+        // before either commits. $executeRaw, not $queryRaw:
+        // pg_advisory_xact_lock() returns void, which $queryRaw can't
+        // deserialize (see categories.controller.ts for the same
+        // pattern/note).
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('finalpro:staff_invite:' || ${dto.phone}))`;
 
         const freshMember = await tx.vendorUser.findFirst({
           where: { vendorId, user: { phone: dto.phone } },
@@ -281,14 +292,23 @@ export class VendorsController {
               'This phone number already belongs to a member of this vendor account',
           });
         }
+        const freshEmployeeElsewhere = await tx.vendorUser.findFirst({
+          where: { role: 'BRANCH_EMPLOYEE', user: { phone: dto.phone } },
+        });
+        if (freshEmployeeElsewhere) {
+          throw new ForbiddenException({
+            code: 'EMPLOYEE_ALREADY_ASSIGNED',
+            message:
+              'This phone number is already assigned as a branch employee elsewhere - reassignment is not supported yet',
+          });
+        }
         const freshPending = await tx.staffInvite.findFirst({
-          where: { vendorId, phone: dto.phone, status: 'PENDING' },
+          where: { phone: dto.phone, status: 'PENDING' },
         });
         if (freshPending) {
           throw new ConflictException({
             code: 'STAFF_INVITE_ALREADY_PENDING',
-            message:
-              'This phone number already has a pending invite for this vendor account',
+            message: 'This phone number already has a pending staff invite',
           });
         }
 
@@ -340,8 +360,7 @@ export class VendorsController {
       ) {
         throw new ConflictException({
           code: 'STAFF_INVITE_ALREADY_PENDING',
-          message:
-            'This phone number already has a pending invite for this vendor account',
+          message: 'This phone number already has a pending staff invite',
         });
       }
       throw err;

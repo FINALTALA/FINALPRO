@@ -3,6 +3,7 @@ import {
   Body,
   ConflictException,
   Controller,
+  ForbiddenException,
   HttpCode,
   HttpException,
   HttpStatus,
@@ -589,13 +590,16 @@ export class AuthController {
     let result;
     try {
       result = await this.prisma.$transaction(async (tx) => {
-        // Locks the same vendor row VendorsController.inviteStaff()
-        // locks (by vendorId, not by this invite's own id) - see that
-        // method's comment for the exact race this closes from the
-        // other side. Whichever of the two transactions gets here
-        // first now fully completes - including the re-checks/writes
-        // below - before the other's own lock acquisition can succeed.
-        await tx.$queryRaw`SELECT id FROM vendors WHERE id = ${candidateInvite.vendorId} FOR UPDATE`;
+        // Locks the same phone-keyed advisory lock
+        // VendorsController.inviteStaff() locks (not a row lock on
+        // this invite's own vendor - see that method's comment for why
+        // the key had to widen from a per-vendor row lock to a
+        // phone-keyed advisory lock in review round 4, once
+        // PDR-008's employee-uniqueness invariant became cross-vendor).
+        // Whichever of the two transactions gets here first now fully
+        // completes - including the re-checks/writes below - before
+        // the other's own lock acquisition can succeed.
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('finalpro:staff_invite:' || ${dto.phone}))`;
 
         // Re-fetched fresh, under the lock - candidateInvite above is
         // only what picked *which* vendor to lock; it is never used
@@ -613,6 +617,29 @@ export class AuthController {
           throw new NotFoundException({
             code: 'STAFF_INVITE_NOT_FOUND',
             message: 'No pending invite was found for this phone number',
+          });
+        }
+
+        // Review-round finding (round 4): re-checked fresh, under the
+        // same phone-keyed lock inviteStaff() uses - PDR-008 ties this
+        // phone to one BRANCH_EMPLOYEE assignment at a time, across
+        // every vendor. Without this, a second, unrelated invite for a
+        // different vendor accepted concurrently (both were legitimately
+        // PENDING before either commits, e.g. created moments apart
+        // before round 4's global pending-invite index existed on
+        // older PENDING rows - or simply because this is the
+        // authoritative check, not the DB constraint, which only backstops
+        // it) would otherwise be free to succeed right up until
+        // vendorUser.create() below hit the unique index and failed with
+        // a generic, harder-to-label P2002.
+        const alreadyEmployeeElsewhere = await tx.vendorUser.findFirst({
+          where: { role: 'BRANCH_EMPLOYEE', user: { phone: dto.phone } },
+        });
+        if (alreadyEmployeeElsewhere) {
+          throw new ForbiddenException({
+            code: 'EMPLOYEE_ALREADY_ASSIGNED',
+            message:
+              'This phone number is already assigned as a branch employee elsewhere - reassignment is not supported yet',
           });
         }
 

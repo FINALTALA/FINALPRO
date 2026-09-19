@@ -270,6 +270,22 @@ model VendorUser {
 
   @@unique([userId, vendorId])
   @@index([branchId])
+  /// Review-round finding (round 4): PDR-008 and SRS Part 3 G.0 - "a
+  /// branch employee is assigned to exactly one branch **at a time**"
+  /// means across every vendor, not per vendor. `@@unique([userId,
+  /// vendorId])` above only ever stopped a duplicate row for the *same*
+  /// vendor; it never stopped the same account becoming BRANCH_EMPLOYEE
+  /// at a *different* vendor too. A partial unique index -
+  /// `UNIQUE(userId) WHERE role = 'BRANCH_EMPLOYEE'`, hand-written in
+  /// this model's migration, not representable in Prisma's schema DSL
+  /// (same already-established pattern as this table's own
+  /// role/branchId CHECK constraint) - closes that: an account may
+  /// still OWNER any number of vendors (untouched, that role is
+  /// excluded by the index's WHERE clause) and always remains a
+  /// customer regardless, but may only ever hold one BRANCH_EMPLOYEE
+  /// row at a time, full stop. Reassigning an employee to a different
+  /// branch/vendor is RB-ROLE-003 (disable/transfer, Should, not built
+  /// this sprint) - until then this is a one-way assignment.
   @@map("vendor_users")
 }
 
@@ -338,27 +354,30 @@ model StaffInvite {
 
   @@index([phone, status])
   @@index([vendorId])
-  /// Review-round finding: at most one PENDING invite per
-  /// (vendorId, phone), regardless of branch - prevents an owner
-  /// (or a race) from creating two PENDING invites for the same
-  /// person to two different branches of the same vendor, which would
-  /// make acceptance ambiguous. A partial unique index, not a plain
-  /// `@@unique`, only so a *historical* ACCEPTED row (a real audit
-  /// record, per PDR-010's "retain the old record") never blocks
-  /// indexing on its own - this index says nothing at all about
-  /// whether inviting the same vendor/phone again afterward is
-  /// actually allowed. It is not: once a phone is a `VendorUser` of
-  /// this vendor, `VendorsController.inviteStaff()`'s
-  /// `ALREADY_VENDOR_MEMBER` check (race-closed by a vendor-row lock,
-  /// see that method's own comment) is what correctly refuses a new
-  /// invite - PDR-008/009 ties one person to exactly one branch within
-  /// a given vendor. This index only ever adjudicates between two
-  /// *simultaneously PENDING* invites. Prisma's schema DSL cannot
-  /// express a partial index, so this is declared here for
-  /// documentation only - the actual index is created by hand in this
-  /// model's migration (the same already-established pattern as
-  /// VendorUser's role/branch CHECK constraint, which is likewise
-  /// invisible to `schema.prisma` but real in the database).
+  /// Review-round finding (round 4): at most one PENDING invite per
+  /// *phone*, globally - not per (vendorId, phone). AuthController.
+  /// acceptStaffInvite() has no invite_id parameter and no UI to pick
+  /// among several candidates; it always resolves "the" invite to
+  /// accept via a plain most-recent-PENDING lookup by phone alone. Two
+  /// PENDING invites for the same phone from two *different* vendors
+  /// would make that resolution genuinely ambiguous - and since
+  /// VendorUser's own employee-uniqueness constraint below means at
+  /// most one of them could ever actually be accepted anyway, the
+  /// other would be left permanently dangling, the exact class of bug
+  /// this whole line of fixes exists to prevent. A partial unique
+  /// index, not a plain `@@unique`, only so a *historical* ACCEPTED row
+  /// (a real audit record, per PDR-010's "retain the old record") never
+  /// blocks the index itself - this index says nothing about whether
+  /// inviting an already-employed phone again afterward is actually
+  /// allowed; it is not, but that is `VendorsController.inviteStaff()`'s
+  /// `ALREADY_VENDOR_MEMBER`/`EMPLOYEE_ALREADY_ASSIGNED` checks' job
+  /// (phone-scoped advisory-lock-guarded, see that method's own
+  /// comment), not this index's. Prisma's schema DSL cannot express a
+  /// partial index, so this is declared here for documentation only -
+  /// the actual index is created by hand in this model's migration
+  /// (the same already-established pattern as VendorUser's role/branch
+  /// CHECK constraint, which is likewise invisible to `schema.prisma`
+  /// but real in the database).
   @@map("staff_invites")
 }
 

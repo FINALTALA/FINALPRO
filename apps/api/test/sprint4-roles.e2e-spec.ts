@@ -377,7 +377,7 @@ describe('Sprint 4 - roles, staff invites, workspace switcher (e2e)', () => {
       expect(pendingInvites[0].branchId).toBe(branchAId);
     });
 
-    it('still allows a new invite to the same phone from a DIFFERENT vendor - the pending-invite uniqueness is per-vendor, not global', async () => {
+    it('refuses a second pending invite for the same phone from a DIFFERENT vendor too - review round 4: PENDING-invite uniqueness is global, not per-vendor, since accept() has no invite_id to disambiguate between candidates', async () => {
       const ownerA = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId: vendorAId, branchId: branchAId } =
         await createVendorWithBranch(ownerA);
@@ -395,14 +395,21 @@ describe('Sprint 4 - roles, staff invites, workspace switcher (e2e)', () => {
         .send({ phone: sharedPhone })
         .expect(201);
 
-      await request(app.getHttpServer())
+      const second = await request(app.getHttpServer())
         .post(
           `/api/v1/vendors/${vendorBId}/branches/${branchBId}/staff-invites`,
         )
         .set('Authorization', `Bearer ${ownerB}`)
         .set('Idempotency-Key', unique('invite-b'))
         .send({ phone: sharedPhone })
-        .expect(201);
+        .expect(409);
+      expect(second.body.error.code).toBe('STAFF_INVITE_ALREADY_PENDING');
+
+      const pendingInvites = await prisma.staffInvite.findMany({
+        where: { phone: sharedPhone, status: 'PENDING' },
+      });
+      expect(pendingInvites).toHaveLength(1);
+      expect(pendingInvites[0].vendorId).toBe(vendorAId);
     });
 
     it('under two concurrent invite requests for the same phone in the same vendor targeting two different branches, exactly one succeeds and exactly one PENDING row survives', async () => {
@@ -538,23 +545,28 @@ describe('Sprint 4 - roles, staff invites, workspace switcher (e2e)', () => {
       // Whichever transaction wins the vendor-row lock first, the
       // outcome is deterministic: acceptance always succeeds (the
       // invite it targets was genuinely still valid at request time),
-      // and the concurrent new-invite attempt always loses - either
-      // because it now sees the phone as an existing member
-      // (ALREADY_VENDOR_MEMBER, if accept() committed first) or
+      // and the concurrent new-invite attempt always loses - because it
+      // now sees the phone as an existing member of this same vendor
+      // (ALREADY_VENDOR_MEMBER) or as a BRANCH_EMPLOYEE somewhere at
+      // all (EMPLOYEE_ALREADY_ASSIGNED, round 4's global check - which
+      // of these two non-transactional pre-checks happens to observe
+      // accept()'s commit first is itself racy, but either is a
+      // correct, safe rejection) if accept() committed first, or
       // because it still sees the original invite as PENDING
       // (STAFF_INVITE_ALREADY_PENDING, if it acquired the lock first
-      // and correctly refused to create a second pending row) - both
-      // are safe, neither ever creates the dangling invite the bug
+      // and correctly refused to create a second pending row) - all
+      // three are safe, none ever creates the dangling invite the bug
       // report described.
       expect(acceptRes.status).toBe(200);
-      // ALREADY_VENDOR_MEMBER is a 403 (ForbiddenException, matching
-      // this codebase's existing convention for that code);
-      // STAFF_INVITE_ALREADY_PENDING is a 409 (ConflictException) -
-      // which one fires depends on which transaction wins the lock
-      // race, so this asserts the code, not a single fixed status.
+      // ALREADY_VENDOR_MEMBER/EMPLOYEE_ALREADY_ASSIGNED are 403
+      // (ForbiddenException); STAFF_INVITE_ALREADY_PENDING is 409
+      // (ConflictException) - which one fires depends on which
+      // transaction wins the lock race, so this asserts the code, not
+      // a single fixed status.
       expect([403, 409]).toContain(newInviteRes.status);
       expect([
         'ALREADY_VENDOR_MEMBER',
+        'EMPLOYEE_ALREADY_ASSIGNED',
         'STAFF_INVITE_ALREADY_PENDING',
       ]).toContain(newInviteRes.body.error.code);
 
@@ -573,6 +585,201 @@ describe('Sprint 4 - roles, staff invites, workspace switcher (e2e)', () => {
         where: { vendorId, phone: targetPhone, status: 'PENDING' },
       });
       expect(pendingInvites).toHaveLength(0);
+    });
+  });
+
+  describe('Review-round fix (round 4): a BRANCH_EMPLOYEE is assigned to one branch at a time, across every vendor (PDR-008, SRS Part 3 G.0)', () => {
+    it('rejects a direct write making the same User a BRANCH_EMPLOYEE at a SECOND vendor while still assigned at the first (global partial unique index)', async () => {
+      const ownerA = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId: vendorAId, branchId: branchAId } =
+        await createVendorWithBranch(ownerA);
+      const ownerB = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId: vendorBId, branchId: branchBId } =
+        await createVendorWithBranch(ownerB);
+
+      const employeeUser = await prisma.user.create({
+        data: { phone: uniquePhone(), passwordHash: 'x' },
+      });
+      await prisma.vendorUser.create({
+        data: {
+          userId: employeeUser.id,
+          vendorId: vendorAId,
+          role: 'BRANCH_EMPLOYEE',
+          branchId: branchAId,
+        },
+      });
+
+      await expect(
+        prisma.vendorUser.create({
+          data: {
+            userId: employeeUser.id,
+            vendorId: vendorBId,
+            role: 'BRANCH_EMPLOYEE',
+            branchId: branchBId,
+          },
+        }),
+      ).rejects.toThrow();
+    });
+
+    it('still allows the same account to OWN multiple vendors - the global uniqueness only applies to the BRANCH_EMPLOYEE role', async () => {
+      const ownerPhone = uniquePhone();
+      const owner = await signup(ownerPhone, 'a-strong-password');
+      const first = await createVendorWithBranch(owner);
+      const second = await createVendorWithBranch(owner);
+      expect(second.vendorId).not.toBe(first.vendorId);
+
+      const ownerships = await prisma.vendorUser.findMany({
+        where: { user: { phone: ownerPhone } },
+      });
+      expect(ownerships).toHaveLength(2);
+      expect(ownerships.every((m) => m.role === 'OWNER')).toBe(true);
+      expect(ownerships.map((m) => m.vendorId).sort()).toEqual(
+        [first.vendorId, second.vendorId].sort(),
+      );
+    });
+
+    it('refuses to invite a phone that is already a BRANCH_EMPLOYEE at a different vendor - EMPLOYEE_ALREADY_ASSIGNED, distinct from ALREADY_VENDOR_MEMBER', async () => {
+      const ownerA = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId: vendorAId, branchId: branchAId } =
+        await createVendorWithBranch(ownerA);
+      const ownerB = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId: vendorBId, branchId: branchBId } =
+        await createVendorWithBranch(ownerB);
+      const employeePhone = uniquePhone();
+      await inviteAndAcceptAsNewUser(
+        ownerA,
+        vendorAId,
+        branchAId,
+        employeePhone,
+        'employee-password',
+      );
+
+      const res = await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorBId}/branches/${branchBId}/staff-invites`,
+        )
+        .set('Authorization', `Bearer ${ownerB}`)
+        .set('Idempotency-Key', unique('invite-cross-vendor'))
+        .send({ phone: employeePhone })
+        .expect(403);
+      expect(res.body.error.code).toBe('EMPLOYEE_ALREADY_ASSIGNED');
+
+      const pendingInvites = await prisma.staffInvite.findMany({
+        where: { phone: employeePhone, status: 'PENDING' },
+      });
+      expect(pendingInvites).toHaveLength(0);
+    });
+
+    it('refuses to ACCEPT an invite for a phone that became a BRANCH_EMPLOYEE elsewhere in the meantime, even if that invite is still genuinely PENDING', async () => {
+      // Builds the exact edge case the fresh in-transaction check (not
+      // just the DB constraint) exists for: an invite that was valid
+      // when created, but whose invitee accepted a *different* vendor's
+      // invite first. Constructed directly since the global pending-
+      // invite index (this same round's other fix) makes two genuinely
+      // concurrent PENDING invites for one phone impossible to reach
+      // through the API - this proves the accept-time re-check is what
+      // actually protects the case where an old invite from *before*
+      // that index existed (or before it applied) is accepted late.
+      const ownerA = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId: vendorAId, branchId: branchAId } =
+        await createVendorWithBranch(ownerA);
+      const ownerB = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId: vendorBId, branchId: branchBId } =
+        await createVendorWithBranch(ownerB);
+      const targetPhone = uniquePhone();
+
+      await inviteAndAcceptAsNewUser(
+        ownerA,
+        vendorAId,
+        branchAId,
+        targetPhone,
+        'employee-password',
+      );
+
+      // A stale invite to vendor B, inserted directly (bypassing the
+      // now-global pending-uniqueness index, which the API itself
+      // would correctly have refused to let coexist with vendor A's
+      // pending invite before it was accepted).
+      const staleInvite = await prisma.staffInvite.create({
+        data: {
+          vendorId: vendorBId,
+          branchId: branchBId,
+          phone: targetPhone,
+          invitedById: (
+            await prisma.vendorUser.findFirstOrThrow({
+              where: { vendorId: vendorBId, role: 'OWNER' },
+            })
+          ).userId,
+          expiresAt: new Date(Date.now() + 1000 * 60 * 60),
+        },
+      });
+
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/otp/request')
+        .send({ phone: targetPhone, purpose: 'staff_invite' })
+        .expect(202);
+      const code = fakeSms.lastCodeFor(targetPhone);
+      const verify = await request(app.getHttpServer())
+        .post('/api/v1/auth/otp/verify')
+        .set('Idempotency-Key', unique('verify'))
+        .send({ phone: targetPhone, otp_code: code, purpose: 'staff_invite' })
+        .expect(200);
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/auth/staff-invites/accept')
+        .set('Idempotency-Key', unique('accept-stale'))
+        .send({
+          phone: targetPhone,
+          verification_token: verify.body.session_token,
+        })
+        .expect(403);
+      expect(res.body.error.code).toBe('EMPLOYEE_ALREADY_ASSIGNED');
+
+      const vendorUsers = await prisma.vendorUser.findMany({
+        where: { user: { phone: targetPhone }, role: 'BRANCH_EMPLOYEE' },
+      });
+      expect(vendorUsers).toHaveLength(1);
+      expect(vendorUsers[0].vendorId).toBe(vendorAId);
+
+      const refreshedStaleInvite = await prisma.staffInvite.findUniqueOrThrow({
+        where: { id: staleInvite.id },
+      });
+      expect(refreshedStaleInvite.status).toBe('PENDING');
+    });
+
+    it('under two concurrent invite requests for the same phone from two DIFFERENT vendors, exactly one succeeds and exactly one PENDING invite survives globally', async () => {
+      const ownerA = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId: vendorAId, branchId: branchAId } =
+        await createVendorWithBranch(ownerA);
+      const ownerB = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId: vendorBId, branchId: branchBId } =
+        await createVendorWithBranch(ownerB);
+      const targetPhone = uniquePhone();
+
+      const [resA, resB] = await Promise.all([
+        request(app.getHttpServer())
+          .post(
+            `/api/v1/vendors/${vendorAId}/branches/${branchAId}/staff-invites`,
+          )
+          .set('Authorization', `Bearer ${ownerA}`)
+          .set('Idempotency-Key', unique('invite-cross-race-a'))
+          .send({ phone: targetPhone }),
+        request(app.getHttpServer())
+          .post(
+            `/api/v1/vendors/${vendorBId}/branches/${branchBId}/staff-invites`,
+          )
+          .set('Authorization', `Bearer ${ownerB}`)
+          .set('Idempotency-Key', unique('invite-cross-race-b'))
+          .send({ phone: targetPhone }),
+      ]);
+
+      const statuses = [resA.status, resB.status].sort();
+      expect(statuses).toEqual([201, 409]);
+
+      const pendingInvites = await prisma.staffInvite.findMany({
+        where: { phone: targetPhone, status: 'PENDING' },
+      });
+      expect(pendingInvites).toHaveLength(1);
     });
   });
 
