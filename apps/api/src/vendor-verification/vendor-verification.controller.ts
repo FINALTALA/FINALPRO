@@ -73,15 +73,20 @@ export class VendorVerificationController {
   // (APPLIED or UNDER_REVIEW) *and* this specific branch hasn't already
   // been decided (PENDING or RESUBMISSION_REQUESTED). Submitting once
   // the vendor is REJECTED/APPROVED/ACTIVE/... or once this exact
-  // branch is already APPROVED/REJECTED is refused outright - this
-  // build has no reapplication flow yet (⚠ OPEN-010: whether/how a
-  // vendor may submit a new application after a REJECTED decision is
-  // still an open product question, deliberately not decided by
-  // BR-026), so letting a resubmission silently reset an already-
-  // decided branch back to PENDING would leave it stuck (the decision
-  // endpoint only acts on a vendor that's UNDER_REVIEW) or would let a
-  // vendor un-approve a branch after the vendor itself already advanced
-  // past review.
+  // branch is already APPROVED/REJECTED is refused outright - a
+  // REJECTED application itself is a closed, immutable record (PDR-010,
+  // approved-product-decisions-2026-09.md): there is no in-place
+  // resubmission/reopening of it. PDR-010 also closes OPEN-010: the
+  // vendor's actual reapplication path is a **new, corrected**
+  // application via `POST /vendors` under the same account (a fresh
+  // `Vendor`/`VendorUser` pair, already unconditionally supported by
+  // that endpoint - see VendorsController.apply()); the old REJECTED
+  // `Vendor` row and its audit trail are left untouched. Letting a
+  // resubmission silently reset an already-decided branch back to
+  // PENDING instead would leave it stuck (the decision endpoint only
+  // acts on a vendor that's UNDER_REVIEW) or would let a vendor
+  // un-approve a branch after the vendor itself already advanced past
+  // review.
   @Post('verification-evidence')
   @UseInterceptors(IdempotencyInterceptor)
   async submitEvidence(
@@ -135,7 +140,7 @@ export class VendorVerificationController {
         throw new ConflictException({
           code: 'VENDOR_NOT_REVIEWABLE',
           message:
-            'This vendor application has already been decided and this build has no resubmission/reapplication flow yet',
+            'This vendor application has already been decided - evidence cannot be resubmitted to it. Submit a new, corrected application via POST /vendors instead (PDR-010)',
         });
       }
 
@@ -225,11 +230,14 @@ export class VendorVerificationController {
   // approving the last pending physical branch -> APPROVED; rejecting
   // any physical branch's evidence -> REJECTED (BR-026/BDR-016: no
   // per-branch partial state at the vendor level - a product decision
-  // confirmed by the product owner on review of this endpoint,
-  // resolving OPEN-005's rejection-criteria half; reviewer assignment,
-  // the other half, is still open. Whether/how a REJECTED vendor may
-  // submit a new application is a *separate*, still-open question -
-  // ⚠ OPEN-010 - this build simply has no such flow yet); requesting
+  // confirmed by the product owner on review of this endpoint. OPEN-005
+  // is fully closed by PDR-010: platform administrators review
+  // evidence, both the rejection-criteria half and the reviewer-
+  // assignment half. OPEN-010, whether/how a REJECTED vendor may
+  // reapply, is also closed by PDR-010: a corrected application may be
+  // submitted immediately as a *new* application via `POST /vendors`;
+  // this endpoint itself never reopens the rejected one - see
+  // submitEvidence()'s comment above for that split); requesting
   // resubmission leaves the vendor UNDER_REVIEW so it can be
   // resubmitted and decided again.
   @Post('verification-decision')
@@ -339,8 +347,9 @@ export class VendorVerificationController {
       //  - reject -> vendor UNDER_REVIEW -> REJECTED unconditionally
       //    (BR-026/BDR-016 - rejecting evidence for any one physical
       //    branch rejects the whole application; no per-branch partial
-      //    state. Reapplication after REJECTED is a separate, still-
-      //    open question - ⚠ OPEN-010 - not decided by this rule).
+      //    state. This REJECTED Vendor row is a closed, immutable
+      //    record - reapplication is a *new* application via
+      //    `POST /vendors`, per PDR-010; this rule does not reopen it).
       //  - request_resubmission -> no vendor transition; the vendor
       //    stays UNDER_REVIEW and can resubmit evidence for this
       //    branch (verification-evidence resets it to PENDING).

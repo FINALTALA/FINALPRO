@@ -567,7 +567,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .expect(409);
     });
 
-    it('refuses to resubmit evidence once the vendor application has been rejected - the branch and vendor states are left unchanged (no reapplication flow)', async () => {
+    it('refuses to resubmit evidence once the vendor application has been rejected - the branch and vendor states are left unchanged (a REJECTED application is closed; reapplication is a new POST /vendors application, PDR-010)', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const reviewer = await signupWithPlatformRole('VERIFICATION_REVIEWER');
       const { vendorId, branchId } =
@@ -615,6 +615,71 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         where: { id: vendorId },
       });
       expect(vendor.status).toBe('REJECTED');
+    });
+
+    it('lets the same account submit a new, corrected application after a rejection - a fresh Vendor with its own id, APPLIED, while the rejected one is untouched (OPEN-010, PDR-010)', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const reviewer = await signupWithPlatformRole('VERIFICATION_REVIEWER');
+      const { vendorId: rejectedVendorId, branchId: rejectedBranchId } =
+        await createVendorWithPhysicalBranch(owner);
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${rejectedVendorId}/branches/${rejectedBranchId}/verification-evidence`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('evidence'))
+        .send({
+          lat: 32.0,
+          lng: 35.0,
+          verification_photo_url: 'https://example.com/fake.jpg',
+        })
+        .expect(201);
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${rejectedVendorId}/branches/${rejectedBranchId}/verification-decision`,
+        )
+        .set('Authorization', `Bearer ${reviewer}`)
+        .set('Idempotency-Key', unique('decision'))
+        .send({ decision: 'reject', reason: 'Photo does not match the pin' })
+        .expect(201);
+
+      // The reapplication path is not a resubmission endpoint - it's the
+      // same POST /vendors the first application used, called again
+      // under the same account with a fresh Idempotency-Key.
+      const reapplied = await request(app.getHttpServer())
+        .post('/api/v1/vendors')
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('vendor-reapply'))
+        .send({
+          legal_name: unique('Vendor'),
+          branches: [{ name: 'Corrected main branch', is_physical: true }],
+        })
+        .expect(201);
+      expect(reapplied.body.status).toBe('APPLIED');
+      expect(reapplied.body.id).not.toBe(rejectedVendorId);
+
+      const newVendor = await prisma.vendor.findUniqueOrThrow({
+        where: { id: reapplied.body.id },
+      });
+      expect(newVendor.status).toBe('APPLIED');
+
+      // The rejected application is left exactly as it was - closed,
+      // not reopened or reset, and its audit trail is retained.
+      const rejectedVendor = await prisma.vendor.findUniqueOrThrow({
+        where: { id: rejectedVendorId },
+      });
+      expect(rejectedVendor.status).toBe('REJECTED');
+      const rejectedBranch = await prisma.storeBranch.findUniqueOrThrow({
+        where: { id: rejectedBranchId },
+      });
+      expect(rejectedBranch.verificationStatus).toBe('REJECTED');
+      const rejectionAudit = await prisma.auditLog.findMany({
+        where: { entityType: 'Vendor', entityId: rejectedVendorId },
+      });
+      const auditActions = rejectionAudit.map((row) => row.action);
+      expect(auditActions).toEqual(
+        expect.arrayContaining(['vendor.applied', 'vendor.rejected']),
+      );
     });
 
     it('refuses to resubmit evidence for a branch already APPROVED once the vendor itself is ACTIVE - it cannot be reset back to PENDING', async () => {
