@@ -78,10 +78,15 @@ export class SubscriptionsController {
   async current(
     @Param('vendorId') vendorId: string,
     @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
   ) {
     await this.requireOwner(vendorId, user.id);
     return this.prisma.$transaction(async (tx) => {
-      await this.subscriptionGate.refreshStatus(tx, vendorId);
+      await this.subscriptionGate.refreshStatus(
+        tx,
+        vendorId,
+        req.correlationId,
+      );
       const sub = await tx.vendorSubscription.findFirst({
         where: { vendorId },
         orderBy: { createdAt: 'desc' },
@@ -221,7 +226,11 @@ export class SubscriptionsController {
     return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM vendors WHERE id = ${vendorId} FOR UPDATE`;
 
-      const status = await this.subscriptionGate.refreshStatus(tx, vendorId);
+      const status = await this.subscriptionGate.refreshStatus(
+        tx,
+        vendorId,
+        req.correlationId,
+      );
       if (status !== 'EXPIRED') {
         throw new ConflictException({
           code: 'SUBSCRIPTION_NOT_EXPIRED',

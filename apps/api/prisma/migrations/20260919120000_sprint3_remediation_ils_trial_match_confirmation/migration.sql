@@ -16,24 +16,51 @@
 --    exact-identifier match is now stored as a pending proposal, never
 --    an immediate link, until the store owner explicitly confirms it.
 --
--- Migration safety note: narrowing SubscriptionStatus can't use a plain
--- ::text::newtype cast if any row still holds a value the new type
--- doesn't have (PAST_DUE/SUSPENDED/CANCELLED) - and a value can't be
--- normalized to 'EXPIRED' via a pre-swap UPDATE either, since 'EXPIRED'
--- isn't valid in the *old* enum type until after the swap. The USING
--- clauses below remap those three legacy values to 'EXPIRED' (the
--- closest honest equivalent - "not currently usable") inline, as part
--- of the type conversion itself, so this can never fail regardless of
--- what a given database's rows actually hold - even though no
+-- Migration safety note (SubscriptionStatus): narrowing this enum can't
+-- use a plain ::text::newtype cast if any row still holds a value the
+-- new type doesn't have (PAST_DUE/SUSPENDED/CANCELLED) - and a value
+-- can't be normalized to 'EXPIRED' via a pre-swap UPDATE either, since
+-- 'EXPIRED' isn't valid in the *old* enum type until after the swap.
+-- The USING clauses below remap those three legacy values to 'EXPIRED'
+-- (the closest honest equivalent - "not currently usable") inline, as
+-- part of the type conversion itself, so this can never fail regardless
+-- of what a given database's rows actually hold - even though no
 -- environment this has run against (local dev/CI only; Sprint 3 was
 -- never merged to main, so no production data exists) has ever driven
 -- a subscription into those states, since that lifecycle was never
 -- built.
 --
+-- Migration safety note (offer_variants.currency, review-round finding):
+-- unlike SubscriptionStatus above, currency is NOT safe to silently
+-- remap - the pre-remediation DTO accepted any string, so a real
+-- dev/staging database could genuinely hold USD/JOD rows. Dropping the
+-- column without checking would make that price silently read as ILS
+-- forever, with no FX rate this migration is authorised to invent and
+-- no way to recover the original value afterward - real data
+-- corruption, not a cosmetic normalization. The DO block below is a
+-- hard preflight: it inspects every row first and refuses to proceed
+-- (via RAISE EXCEPTION, aborting the whole migration transaction) if
+-- any is found, naming exactly how many and requiring a human to
+-- correct them before re-running this migration. No automatic
+-- conversion, ever.
+--
 -- As with every prior migration here, the generated diff also proposed
 -- renaming the pre-existing `idempotency_lookup` index to Prisma's
 -- default naming convention - the same pure-cosmetic, unrelated
 -- mismatch documented in the earlier migrations. Left alone again.
+
+DO $$
+DECLARE
+  non_ils_count integer;
+BEGIN
+  SELECT COUNT(*) INTO non_ils_count
+  FROM "offer_variants"
+  WHERE "currency" IS DISTINCT FROM 'ILS';
+
+  IF non_ils_count > 0 THEN
+    RAISE EXCEPTION 'Refusing to drop offer_variants.currency: % row(s) have a currency value other than ILS (PDR-001 remediation preflight). Correct or migrate these rows to ILS manually first - this migration performs no automatic currency conversion and invents no FX rate. Inspect them with: SELECT id, "sellerSku", currency, "basePrice" FROM offer_variants WHERE currency IS DISTINCT FROM ''ILS'';', non_ils_count;
+  END IF;
+END $$;
 
 -- CreateEnum
 CREATE TYPE "MatchProposalStatus" AS ENUM ('NONE', 'PENDING', 'CONFIRMED', 'REJECTED');

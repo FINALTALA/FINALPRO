@@ -899,6 +899,18 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
       // expired trial - only new-listing creation is blocked.
       expect(vendorAfterExpiry.status).toBe('ACTIVE');
 
+      // Review-round finding: the ACTIVE -> EXPIRED transition must be
+      // audited (Part 4, H.1) - written atomically inside the same
+      // transaction as the status change itself.
+      const expiryAuditRows = await prisma.auditLog.findMany({
+        where: {
+          entityType: 'VendorSubscription',
+          entityId: sub.id,
+          action: 'vendor_subscription.expired',
+        },
+      });
+      expect(expiryAuditRows).toHaveLength(1);
+
       // New offer creation is blocked while expired (BR-014).
       await request(app.getHttpServer())
         .post(`/api/v1/vendors/${vendorId}/offers`)
@@ -947,6 +959,47 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .send({})
         .expect(409);
       expect(res.body.error.code).toBe('SUBSCRIPTION_NOT_EXPIRED');
+    });
+
+    it('concurrent checks of an already-lapsed trial write exactly one expiry audit row (review-round finding)', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const reviewer = await signupWithPlatformRole('VERIFICATION_REVIEWER');
+      const vendorId = await activateVendor(owner, reviewer);
+
+      const sub = await prisma.vendorSubscription.findFirstOrThrow({
+        where: { vendorId },
+      });
+      await prisma.vendorSubscription.update({
+        where: { id: sub.id },
+        data: { periodEnd: new Date(Date.now() - 1000) },
+      });
+
+      // Several concurrent reads all race to be the one that observes
+      // the lapsed trial and performs the ACTIVE -> EXPIRED transition.
+      // `SubscriptionGateService.refreshStatus` row-locks the vendor
+      // first, so only one of these should actually write the
+      // transition (and its audit row) - the rest must see the
+      // already-EXPIRED status and return early.
+      const responses = await Promise.all(
+        Array.from({ length: 5 }, () =>
+          request(app.getHttpServer())
+            .get(`/api/v1/vendors/${vendorId}/subscription`)
+            .set('Authorization', `Bearer ${owner}`),
+        ),
+      );
+      for (const res of responses) {
+        expect(res.status).toBe(200);
+        expect(res.body.status).toBe('EXPIRED');
+      }
+
+      const expiryAuditRows = await prisma.auditLog.findMany({
+        where: {
+          entityType: 'VendorSubscription',
+          entityId: sub.id,
+          action: 'vendor_subscription.expired',
+        },
+      });
+      expect(expiryAuditRows).toHaveLength(1);
     });
   });
 

@@ -164,7 +164,7 @@ export class VendorOffersController {
     // back alongside the offer-creation transaction below just because
     // the gate says no.
     const subscriptionStatus = await this.prisma.$transaction((tx) =>
-      this.subscriptionGate.refreshStatus(tx, vendorId),
+      this.subscriptionGate.refreshStatus(tx, vendorId, req.correlationId),
     );
     if (subscriptionStatus !== 'ACTIVE') {
       throw new ForbiddenException({
@@ -312,6 +312,22 @@ export class VendorOffersController {
   // products concurrently could otherwise both read the offer as
   // unlinked and both "win" - see the e2e concurrency test for this
   // exact race.
+  //
+  // Review-round finding, deliberately NOT implemented here (tracked as
+  // OPEN-014, docs/srs/07-risks-and-decisions.md): this method only
+  // covers the *matching* half of PDR-012 (BR-001/FR-MATCH-002). It does
+  // not implement the *naming* half of Part 3.2 - "the first confirmed
+  // matched offer supplies a provisional canonical name... a later
+  // matching vendor must adopt the canonical name if it accepts the
+  // product is identical... any matched vendor may request a
+  // canonical-name change for admin approve/reject." Confirming a match
+  // here never touches VendorOffer.titleAr/titleEn or
+  // CanonicalProduct.modelName, and there is no admin-approval-request
+  // entity for a requested rename - that is real, substantial new scope
+  // (new fields, a first-confirmer-sets-the-name mechanic, a whole
+  // approval flow) that this remediation's three named blockers
+  // (S3-B01/B02/B03) did not include. PDR-012 is NOT complete; do not
+  // treat confirmed matches as having a synchronized display name.
   @Post(':offerId/variants/:variantId/match-confirmation')
   @HttpCode(200)
   @UseInterceptors(IdempotencyInterceptor)
