@@ -343,14 +343,22 @@ model StaffInvite {
   /// (or a race) from creating two PENDING invites for the same
   /// person to two different branches of the same vendor, which would
   /// make acceptance ambiguous. A partial unique index, not a plain
-  /// `@@unique`, since ACCEPTED rows for the same vendor/phone must
-  /// stay allowed to exist (a real audit history, per PDR-010's
-  /// "retain the old record"). Prisma's schema DSL cannot express a
-  /// partial index, so this is declared here for documentation only -
-  /// the actual index is created by hand in this model's migration
-  /// (the same already-established pattern as VendorUser's role/branch
-  /// CHECK constraint, which is likewise invisible to `schema.prisma`
-  /// but real in the database).
+  /// `@@unique`, only so a *historical* ACCEPTED row (a real audit
+  /// record, per PDR-010's "retain the old record") never blocks
+  /// indexing on its own - this index says nothing at all about
+  /// whether inviting the same vendor/phone again afterward is
+  /// actually allowed. It is not: once a phone is a `VendorUser` of
+  /// this vendor, `VendorsController.inviteStaff()`'s
+  /// `ALREADY_VENDOR_MEMBER` check (race-closed by a vendor-row lock,
+  /// see that method's own comment) is what correctly refuses a new
+  /// invite - PDR-008/009 ties one person to exactly one branch within
+  /// a given vendor. This index only ever adjudicates between two
+  /// *simultaneously PENDING* invites. Prisma's schema DSL cannot
+  /// express a partial index, so this is declared here for
+  /// documentation only - the actual index is created by hand in this
+  /// model's migration (the same already-established pattern as
+  /// VendorUser's role/branch CHECK constraint, which is likewise
+  /// invisible to `schema.prisma` but real in the database).
   @@map("staff_invites")
 }
 

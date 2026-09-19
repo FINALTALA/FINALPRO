@@ -27,17 +27,23 @@
 --    the same phone in the same vendor to two different branches -
 --    acceptance would then be ambiguous about which branch wins.
 --    Added a partial unique index: at most one PENDING invite per
---    (vendorId, phone). ACCEPTED rows are deliberately excluded from
---    it (PDR-010's "retain the old record, correctable new application
---    stays possible" reasoning applies the same way here - a
---    previously-accepted invite must never block a *later*, separate
---    invite to the same vendor/phone from being created and audited;
---    this index only ever blocks a second *simultaneously pending*
---    one). Prisma's schema DSL cannot express a partial index - it is
---    documented on StaffInvite in schema.prisma but only actually
---    created here, the same already-established pattern as
---    VendorUser's role/branch CHECK constraint from the prior
---    migration.
+--    (vendorId, phone). ACCEPTED rows are excluded only so a
+--    *historical* accepted row (a real audit record, PDR-010's
+--    "retain the old record") never blocks the index itself - this
+--    index says nothing about whether a *new* invite to the same
+--    vendor/phone is actually allowed afterward. It is not: once a
+--    phone is a VendorUser of this vendor, inviteStaff()'s
+--    ALREADY_VENDOR_MEMBER check (race-closed by a vendor-row lock -
+--    see that method's own review-round-3 fix) is what correctly
+--    refuses it, since PDR-008/009 ties one person to exactly one
+--    branch within a given vendor. This index only ever adjudicates
+--    between two *simultaneously PENDING* invites for the same
+--    vendor/phone (e.g. two different candidate branches, before
+--    either is accepted). Prisma's schema DSL cannot express a
+--    partial index - it is documented on StaffInvite in schema.prisma
+--    but only actually created here, the same already-established
+--    pattern as VendorUser's role/branch CHECK constraint from the
+--    prior migration.
 --
 -- Both changes are purely additive/tightening: no currently-committed
 -- row can violate either (every VendorUser/StaffInvite row created so

@@ -449,6 +449,131 @@ describe('Sprint 4 - roles, staff invites, workspace switcher (e2e)', () => {
       });
       expect(pendingInvites).toHaveLength(1);
     });
+
+    it('refuses a brand-new invite to a phone that already became a member of this same vendor through an earlier accepted invite - ALREADY_VENDOR_MEMBER, not the partial index, is what enforces this', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const employeePhone = uniquePhone();
+      await inviteAndAcceptAsNewUser(
+        owner,
+        vendorId,
+        branchId,
+        employeePhone,
+        'employee-password',
+      );
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/branches/${branchId}/staff-invites`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('invite-after-accept'))
+        .send({ phone: employeePhone })
+        .expect(403);
+      expect(res.body.error.code).toBe('ALREADY_VENDOR_MEMBER');
+
+      const pendingInvites = await prisma.staffInvite.findMany({
+        where: { vendorId, phone: employeePhone, status: 'PENDING' },
+      });
+      expect(pendingInvites).toHaveLength(0);
+    });
+
+    it('under a real race between accepting an OLDER pending invite and the owner creating a NEW invite for the same phone/vendor (different branch), exactly one VendorUser ends up existing, the original invite is ACCEPTED, and no dangling PENDING invite survives', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const applyRes = await request(app.getHttpServer())
+        .post('/api/v1/vendors')
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('vendor-apply'))
+        .send({
+          legal_name: unique('Vendor'),
+          branches: [
+            { name: 'Branch A', is_physical: true },
+            { name: 'Branch B', is_physical: true },
+          ],
+        })
+        .expect(201);
+      const vendorId = applyRes.body.id;
+      const branchAId = applyRes.body.branches[0].id;
+      const branchBId = applyRes.body.branches[1].id;
+      const targetPhone = uniquePhone();
+
+      // The invite being accepted - created and OTP-verified up front,
+      // so the accept() call below only has to do its own transactional
+      // work when the race actually fires, matching the real-world
+      // shape of the bug (an invitee finishing acceptance while the
+      // owner, unaware, tries to invite them again to a second branch).
+      await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/branches/${branchAId}/staff-invites`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('invite-original'))
+        .send({ phone: targetPhone })
+        .expect(201);
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/otp/request')
+        .send({ phone: targetPhone, purpose: 'staff_invite' })
+        .expect(202);
+      const code = fakeSms.lastCodeFor(targetPhone);
+      const verify = await request(app.getHttpServer())
+        .post('/api/v1/auth/otp/verify')
+        .set('Idempotency-Key', unique('verify'))
+        .send({ phone: targetPhone, otp_code: code, purpose: 'staff_invite' })
+        .expect(200);
+
+      const [acceptRes, newInviteRes] = await Promise.all([
+        request(app.getHttpServer())
+          .post('/api/v1/auth/staff-invites/accept')
+          .set('Idempotency-Key', unique('accept-race'))
+          .send({
+            phone: targetPhone,
+            verification_token: verify.body.session_token,
+            password: 'employee-password',
+          }),
+        request(app.getHttpServer())
+          .post(
+            `/api/v1/vendors/${vendorId}/branches/${branchBId}/staff-invites`,
+          )
+          .set('Authorization', `Bearer ${owner}`)
+          .set('Idempotency-Key', unique('invite-race-new'))
+          .send({ phone: targetPhone }),
+      ]);
+
+      // Whichever transaction wins the vendor-row lock first, the
+      // outcome is deterministic: acceptance always succeeds (the
+      // invite it targets was genuinely still valid at request time),
+      // and the concurrent new-invite attempt always loses - either
+      // because it now sees the phone as an existing member
+      // (ALREADY_VENDOR_MEMBER, if accept() committed first) or
+      // because it still sees the original invite as PENDING
+      // (STAFF_INVITE_ALREADY_PENDING, if it acquired the lock first
+      // and correctly refused to create a second pending row) - both
+      // are safe, neither ever creates the dangling invite the bug
+      // report described.
+      expect(acceptRes.status).toBe(200);
+      // ALREADY_VENDOR_MEMBER is a 403 (ForbiddenException, matching
+      // this codebase's existing convention for that code);
+      // STAFF_INVITE_ALREADY_PENDING is a 409 (ConflictException) -
+      // which one fires depends on which transaction wins the lock
+      // race, so this asserts the code, not a single fixed status.
+      expect([403, 409]).toContain(newInviteRes.status);
+      expect([
+        'ALREADY_VENDOR_MEMBER',
+        'STAFF_INVITE_ALREADY_PENDING',
+      ]).toContain(newInviteRes.body.error.code);
+
+      const vendorUsers = await prisma.vendorUser.findMany({
+        where: { vendorId, user: { phone: targetPhone } },
+      });
+      expect(vendorUsers).toHaveLength(1);
+      expect(vendorUsers[0].branchId).toBe(branchAId);
+
+      const originalInvite = await prisma.staffInvite.findFirst({
+        where: { vendorId, branchId: branchAId, phone: targetPhone },
+      });
+      expect(originalInvite?.status).toBe('ACCEPTED');
+
+      const pendingInvites = await prisma.staffInvite.findMany({
+        where: { vendorId, phone: targetPhone, status: 'PENDING' },
+      });
+      expect(pendingInvites).toHaveLength(0);
+    });
   });
 
   describe('RB-ROLE-004: least-privilege authorization (BOLA and cross-branch access)', () => {

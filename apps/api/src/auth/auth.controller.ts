@@ -553,7 +553,14 @@ export class AuthController {
       });
     }
 
-    const invite = await this.prisma.staffInvite.findFirst({
+    // Fast, friendly, non-authoritative fail-fast - see the fresh
+    // re-check under the vendor lock inside the transaction below,
+    // which is what's actually authoritative (review-round finding:
+    // this codebase's own inviteStaff() runs concurrently against
+    // this exact endpoint for the same vendor/phone; only re-reading
+    // the invite fresh *after* acquiring that same lock can guarantee
+    // this is still the row to act on).
+    const candidateInvite = await this.prisma.staffInvite.findFirst({
       where: {
         phone: dto.phone,
         status: 'PENDING',
@@ -561,17 +568,17 @@ export class AuthController {
       },
       orderBy: { createdAt: 'desc' },
     });
-    if (!invite) {
+    if (!candidateInvite) {
       throw new NotFoundException({
         code: 'STAFF_INVITE_NOT_FOUND',
         message: 'No pending invite was found for this phone number',
       });
     }
 
-    const existingUser = await this.prisma.user.findUnique({
+    const existingUserPreCheck = await this.prisma.user.findUnique({
       where: { phone: dto.phone },
     });
-    if (!existingUser && !dto.password) {
+    if (!existingUserPreCheck && !dto.password) {
       throw new BadRequestException({
         code: 'PASSWORD_REQUIRED',
         message:
@@ -582,6 +589,44 @@ export class AuthController {
     let result;
     try {
       result = await this.prisma.$transaction(async (tx) => {
+        // Locks the same vendor row VendorsController.inviteStaff()
+        // locks (by vendorId, not by this invite's own id) - see that
+        // method's comment for the exact race this closes from the
+        // other side. Whichever of the two transactions gets here
+        // first now fully completes - including the re-checks/writes
+        // below - before the other's own lock acquisition can succeed.
+        await tx.$queryRaw`SELECT id FROM vendors WHERE id = ${candidateInvite.vendorId} FOR UPDATE`;
+
+        // Re-fetched fresh, under the lock - candidateInvite above is
+        // only what picked *which* vendor to lock; it is never used
+        // for the actual decision below. A concurrent accept() for
+        // this exact same invite (double-accept) or an unrelated
+        // change is caught here, not assumed away.
+        const invite = await tx.staffInvite.findUnique({
+          where: { id: candidateInvite.id },
+        });
+        if (
+          !invite ||
+          invite.status !== 'PENDING' ||
+          invite.expiresAt.getTime() <= Date.now()
+        ) {
+          throw new NotFoundException({
+            code: 'STAFF_INVITE_NOT_FOUND',
+            message: 'No pending invite was found for this phone number',
+          });
+        }
+
+        const existingUser = await tx.user.findUnique({
+          where: { phone: dto.phone },
+        });
+        if (!existingUser && !dto.password) {
+          throw new BadRequestException({
+            code: 'PASSWORD_REQUIRED',
+            message:
+              'A password is required to create an account for this phone number',
+          });
+        }
+
         let userId: string;
         let userPhoneVerifiedAt: Date;
         let userSessionVersion: number;
@@ -699,7 +744,7 @@ export class AuthController {
       // request into a 500. The caller gets session_token: null and can
       // log in normally with the password they just set/already had.
       this.logger.error(
-        `Staff invite ${invite.id} accepted for user ${result.userId}, but issuing a session failed: ${(err as Error).message}`,
+        `Staff invite ${candidateInvite.id} accepted for user ${result.userId}, but issuing a session failed: ${(err as Error).message}`,
       );
     }
 
