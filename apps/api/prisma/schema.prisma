@@ -55,6 +55,7 @@ model User {
   vendorUsers      VendorUser[]
   auditLogs        AuditLog[]
   reviewedBranches StoreBranch[]    @relation("BranchReviewer")
+  sentStaffInvites StaffInvite[]    @relation("StaffInviter")
 
   @@map("users")
 }
@@ -100,6 +101,12 @@ enum OtpPurpose {
   SIGNUP
   PASSWORD_RESET
   PHONE_CHANGE
+  /// Sprint 4 (RB-ROLE-002, PDR-008): proves phone ownership before a
+  /// StaffInvite is accepted - the same `POST /auth/otp/request` /
+  /// `POST /auth/otp/verify` pair every other purpose uses, gated the
+  /// same way PASSWORD_RESET is (only issued when something real is
+  /// waiting on the other end - see AuthController.requestOtp).
+  STAFF_INVITE
 }
 
 /// Backs `POST /auth/otp/request` / `POST /auth/otp/verify` (Part 4,
@@ -158,12 +165,19 @@ enum VendorStatus {
   CANCELLED
 }
 
-/// Only OWNER exists for the FYP window (BL-VEND-005b: "owner-only
-/// vendor account, no sub-roles" is the Must-scope fallback for the
-/// full admin/branch-manager/catalog/order-processing role set in
-/// FR-VEND-007/BL-VEND-005, which is a Should/stretch item).
+/// Sprint 4 (RB-ROLE-001, PDR-008/009): BRANCH_EMPLOYEE replaces the old
+/// Sprint 2 "owner-only, no sub-roles" fallback (BL-VEND-005b) - PDR-008
+/// explicitly requires owner + branch-employee, not the full
+/// admin/catalog/order-processing sub-role set FR-VEND-007/BL-VEND-005
+/// describes (that remains out of scope). OWNER controls the whole
+/// vendor - configuration, catalog, prices, staff, every branch's
+/// orders/stock, subscription, analytics. BRANCH_EMPLOYEE is scoped to
+/// exactly one branch's orders/stock only, per VendorUser.branchId -
+/// see that field's comment for the invariant this enum's two values
+/// impose on it.
 enum VendorUserRole {
   OWNER
+  BRANCH_EMPLOYEE
 }
 
 /// Part 3, G.3. Sprint 2 (BL-VEND-001) captures just enough to submit
@@ -223,10 +237,17 @@ model Vendor {
   subscriptions   VendorSubscription[]
   canonicalOffers VendorOffer[]
   offerVariants   OfferVariant[]
+  staffInvites    StaffInvite[]
 
   @@map("vendors")
 }
 
+/// branchId (Sprint 4, RB-ROLE-001): null for OWNER (vendor-wide access),
+/// required for BRANCH_EMPLOYEE (scoped to exactly this one branch) -
+/// enforced by this table's own CHECK constraint (see the migration),
+/// not just application code, so the invariant holds even against a
+/// direct write. VendorMembershipGuard reads this alongside role on
+/// every vendor-scoped route to decide access (see its own doc comment).
 model VendorUser {
   id       String         @id @default(uuid())
   userId   String
@@ -234,8 +255,11 @@ model VendorUser {
   vendorId String
   vendor   Vendor         @relation(fields: [vendorId], references: [id])
   role     VendorUserRole @default(OWNER)
+  branchId String?
+  branch   StoreBranch?   @relation(fields: [branchId], references: [id])
 
   @@unique([userId, vendorId])
+  @@index([branchId])
   @@map("vendor_users")
 }
 
@@ -260,8 +284,43 @@ model StoreBranch {
   reviewNote           String?
   createdAt            DateTime                 @default(now())
 
+  vendorUsers  VendorUser[]
+  staffInvites StaffInvite[]
+
   @@index([vendorId])
   @@map("store_branches")
+}
+
+enum StaffInviteStatus {
+  PENDING
+  ACCEPTED
+}
+
+/// Sprint 4 (RB-ROLE-002, PDR-008): an owner-initiated invite for a
+/// phone number to join one specific branch as BRANCH_EMPLOYEE - "same
+/// pattern as signup" (OtpPurpose.STAFF_INVITE, the same
+/// issue/check/consume/PhoneVerificationService-token flow SIGNUP
+/// already uses) rather than a new mechanism. No EXPIRED status is
+/// stored: expiry is computed lazily from expiresAt at accept time
+/// (the same lazy-expiry pattern VendorSubscription uses), not written
+/// by a background sweep this project has no worker for.
+model StaffInvite {
+  id          String            @id @default(uuid())
+  vendorId    String
+  vendor      Vendor            @relation(fields: [vendorId], references: [id])
+  branchId    String
+  branch      StoreBranch       @relation(fields: [branchId], references: [id])
+  phone       String
+  invitedById String
+  invitedBy   User              @relation("StaffInviter", fields: [invitedById], references: [id])
+  status      StaffInviteStatus @default(PENDING)
+  createdAt   DateTime          @default(now())
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+
+  @@index([phone, status])
+  @@index([vendorId])
+  @@map("staff_invites")
 }
 
 /// Immutable, append-only audit trail - the source of truth for every

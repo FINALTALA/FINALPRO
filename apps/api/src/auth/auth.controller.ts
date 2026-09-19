@@ -7,6 +7,7 @@ import {
   HttpException,
   HttpStatus,
   Logger,
+  NotFoundException,
   Post,
   Req,
   UseInterceptors,
@@ -15,6 +16,7 @@ import { Throttle } from '@nestjs/throttler';
 import * as bcrypt from 'bcryptjs';
 import { Request } from 'express';
 import { AuditLogService } from '../audit/audit-log.service';
+import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { IdempotencyTtl } from '../common/idempotency/idempotency-ttl.decorator';
 import { Prisma } from '../../generated/prisma/client';
@@ -25,6 +27,7 @@ import { OtpVerifyDto } from './dto/otp-verify.dto';
 import { PasswordResetConfirmDto } from './dto/password-reset-confirm.dto';
 import { PasswordResetRequestDto } from './dto/password-reset-request.dto';
 import { RegisterDto } from './dto/register.dto';
+import { StaffInviteAcceptDto } from './dto/staff-invite-accept.dto';
 import { OtpCheckResult, OtpService } from './otp.service';
 import { toPrismaOtpPurpose } from './otp-purpose.util';
 import { PhoneVerificationService } from './phone-verification.service';
@@ -85,6 +88,7 @@ export class AuthController {
     private readonly sessions: SessionService,
     private readonly phoneVerification: PhoneVerificationService,
     private readonly auditLog: AuditLogService,
+    private readonly idempotencyCompletion: IdempotencyCompletionService,
   ) {}
 
   // FR-AUTH-011: auth/OTP endpoints get a materially stricter limit
@@ -104,6 +108,23 @@ export class AuthController {
         where: { phone: dto.phone },
       });
       if (user) {
+        await this.otp.issue(dto.phone, purpose);
+      }
+    } else if (purpose === 'STAFF_INVITE') {
+      // Same anti-abuse shape as PASSWORD_RESET above (Sprint 4,
+      // RB-ROLE-002): only issue a real code when a genuine, still-
+      // pending, not-yet-expired StaffInvite exists for this phone -
+      // otherwise anyone could make this endpoint SMS an arbitrary
+      // phone number by claiming purpose=staff_invite with nothing
+      // real behind it.
+      const invite = await this.prisma.staffInvite.findFirst({
+        where: {
+          phone: dto.phone,
+          status: 'PENDING',
+          expiresAt: { gt: new Date() },
+        },
+      });
+      if (invite) {
         await this.otp.issue(dto.phone, purpose);
       }
     } else {
@@ -501,5 +522,187 @@ export class AuthController {
     }
 
     return responseBody;
+  }
+
+  // Sprint 4 (RB-ROLE-002, PDR-008): finalizes a StaffInvite - "same
+  // pattern as signup" (verification_token from POST /auth/otp/verify,
+  // purpose=staff_invite), but branching on whether the invited phone
+  // already has an account, since unlike open self-registration this
+  // phone might belong to an existing customer/vendor-owner who is
+  // simply adding a branch-employee role to their same account
+  // (PDR-008: "one account may be a customer and also hold ... roles").
+  @Post('staff-invites/accept')
+  @HttpCode(200)
+  @UseInterceptors(IdempotencyInterceptor)
+  async acceptStaffInvite(
+    @Body() dto: StaffInviteAcceptDto,
+    @Req() req: Request,
+  ) {
+    const verification = await this.phoneVerification.consume(
+      dto.verification_token,
+    );
+    if (
+      !verification ||
+      verification.phone !== dto.phone ||
+      verification.purpose !== 'STAFF_INVITE'
+    ) {
+      throw new BadRequestException({
+        code: 'PHONE_NOT_VERIFIED',
+        message:
+          'This phone number has not been OTP-verified for a staff invite, or the verification has expired',
+      });
+    }
+
+    const invite = await this.prisma.staffInvite.findFirst({
+      where: {
+        phone: dto.phone,
+        status: 'PENDING',
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!invite) {
+      throw new NotFoundException({
+        code: 'STAFF_INVITE_NOT_FOUND',
+        message: 'No pending invite was found for this phone number',
+      });
+    }
+
+    const existingUser = await this.prisma.user.findUnique({
+      where: { phone: dto.phone },
+    });
+    if (!existingUser && !dto.password) {
+      throw new BadRequestException({
+        code: 'PASSWORD_REQUIRED',
+        message:
+          'A password is required to create an account for this phone number',
+      });
+    }
+
+    let result;
+    try {
+      result = await this.prisma.$transaction(async (tx) => {
+        let userId: string;
+        let userPhoneVerifiedAt: Date;
+        let userSessionVersion: number;
+        if (existingUser) {
+          userId = existingUser.id;
+          userPhoneVerifiedAt = existingUser.phoneVerifiedAt ?? new Date();
+          userSessionVersion = existingUser.sessionVersion;
+        } else {
+          const passwordHash = await bcrypt.hash(dto.password!, 10);
+          const created = await tx.user.create({
+            data: {
+              phone: dto.phone,
+              passwordHash,
+              phoneVerifiedAt: new Date(),
+            },
+          });
+          await tx.customerProfile.create({ data: { userId: created.id } });
+          userId = created.id;
+          userPhoneVerifiedAt = created.phoneVerifiedAt!;
+          userSessionVersion = created.sessionVersion;
+        }
+
+        const vendorUser = await tx.vendorUser.create({
+          data: {
+            userId,
+            vendorId: invite.vendorId,
+            role: 'BRANCH_EMPLOYEE',
+            branchId: invite.branchId,
+          },
+        });
+        await tx.staffInvite.update({
+          where: { id: invite.id },
+          data: { status: 'ACCEPTED', acceptedAt: new Date() },
+        });
+        await this.auditLog.record(
+          {
+            actorId: userId,
+            correlationId: req.correlationId,
+            action: 'vendor_user.staff_invite_accepted',
+            entityType: 'VendorUser',
+            entityId: vendorUser.id,
+            afterState: {
+              vendor_id: invite.vendorId,
+              branch_id: invite.branchId,
+              role: 'BRANCH_EMPLOYEE',
+            },
+          },
+          tx,
+        );
+
+        // session_token is necessarily null here - Redis/SessionService
+        // never participates in this transaction (same reasoning as
+        // confirmPasswordReset()'s LOGIN_REQUIRED default above: session
+        // issuance is a pure enhancement on top of an already-committed
+        // outcome, never a condition of it). Updated to the real token
+        // just below, once issued - a best-effort second write, not
+        // something this transaction can wait on.
+        const body = {
+          vendor_id: invite.vendorId,
+          branch_id: invite.branchId,
+          role: 'BRANCH_EMPLOYEE' as const,
+          session_token: null as string | null,
+        };
+        await this.idempotencyCompletion.complete(
+          tx,
+          req.idempotencyClaimId,
+          body,
+          200,
+        );
+        return {
+          body,
+          userId,
+          phone: dto.phone,
+          phoneVerifiedAt: userPhoneVerifiedAt,
+          sessionVersion: userSessionVersion,
+        };
+      });
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        throw new ConflictException({
+          code: 'ALREADY_VENDOR_MEMBER',
+          message: 'This account is already a member of this vendor',
+        });
+      }
+      throw err;
+    }
+
+    const responseWithToken = {
+      ...result.body,
+      session_token: null as string | null,
+    };
+    try {
+      const token = await this.sessions.create({
+        userId: result.userId,
+        phone: result.phone,
+        phoneVerifiedAt: result.phoneVerifiedAt.toISOString(),
+        sessionVersion: result.sessionVersion,
+      });
+      responseWithToken.session_token = token;
+
+      if (req.idempotencyClaimId) {
+        await this.prisma.idempotencyKey.update({
+          where: { id: req.idempotencyClaimId },
+          data: { responseBody: responseWithToken as Prisma.InputJsonValue },
+        });
+      }
+    } catch (err) {
+      // Same resilience as confirmPasswordReset() above: the invite has
+      // already durably been accepted and the VendorUser row already
+      // durably exists - a session is a pure enhancement on top of
+      // that, so a Redis hiccup here must not turn an already-successful
+      // request into a 500. The caller gets session_token: null and can
+      // log in normally with the password they just set/already had.
+      this.logger.error(
+        `Staff invite ${invite.id} accepted for user ${result.userId}, but issuing a session failed: ${(err as Error).message}`,
+      );
+    }
+
+    return responseWithToken;
   }
 }

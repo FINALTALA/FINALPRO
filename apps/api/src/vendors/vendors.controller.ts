@@ -1,7 +1,11 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
+  Get,
   HttpCode,
+  NotFoundException,
+  Param,
   Post,
   Req,
   UseGuards,
@@ -10,14 +14,40 @@ import {
 import { Request } from 'express';
 import { AuditLogService } from '../audit/audit-log.service';
 import { CurrentUser } from '../auth/current-user.decorator';
+import { CurrentVendorMembership } from '../auth/current-vendor-membership.decorator';
+import { OtpService } from '../auth/otp.service';
 import {
   AuthenticatedUser,
   SessionAuthGuard,
 } from '../auth/session-auth.guard';
+import {
+  VendorMembership,
+  VendorMembershipGuard,
+} from '../auth/vendor-membership.guard';
+import { RequireVendorRole } from '../auth/vendor-role.decorator';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateVendorDto } from './dto/create-vendor.dto';
+import { InviteStaffDto } from './dto/invite-staff.dto';
+
+const STAFF_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+function branchSummaryDto(branch: {
+  id: string;
+  vendorId: string;
+  name: string;
+  isPhysical: boolean;
+  verificationStatus: string;
+}) {
+  return {
+    id: branch.id,
+    vendor_id: branch.vendorId,
+    name: branch.name,
+    is_physical: branch.isPhysical,
+    verification_status: branch.verificationStatus,
+  };
+}
 
 // FR-VEND-001 / BL-VEND-001: any authenticated user can submit a
 // vendor application - there's no separate "vendor applicant" role.
@@ -36,6 +66,7 @@ export class VendorsController {
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
     private readonly idempotencyCompletion: IdempotencyCompletionService,
+    private readonly otp: OtpService,
   ) {}
 
   @Post()
@@ -106,5 +137,149 @@ export class VendorsController {
       );
       return body;
     });
+  }
+
+  // Sprint 4 (RB-ROLE-004, PDR-009): the first real, testable
+  // application of VendorMembershipGuard's branch-scoping - an OWNER
+  // sees every branch under their vendor; a BRANCH_EMPLOYEE sees only
+  // their own assigned branch, never a sibling branch of the same
+  // vendor. No :branchId param on this route, so the guard only checks
+  // plain membership here; the employee-scoping is this handler's own
+  // job below (mirrors how the guard is documented to work).
+  @Get(':vendorId/branches')
+  @UseGuards(VendorMembershipGuard)
+  async listBranches(
+    @Param('vendorId') vendorId: string,
+    @CurrentVendorMembership() membership: VendorMembership,
+  ) {
+    const branches = await this.prisma.storeBranch.findMany({
+      where: {
+        vendorId,
+        ...(membership.role === 'BRANCH_EMPLOYEE'
+          ? { id: membership.branchId! }
+          : {}),
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    return branches.map(branchSummaryDto);
+  }
+
+  // Same guard, but this route *does* have a :branchId param, so
+  // VendorMembershipGuard itself already refuses a BRANCH_EMPLOYEE
+  // whose own branchId doesn't match it - see the guard's own doc
+  // comment. Nothing else to check here beyond that.
+  @Get(':vendorId/branches/:branchId')
+  @UseGuards(VendorMembershipGuard)
+  async getBranch(
+    @Param('vendorId') vendorId: string,
+    @Param('branchId') branchId: string,
+  ) {
+    const branch = await this.prisma.storeBranch.findUnique({
+      where: { id: branchId },
+    });
+    if (!branch || branch.vendorId !== vendorId) {
+      throw new NotFoundException({
+        code: 'BRANCH_NOT_FOUND',
+        message: 'Branch not found for this vendor',
+      });
+    }
+    return branchSummaryDto(branch);
+  }
+
+  // Sprint 4 (RB-ROLE-002, PDR-008/009): owner-only ("staff" is store
+  // configuration - PDR-009 explicitly lists it among what an employee
+  // may never touch). Creates the StaffInvite record and issues the
+  // OTP in the same transaction/flow as every other "prove phone
+  // ownership" step this codebase has (AuthController.requestOtp's
+  // STAFF_INVITE branch is what actually sends it, gated on this row
+  // existing - see that method's comment).
+  @Post(':vendorId/branches/:branchId/staff-invites')
+  @HttpCode(201)
+  @UseGuards(VendorMembershipGuard)
+  @RequireVendorRole('OWNER')
+  @UseInterceptors(IdempotencyInterceptor)
+  async inviteStaff(
+    @Param('vendorId') vendorId: string,
+    @Param('branchId') branchId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: InviteStaffDto,
+    @Req() req: Request,
+  ) {
+    const branch = await this.prisma.storeBranch.findUnique({
+      where: { id: branchId },
+    });
+    if (!branch || branch.vendorId !== vendorId) {
+      throw new NotFoundException({
+        code: 'BRANCH_NOT_FOUND',
+        message: 'Branch not found for this vendor',
+      });
+    }
+
+    const existingMember = await this.prisma.vendorUser.findFirst({
+      where: { vendorId, user: { phone: dto.phone } },
+    });
+    if (existingMember) {
+      throw new ForbiddenException({
+        code: 'ALREADY_VENDOR_MEMBER',
+        message:
+          'This phone number already belongs to a member of this vendor account',
+      });
+    }
+
+    const body = await this.prisma.$transaction(async (tx) => {
+      const invite = await tx.staffInvite.create({
+        data: {
+          vendorId,
+          branchId,
+          phone: dto.phone,
+          invitedById: user.id,
+          expiresAt: new Date(Date.now() + STAFF_INVITE_TTL_MS),
+        },
+      });
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'staff_invite.created',
+          entityType: 'StaffInvite',
+          entityId: invite.id,
+          afterState: {
+            vendor_id: vendorId,
+            branch_id: branchId,
+            phone: dto.phone,
+          },
+        },
+        tx,
+      );
+
+      const responseBody = {
+        id: invite.id,
+        vendor_id: vendorId,
+        branch_id: branchId,
+        phone: invite.phone,
+        status: invite.status,
+        expires_at: invite.expiresAt.toISOString(),
+      };
+      await this.idempotencyCompletion.complete(
+        tx,
+        req.idempotencyClaimId,
+        responseBody,
+        201,
+      );
+      return responseBody;
+    });
+
+    // Issued after the transaction commits - OtpService.issue() writes
+    // through the top-level PrismaService, not this method's `tx`, so it
+    // can never be part of that same atomic write anyway; the invite
+    // row (already durably committed above) is the real source of
+    // truth regardless of whether this SMS send succeeds. If it's lost
+    // (a transient SMS-provider failure), the invitee's own client can
+    // still recover by calling POST /auth/otp/request itself -
+    // AuthController.requestOtp()'s STAFF_INVITE branch re-issues for
+    // any phone with a real pending invite, not just the first send.
+    await this.otp.issue(dto.phone, 'STAFF_INVITE');
+
+    return body;
   }
 }

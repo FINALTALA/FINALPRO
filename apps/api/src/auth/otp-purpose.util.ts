@@ -8,6 +8,10 @@ export const WIRE_OTP_PURPOSES = [
   'signup',
   'password_reset',
   'phone_change',
+  // Sprint 4 (RB-ROLE-002): a StaffInvite's phone-ownership proof, using
+  // this exact same generic request/verify pair - see
+  // VendorsController.inviteStaff() / AuthController.acceptStaffInvite().
+  'staff_invite',
 ] as const;
 export type WireOtpPurpose = (typeof WIRE_OTP_PURPOSES)[number];
 
@@ -15,6 +19,7 @@ const WIRE_TO_PRISMA: Record<WireOtpPurpose, OtpPurpose> = {
   signup: OtpPurpose.SIGNUP,
   password_reset: OtpPurpose.PASSWORD_RESET,
   phone_change: OtpPurpose.PHONE_CHANGE,
+  staff_invite: OtpPurpose.STAFF_INVITE,
 };
 
 export function toPrismaOtpPurpose(wire: WireOtpPurpose): OtpPurpose {
