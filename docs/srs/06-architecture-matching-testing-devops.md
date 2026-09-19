@@ -209,6 +209,18 @@ Already specified functionally in FR-MATCH-006/007 (Part 2) — Section N adds o
 | TC-A11Y-001 | Every status/severity indicator across the admin and vendor portals is distinguishable without relying on color alone | Part 5, K.1 accessibility notes |
 | TC-RTL-001 | The full customer checkout flow mirrors correctly in Arabic, including form field order and the comparison table's sticky column | NFR-RTL-001 |
 | TC-DR-001 | A full-environment restore from the most recent backup meets the NFR-REL-001/002 RPO/RTO targets | Part 4, I.2 |
+| TC-ILS-001 | Every create/import/price/discount/checkout/refund path rejects non-ILS money and no response exposes an FX-normalized or native-currency amount. | PDR-001, FR-PRICE-008, BR-027 |
+| TC-ROLE-001 | A customer account that is also a branch employee can switch workspaces, but its employee workspace can read/mutate only its one active branch; price, media, description, analytics and cross-branch attempts are denied. | PDR-008/009, FR-VEND-013, FR-VPORTAL-007 |
+| TC-ROLE-002 | Disabling an employee invalidates active work access immediately while their historic inventory/order actions remain in the audit trail. | PDR-008/009 |
+| TC-STOCK-001 | Two concurrent physical sales against the final unit allow exactly one atomic decrement and leave an immutable inventory movement/audit record. | PDR-020, FR-INV-009 |
+| TC-STOCK-002 | Damage/loss/count correction without reason is rejected; any valid manual reduction sends an owner alert regardless of quantity. | PDR-021, FR-INV-010, BR-031 |
+| TC-CHECKOUT-004 | Selected cart lines that one branch can fulfil are one BranchOrder; lines without a shared eligible branch become separate BranchOrders. Unselected cart lines remain untouched. | PDR-003/004, FR-CART-017, FR-ORD-009 |
+| TC-CHECKOUT-005 | Checkout proposes nearest eligible branch but accepts a customer-selected farther eligible branch; it rejects a branch missing any selected variant. | PDR-023, FR-CART-018, BR-029 |
+| TC-FUL-001 | A delayed preparation produces the six-hour employee reminder; at slot time online payment offers reschedule/refund and COD expires after 48 hours without a new slot. | PDR-025 |
+| TC-FUL-002 | At Delivered, customer confirmation is requested; no response is reminded at 48 hours and auto-confirms at 72. A report may reset to Sent only through the staff action and creates fresh confirmation. | PDR-026, BR-034 |
+| TC-ONLINE-001 | Online-only store pickup points are public/selectable but have no inventory rows; checkout reserves warehouse stock and never exposes warehouse address. | PDR-010, FR-VEND-012 |
+| TC-RETURN-003 | A store return-policy change is blocked inside six months and an order evaluates the policy/fees snapshotted at its purchase, not today’s policy. | PDR-030, FR-RET-008, BR-033 |
+| TC-DISC-001 | A public product card chooses lowest eligible ILS price and up to five cheapest store logos, excluding unavailable/inactive offers; logo navigation opens the exact store offer. | PDR-015/016, FR-COMP-010/011 |
 
 Full requirement-to-test traceability is completed in Part 9.
 

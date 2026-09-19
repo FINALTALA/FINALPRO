@@ -2,9 +2,21 @@
 
 The final part of this SRS. Builds on every prior part and closes the master prompt's required structure: Section 8 (acceptance criteria), Section 9 (traceability), and Section 10 (final recommendations).
 
+> **September 2026 change-control notice:** The original acceptance set/traceability matrix predates the approved [product-decision baseline](../approved-product-decisions-2026-09.md). Historical scenarios using vendor-only suborders, guest carts or FX are superseded where they conflict with the amendment scenarios below. The full matrix must be regenerated after Part 8 is re-estimated; it must not be represented as complete in the meantime.
+
 ---
 
 ## Acceptance criteria (Given/When/Then)
+
+### September 2026 amendment scenarios
+
+| # | Category | Scenario (Given/When/Then) | Tags |
+|---|---|---|---|
+| AC-18 | Branch-order formation | **Given** a signed-in customer selects two cart lines that Branch Nablus can both fulfil and one line only Branch Ramallah can fulfil, **when** they request a checkout quote, **then** the platform proposes one Nablus BranchOrder and one Ramallah BranchOrder; the unselected cart line remains in cart. | FR-CART-017/018, FR-ORD-009, `TC-CHECKOUT-004` |
+| AC-19 | Least privilege | **Given** an account with a customer and branch-employee grant, **when** it opens employee workspace, **then** it can process only its assigned branch’s orders/stock and receives `403` for price, analytics or another branch; switching to customer workspace retains only its own customer data. | FR-VEND-013, FR-VPORTAL-007, `TC-ROLE-001` |
+| AC-20 | ILS-only validation | **Given** an owner edits an offer/import row, **when** it provides a non-ILS currency or FX value, **then** validation rejects it; a valid ILS price appears unchanged in global comparison and checkout. | FR-PRICE-008, BR-027, `TC-ILS-001` |
+| AC-21 | Stock movement and alert | **Given** a branch employee records a one-unit damage correction, **when** it submits a mandatory reason, **then** branch stock changes atomically, an audit movement is retained and owner notification is created regardless of quantity. | FR-INV-010, BR-031, `TC-STOCK-002` |
+| AC-22 | Online-only privacy | **Given** an online-only store with a hidden warehouse and two public pickup points, **when** a customer views its store and checks out using pickup, **then** both pickup points may be shown/selected but warehouse address and stock location are never returned. | FR-VEND-012, `TC-ONLINE-001` |
 
 Per the master prompt, this is a **representative set**, not exhaustive coverage of every `FR-*` — consistent with how Part 4 treated the API endpoint inventory and Part 6 treated test scenarios. Each scenario below is chosen to cover one of the required categories (happy path, validation failure, permission failure, empty state, integration failure, duplicate request, concurrency, audit record, Arabic/RTL) against the platform's highest-risk mechanics, and is tagged to its `TC-*` test (Part 6, O.2) and `FR-*`/`BR-*` IDs.
 

@@ -1,6 +1,6 @@
 # Phase 0 — Understanding, Clarification Questions, Assumptions, and Proposed SRS Table of Contents
 
-Status: **Clarification questions answered by the product owner (2026-09-14). Proceeding to Phase 1 (full SRS), delivered in numbered parts.**
+Status: **Historical clarification baseline, answered by the product owner (2026-09-14).** Later approved product decisions are recorded in [`docs/approved-product-decisions-2026-09.md`](../approved-product-decisions-2026-09.md) and take precedence wherever they conflict with this historical record. The nine SRS parts must be revised against that approved change-control baseline before any affected feature is implemented.
 Governing spec: [`docs/master-prompt.md`](../master-prompt.md)
 Role split: Claude = developer/author · Codex = auditor/reviewer · Product owner = final approver.
 
