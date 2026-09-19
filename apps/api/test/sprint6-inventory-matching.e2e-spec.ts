@@ -865,6 +865,57 @@ describe('Sprint 6 - branch inventory, stock movements, media, non-exact match r
       expect(stale).toBeNull();
     });
 
+    it('under two concurrent PRIMARY requests for the same variant, neither 500s/P2002s, and exactly one PRIMARY row survives', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
+      const { offerId, variantId } = await createOfferVariant(
+        owner,
+        vendorId,
+        branchAId,
+      );
+
+      const [resA, resB] = await Promise.all([
+        request(app.getHttpServer())
+          .post(
+            `/api/v1/vendors/${vendorId}/offers/${offerId}/variants/${variantId}/media`,
+          )
+          .set('Authorization', `Bearer ${owner}`)
+          .set('Idempotency-Key', unique('media-race-a'))
+          .send({ url: 'https://example.com/race-a.jpg', kind: 'PRIMARY' }),
+        request(app.getHttpServer())
+          .post(
+            `/api/v1/vendors/${vendorId}/offers/${offerId}/variants/${variantId}/media`,
+          )
+          .set('Authorization', `Bearer ${owner}`)
+          .set('Idempotency-Key', unique('media-race-b'))
+          .send({ url: 'https://example.com/race-b.jpg', kind: 'PRIMARY' }),
+      ]);
+
+      // Both requests are legitimate "set the primary image" calls -
+      // the FOR UPDATE lock on the offer variant serializes them into
+      // a delete-then-insert sequence, so both are expected to succeed
+      // (whichever ran second simply replaces the first's row) - never
+      // a 500 or a raw P2002.
+      expect(resA.status).toBe(201);
+      expect(resB.status).toBe(201);
+
+      const list = await request(app.getHttpServer())
+        .get(
+          `/api/v1/vendors/${vendorId}/offers/${offerId}/variants/${variantId}/media`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .expect(200);
+      const primaries = list.body.filter(
+        (m: { kind: string }) => m.kind === 'PRIMARY',
+      );
+      expect(primaries).toHaveLength(1);
+
+      const rows = await prisma.offerVariantMedia.findMany({
+        where: { offerVariantId: variantId, kind: 'PRIMARY' },
+      });
+      expect(rows).toHaveLength(1);
+    });
+
     it('lets the owner remove a media item', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);

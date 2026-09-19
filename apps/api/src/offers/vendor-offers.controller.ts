@@ -573,37 +573,70 @@ export class VendorOffersController {
     await this.requireVariant(vendorId, offerId, variantId);
     const kind = dto.kind ?? 'ADDITIONAL';
 
-    const body = await this.prisma.$transaction(async (tx) => {
-      if (kind === 'PRIMARY') {
-        await tx.offerVariantMedia.deleteMany({
-          where: { offerVariantId: variantId, kind: 'PRIMARY' },
+    let body;
+    try {
+      body = await this.prisma.$transaction(async (tx) => {
+        if (kind === 'PRIMARY') {
+          // Review-round finding: two concurrent PRIMARY requests for
+          // the same variant could both pass deleteMany() (each seeing
+          // the same pre-race state, or no existing row at all) and
+          // then race each other's create() against the partial unique
+          // index (offer_variant_media_primary_per_variant_key) - the
+          // index correctly stops a second PRIMARY row from ever
+          // existing, but the *loser* of that race got there via a
+          // raw P2002/500, not the atomic replace this endpoint's own
+          // contract promises. Locking the OfferVariant row itself
+          // first (a fixed, per-variant key - ADDITIONAL inserts never
+          // take this lock and stay fully concurrent) serializes the
+          // two delete-then-insert sequences, so the second transaction
+          // always sees the first's already-committed delete before it
+          // deletes/inserts anything itself.
+          await tx.$queryRaw`SELECT id FROM offer_variants WHERE id = ${variantId} FOR UPDATE`;
+          await tx.offerVariantMedia.deleteMany({
+            where: { offerVariantId: variantId, kind: 'PRIMARY' },
+          });
+        }
+        const media = await tx.offerVariantMedia.create({
+          data: { vendorId, offerVariantId: variantId, url: dto.url, kind },
+        });
+
+        await this.auditLog.record(
+          {
+            actorId: user.id,
+            correlationId: req.correlationId,
+            action: 'offer_variant_media.added',
+            entityType: 'OfferVariantMedia',
+            entityId: media.id,
+            afterState: this.mediaToDto(media),
+          },
+          tx,
+        );
+
+        const responseBody = this.mediaToDto(media);
+        await this.idempotencyCompletion.complete(
+          tx,
+          req.idempotencyClaimId,
+          responseBody,
+          201,
+        );
+        return responseBody;
+      });
+    } catch (err) {
+      // Defensive only - the FOR UPDATE lock above already makes this
+      // unreachable for PRIMARY under normal operation; kept in case a
+      // future caller ever creates ADDITIONAL/PRIMARY rows through a
+      // path that bypasses this lock (e.g. a direct write).
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        throw new ConflictException({
+          code: 'PRIMARY_MEDIA_ALREADY_EXISTS',
+          message: 'This offer variant already has a primary image',
         });
       }
-      const media = await tx.offerVariantMedia.create({
-        data: { vendorId, offerVariantId: variantId, url: dto.url, kind },
-      });
-
-      await this.auditLog.record(
-        {
-          actorId: user.id,
-          correlationId: req.correlationId,
-          action: 'offer_variant_media.added',
-          entityType: 'OfferVariantMedia',
-          entityId: media.id,
-          afterState: this.mediaToDto(media),
-        },
-        tx,
-      );
-
-      const responseBody = this.mediaToDto(media);
-      await this.idempotencyCompletion.complete(
-        tx,
-        req.idempotencyClaimId,
-        responseBody,
-        201,
-      );
-      return responseBody;
-    });
+      throw err;
+    }
 
     return body;
   }
