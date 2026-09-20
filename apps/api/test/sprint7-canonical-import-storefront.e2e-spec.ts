@@ -793,6 +793,66 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
       expect(offers).toHaveLength(2);
     });
 
+    // Round-4 review fix: persisting ImportIdentifierRecord's evidence
+    // from firstRow alone under-reported it - a group of [brand empty,
+    // brand "Nike"] has no in-file conflict (nothing differs), but
+    // firstRow.brandName is null, so the record used to silently
+    // remember NULL instead of "Nike". A later import with a genuinely
+    // conflicting brand_name would then pass the null-tolerant
+    // comparison undetected. collectGroupEvidence() now derives the
+    // record's brand/type/mpn from the WHOLE group, not row 0.
+    it('PDR-019 evidence: brand_name provided by a LATER row in the same group (not the first) is still persisted and still catches a later conflict', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId } = await createVendorWithTwoBranches(owner);
+      await activateVendorSubscription(owner, vendorId);
+
+      const sharedGtin = unique('gtin').slice(0, 20);
+      const firstCsv = [
+        'title_ar,title_en,seller_sku,base_price,identifier_type,identifier_value,brand_name',
+        `أ,A,${unique('sku')},20,GTIN,${sharedGtin},`,
+        `ب,B,${unique('sku')},20,GTIN,${sharedGtin},Nike`,
+      ].join('\n');
+      const firstRes = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/offers/import`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('import'))
+        .attach('file', Buffer.from(firstCsv, 'utf-8'), 'products.csv')
+        .expect(201);
+      expect(firstRes.body.imported).toHaveLength(2);
+      expect(firstRes.body.conflicts).toHaveLength(0);
+
+      const record = await prisma.importIdentifierRecord.findUnique({
+        where: {
+          vendorId_identifierType_identifierValue: {
+            vendorId,
+            identifierType: 'GTIN',
+            identifierValue: sharedGtin,
+          },
+        },
+      });
+      expect(record?.brandName).toBe('Nike');
+
+      const secondCsv = [
+        'title_ar,title_en,seller_sku,base_price,identifier_type,identifier_value,brand_name',
+        `ج,C,${unique('sku')},20,GTIN,${sharedGtin},Adidas`,
+      ].join('\n');
+      const secondRes = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/offers/import`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('import'))
+        .attach('file', Buffer.from(secondCsv, 'utf-8'), 'products.csv')
+        .expect(201);
+
+      expect(secondRes.body.imported).toHaveLength(0);
+      expect(secondRes.body.conflicts).toHaveLength(1);
+      expect(secondRes.body.conflicts[0].reason).toContain('brandName');
+
+      const variantsAfter = await prisma.offerVariant.findMany({
+        where: { vendorId },
+      });
+      expect(variantsAfter).toHaveLength(2);
+    });
+
     // Round-3 review fix (Blocker 1): ImportIdentifierRecord starts
     // empty for every vendor - a pre-Sprint-7 (or simply not-yet-
     // imported-through) OfferVariant already carrying an identifier

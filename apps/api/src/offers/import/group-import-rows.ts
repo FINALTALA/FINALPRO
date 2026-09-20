@@ -107,6 +107,33 @@ interface BrandFields {
   mpn: string | null;
 }
 
+// Review-round fix (Sprint 7 round 4): the single non-null value present
+// for each field across an already-conflict-checked group - never just
+// the group's first row. findConflictingField() below already proved
+// there is at most one DISTINCT non-null value per field among these
+// rows, so picking the first non-null one anywhere in the group (not
+// row 0 specifically) is the group's whole evidence, not a partial
+// slice of it. Using only firstRow here was the bug: a group of [brand
+// empty, brand "Nike"] has no in-file conflict (nothing differs, since
+// the first row simply has no opinion) but firstRow.brandName is null -
+// persisting that null would have silently discarded "Nike" as evidence
+// for every later cross-import compatibility check.
+export function collectGroupEvidence(rows: ValidatedImportRow[]): BrandFields {
+  const fields: Array<keyof BrandFields> = ['brandName', 'productType', 'mpn'];
+  const evidence: BrandFields = {
+    brandName: null,
+    productType: null,
+    mpn: null,
+  };
+  for (const field of fields) {
+    const value = rows
+      .map((r) => r[field])
+      .find((v): v is string => v !== null);
+    evidence[field] = value ?? null;
+  }
+  return evidence;
+}
+
 /** Null-tolerant: a field only conflicts when BOTH sides have a
  * non-null value and they differ - absence of evidence on either side
  * is never itself a conflict (see this file's own header comment). */

@@ -14,6 +14,7 @@ import {
 } from '@nestjs/common';
 import { Request } from 'express';
 import { randomUUID } from 'crypto';
+import { Prisma } from '../../generated/prisma/client';
 import { AuditLogService } from '../audit/audit-log.service';
 import { CurrentUser } from '../auth/current-user.decorator';
 import {
@@ -29,6 +30,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SubscriptionGateService } from '../subscriptions/subscription-gate.service';
 import { ImportReport } from './dto/import-report.dto';
 import {
+  collectGroupEvidence,
   conflictingField,
   groupImportRows,
   ImportGroup,
@@ -225,6 +227,12 @@ export class OffersImportController {
       await this.prisma.$transaction(async (tx) => {
         let offerId = reuseOfferId;
         const firstRow = rowsToCreate[0];
+        // Review-round fix (round 4): the group's UNIFIED brand/type/mpn
+        // evidence, not just firstRow's - see collectGroupEvidence()'s
+        // own comment for why firstRow alone under-reported evidence
+        // that a later row in the same already-conflict-checked group
+        // actually provided.
+        const groupEvidence = collectGroupEvidence(rows);
 
         // PDR-019's "same barcode + new colour/size = additive, not
         // conflict" must hold across separate import requests too, not
@@ -316,7 +324,10 @@ export class OffersImportController {
           }
 
           if (identifierRecord) {
-            const conflictField = conflictingField(identifierRecord, firstRow);
+            const conflictField = conflictingField(
+              identifierRecord,
+              groupEvidence,
+            );
             if (conflictField) {
               // Cannot prove compatibility with the prior import - do
               // not guess, report for manual review instead (never
@@ -361,9 +372,9 @@ export class OffersImportController {
                 identifierType: group.identifierType,
                 identifierValue: group.identifierValue,
                 vendorOfferId: offerId,
-                brandName: firstRow.brandName,
-                productType: firstRow.productType,
-                mpn: firstRow.mpn,
+                brandName: groupEvidence.brandName,
+                productType: groupEvidence.productType,
+                mpn: groupEvidence.mpn,
               },
             });
           }
@@ -374,9 +385,9 @@ export class OffersImportController {
               identifierType: group.identifierType!,
               identifierValue: group.identifierValue!,
               vendorOfferId: offerId,
-              brandName: firstRow.brandName,
-              productType: firstRow.productType,
-              mpn: firstRow.mpn,
+              brandName: groupEvidence.brandName,
+              productType: groupEvidence.productType,
+              mpn: groupEvidence.mpn,
             },
           });
         } else if (identifierRecord) {
@@ -384,14 +395,14 @@ export class OffersImportController {
           // import provides it, never overwriting a differing value -
           // conflictingField() above already proved nothing differs.
           const fillIns: Record<string, string> = {};
-          if (!identifierRecord.brandName && firstRow.brandName) {
-            fillIns.brandName = firstRow.brandName;
+          if (!identifierRecord.brandName && groupEvidence.brandName) {
+            fillIns.brandName = groupEvidence.brandName;
           }
-          if (!identifierRecord.productType && firstRow.productType) {
-            fillIns.productType = firstRow.productType;
+          if (!identifierRecord.productType && groupEvidence.productType) {
+            fillIns.productType = groupEvidence.productType;
           }
-          if (!identifierRecord.mpn && firstRow.mpn) {
-            fillIns.mpn = firstRow.mpn;
+          if (!identifierRecord.mpn && groupEvidence.mpn) {
+            fillIns.mpn = groupEvidence.mpn;
           }
           if (Object.keys(fillIns).length > 0) {
             await tx.importIdentifierRecord.update({
@@ -457,12 +468,23 @@ export class OffersImportController {
           });
         }
       });
-    } catch {
-      // Defensive only: a concurrent import (this same file re-submitted
-      // at the same instant from two requests) could still race past
-      // the pre-check above and hit the (vendorId, sellerSku) unique
-      // constraint inside the transaction - reported per-row rather
-      // than failing the whole request.
+    } catch (err) {
+      // Review-round fix (round 4): only the SPECIFIC, expected unique-
+      // constraint race is swallowed here - a concurrent import (this
+      // same file re-submitted at the same instant from two requests)
+      // could still race past the pre-check above and hit
+      // (vendorId, sellerSku)/(vendorId, storeInventoryBarcode) on
+      // OfferVariant, reported per-row rather than failing the whole
+      // request. Anything else (a real DB error, an AuditLog failure, an
+      // unrelated bug) must propagate and fail the request with a 500 -
+      // silently mapping every exception to "seller_sku conflict" would
+      // return a misleading 201 report on a genuine internal failure.
+      if (
+        !(err instanceof Prisma.PrismaClientKnownRequestError) ||
+        err.code !== 'P2002'
+      ) {
+        throw err;
+      }
       for (const row of rowsToCreate) {
         report.invalid_rows.push({
           row_number: row.rowNumber,
