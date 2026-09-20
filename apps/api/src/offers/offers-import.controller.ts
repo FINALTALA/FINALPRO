@@ -14,7 +14,6 @@ import {
 } from '@nestjs/common';
 import { Request } from 'express';
 import { randomUUID } from 'crypto';
-import { Prisma } from '../../generated/prisma/client';
 import { AuditLogService } from '../audit/audit-log.service';
 import { CurrentUser } from '../auth/current-user.decorator';
 import {
@@ -29,6 +28,7 @@ import { MatchingService } from '../matching/matching.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SubscriptionGateService } from '../subscriptions/subscription-gate.service';
 import { ImportReport } from './dto/import-report.dto';
+import { isExpectedOfferVariantConflict } from './import/expected-offer-variant-conflict';
 import {
   collectGroupEvidence,
   conflictingField,
@@ -469,20 +469,20 @@ export class OffersImportController {
         }
       });
     } catch (err) {
-      // Review-round fix (round 4): only the SPECIFIC, expected unique-
-      // constraint race is swallowed here - a concurrent import (this
-      // same file re-submitted at the same instant from two requests)
-      // could still race past the pre-check above and hit
-      // (vendorId, sellerSku)/(vendorId, storeInventoryBarcode) on
-      // OfferVariant, reported per-row rather than failing the whole
-      // request. Anything else (a real DB error, an AuditLog failure, an
-      // unrelated bug) must propagate and fail the request with a 500 -
-      // silently mapping every exception to "seller_sku conflict" would
-      // return a misleading 201 report on a genuine internal failure.
-      if (
-        !(err instanceof Prisma.PrismaClientKnownRequestError) ||
-        err.code !== 'P2002'
-      ) {
+      // Review-round fix (round 5): only the SPECIFIC, expected
+      // OfferVariant unique-constraint race is swallowed here - a
+      // concurrent import (this same file re-submitted at the same
+      // instant from two requests) could still race past the pre-check
+      // above and hit (vendorId, sellerSku)/(vendorId,
+      // storeInventoryBarcode), reported per-row rather than failing the
+      // whole request. Any OTHER P2002 (e.g. ImportIdentifierRecord's
+      // own unique constraint, or any future constraint) - or any
+      // non-P2002 error at all (a real DB error, an AuditLog failure, an
+      // unrelated bug) - must propagate and fail the request with a
+      // 500, not be guessed at: isExpectedOfferVariantConflict() checks
+      // the actual Postgres constraint name against a fixed allow-list,
+      // see its own comment.
+      if (!isExpectedOfferVariantConflict(err)) {
         throw err;
       }
       for (const row of rowsToCreate) {
