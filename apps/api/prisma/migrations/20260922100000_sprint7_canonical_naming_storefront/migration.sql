@@ -17,6 +17,12 @@
 -- Review-round fix (Blocker 3, RB-MATCH-004/PDR-019): also adds
 -- import_identifier_records, a brand-new table with nothing to
 -- backfill - see ImportIdentifierRecord's own schema.prisma comment.
+--
+-- Round-3 review fix (Blocker 2): also adds a unique index on
+-- vendor_offers(vendorId, id) - existing rows already satisfy this
+-- trivially (id alone is already unique) - so import_identifier_records'
+-- own FK to vendor_offers can be the composite (vendorId, vendorOfferId)
+-- shape a tenant-safe relation needs, not vendorOfferId alone.
 
 -- CreateEnum
 CREATE TYPE "NameChangeRequestStatus" AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
@@ -103,6 +109,14 @@ ALTER TABLE "canonical_name_change_requests" ADD CONSTRAINT "canonical_name_chan
 -- AddForeignKey
 ALTER TABLE "canonical_name_change_requests" ADD CONSTRAINT "canonical_name_change_requests_decidedById_fkey" FOREIGN KEY ("decidedById") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
+-- CreateIndex (review-round fix, Sprint 7 round 3 Blocker 2): lets
+-- import_identifier_records' FK to vendor_offers below be a composite
+-- (vendorId, vendorOfferId) FK instead of vendorOfferId alone - id is
+-- already globally unique so this adds no new uniqueness, only a target
+-- the composite FK can reference. See ImportIdentifierRecord's own
+-- schema.prisma comment for why that matters (tenant-safety).
+CREATE UNIQUE INDEX "vendor_offers_vendorId_id_key" ON "vendor_offers"("vendorId", "id");
+
 -- CreateTable
 CREATE TABLE "import_identifier_records" (
     "id" TEXT NOT NULL,
@@ -124,5 +138,10 @@ CREATE UNIQUE INDEX "import_identifier_records_vendor_identifier_key" ON "import
 -- AddForeignKey
 ALTER TABLE "import_identifier_records" ADD CONSTRAINT "import_identifier_records_vendorId_fkey" FOREIGN KEY ("vendorId") REFERENCES "vendors"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- AddForeignKey
-ALTER TABLE "import_identifier_records" ADD CONSTRAINT "import_identifier_records_vendorOfferId_fkey" FOREIGN KEY ("vendorOfferId") REFERENCES "vendor_offers"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+-- AddForeignKey (review-round fix, Sprint 7 round 3 Blocker 2): a
+-- COMPOSITE FK on (vendorId, vendorOfferId), not vendorOfferId alone -
+-- rejects a cross-tenant link (this record's vendorId paired with a
+-- DIFFERENT vendor's offer) at the database level, not just in
+-- application code. See ImportIdentifierRecord's own schema.prisma
+-- comment.
+ALTER TABLE "import_identifier_records" ADD CONSTRAINT "import_identifier_records_vendorId_vendorOfferId_fkey" FOREIGN KEY ("vendorId", "vendorOfferId") REFERENCES "vendor_offers"("vendorId", "id") ON DELETE RESTRICT ON UPDATE CASCADE;

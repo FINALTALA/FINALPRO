@@ -226,14 +226,17 @@ export class OffersImportController {
         let offerId = reuseOfferId;
         const firstRow = rowsToCreate[0];
 
-        // Review-round fix (Blocker 3, RB-MATCH-004/PDR-019): PDR-019's
-        // "same barcode + new colour/size = additive, not conflict" must
-        // hold across separate import requests too, not just within one
-        // file - so before deciding "new offer", check whether a PRIOR
-        // import already recorded this exact (type, value) for this
-        // vendor. The unique constraint on ImportIdentifierRecord makes
-        // ">1 possible offer" structurally impossible here - there is at
-        // most one record per (vendor, identifierType, identifierValue).
+        // PDR-019's "same barcode + new colour/size = additive, not
+        // conflict" must hold across separate import requests too, not
+        // just within one file - so before deciding "new offer", check
+        // whether a PRIOR import already recorded this exact (type,
+        // value) for this vendor. The unique constraint on
+        // ImportIdentifierRecord makes ">1 possible offer" structurally
+        // impossible from THIS table alone - there is at most one
+        // record per (vendor, identifierType, identifierValue). A
+        // pre-existing OfferVariant with no record yet (see below) can
+        // still be ambiguous, since nothing enforced that before this
+        // table existed.
         let identifierRecord: {
           id: string;
           vendorOfferId: string;
@@ -241,7 +244,26 @@ export class OffersImportController {
           productType: string | null;
           mpn: string | null;
         } | null = null;
+        // Round-3 review fix (Blocker 1): does this group's decision
+        // require a freshly-created ImportIdentifierRecord (a
+        // pre-existing OfferVariant was found, matched to exactly one
+        // offer, but never had a record) rather than one already read
+        // above or created for a brand-new offer below?
+        let recordNeedsCreateFor: string | null = null;
+
         if (!offerId && group.identifierType && group.identifierValue) {
+          // Round-3 review fix (Blocker 3): serialize every decision
+          // for this exact (vendor, identifierType, identifierValue)
+          // BEFORE reading/creating anything below - without this, two
+          // concurrent imports referencing the same identifier with
+          // different (valid, distinct) seller_skus could both see "no
+          // record yet" and race to create one, tripping the unique
+          // constraint and surfacing a misleading "seller_sku conflict"
+          // for a SKU that never actually collided. Released
+          // automatically at commit/rollback - no manual unlock needed
+          // (same pattern as vendors.controller.ts's staff-invite lock).
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('finalpro:import_identifier:' || ${vendorId} || ':' || ${group.identifierType} || ':' || ${group.identifierValue}))`;
+
           identifierRecord = await tx.importIdentifierRecord.findUnique({
             where: {
               vendorId_identifierType_identifierValue: {
@@ -251,6 +273,48 @@ export class OffersImportController {
               },
             },
           });
+
+          if (!identifierRecord) {
+            // Round-3 review fix (Blocker 1): ImportIdentifierRecord
+            // starts empty for every vendor - a pre-Sprint-7 (or simply
+            // not-yet-tracked) OfferVariant already carrying this exact
+            // identifier must still be found and reused, or a new SKU
+            // under the same real-world product would wrongly spawn a
+            // second offer. brandName/productType/mpn are not stored on
+            // OfferVariant (see validate-import-row.ts's own comment),
+            // so there is no compatibility evidence to check on this
+            // path - only whether the identifier maps to exactly one
+            // existing offer.
+            const legacyVariants = await tx.offerVariant.findMany({
+              where: {
+                vendorId,
+                identifierType: group.identifierType,
+                identifierValue: group.identifierValue,
+              },
+              select: { vendorOfferId: true },
+            });
+            const legacyOfferIds = Array.from(
+              new Set(legacyVariants.map((v) => v.vendorOfferId)),
+            );
+            if (legacyOfferIds.length > 1) {
+              // More than one pre-existing offer already uses this
+              // identifier (possible before this table existed to
+              // prevent it) - cannot prove which one this import
+              // belongs to. Do not guess.
+              for (const row of rowsToCreate) {
+                report.conflicts.push({
+                  row_number: row.rowNumber,
+                  reason: `Multiple existing offers already use identifier_type/identifier_value "${group.identifierType}/${group.identifierValue}" for this vendor - cannot determine which to attach to, requires manual review (PDR-019)`,
+                });
+              }
+              return;
+            }
+            if (legacyOfferIds.length === 1) {
+              offerId = legacyOfferIds[0];
+              recordNeedsCreateFor = offerId;
+            }
+          }
+
           if (identifierRecord) {
             const conflictField = conflictingField(identifierRecord, firstRow);
             if (conflictField) {
@@ -303,6 +367,18 @@ export class OffersImportController {
               },
             });
           }
+        } else if (recordNeedsCreateFor === offerId) {
+          await tx.importIdentifierRecord.create({
+            data: {
+              vendorId,
+              identifierType: group.identifierType!,
+              identifierValue: group.identifierValue!,
+              vendorOfferId: offerId,
+              brandName: firstRow.brandName,
+              productType: firstRow.productType,
+              mpn: firstRow.mpn,
+            },
+          });
         } else if (identifierRecord) {
           // Fill in any previously-missing brand/type/mpn now that this
           // import provides it, never overwriting a differing value -

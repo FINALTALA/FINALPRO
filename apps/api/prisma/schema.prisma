@@ -841,6 +841,14 @@ model VendorOffer {
 
   @@index([vendorId])
   @@index([canonicalProductId])
+  /// Review-round fix (Sprint 7 round 3, Blocker 2): lets
+  /// ImportIdentifierRecord.vendorOffer below be a composite FK on
+  /// (vendorId, id) instead of id alone - id alone is already globally
+  /// unique, so this adds no new uniqueness, only a target the composite
+  /// FK can reference, which is what makes a cross-tenant link (vendor A's
+  /// record pointing at vendor B's offer) rejected by Postgres itself
+  /// rather than merely by application code.
+  @@unique([vendorId, id])
   @@map("vendor_offers")
 }
 
@@ -860,6 +868,14 @@ model VendorOffer {
 /// identifier per vendor - a barcode's real-world uniqueness is treated
 /// as store-scoped here, the same as every other per-vendor uniqueness
 /// rule in this schema (e.g. OfferVariant.storeInventoryBarcode).
+///
+/// Review-round fix (Sprint 7 round 3, Blocker 2): `vendorOffer` below is
+/// a COMPOSITE foreign key on (vendorId, vendorOfferId) -> VendorOffer's
+/// own (vendorId, id), not vendorOfferId alone - a single-column FK to
+/// VendorOffer.id only proves the offer exists *somewhere*, not that it
+/// belongs to THIS record's vendorId, so raw SQL (or a future bug) could
+/// otherwise link vendor A's record to vendor B's offer. The composite FK
+/// makes that rejected by Postgres itself.
 model ImportIdentifierRecord {
   id              String              @id @default(uuid())
   vendorId        String
@@ -867,7 +883,7 @@ model ImportIdentifierRecord {
   identifierType  OfferIdentifierType
   identifierValue String
   vendorOfferId   String
-  vendorOffer     VendorOffer         @relation(fields: [vendorOfferId], references: [id])
+  vendorOffer     VendorOffer         @relation(fields: [vendorId, vendorOfferId], references: [vendorId, id])
   brandName       String?
   productType     String?
   mpn             String?

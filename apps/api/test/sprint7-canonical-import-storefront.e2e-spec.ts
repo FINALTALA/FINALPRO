@@ -6,6 +6,7 @@ import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
 import { PrismaService } from './../src/prisma/prisma.service';
 import { generateVendorSlug } from './../src/common/slug.util';
+import { randomUUID } from 'crypto';
 
 class FakeSmsService {
   sent: { phone: string; code: string; expiresAt: Date }[] = [];
@@ -790,6 +791,213 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
         where: { vendorId },
       });
       expect(offers).toHaveLength(2);
+    });
+
+    // Round-3 review fix (Blocker 1): ImportIdentifierRecord starts
+    // empty for every vendor - a pre-Sprint-7 (or simply not-yet-
+    // imported-through) OfferVariant already carrying an identifier
+    // must still be found and reused by a later import, not silently
+    // duplicated into a second offer for the same real-world product.
+    it('PDR-019 legacy data: a pre-existing OfferVariant with no ImportIdentifierRecord yet is found and reused, not duplicated into a second offer', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId } = await createVendorWithTwoBranches(owner);
+      await activateVendorSubscription(owner, vendorId);
+
+      const gtin = unique('gtin').slice(0, 20);
+      const legacyOffer = await prisma.vendorOffer.create({
+        data: { vendorId, titleAr: 'قديم', titleEn: 'Legacy' },
+      });
+      await prisma.offerVariant.create({
+        data: {
+          vendorId,
+          vendorOfferId: legacyOffer.id,
+          sellerSku: unique('sku'),
+          basePrice: 10,
+          identifierType: 'GTIN',
+          identifierValue: gtin,
+          storeInventoryBarcode: unique('barcode'),
+        },
+      });
+
+      const csv = [
+        'title_ar,title_en,seller_sku,base_price,identifier_type,identifier_value',
+        `جديد,New,${unique('sku')},20,GTIN,${gtin}`,
+      ].join('\n');
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/offers/import`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('import'))
+        .attach('file', Buffer.from(csv, 'utf-8'), 'products.csv')
+        .expect(201);
+
+      expect(res.body.imported).toHaveLength(1);
+      expect(res.body.conflicts).toHaveLength(0);
+      expect(res.body.imported[0].offer_id).toBe(legacyOffer.id);
+
+      const offers = await prisma.vendorOffer.findMany({
+        where: { vendorId },
+      });
+      expect(offers).toHaveLength(1);
+
+      const record = await prisma.importIdentifierRecord.findUnique({
+        where: {
+          vendorId_identifierType_identifierValue: {
+            vendorId,
+            identifierType: 'GTIN',
+            identifierValue: gtin,
+          },
+        },
+      });
+      expect(record?.vendorOfferId).toBe(legacyOffer.id);
+    });
+
+    it('PDR-019 legacy data: more than one pre-existing offer already using the same identifier is a manual-review conflict, never auto-linked', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId } = await createVendorWithTwoBranches(owner);
+      await activateVendorSubscription(owner, vendorId);
+
+      const gtin = unique('gtin').slice(0, 20);
+      const legacyOfferA = await prisma.vendorOffer.create({
+        data: { vendorId, titleAr: 'أ', titleEn: 'A' },
+      });
+      await prisma.offerVariant.create({
+        data: {
+          vendorId,
+          vendorOfferId: legacyOfferA.id,
+          sellerSku: unique('sku'),
+          basePrice: 10,
+          identifierType: 'GTIN',
+          identifierValue: gtin,
+          storeInventoryBarcode: unique('barcode'),
+        },
+      });
+      const legacyOfferB = await prisma.vendorOffer.create({
+        data: { vendorId, titleAr: 'ب', titleEn: 'B' },
+      });
+      await prisma.offerVariant.create({
+        data: {
+          vendorId,
+          vendorOfferId: legacyOfferB.id,
+          sellerSku: unique('sku'),
+          basePrice: 10,
+          identifierType: 'GTIN',
+          identifierValue: gtin,
+          storeInventoryBarcode: unique('barcode'),
+        },
+      });
+
+      const csv = [
+        'title_ar,title_en,seller_sku,base_price,identifier_type,identifier_value',
+        `جديد,New,${unique('sku')},20,GTIN,${gtin}`,
+      ].join('\n');
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/offers/import`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('import'))
+        .attach('file', Buffer.from(csv, 'utf-8'), 'products.csv')
+        .expect(201);
+
+      expect(res.body.imported).toHaveLength(0);
+      expect(res.body.conflicts).toHaveLength(1);
+      expect(res.body.conflicts[0].reason).toContain(
+        'Multiple existing offers',
+      );
+
+      const offers = await prisma.vendorOffer.findMany({
+        where: { vendorId },
+      });
+      expect(offers).toHaveLength(2);
+      const record = await prisma.importIdentifierRecord.findUnique({
+        where: {
+          vendorId_identifierType_identifierValue: {
+            vendorId,
+            identifierType: 'GTIN',
+            identifierValue: gtin,
+          },
+        },
+      });
+      expect(record).toBeNull();
+    });
+
+    // Round-3 review fix (Blocker 2): ImportIdentifierRecord.vendorOffer
+    // is now a COMPOSITE FK on (vendorId, vendorOfferId), not
+    // vendorOfferId alone - a cross-vendor link (this record's vendorId
+    // paired with a DIFFERENT vendor's offer) must be rejected by
+    // Postgres itself, not just by application code, since raw SQL
+    // bypasses the app entirely.
+    it('DB-level: a cross-vendor ImportIdentifierRecord link is rejected by the composite foreign key', async () => {
+      const ownerA = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId: vendorAId } = await createVendorWithTwoBranches(ownerA);
+      const ownerB = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId: vendorBId } = await createVendorWithTwoBranches(ownerB);
+
+      const offerB = await prisma.vendorOffer.create({
+        data: { vendorId: vendorBId, titleAr: 'ب', titleEn: 'B' },
+      });
+
+      await expect(
+        prisma.$executeRaw`INSERT INTO import_identifier_records (id, "vendorId", "identifierType", "identifierValue", "vendorOfferId", "updatedAt")
+          VALUES (${randomUUID()}, ${vendorAId}, 'GTIN', ${unique('gtin')}, ${offerB.id}, now())`,
+      ).rejects.toThrow();
+    });
+
+    // Round-3 review fix (Blocker 3): two concurrent imports referencing
+    // the same identifier with different, valid, new seller_skus must
+    // both succeed and merge into the SAME offer - not race, and not
+    // report a misleading "seller_sku conflict" for a SKU that never
+    // actually collided.
+    it('PDR-019 concurrency: two concurrent imports with the same identifier and different new seller_skus both succeed and merge into one offer', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId } = await createVendorWithTwoBranches(owner);
+      await activateVendorSubscription(owner, vendorId);
+
+      const sharedGtin = unique('gtin').slice(0, 20);
+      const csvA = [
+        'title_ar,title_en,seller_sku,base_price,identifier_type,identifier_value',
+        `أ,A,${unique('sku')},20,GTIN,${sharedGtin}`,
+      ].join('\n');
+      const csvB = [
+        'title_ar,title_en,seller_sku,base_price,identifier_type,identifier_value',
+        `ب,B,${unique('sku')},20,GTIN,${sharedGtin}`,
+      ].join('\n');
+
+      const [resA, resB] = await Promise.all([
+        request(app.getHttpServer())
+          .post(`/api/v1/vendors/${vendorId}/offers/import`)
+          .set('Authorization', `Bearer ${owner}`)
+          .set('Idempotency-Key', unique('import-a'))
+          .attach('file', Buffer.from(csvA, 'utf-8'), 'a.csv'),
+        request(app.getHttpServer())
+          .post(`/api/v1/vendors/${vendorId}/offers/import`)
+          .set('Authorization', `Bearer ${owner}`)
+          .set('Idempotency-Key', unique('import-b'))
+          .attach('file', Buffer.from(csvB, 'utf-8'), 'b.csv'),
+      ]);
+
+      expect(resA.status).toBe(201);
+      expect(resB.status).toBe(201);
+      expect(resA.body.imported).toHaveLength(1);
+      expect(resB.body.imported).toHaveLength(1);
+      expect(resA.body.imported[0].offer_id).toBe(
+        resB.body.imported[0].offer_id,
+      );
+
+      const offers = await prisma.vendorOffer.findMany({
+        where: { vendorId },
+      });
+      expect(offers).toHaveLength(1);
+      const variants = await prisma.offerVariant.findMany({
+        where: { vendorId },
+      });
+      expect(variants).toHaveLength(2);
+      const records = await prisma.importIdentifierRecord.findMany({
+        where: {
+          vendorId,
+          identifierType: 'GTIN',
+          identifierValue: sharedGtin,
+        },
+      });
+      expect(records).toHaveLength(1);
     });
 
     it('a duplicate seller_sku within the same file is reported, not silently overwritten', async () => {
