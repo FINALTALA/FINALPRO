@@ -14,6 +14,7 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { Request } from 'express';
 import { AuditLogService } from '../audit/audit-log.service';
 import { CurrentUser } from '../auth/current-user.decorator';
@@ -31,6 +32,7 @@ import { RequireVendorRole } from '../auth/vendor-role.decorator';
 import { DeliveryZoneRegion, Prisma } from '../../generated/prisma/client';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
+import { generateVendorSlug } from '../common/slug.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePickupPointDto } from './dto/create-pickup-point.dto';
 import { CreateVendorDto } from './dto/create-vendor.dto';
@@ -151,8 +153,19 @@ export class VendorsController {
     @Req() req: Request,
   ) {
     return this.prisma.$transaction(async (tx) => {
+      // Sprint 7 (RB-STOREF-001): the id is generated up front so the
+      // slug can be derived from it deterministically before insert -
+      // see common/slug.util.ts. displayName defaults to legalName;
+      // the owner may diverge it later via the storefront settings
+      // endpoint without ever changing the stable slug.
+      const vendorId = randomUUID();
       const created = await tx.vendor.create({
-        data: { legalName: dto.legal_name },
+        data: {
+          id: vendorId,
+          legalName: dto.legal_name,
+          slug: generateVendorSlug(dto.legal_name, vendorId),
+          displayName: dto.legal_name,
+        },
       });
       await tx.vendorUser.create({
         data: { userId: user.id, vendorId: created.id, role: 'OWNER' },

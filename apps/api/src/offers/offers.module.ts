@@ -4,6 +4,7 @@ import { AuthModule } from '../auth/auth.module';
 import { IdempotencyModule } from '../common/idempotency/idempotency.module';
 import { MatchingModule } from '../matching/matching.module';
 import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
+import { OffersImportController } from './offers-import.controller';
 import { VendorOffersController } from './vendor-offers.controller';
 
 @Module({
@@ -14,6 +15,6 @@ import { VendorOffersController } from './vendor-offers.controller';
     IdempotencyModule,
     SubscriptionsModule,
   ],
-  controllers: [VendorOffersController],
+  controllers: [VendorOffersController, OffersImportController],
 })
 export class OffersModule {}

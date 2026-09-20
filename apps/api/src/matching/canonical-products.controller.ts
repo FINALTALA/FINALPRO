@@ -26,8 +26,11 @@ import { generatePlatformProductBarcode } from '../common/barcode.util';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
+import { CanonicalNamingService } from './canonical-naming.service';
 import { CreateCanonicalProductDto } from './dto/create-canonical-product.dto';
 import { CreateCanonicalVariantDto } from './dto/create-canonical-variant.dto';
+import { DecideNameChangeRequestDto } from './dto/decide-name-change-request.dto';
+import { nameChangeRequestDto } from './match-review.controller';
 
 // FR-MATCH-008 / BL-MATCH-001: level 1 + 2 of the four-level canonical
 // model. Read routes are public; writes require PLATFORM_ADMIN (Part 3:
@@ -37,6 +40,7 @@ export class CanonicalProductsController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
+    private readonly canonicalNaming: CanonicalNamingService,
     private readonly idempotencyCompletion: IdempotencyCompletionService,
   ) {}
 
@@ -46,6 +50,8 @@ export class CanonicalProductsController {
     categoryId: string;
     modelName: string;
     status: string;
+    canonicalNameAr: string | null;
+    canonicalNameEn: string | null;
   }) {
     return {
       id: product.id,
@@ -53,6 +59,13 @@ export class CanonicalProductsController {
       category_id: product.categoryId,
       model_name: product.modelName,
       status: product.status,
+      // Sprint 7 (RB-MATCH-003): the customer-facing name, once a
+      // first vendor has confirmed a match - null until then. Never
+      // the internal platformProductBarcode (see that field's own
+      // comment on CanonicalProductVariant, which this DTO already
+      // never includes either).
+      canonical_name_ar: product.canonicalNameAr,
+      canonical_name_en: product.canonicalNameEn,
     };
   }
 
@@ -78,6 +91,140 @@ export class CanonicalProductsController {
       orderBy: { createdAt: 'asc' },
     });
     return products.map((p) => this.toDto(p));
+  }
+
+  // Sprint 7 (RB-MATCH-003): the admin queue - every vendor's PENDING
+  // rename request across every canonical product, oldest first (a
+  // reviewer works through it in submission order). Created by
+  // MatchReviewController.requestNameChange() (owner-only, vendor-
+  // scoped); only ever decided here. Declared before @Get(':id') below
+  // deliberately - NestJS/Express matches routes in declaration order,
+  // and :id would otherwise swallow the literal "name-change-requests"
+  // segment as if it were an id.
+  @Get('name-change-requests')
+  @UseGuards(SessionAuthGuard, PlatformRoleGuard)
+  @RequirePlatformRole(PlatformRole.PLATFORM_ADMIN)
+  async listNameChangeRequests() {
+    const requests = await this.prisma.canonicalNameChangeRequest.findMany({
+      where: { status: 'PENDING' },
+      orderBy: { createdAt: 'asc' },
+    });
+    return requests.map(nameChangeRequestDto);
+  }
+
+  // Approval propagates the new name to the CanonicalProduct itself and
+  // every VendorOffer currently matched to it (CanonicalNamingService.
+  // applyApprovedRename()) - "the new name becomes canonical for every
+  // related matched offer." Locks the CanonicalProduct row first (same
+  // fixed lock order as confirmMatch()/decide(), so this can never race
+  // a concurrent first-confirmation or another decision for the same
+  // product) and auto-rejects every other still-PENDING request for
+  // the same product - only one name can stand, the same "no
+  // conflicting outcome left dangling" pattern this codebase already
+  // uses for match candidates/staff invites. Same route-ordering
+  // reasoning as listNameChangeRequests above - must precede
+  // @Get(':id').
+  @Post('name-change-requests/:requestId/decision')
+  @HttpCode(200)
+  @UseGuards(SessionAuthGuard, PlatformRoleGuard)
+  @RequirePlatformRole(PlatformRole.PLATFORM_ADMIN)
+  @UseInterceptors(IdempotencyInterceptor)
+  async decideNameChangeRequest(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('requestId') requestId: string,
+    @Body() dto: DecideNameChangeRequestDto,
+    @Req() req: Request,
+  ) {
+    const preCheck = await this.prisma.canonicalNameChangeRequest.findUnique({
+      where: { id: requestId },
+    });
+    if (!preCheck) {
+      throw new NotFoundException({
+        code: 'NAME_CHANGE_REQUEST_NOT_FOUND',
+        message: 'Name change request not found',
+      });
+    }
+
+    const body = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM canonical_products WHERE id = ${preCheck.canonicalProductId} FOR UPDATE`;
+
+      const request = await tx.canonicalNameChangeRequest.findUniqueOrThrow({
+        where: { id: requestId },
+      });
+      if (request.status !== 'PENDING') {
+        throw new ConflictException({
+          code: 'NAME_CHANGE_REQUEST_ALREADY_DECIDED',
+          message: 'This name change request has already been decided',
+        });
+      }
+
+      let updated;
+      if (dto.decision === 'reject') {
+        updated = await tx.canonicalNameChangeRequest.update({
+          where: { id: requestId },
+          data: {
+            status: 'REJECTED',
+            decidedById: user.id,
+            decidedAt: new Date(),
+          },
+        });
+      } else {
+        updated = await tx.canonicalNameChangeRequest.update({
+          where: { id: requestId },
+          data: {
+            status: 'APPROVED',
+            decidedById: user.id,
+            decidedAt: new Date(),
+          },
+        });
+        await this.canonicalNaming.applyApprovedRename(
+          tx,
+          request.canonicalProductId,
+          request.requestedNameAr,
+          request.requestedNameEn,
+          user.id,
+          req.correlationId,
+        );
+        await tx.canonicalNameChangeRequest.updateMany({
+          where: {
+            canonicalProductId: request.canonicalProductId,
+            status: 'PENDING',
+            id: { not: requestId },
+          },
+          data: {
+            status: 'REJECTED',
+            decidedById: user.id,
+            decidedAt: new Date(),
+          },
+        });
+      }
+
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action:
+            dto.decision === 'approve'
+              ? 'canonical_name_change_request.approved'
+              : 'canonical_name_change_request.rejected',
+          entityType: 'CanonicalNameChangeRequest',
+          entityId: requestId,
+          afterState: nameChangeRequestDto(updated),
+        },
+        tx,
+      );
+
+      const responseBody = nameChangeRequestDto(updated);
+      await this.idempotencyCompletion.complete(
+        tx,
+        req.idempotencyClaimId,
+        responseBody,
+        200,
+      );
+      return responseBody;
+    });
+
+    return body;
   }
 
   @Get(':id')

@@ -2,6 +2,7 @@ import {
   Body,
   ConflictException,
   Controller,
+  ForbiddenException,
   Get,
   HttpCode,
   NotFoundException,
@@ -23,8 +24,36 @@ import { RequireVendorRole } from '../auth/vendor-role.decorator';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
+import { CanonicalNamingService } from './canonical-naming.service';
 import { MatchReviewDecisionDto } from './dto/match-review-decision.dto';
+import { RequestNameChangeDto } from './dto/request-name-change.dto';
 import { MatchingService } from './matching.service';
+
+export function nameChangeRequestDto(r: {
+  id: string;
+  canonicalProductId: string;
+  vendorId: string;
+  requestedNameAr: string;
+  requestedNameEn: string;
+  reason: string | null;
+  status: string;
+  decidedById: string | null;
+  decidedAt: Date | null;
+  createdAt: Date;
+}) {
+  return {
+    id: r.id,
+    canonical_product_id: r.canonicalProductId,
+    vendor_id: r.vendorId,
+    requested_name_ar: r.requestedNameAr,
+    requested_name_en: r.requestedNameEn,
+    reason: r.reason,
+    status: r.status,
+    decided_by_id: r.decidedById,
+    decided_at: r.decidedAt?.toISOString() ?? null,
+    created_at: r.createdAt.toISOString(),
+  };
+}
 
 function candidateDto(c: {
   id: string;
@@ -57,6 +86,7 @@ export class MatchReviewController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly matching: MatchingService,
+    private readonly canonicalNaming: CanonicalNamingService,
     private readonly auditLog: AuditLogService,
     private readonly idempotencyCompletion: IdempotencyCompletionService,
   ) {}
@@ -145,7 +175,33 @@ export class MatchReviewController {
   ) {
     await this.requireVariant(vendorId, offerId, variantId);
 
+    // Sprint 7 (RB-MATCH-003): same pre-transaction, non-authoritative
+    // lookup as VendorOffersController.confirmMatch() - a candidate's
+    // own canonicalVariantId is immutable once created, only its
+    // status changes, so this id is stable to look up before the
+    // transaction purely to decide lock order (canonical_products
+    // before vendor_offers, consistently - see CanonicalNamingService's
+    // own comment for why the fixed order matters).
+    let targetCanonicalProductId: string | null = null;
+    if (dto.decision === 'approve') {
+      const candidatePreCheck =
+        await this.prisma.matchReviewCandidate.findUnique({
+          where: { id: candidateId },
+        });
+      if (candidatePreCheck) {
+        const canonicalVariantPreCheck =
+          await this.prisma.canonicalProductVariant.findUnique({
+            where: { id: candidatePreCheck.canonicalVariantId },
+          });
+        targetCanonicalProductId =
+          canonicalVariantPreCheck?.canonicalProductId ?? null;
+      }
+    }
+
     return this.prisma.$transaction(async (tx) => {
+      if (targetCanonicalProductId) {
+        await tx.$queryRaw`SELECT id FROM canonical_products WHERE id = ${targetCanonicalProductId} FOR UPDATE`;
+      }
       await tx.$queryRaw`SELECT id FROM vendor_offers WHERE id = ${offerId} FOR UPDATE`;
 
       const candidate = await tx.matchReviewCandidate.findUnique({
@@ -217,6 +273,16 @@ export class MatchReviewController {
           },
           data: { status: 'REJECTED', decidedAt: new Date() },
         });
+
+        // Sprint 7 (RB-MATCH-003): same first-confirmer/adoption rule
+        // as the exact-match flow - see CanonicalNamingService.
+        await this.canonicalNaming.applyOnConfirm(
+          tx,
+          canonicalVariant.canonicalProductId,
+          offerId,
+          user.id,
+          req.correlationId,
+        );
       }
 
       await this.auditLog.record(
@@ -256,5 +322,70 @@ export class MatchReviewController {
       orderBy: { score: 'desc' },
     });
     return candidates.map(candidateDto);
+  }
+
+  // Sprint 7 (RB-MATCH-003, Sec 3.2): "Any matched vendor may request a
+  // canonical-name change for admin approve/reject." Owner-only
+  // (requesting a rename is a catalog action, same PDR-009 domain as
+  // confirming a match). Requires this vendor to actually have a
+  // confirmed offer against this CanonicalProduct - a vendor with no
+  // stake in the product has no standing to request its name changed.
+  // The request itself is only ever *decided* by
+  // CanonicalProductsController (PLATFORM_ADMIN) - creating one never
+  // changes the name.
+  @Post(':vendorId/canonical-products/:canonicalProductId/name-change-requests')
+  @HttpCode(201)
+  @UseInterceptors(IdempotencyInterceptor)
+  @RequireVendorRole('OWNER')
+  async requestNameChange(
+    @Param('vendorId') vendorId: string,
+    @Param('canonicalProductId') canonicalProductId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: RequestNameChangeDto,
+    @Req() req: Request,
+  ) {
+    const hasConfirmedMatch = await this.prisma.vendorOffer.findFirst({
+      where: { vendorId, canonicalProductId },
+    });
+    if (!hasConfirmedMatch) {
+      throw new ForbiddenException({
+        code: 'NOT_A_MATCHED_VENDOR',
+        message:
+          'Your vendor account has no confirmed offer matched to this canonical product',
+      });
+    }
+
+    const body = await this.prisma.$transaction(async (tx) => {
+      const request = await tx.canonicalNameChangeRequest.create({
+        data: {
+          canonicalProductId,
+          vendorId,
+          requestedNameAr: dto.requested_name_ar,
+          requestedNameEn: dto.requested_name_en,
+          reason: dto.reason,
+        },
+      });
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'canonical_name_change_request.created',
+          entityType: 'CanonicalNameChangeRequest',
+          entityId: request.id,
+          afterState: nameChangeRequestDto(request),
+        },
+        tx,
+      );
+      const responseBody = nameChangeRequestDto(request);
+      await this.idempotencyCompletion.complete(
+        tx,
+        req.idempotencyClaimId,
+        responseBody,
+        201,
+      );
+      return responseBody;
+    });
+
+    return body;
   }
 }

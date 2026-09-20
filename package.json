@@ -14,5 +14,8 @@
     "test:e2e:api": "npm run test:e2e --workspace=apps/api",
     "lint:api": "npm run lint --workspace=apps/api",
     "lint:web": "npm run lint --workspace=apps/web"
+  },
+  "overrides": {
+    "multer": "2.4.0"
   }
 }
