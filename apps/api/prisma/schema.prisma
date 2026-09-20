@@ -294,6 +294,7 @@ model Vendor {
   offerVariantMedia      OfferVariantMedia[]
   matchReviewCandidates  MatchReviewCandidate[]
   nameChangeRequests     CanonicalNameChangeRequest[]
+  importIdentifierRecords ImportIdentifierRecord[]
 
   @@map("vendors")
 }
@@ -836,10 +837,44 @@ model VendorOffer {
   createdAt          DateTime          @default(now())
 
   variants OfferVariant[]
+  importIdentifierRecords ImportIdentifierRecord[]
 
   @@index([vendorId])
   @@index([canonicalProductId])
   @@map("vendor_offers")
+}
+
+/// Sprint 7 round 2 fix (RB-MATCH-004 Blocker 3, PDR-019): the minimal
+/// state needed to apply PDR-019's "same barcode + new colour/size is
+/// additive, not a conflict" rule ACROSS separate import requests, not
+/// just within one file. brandName/productType/mpn are otherwise
+/// validation/grouping-only free text with nowhere else persisted (see
+/// validate-import-row.ts's own comment) - without recording them here,
+/// a second import batch referencing the same identifier would have no
+/// evidence to check compatibility against, and no way to know which
+/// existing VendorOffer a later matching row should attach to. A second
+/// import can only ever safely merge into the first when neither side
+/// contradicts the other on brand/product type/MPN (see
+/// import/group-import-rows.ts's conflictingField()); anything else is
+/// reported as a manual-review conflict, never guessed. Scoped to one
+/// identifier per vendor - a barcode's real-world uniqueness is treated
+/// as store-scoped here, the same as every other per-vendor uniqueness
+/// rule in this schema (e.g. OfferVariant.storeInventoryBarcode).
+model ImportIdentifierRecord {
+  id              String              @id @default(uuid())
+  vendorId        String
+  vendor          Vendor              @relation(fields: [vendorId], references: [id])
+  identifierType  OfferIdentifierType
+  identifierValue String
+  vendorOfferId   String
+  vendorOffer     VendorOffer         @relation(fields: [vendorOfferId], references: [id])
+  brandName       String?
+  productType     String?
+  mpn             String?
+  updatedAt       DateTime            @updatedAt
+
+  @@unique([vendorId, identifierType, identifierValue], map: "import_identifier_records_vendor_identifier_key")
+  @@map("import_identifier_records")
 }
 
 enum OfferCondition {

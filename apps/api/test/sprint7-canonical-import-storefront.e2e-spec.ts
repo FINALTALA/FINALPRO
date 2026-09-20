@@ -5,6 +5,7 @@ import { AppModule } from './../src/app.module';
 import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
 import { PrismaService } from './../src/prisma/prisma.service';
+import { generateVendorSlug } from './../src/common/slug.util';
 
 class FakeSmsService {
   sent: { phone: string; code: string; expiresAt: Date }[] = [];
@@ -704,6 +705,93 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
       expect(res.body.conflicts[0].reason).toContain('brandName');
     });
 
+    // Review-round fix (Blocker 3): PDR-019's additive rule must hold
+    // across separate import REQUESTS, not just within one file - a
+    // second import referencing an identifier a prior import already
+    // used (compatible brand/type/mpn, a new seller_sku) must attach as
+    // a new variant on the SAME VendorOffer the first import created,
+    // never spawn a second offer for what is the same real-world
+    // product.
+    it('PDR-019 across imports: a second import with the same identifier_type/value and a new seller_sku becomes an additional variant on the SAME offer as the first import', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId } = await createVendorWithTwoBranches(owner);
+      await activateVendorSubscription(owner, vendorId);
+
+      const sharedGtin = unique('gtin').slice(0, 20);
+      const skuRed = unique('sku');
+      const firstCsv = [
+        'title_ar,title_en,seller_sku,base_price,identifier_type,identifier_value,brand_name,product_type,specs_text_en',
+        `تيشيرت,T-Shirt,${skuRed},20,GTIN,${sharedGtin},Acme,Apparel,Red`,
+      ].join('\n');
+      const firstRes = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/offers/import`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('import'))
+        .attach('file', Buffer.from(firstCsv, 'utf-8'), 'products.csv')
+        .expect(201);
+      expect(firstRes.body.imported).toHaveLength(1);
+      const firstOfferId = firstRes.body.imported[0].offer_id;
+
+      const skuBlue = unique('sku');
+      const secondCsv = [
+        'title_ar,title_en,seller_sku,base_price,identifier_type,identifier_value,brand_name,product_type,specs_text_en',
+        `تيشيرت,T-Shirt,${skuBlue},20,GTIN,${sharedGtin},Acme,Apparel,Blue`,
+      ].join('\n');
+      const secondRes = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/offers/import`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('import'))
+        .attach('file', Buffer.from(secondCsv, 'utf-8'), 'products.csv')
+        .expect(201);
+
+      expect(secondRes.body.imported).toHaveLength(1);
+      expect(secondRes.body.conflicts).toHaveLength(0);
+      expect(secondRes.body.imported[0].offer_id).toBe(firstOfferId);
+
+      const offers = await prisma.vendorOffer.findMany({
+        where: { vendorId },
+      });
+      expect(offers).toHaveLength(1);
+    });
+
+    it('PDR-019 across imports: different identifier_types sharing the same raw value never merge into one offer', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId } = await createVendorWithTwoBranches(owner);
+      await activateVendorSubscription(owner, vendorId);
+
+      const sharedValue = unique('code').slice(0, 20);
+      const firstCsv = [
+        'title_ar,title_en,seller_sku,base_price,identifier_type,identifier_value',
+        `أ,A,${unique('sku')},20,GTIN,${sharedValue}`,
+      ].join('\n');
+      const firstRes = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/offers/import`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('import'))
+        .attach('file', Buffer.from(firstCsv, 'utf-8'), 'products.csv')
+        .expect(201);
+      const firstOfferId = firstRes.body.imported[0].offer_id;
+
+      const secondCsv = [
+        'title_ar,title_en,seller_sku,base_price,identifier_type,identifier_value',
+        `ب,B,${unique('sku')},20,MPN,${sharedValue}`,
+      ].join('\n');
+      const secondRes = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/offers/import`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('import'))
+        .attach('file', Buffer.from(secondCsv, 'utf-8'), 'products.csv')
+        .expect(201);
+
+      expect(secondRes.body.imported).toHaveLength(1);
+      expect(secondRes.body.imported[0].offer_id).not.toBe(firstOfferId);
+
+      const offers = await prisma.vendorOffer.findMany({
+        where: { vendorId },
+      });
+      expect(offers).toHaveLength(2);
+    });
+
     it('a duplicate seller_sku within the same file is reported, not silently overwritten', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
@@ -863,6 +951,35 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
       });
       expect(media).toHaveLength(0);
     });
+
+    // Review-round fix (Blocker 2): a file over the byte-size limit must
+    // be rejected by multer's own limits check, which runs inside the
+    // FileInterceptor before the controller method body (and therefore
+    // before parseImportFile()/groupImportRows() ever run) - proven here
+    // by asserting no VendorOffer was created for this vendor at all,
+    // not just by the HTTP status. @nestjs/platform-express's
+    // FileInterceptor already maps multer's LIMIT_FILE_SIZE to its own
+    // PayloadTooLargeException (413, standard for "request body too
+    // large") before the error ever reaches HttpExceptionFilter, so
+    // there is nothing else to wire up for a clean, documented 4xx here.
+    it('refuses a file exceeding the upload size limit, without ever reaching the parser/import logic', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId } = await createVendorWithTwoBranches(owner);
+      await activateVendorSubscription(owner, vendorId);
+
+      const oversized = Buffer.alloc(11 * 1024 * 1024, 'a');
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/offers/import`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('import'))
+        .attach('file', oversized, 'huge.csv');
+
+      expect(res.status).toBe(413);
+      expect(res.body.error.code).toBe('PAYLOAD_TOO_LARGE');
+
+      const offers = await prisma.vendorOffer.findMany({ where: { vendorId } });
+      expect(offers).toHaveLength(0);
+    });
   });
 
   describe('RB-STOREF-001: public storefront foundation', () => {
@@ -887,6 +1004,34 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
       expect(settings.body.display_name).toBe(legalName);
       expect(settings.body.slug).toBeTruthy();
       expect(settings.body.is_published).toBe(false);
+    });
+
+    // Review-round fix: migration 20260922100000's SQL backfill must
+    // derive the exact same slug as generateVendorSlug() (slug.util.ts)
+    // for the same inputs, including for a legalName that is entirely
+    // non-ASCII (e.g. Arabic) and collapses to nothing under the
+    // slugify regexes - an earlier version of the backfill SQL produced
+    // SQL NULL in that case instead of falling back to the bare id, see
+    // slug.util.spec.ts and the migration file's own comment. This runs
+    // the migration's exact backfill expression directly against
+    // Postgres (not through the application) and compares it to the
+    // TypeScript function's output for both an ASCII and an Arabic
+    // legalName.
+    it('the migration backfill SQL produces the exact same slug as generateVendorSlug(), including for an Arabic legalName, with no leading dash', async () => {
+      const id = 'cccccccc-dddd-eeee-ffff-000000000000';
+      for (const legalName of ['My Test Store', 'متجر الأمل']) {
+        const rows = await prisma.$queryRaw<{ slug: string }[]>`
+          SELECT COALESCE(
+            NULLIF(regexp_replace(lower(regexp_replace(${legalName}::text, '[^a-zA-Z0-9]+', '-', 'g')), '(^-+|-+$)', '', 'g'), '')
+              || '-' || replace(${id}::text, '-', ''),
+            replace(${id}::text, '-', '')
+          ) AS slug
+        `;
+        const sqlSlug = rows[0].slug;
+        expect(sqlSlug).toBe(generateVendorSlug(legalName, id));
+        expect(sqlSlug.startsWith('-')).toBe(false);
+        expect(sqlSlug).toMatch(/^[a-z0-9-]+$/);
+      }
     });
 
     it('lets the owner update storefront settings', async () => {

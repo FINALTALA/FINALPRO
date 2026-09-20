@@ -28,14 +28,25 @@ import { MatchingService } from '../matching/matching.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SubscriptionGateService } from '../subscriptions/subscription-gate.service';
 import { ImportReport } from './dto/import-report.dto';
-import { groupImportRows } from './import/group-import-rows';
-import { parseImportFile } from './import/parse-import-file';
 import {
-  ValidatedImportRow,
-  validateImportRow,
-} from './import/validate-import-row';
+  conflictingField,
+  groupImportRows,
+  ImportGroup,
+} from './import/group-import-rows';
+import { parseImportFile } from './import/parse-import-file';
+import { validateImportRow } from './import/validate-import-row';
 
 const MAX_IMPORT_ROWS = 2000;
+// Review-round fix (Blocker 2): without an explicit multer `limits`,
+// memory storage buffers an arbitrarily large upload in full BEFORE the
+// MAX_IMPORT_ROWS check below ever runs - a resource-exhaustion vector
+// independent of the multer CVE fix (that fixes a bug in multer itself,
+// this sets an application resource policy multer doesn't have an
+// opinion on). 10 MiB comfortably fits a 2000-row CSV/XLSX (a 2000-row
+// CSV with the columns validate-import-row.ts expects is on the order
+// of a few hundred KB; XLSX's zip/XML overhead is larger but still well
+// under this) while bounding worst-case memory use per request.
+const MAX_IMPORT_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 
 // Sprint 7 (RB-MATCH-004): batch CSV/XLSX import - owner-only (catalog
 // creation, PDR-009), reusing the exact same VendorOffer/OfferVariant
@@ -65,7 +76,12 @@ export class OffersImportController {
 
   @Post()
   @HttpCode(201)
-  @UseInterceptors(FileInterceptor('file'), IdempotencyInterceptor)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: MAX_IMPORT_FILE_SIZE_BYTES, files: 1 },
+    }),
+    IdempotencyInterceptor,
+  )
   @RequireVendorRole('OWNER')
   async import(
     @Param('vendorId') vendorId: string,
@@ -149,7 +165,7 @@ export class OffersImportController {
     );
 
     for (const group of groups) {
-      await this.importGroup(vendorId, group.rows, user, req, report);
+      await this.importGroup(vendorId, group, user, req, report);
     }
 
     await this.auditLog.record({
@@ -172,11 +188,12 @@ export class OffersImportController {
 
   private async importGroup(
     vendorId: string,
-    rows: ValidatedImportRow[],
+    group: ImportGroup,
     user: AuthenticatedUser,
     req: Request,
     report: ImportReport,
   ): Promise<void> {
+    const rows = group.rows;
     const existingVariants = await this.prisma.offerVariant.findMany({
       where: { vendorId, sellerSku: { in: rows.map((r) => r.sellerSku) } },
     });
@@ -207,8 +224,52 @@ export class OffersImportController {
     try {
       await this.prisma.$transaction(async (tx) => {
         let offerId = reuseOfferId;
+        const firstRow = rowsToCreate[0];
+
+        // Review-round fix (Blocker 3, RB-MATCH-004/PDR-019): PDR-019's
+        // "same barcode + new colour/size = additive, not conflict" must
+        // hold across separate import requests too, not just within one
+        // file - so before deciding "new offer", check whether a PRIOR
+        // import already recorded this exact (type, value) for this
+        // vendor. The unique constraint on ImportIdentifierRecord makes
+        // ">1 possible offer" structurally impossible here - there is at
+        // most one record per (vendor, identifierType, identifierValue).
+        let identifierRecord: {
+          id: string;
+          vendorOfferId: string;
+          brandName: string | null;
+          productType: string | null;
+          mpn: string | null;
+        } | null = null;
+        if (!offerId && group.identifierType && group.identifierValue) {
+          identifierRecord = await tx.importIdentifierRecord.findUnique({
+            where: {
+              vendorId_identifierType_identifierValue: {
+                vendorId,
+                identifierType: group.identifierType,
+                identifierValue: group.identifierValue,
+              },
+            },
+          });
+          if (identifierRecord) {
+            const conflictField = conflictingField(identifierRecord, firstRow);
+            if (conflictField) {
+              // Cannot prove compatibility with the prior import - do
+              // not guess, report for manual review instead (never
+              // auto-merge on unproven brand/type/mpn).
+              for (const row of rowsToCreate) {
+                report.conflicts.push({
+                  row_number: row.rowNumber,
+                  reason: `Conflicts with a previously imported offer sharing identifier_type/identifier_value "${group.identifierType}/${group.identifierValue}" - differing ${conflictField} requires manual review (PDR-019)`,
+                });
+              }
+              return;
+            }
+            offerId = identifierRecord.vendorOfferId;
+          }
+        }
+
         if (!offerId) {
-          const firstRow = rowsToCreate[0];
           const offer = await tx.vendorOffer.create({
             data: {
               vendorId,
@@ -228,6 +289,40 @@ export class OffersImportController {
             },
             tx,
           );
+
+          if (group.identifierType && group.identifierValue) {
+            await tx.importIdentifierRecord.create({
+              data: {
+                vendorId,
+                identifierType: group.identifierType,
+                identifierValue: group.identifierValue,
+                vendorOfferId: offerId,
+                brandName: firstRow.brandName,
+                productType: firstRow.productType,
+                mpn: firstRow.mpn,
+              },
+            });
+          }
+        } else if (identifierRecord) {
+          // Fill in any previously-missing brand/type/mpn now that this
+          // import provides it, never overwriting a differing value -
+          // conflictingField() above already proved nothing differs.
+          const fillIns: Record<string, string> = {};
+          if (!identifierRecord.brandName && firstRow.brandName) {
+            fillIns.brandName = firstRow.brandName;
+          }
+          if (!identifierRecord.productType && firstRow.productType) {
+            fillIns.productType = firstRow.productType;
+          }
+          if (!identifierRecord.mpn && firstRow.mpn) {
+            fillIns.mpn = firstRow.mpn;
+          }
+          if (Object.keys(fillIns).length > 0) {
+            await tx.importIdentifierRecord.update({
+              where: { id: identifierRecord.id },
+              data: fillIns,
+            });
+          }
         }
 
         for (const row of rowsToCreate) {
