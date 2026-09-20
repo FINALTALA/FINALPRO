@@ -3,7 +3,6 @@ import {
   Body,
   ConflictException,
   Controller,
-  ForbiddenException,
   NotFoundException,
   Param,
   Post,
@@ -15,12 +14,14 @@ import { Request } from 'express';
 import { AuditLogService } from '../audit/audit-log.service';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { PlatformRole } from '../../generated/prisma/client';
-import { RequirePlatformRole } from '../auth/platform-role.decorator';
 import { PlatformRoleGuard } from '../auth/platform-role.guard';
+import { RequirePlatformRole } from '../auth/platform-role.decorator';
 import {
   AuthenticatedUser,
   SessionAuthGuard,
 } from '../auth/session-auth.guard';
+import { VendorMembershipGuard } from '../auth/vendor-membership.guard';
+import { RequireVendorRole } from '../auth/vendor-role.decorator';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
@@ -87,7 +88,20 @@ export class VendorVerificationController {
   // acts on a vendor that's UNDER_REVIEW) or would let a vendor
   // un-approve a branch after the vendor itself already advanced past
   // review.
+  // Security remediation (post-Sprint-6 review): this route used to
+  // check membership by hand (any role, no branch scoping) instead of
+  // going through VendorMembershipGuard - the same class of gap found
+  // and fixed twice before in VendorOffersController and
+  // SubscriptionsController. Submitting verification evidence is store
+  // configuration (PDR-009: owner-only), so a BRANCH_EMPLOYEE must
+  // never reach this at all, for their own branch or any other. Fixed
+  // by applying VendorMembershipGuard + @RequireVendorRole('OWNER')
+  // here specifically - not on the class, and not on decide() below,
+  // which is a platform reviewer's action entirely unrelated to vendor
+  // membership and stays exactly as it was (PlatformRoleGuard only).
   @Post('verification-evidence')
+  @UseGuards(VendorMembershipGuard)
+  @RequireVendorRole('OWNER')
   @UseInterceptors(IdempotencyInterceptor)
   async submitEvidence(
     @Param('vendorId') vendorId: string,
@@ -96,16 +110,6 @@ export class VendorVerificationController {
     @Body() dto: SubmitBranchEvidenceDto,
     @Req() req: Request,
   ) {
-    const membership = await this.prisma.vendorUser.findUnique({
-      where: { userId_vendorId: { userId: user.id, vendorId } },
-    });
-    if (!membership) {
-      throw new ForbiddenException({
-        code: 'NOT_VENDOR_OWNER',
-        message: 'You are not a member of this vendor account',
-      });
-    }
-
     const branch = await this.prisma.storeBranch.findUnique({
       where: { id: branchId },
     });
