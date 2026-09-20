@@ -1,0 +1,497 @@
+import { FileInterceptor } from '@nestjs/platform-express';
+import {
+  BadRequestException,
+  Controller,
+  ForbiddenException,
+  HttpCode,
+  NotFoundException,
+  Param,
+  Post,
+  Req,
+  UploadedFile,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
+import { Request } from 'express';
+import { randomUUID } from 'crypto';
+import { AuditLogService } from '../audit/audit-log.service';
+import { CurrentUser } from '../auth/current-user.decorator';
+import {
+  AuthenticatedUser,
+  SessionAuthGuard,
+} from '../auth/session-auth.guard';
+import { VendorMembershipGuard } from '../auth/vendor-membership.guard';
+import { RequireVendorRole } from '../auth/vendor-role.decorator';
+import { generateStoreInventoryBarcode } from '../common/barcode.util';
+import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
+import { MatchingService } from '../matching/matching.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { SubscriptionGateService } from '../subscriptions/subscription-gate.service';
+import { ImportReport } from './dto/import-report.dto';
+import { isExpectedOfferVariantConflict } from './import/expected-offer-variant-conflict';
+import {
+  collectGroupEvidence,
+  conflictingField,
+  groupImportRows,
+  ImportGroup,
+} from './import/group-import-rows';
+import { parseImportFile } from './import/parse-import-file';
+import { validateImportRow } from './import/validate-import-row';
+
+const MAX_IMPORT_ROWS = 2000;
+// Review-round fix (Blocker 2): without an explicit multer `limits`,
+// memory storage buffers an arbitrarily large upload in full BEFORE the
+// MAX_IMPORT_ROWS check below ever runs - a resource-exhaustion vector
+// independent of the multer CVE fix (that fixes a bug in multer itself,
+// this sets an application resource policy multer doesn't have an
+// opinion on). 10 MiB comfortably fits a 2000-row CSV/XLSX (a 2000-row
+// CSV with the columns validate-import-row.ts expects is on the order
+// of a few hundred KB; XLSX's zip/XML overhead is larger but still well
+// under this) while bounding worst-case memory use per request.
+const MAX_IMPORT_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+
+// Sprint 7 (RB-MATCH-004): batch CSV/XLSX import - owner-only (catalog
+// creation, PDR-009), reusing the exact same VendorOffer/OfferVariant
+// creation rules and subscription gate the single-row JSON endpoints
+// already enforce (VendorOffersController.create()/createVariant()) -
+// this is the same business action, just batch-driven. No image/video
+// import (RB-MATCH-004's own scope line - media stays manual-only via
+// the Sprint 6 endpoints); no ImportJob persistence - this project has
+// no background-worker infrastructure, so the whole file is validated
+// and written synchronously within the request, and the response IS
+// the report (nothing to poll for later).
+// @RequireVendorRole is applied on the @Post() method below, not here -
+// VendorMembershipGuard reads it via Reflector.get(KEY,
+// context.getHandler()), which never sees a class-level decorator (the
+// same requirement already documented, and already gotten wrong once
+// each, on VendorOffersController/SubscriptionsController - see their
+// own comments).
+@Controller('vendors/:vendorId/offers/import')
+@UseGuards(SessionAuthGuard, VendorMembershipGuard)
+export class OffersImportController {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLog: AuditLogService,
+    private readonly matching: MatchingService,
+    private readonly subscriptionGate: SubscriptionGateService,
+  ) {}
+
+  @Post()
+  @HttpCode(201)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: MAX_IMPORT_FILE_SIZE_BYTES, files: 1 },
+    }),
+    IdempotencyInterceptor,
+  )
+  @RequireVendorRole('OWNER')
+  async import(
+    @Param('vendorId') vendorId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @Req() req: Request,
+  ): Promise<ImportReport> {
+    if (!file) {
+      throw new BadRequestException({
+        code: 'FILE_REQUIRED',
+        message: 'A CSV or XLSX file must be uploaded under the "file" field',
+      });
+    }
+
+    const vendorExists = await this.prisma.vendor.findUnique({
+      where: { id: vendorId },
+    });
+    if (!vendorExists) {
+      throw new NotFoundException({
+        code: 'VENDOR_NOT_FOUND',
+        message: 'Vendor not found',
+      });
+    }
+
+    // Same FR-VEND-004/BR-014 gate as VendorOffersController.create() -
+    // import creates the exact same kind of resource, so it is gated
+    // the exact same way.
+    const subscriptionStatus = await this.prisma.$transaction((tx) =>
+      this.subscriptionGate.refreshStatus(tx, vendorId, req.correlationId),
+    );
+    if (subscriptionStatus !== 'ACTIVE') {
+      throw new ForbiddenException({
+        code: 'SUBSCRIPTION_INACTIVE',
+        message: 'An active subscription is required before importing offers',
+      });
+    }
+
+    let parsedRows: Record<string, string>[];
+    try {
+      parsedRows = await parseImportFile(file.buffer, file.originalname);
+    } catch {
+      throw new BadRequestException({
+        code: 'UNSUPPORTED_FILE_TYPE',
+        message: 'Only .csv and .xlsx files are supported',
+      });
+    }
+    if (parsedRows.length > MAX_IMPORT_ROWS) {
+      throw new BadRequestException({
+        code: 'IMPORT_FILE_TOO_LARGE',
+        message: `A single import is limited to ${MAX_IMPORT_ROWS} rows`,
+      });
+    }
+
+    const report: ImportReport = {
+      total_rows: parsedRows.length,
+      imported: [],
+      skipped_already_imported: [],
+      invalid_rows: [],
+      conflicts: [],
+    };
+
+    const validRows = [];
+    for (let i = 0; i < parsedRows.length; i += 1) {
+      const rowNumber = i + 2; // header is row 1
+      const result = validateImportRow(parsedRows[i], rowNumber);
+      if ('errors' in result) {
+        report.invalid_rows.push(
+          ...result.errors.map((e) => ({
+            row_number: e.rowNumber,
+            reason: e.reason,
+          })),
+        );
+      } else {
+        validRows.push(result.row);
+      }
+    }
+
+    const { groups, conflicts } = groupImportRows(validRows);
+    report.conflicts.push(
+      ...conflicts.map((c) => ({ row_number: c.rowNumber, reason: c.reason })),
+    );
+
+    for (const group of groups) {
+      await this.importGroup(vendorId, group, user, req, report);
+    }
+
+    await this.auditLog.record({
+      actorId: user.id,
+      correlationId: req.correlationId,
+      action: 'vendor_offers.imported',
+      entityType: 'Vendor',
+      entityId: vendorId,
+      afterState: {
+        total_rows: report.total_rows,
+        imported_count: report.imported.length,
+        skipped_count: report.skipped_already_imported.length,
+        invalid_count: report.invalid_rows.length,
+        conflict_count: report.conflicts.length,
+      },
+    });
+
+    return report;
+  }
+
+  private async importGroup(
+    vendorId: string,
+    group: ImportGroup,
+    user: AuthenticatedUser,
+    req: Request,
+    report: ImportReport,
+  ): Promise<void> {
+    const rows = group.rows;
+    const existingVariants = await this.prisma.offerVariant.findMany({
+      where: { vendorId, sellerSku: { in: rows.map((r) => r.sellerSku) } },
+    });
+    const existingBySku = new Map(
+      existingVariants.map((v) => [v.sellerSku, v]),
+    );
+
+    for (const row of rows) {
+      const existing = existingBySku.get(row.sellerSku);
+      if (existing) {
+        report.skipped_already_imported.push({
+          row_number: row.rowNumber,
+          reason: `seller_sku "${row.sellerSku}" already exists for this vendor - not re-imported`,
+          offer_id: existing.vendorOfferId,
+        });
+      }
+    }
+
+    const rowsToCreate = rows.filter((r) => !existingBySku.has(r.sellerSku));
+    if (rowsToCreate.length === 0) {
+      return;
+    }
+
+    const reuseOfferId = rows
+      .map((r) => existingBySku.get(r.sellerSku))
+      .find((v) => v)?.vendorOfferId;
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        let offerId = reuseOfferId;
+        const firstRow = rowsToCreate[0];
+        // Review-round fix (round 4): the group's UNIFIED brand/type/mpn
+        // evidence, not just firstRow's - see collectGroupEvidence()'s
+        // own comment for why firstRow alone under-reported evidence
+        // that a later row in the same already-conflict-checked group
+        // actually provided.
+        const groupEvidence = collectGroupEvidence(rows);
+
+        // PDR-019's "same barcode + new colour/size = additive, not
+        // conflict" must hold across separate import requests too, not
+        // just within one file - so before deciding "new offer", check
+        // whether a PRIOR import already recorded this exact (type,
+        // value) for this vendor. The unique constraint on
+        // ImportIdentifierRecord makes ">1 possible offer" structurally
+        // impossible from THIS table alone - there is at most one
+        // record per (vendor, identifierType, identifierValue). A
+        // pre-existing OfferVariant with no record yet (see below) can
+        // still be ambiguous, since nothing enforced that before this
+        // table existed.
+        let identifierRecord: {
+          id: string;
+          vendorOfferId: string;
+          brandName: string | null;
+          productType: string | null;
+          mpn: string | null;
+        } | null = null;
+        // Round-3 review fix (Blocker 1): does this group's decision
+        // require a freshly-created ImportIdentifierRecord (a
+        // pre-existing OfferVariant was found, matched to exactly one
+        // offer, but never had a record) rather than one already read
+        // above or created for a brand-new offer below?
+        let recordNeedsCreateFor: string | null = null;
+
+        if (!offerId && group.identifierType && group.identifierValue) {
+          // Round-3 review fix (Blocker 3): serialize every decision
+          // for this exact (vendor, identifierType, identifierValue)
+          // BEFORE reading/creating anything below - without this, two
+          // concurrent imports referencing the same identifier with
+          // different (valid, distinct) seller_skus could both see "no
+          // record yet" and race to create one, tripping the unique
+          // constraint and surfacing a misleading "seller_sku conflict"
+          // for a SKU that never actually collided. Released
+          // automatically at commit/rollback - no manual unlock needed
+          // (same pattern as vendors.controller.ts's staff-invite lock).
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('finalpro:import_identifier:' || ${vendorId} || ':' || ${group.identifierType} || ':' || ${group.identifierValue}))`;
+
+          identifierRecord = await tx.importIdentifierRecord.findUnique({
+            where: {
+              vendorId_identifierType_identifierValue: {
+                vendorId,
+                identifierType: group.identifierType,
+                identifierValue: group.identifierValue,
+              },
+            },
+          });
+
+          if (!identifierRecord) {
+            // Round-3 review fix (Blocker 1): ImportIdentifierRecord
+            // starts empty for every vendor - a pre-Sprint-7 (or simply
+            // not-yet-tracked) OfferVariant already carrying this exact
+            // identifier must still be found and reused, or a new SKU
+            // under the same real-world product would wrongly spawn a
+            // second offer. brandName/productType/mpn are not stored on
+            // OfferVariant (see validate-import-row.ts's own comment),
+            // so there is no compatibility evidence to check on this
+            // path - only whether the identifier maps to exactly one
+            // existing offer.
+            const legacyVariants = await tx.offerVariant.findMany({
+              where: {
+                vendorId,
+                identifierType: group.identifierType,
+                identifierValue: group.identifierValue,
+              },
+              select: { vendorOfferId: true },
+            });
+            const legacyOfferIds = Array.from(
+              new Set(legacyVariants.map((v) => v.vendorOfferId)),
+            );
+            if (legacyOfferIds.length > 1) {
+              // More than one pre-existing offer already uses this
+              // identifier (possible before this table existed to
+              // prevent it) - cannot prove which one this import
+              // belongs to. Do not guess.
+              for (const row of rowsToCreate) {
+                report.conflicts.push({
+                  row_number: row.rowNumber,
+                  reason: `Multiple existing offers already use identifier_type/identifier_value "${group.identifierType}/${group.identifierValue}" for this vendor - cannot determine which to attach to, requires manual review (PDR-019)`,
+                });
+              }
+              return;
+            }
+            if (legacyOfferIds.length === 1) {
+              offerId = legacyOfferIds[0];
+              recordNeedsCreateFor = offerId;
+            }
+          }
+
+          if (identifierRecord) {
+            const conflictField = conflictingField(
+              identifierRecord,
+              groupEvidence,
+            );
+            if (conflictField) {
+              // Cannot prove compatibility with the prior import - do
+              // not guess, report for manual review instead (never
+              // auto-merge on unproven brand/type/mpn).
+              for (const row of rowsToCreate) {
+                report.conflicts.push({
+                  row_number: row.rowNumber,
+                  reason: `Conflicts with a previously imported offer sharing identifier_type/identifier_value "${group.identifierType}/${group.identifierValue}" - differing ${conflictField} requires manual review (PDR-019)`,
+                });
+              }
+              return;
+            }
+            offerId = identifierRecord.vendorOfferId;
+          }
+        }
+
+        if (!offerId) {
+          const offer = await tx.vendorOffer.create({
+            data: {
+              vendorId,
+              titleAr: firstRow.titleAr,
+              titleEn: firstRow.titleEn,
+            },
+          });
+          offerId = offer.id;
+          await this.auditLog.record(
+            {
+              actorId: user.id,
+              correlationId: req.correlationId,
+              action: 'vendor_offer.created',
+              entityType: 'VendorOffer',
+              entityId: offer.id,
+              afterState: { title_ar: offer.titleAr, title_en: offer.titleEn },
+            },
+            tx,
+          );
+
+          if (group.identifierType && group.identifierValue) {
+            await tx.importIdentifierRecord.create({
+              data: {
+                vendorId,
+                identifierType: group.identifierType,
+                identifierValue: group.identifierValue,
+                vendorOfferId: offerId,
+                brandName: groupEvidence.brandName,
+                productType: groupEvidence.productType,
+                mpn: groupEvidence.mpn,
+              },
+            });
+          }
+        } else if (recordNeedsCreateFor === offerId) {
+          await tx.importIdentifierRecord.create({
+            data: {
+              vendorId,
+              identifierType: group.identifierType!,
+              identifierValue: group.identifierValue!,
+              vendorOfferId: offerId,
+              brandName: groupEvidence.brandName,
+              productType: groupEvidence.productType,
+              mpn: groupEvidence.mpn,
+            },
+          });
+        } else if (identifierRecord) {
+          // Fill in any previously-missing brand/type/mpn now that this
+          // import provides it, never overwriting a differing value -
+          // conflictingField() above already proved nothing differs.
+          const fillIns: Record<string, string> = {};
+          if (!identifierRecord.brandName && groupEvidence.brandName) {
+            fillIns.brandName = groupEvidence.brandName;
+          }
+          if (!identifierRecord.productType && groupEvidence.productType) {
+            fillIns.productType = groupEvidence.productType;
+          }
+          if (!identifierRecord.mpn && groupEvidence.mpn) {
+            fillIns.mpn = groupEvidence.mpn;
+          }
+          if (Object.keys(fillIns).length > 0) {
+            await tx.importIdentifierRecord.update({
+              where: { id: identifierRecord.id },
+              data: fillIns,
+            });
+          }
+        }
+
+        for (const row of rowsToCreate) {
+          let proposedCanonicalVariantId: string | null = null;
+          if (row.identifierType && row.identifierValue) {
+            const match = await this.matching.findExactMatch(
+              row.identifierType,
+              row.identifierValue,
+              tx,
+            );
+            proposedCanonicalVariantId = match.canonicalVariantId;
+          }
+
+          const variantId = randomUUID();
+          const variant = await tx.offerVariant.create({
+            data: {
+              id: variantId,
+              vendorId,
+              vendorOfferId: offerId,
+              proposedCanonicalVariantId,
+              matchProposalStatus: proposedCanonicalVariantId
+                ? 'PENDING'
+                : 'NONE',
+              sellerSku: row.sellerSku,
+              condition: row.condition,
+              basePrice: row.basePrice,
+              salePrice: row.salePrice,
+              specsTextAr: row.specsTextAr,
+              specsTextEn: row.specsTextEn,
+              identifierType: row.identifierType,
+              identifierValue: row.identifierValue,
+              storeInventoryBarcode:
+                row.storeInventoryBarcode ??
+                generateStoreInventoryBarcode(variantId),
+            },
+          });
+
+          await this.auditLog.record(
+            {
+              actorId: user.id,
+              correlationId: req.correlationId,
+              action: proposedCanonicalVariantId
+                ? 'offer_variant.match_proposed'
+                : 'offer_variant.created',
+              entityType: 'OfferVariant',
+              entityId: variant.id,
+              afterState: { seller_sku: variant.sellerSku, imported: true },
+            },
+            tx,
+          );
+
+          report.imported.push({
+            row_number: row.rowNumber,
+            offer_id: offerId,
+            variant_id: variant.id,
+          });
+        }
+      });
+    } catch (err) {
+      // Review-round fix (round 5): only the SPECIFIC, expected
+      // OfferVariant unique-constraint race is swallowed here - a
+      // concurrent import (this same file re-submitted at the same
+      // instant from two requests) could still race past the pre-check
+      // above and hit (vendorId, sellerSku)/(vendorId,
+      // storeInventoryBarcode), reported per-row rather than failing the
+      // whole request. Any OTHER P2002 (e.g. ImportIdentifierRecord's
+      // own unique constraint, or any future constraint) - or any
+      // non-P2002 error at all (a real DB error, an AuditLog failure, an
+      // unrelated bug) - must propagate and fail the request with a
+      // 500, not be guessed at: isExpectedOfferVariantConflict() checks
+      // the actual Postgres constraint name against a fixed allow-list,
+      // see its own comment.
+      if (!isExpectedOfferVariantConflict(err)) {
+        throw err;
+      }
+      for (const row of rowsToCreate) {
+        report.invalid_rows.push({
+          row_number: row.rowNumber,
+          reason:
+            'Could not import this row - it may have just been imported concurrently (seller_sku conflict)',
+        });
+      }
+    }
+  }
+}

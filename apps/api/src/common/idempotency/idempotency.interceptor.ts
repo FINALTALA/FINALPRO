@@ -26,10 +26,31 @@ function isUniqueConstraintViolation(error: unknown): boolean {
   );
 }
 
-function hashRequest(method: string, path: string, body: unknown): string {
-  return createHash('sha256')
-    .update(JSON.stringify({ method, path, body: body ?? null }))
-    .digest('hex');
+/**
+ * Sprint 7 (RB-MATCH-004): `fileBuffer` is only ever present for a
+ * multipart file upload (multer's memory storage populates
+ * `request.file.buffer` - see OffersImportController) - `request.body`
+ * alone only ever carries the *other* form fields for that kind of
+ * request, never the file's own bytes, so two uploads with different
+ * file content but identical other fields would otherwise hash
+ * identically and the second could wrongly replay the first's response
+ * instead of being correctly rejected as a same-key/different-payload
+ * conflict. Every existing JSON-body caller is unaffected - they never
+ * pass a fileBuffer, so this parameter changes nothing for them.
+ */
+function hashRequest(
+  method: string,
+  path: string,
+  body: unknown,
+  fileBuffer?: Buffer,
+): string {
+  const hash = createHash('sha256').update(
+    JSON.stringify({ method, path, body: body ?? null }),
+  );
+  if (fileBuffer) {
+    hash.update(fileBuffer);
+  }
+  return hash.digest('hex');
 }
 
 declare module 'express' {
@@ -151,7 +172,13 @@ export class IdempotencyInterceptor implements NestInterceptor {
       ?.id;
     const scope = authenticatedUserId ?? derivePreAuthScope(request.body);
     const requestPath = request.path;
-    const requestHash = hashRequest(request.method, requestPath, request.body);
+    const uploadedFile = (request as { file?: { buffer: Buffer } }).file;
+    const requestHash = hashRequest(
+      request.method,
+      requestPath,
+      request.body,
+      uploadedFile?.buffer,
+    );
     const ttlMs =
       this.reflector.get<number>(IDEMPOTENCY_TTL_KEY, context.getHandler()) ??
       DEFAULT_IDEMPOTENCY_TTL_MS;

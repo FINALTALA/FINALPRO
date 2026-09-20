@@ -57,6 +57,7 @@ model User {
   reviewedBranches StoreBranch[]    @relation("BranchReviewer")
   sentStaffInvites StaffInvite[]    @relation("StaffInviter")
   stockMovements   StockMovement[]
+  decidedNameChangeRequests CanonicalNameChangeRequest[]
 
   @@map("users")
 }
@@ -249,6 +250,34 @@ model Vendor {
   subscriptionStatus SubscriptionStatus @default(NONE)
   /// Sprint 5 (RB-STORE-001, PDR-010). See StoreType's own doc comment.
   storeType          StoreType          @default(PHYSICAL)
+  /// Sprint 7 (RB-STOREF-001, PDR-011): the public storefront's stable
+  /// URL segment - generated once at vendor creation (VendorsController.apply()),
+  /// never editable afterward, deliberately separate from displayName
+  /// below (which the owner can change freely without ever breaking a
+  /// shared/bookmarked link). Globally unique across every vendor.
+  slug String @unique
+  /// Owner-editable public-facing name, distinct from legalName (the
+  /// registration/legal identity captured at application time,
+  /// unrelated to this sprint). Defaults to legalName at creation and
+  /// diverges only once the owner explicitly changes it.
+  displayName          String?
+  logoUrl              String?
+  bio                  String?
+  coverImageUrl        String?
+  coverColor           String?
+  instagramUrl         String?
+  facebookUrl          String?
+  whatsappUrl          String?
+  /// PDR-007: "Each store must publish at least one external contact
+  /// route." Enforced only at the moment of publishing (StorefrontController.publish()
+  /// checked in VendorsController), not continuously - an owner can
+  /// still edit other storefront fields freely while unpublished with
+  /// no contact set yet. Once true, the public storefront reports
+  /// is_available (combined with `status === 'ACTIVE'`, see
+  /// StorefrontController) - the name/identity stay visible either way
+  /// ("المحل غير متاح حالياً" is a status shown alongside identity, never
+  /// a 404).
+  storefrontPublished  Boolean            @default(false)
   createdAt          DateTime           @default(now())
 
   vendorUsers     VendorUser[]
@@ -264,6 +293,8 @@ model Vendor {
   stockMovements  StockMovement[]
   offerVariantMedia      OfferVariantMedia[]
   matchReviewCandidates  MatchReviewCandidate[]
+  nameChangeRequests     CanonicalNameChangeRequest[]
+  importIdentifierRecords ImportIdentifierRecord[]
 
   @@map("vendors")
 }
@@ -670,14 +701,67 @@ model CanonicalProduct {
   category   Category               @relation(fields: [categoryId], references: [id])
   modelName  String
   status     CanonicalProductStatus @default(DRAFT)
+  /// Sprint 7 (RB-MATCH-003, approved-product-decisions-2026-09.md
+  /// Sec 3.2): "The first confirmed matched offer supplies a
+  /// provisional canonical name." Deliberately separate from
+  /// `modelName` above - modelName is the platform-admin-authored model
+  /// family identity set at CanonicalProduct creation (Sprint 3,
+  /// BL-MATCH-001), while canonicalNameAr/En is customer-facing display
+  /// text sourced from real seller usage, only ever set the moment the
+  /// *first* vendor confirms a match (exact or non-exact review) to
+  /// this product - null until then. Every later vendor who confirms a
+  /// match to the same product must adopt it (their own VendorOffer.
+  /// titleAr/titleEn is overwritten to match, in the same transaction
+  /// as their confirmation) - see VendorOffersController.confirmMatch()
+  /// and MatchReviewController.decide(). Changed only through
+  /// CanonicalNameChangeRequest's admin-approval flow afterward, never
+  /// silently by a later confirmation.
+  canonicalNameAr String?
+  canonicalNameEn String?
   createdAt  DateTime               @default(now())
 
-  variants     CanonicalProductVariant[]
-  vendorOffers VendorOffer[]
+  variants            CanonicalProductVariant[]
+  vendorOffers        VendorOffer[]
+  nameChangeRequests  CanonicalNameChangeRequest[]
 
   @@index([brandId])
   @@index([categoryId])
   @@map("canonical_products")
+}
+
+enum NameChangeRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// Sprint 7 (RB-MATCH-003, Sec 3.2): "Any matched vendor may request a
+/// canonical-name change for admin approve/reject." A requester must
+/// currently have at least one confirmed OfferVariant against this
+/// CanonicalProduct (enforced in the controller, not the schema - see
+/// CanonicalProductsController.requestNameChange()). Approval is the
+/// only thing that ever changes CanonicalProduct.canonicalNameAr/En
+/// after its initial first-confirmation set - and propagates to every
+/// currently-matched VendorOffer's own title, the same "no different
+/// names remain for the same matched product" invariant the initial
+/// adoption enforces.
+model CanonicalNameChangeRequest {
+  id                 String                   @id @default(uuid())
+  canonicalProductId String
+  canonicalProduct   CanonicalProduct         @relation(fields: [canonicalProductId], references: [id])
+  vendorId           String
+  vendor             Vendor                   @relation(fields: [vendorId], references: [id])
+  requestedNameAr    String
+  requestedNameEn    String
+  reason             String?
+  status             NameChangeRequestStatus  @default(PENDING)
+  decidedById        String?
+  decidedBy          User?                    @relation(fields: [decidedById], references: [id])
+  decidedAt          DateTime?
+  createdAt          DateTime                 @default(now())
+
+  @@index([canonicalProductId, status])
+  @@map("canonical_name_change_requests")
 }
 
 /// Part 3, G.3 / FR-MATCH-008: level 2 - the manufacturer-distinct SKU-
@@ -753,10 +837,60 @@ model VendorOffer {
   createdAt          DateTime          @default(now())
 
   variants OfferVariant[]
+  importIdentifierRecords ImportIdentifierRecord[]
 
   @@index([vendorId])
   @@index([canonicalProductId])
+  /// Review-round fix (Sprint 7 round 3, Blocker 2): lets
+  /// ImportIdentifierRecord.vendorOffer below be a composite FK on
+  /// (vendorId, id) instead of id alone - id alone is already globally
+  /// unique, so this adds no new uniqueness, only a target the composite
+  /// FK can reference, which is what makes a cross-tenant link (vendor A's
+  /// record pointing at vendor B's offer) rejected by Postgres itself
+  /// rather than merely by application code.
+  @@unique([vendorId, id])
   @@map("vendor_offers")
+}
+
+/// Sprint 7 round 2 fix (RB-MATCH-004 Blocker 3, PDR-019): the minimal
+/// state needed to apply PDR-019's "same barcode + new colour/size is
+/// additive, not a conflict" rule ACROSS separate import requests, not
+/// just within one file. brandName/productType/mpn are otherwise
+/// validation/grouping-only free text with nowhere else persisted (see
+/// validate-import-row.ts's own comment) - without recording them here,
+/// a second import batch referencing the same identifier would have no
+/// evidence to check compatibility against, and no way to know which
+/// existing VendorOffer a later matching row should attach to. A second
+/// import can only ever safely merge into the first when neither side
+/// contradicts the other on brand/product type/MPN (see
+/// import/group-import-rows.ts's conflictingField()); anything else is
+/// reported as a manual-review conflict, never guessed. Scoped to one
+/// identifier per vendor - a barcode's real-world uniqueness is treated
+/// as store-scoped here, the same as every other per-vendor uniqueness
+/// rule in this schema (e.g. OfferVariant.storeInventoryBarcode).
+///
+/// Review-round fix (Sprint 7 round 3, Blocker 2): `vendorOffer` below is
+/// a COMPOSITE foreign key on (vendorId, vendorOfferId) -> VendorOffer's
+/// own (vendorId, id), not vendorOfferId alone - a single-column FK to
+/// VendorOffer.id only proves the offer exists *somewhere*, not that it
+/// belongs to THIS record's vendorId, so raw SQL (or a future bug) could
+/// otherwise link vendor A's record to vendor B's offer. The composite FK
+/// makes that rejected by Postgres itself.
+model ImportIdentifierRecord {
+  id              String              @id @default(uuid())
+  vendorId        String
+  vendor          Vendor              @relation(fields: [vendorId], references: [id])
+  identifierType  OfferIdentifierType
+  identifierValue String
+  vendorOfferId   String
+  vendorOffer     VendorOffer         @relation(fields: [vendorId, vendorOfferId], references: [vendorId, id])
+  brandName       String?
+  productType     String?
+  mpn             String?
+  updatedAt       DateTime            @updatedAt
+
+  @@unique([vendorId, identifierType, identifierValue], map: "import_identifier_records_vendor_identifier_key")
+  @@map("import_identifier_records")
 }
 
 enum OfferCondition {

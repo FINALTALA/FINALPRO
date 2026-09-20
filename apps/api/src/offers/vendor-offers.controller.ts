@@ -27,6 +27,7 @@ import { RequireVendorRole } from '../auth/vendor-role.decorator';
 import { generateStoreInventoryBarcode } from '../common/barcode.util';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
+import { CanonicalNamingService } from '../matching/canonical-naming.service';
 import { MatchingService } from '../matching/matching.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SubscriptionGateService } from '../subscriptions/subscription-gate.service';
@@ -71,6 +72,7 @@ export class VendorOffersController {
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
     private readonly matching: MatchingService,
+    private readonly canonicalNaming: CanonicalNamingService,
     private readonly idempotencyCompletion: IdempotencyCompletionService,
     private readonly subscriptionGate: SubscriptionGateService,
   ) {}
@@ -404,7 +406,37 @@ export class VendorOffersController {
       });
     }
 
+    // Sprint 7 (RB-MATCH-003): a non-authoritative, pre-transaction
+    // lookup of which CanonicalProduct a 'confirm' decision would
+    // target - proposedCanonicalVariantId is immutable once an
+    // OfferVariant is created (never updated afterward), so this id is
+    // stable even though the *decision itself* is re-validated fresh
+    // under lock below. Used only to decide lock order: canonical_products
+    // is locked BEFORE vendor_offers, consistently with
+    // MatchReviewController.decide() - see CanonicalNamingService's own
+    // comment for why the fixed order matters (both the "two stores
+    // confirm to the same product at once" race this sprint's own
+    // requirement calls out, and deadlock avoidance between the two
+    // locks).
+    let targetCanonicalProductId: string | null = null;
+    if (dto.decision === 'confirm') {
+      const variantPreCheck = await this.prisma.offerVariant.findUnique({
+        where: { id: variantId },
+      });
+      if (variantPreCheck?.proposedCanonicalVariantId) {
+        const proposedVariantPreCheck =
+          await this.prisma.canonicalProductVariant.findUnique({
+            where: { id: variantPreCheck.proposedCanonicalVariantId },
+          });
+        targetCanonicalProductId =
+          proposedVariantPreCheck?.canonicalProductId ?? null;
+      }
+    }
+
     return this.prisma.$transaction(async (tx) => {
+      if (targetCanonicalProductId) {
+        await tx.$queryRaw`SELECT id FROM canonical_products WHERE id = ${targetCanonicalProductId} FOR UPDATE`;
+      }
       await tx.$queryRaw`SELECT id FROM vendor_offers WHERE id = ${offerId} FOR UPDATE`;
 
       const freshOffer = await tx.vendorOffer.findUniqueOrThrow({
@@ -463,6 +495,20 @@ export class VendorOffersController {
             data: { canonicalProductId: proposedVariant.canonicalProductId },
           });
         }
+
+        // Sprint 7 (RB-MATCH-003): first-confirmer sets the provisional
+        // canonical name; every later confirmer's own offer adopts it.
+        // Safe to call unconditionally here (not just when
+        // !freshOffer.canonicalProductId) - a second variant of the
+        // *same* already-matched offer being confirmed just re-applies
+        // the same already-adopted name, a no-op.
+        await this.canonicalNaming.applyOnConfirm(
+          tx,
+          proposedVariant.canonicalProductId,
+          offerId,
+          user.id,
+          req.correlationId,
+        );
       }
 
       await this.auditLog.record(
