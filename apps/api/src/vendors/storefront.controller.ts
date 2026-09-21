@@ -21,6 +21,7 @@ import {
 import { VendorMembershipGuard } from '../auth/vendor-membership.guard';
 import { RequireVendorRole } from '../auth/vendor-role.decorator';
 import { PrismaService } from '../prisma/prisma.service';
+import { UpdateApplicableCategoriesDto } from './dto/update-applicable-categories.dto';
 import { UpdateStorefrontDto } from './dto/update-storefront.dto';
 
 // Sprint 7 (RB-STOREF-001, PDR-011/PDR-007). Owner-only throughout,
@@ -129,6 +130,13 @@ export class StorefrontController {
   // route: Instagram, Facebook, or WhatsApp" - checked only at this
   // moment, not continuously (an owner may still freely edit other
   // storefront fields while unpublished with no contact set yet).
+  //
+  // Sprint 8 (RB-STOREF-004, PDR-013): "Stores choose one or more
+  // applicable types [Women/Men/Kids/Accessories] at registration and
+  // may edit them." Deliberately checked HERE, not at
+  // VendorsController.apply() - see UpdateApplicableCategoriesDto's own
+  // comment for why the requirement is deferred to publish time, the
+  // same precedent this exact contact-method check already established.
   @Post(':vendorId/storefront/publish')
   @HttpCode(200)
   @RequireVendorRole('OWNER')
@@ -143,6 +151,15 @@ export class StorefrontController {
         code: 'CONTACT_METHOD_REQUIRED',
         message:
           'At least one contact method (Instagram, Facebook, or WhatsApp) is required before publishing (PDR-007)',
+      });
+    }
+    const applicableCategoryCount =
+      await this.prisma.vendorApplicableCategory.count({ where: { vendorId } });
+    if (applicableCategoryCount === 0) {
+      throw new ForbiddenException({
+        code: 'APPLICABLE_CATEGORY_REQUIRED',
+        message:
+          'At least one applicable store category (Women/Men/Kids/Accessories) is required before publishing (PDR-013)',
       });
     }
     const updated = await this.prisma.vendor.update({
@@ -182,5 +199,57 @@ export class StorefrontController {
       afterState: { is_published: false },
     });
     return ownerStorefrontDto(updated);
+  }
+
+  // Sprint 8 (RB-STOREF-004, PDR-013). Owner-only read/replace of the
+  // vendor's applicable discovery categories - see
+  // UpdateApplicableCategoriesDto's own comment for why this is not part
+  // of VendorsController.apply()'s request contract.
+  @Get(':vendorId/applicable-categories')
+  @RequireVendorRole('OWNER')
+  async getApplicableCategories(@Param('vendorId') vendorId: string) {
+    await this.requireVendor(vendorId);
+    const rows = await this.prisma.vendorApplicableCategory.findMany({
+      where: { vendorId },
+      orderBy: { category: 'asc' },
+    });
+    return { categories: rows.map((r) => r.category) };
+  }
+
+  @Put(':vendorId/applicable-categories')
+  @RequireVendorRole('OWNER')
+  async updateApplicableCategories(
+    @Param('vendorId') vendorId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: UpdateApplicableCategoriesDto,
+    @Req() req: Request,
+  ) {
+    await this.requireVendor(vendorId);
+    const updated = await this.prisma.$transaction(async (tx) => {
+      // Full replace, not a delta (see the DTO's own comment) - delete
+      // every existing row for this vendor, then insert the submitted
+      // set. Small, owner-scoped table (at most 4 possible categories),
+      // so a delete+recreate is simpler and just as safe as a diffed
+      // upsert here.
+      await tx.vendorApplicableCategory.deleteMany({ where: { vendorId } });
+      if (dto.categories.length > 0) {
+        await tx.vendorApplicableCategory.createMany({
+          data: dto.categories.map((category) => ({ vendorId, category })),
+        });
+      }
+      return tx.vendorApplicableCategory.findMany({
+        where: { vendorId },
+        orderBy: { category: 'asc' },
+      });
+    });
+    await this.auditLog.record({
+      actorId: user.id,
+      correlationId: req.correlationId,
+      action: 'vendor.applicable_categories_updated',
+      entityType: 'Vendor',
+      entityId: vendorId,
+      afterState: { categories: updated.map((r) => r.category) },
+    });
+    return { categories: updated.map((r) => r.category) };
   }
 }

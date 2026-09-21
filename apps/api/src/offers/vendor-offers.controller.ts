@@ -8,6 +8,7 @@ import {
   HttpCode,
   NotFoundException,
   Param,
+  Patch,
   Post,
   Req,
   UseGuards,
@@ -35,6 +36,7 @@ import { ConfirmMatchDto } from './dto/confirm-match.dto';
 import { CreateOfferVariantDto } from './dto/create-offer-variant.dto';
 import { CreateOfferVariantMediaDto } from './dto/create-offer-variant-media.dto';
 import { CreateVendorOfferDto } from './dto/create-vendor-offer.dto';
+import { UpdateVendorOfferStatusDto } from './dto/update-vendor-offer-status.dto';
 
 // FR-MATCH-001/BL-VEND-004/BR-014: a vendor's offers, nested under
 // their vendor record. Catalog/pricing is owner-only, full stop
@@ -219,6 +221,50 @@ export class VendorOffersController {
       );
       return body;
     });
+  }
+
+  // Sprint 8 (RB-STOREF-002/RB-COMP-001): the missing piece that lets an
+  // offer ever actually reach OfferStatus.ACTIVE at all - nothing in
+  // Sprints 1-7 ever transitioned an offer away from its DRAFT default
+  // (confirmed by searching this whole codebase before writing this
+  // sprint's public-facing filters), so without this endpoint every
+  // public surface gating on `status === 'ACTIVE'` (store sections,
+  // discovery, comparison - all "لا تعرض عروضاً غير نشطة") would be
+  // permanently unreachable through real usage, not just under-tested.
+  // Owner-only, same as every other catalog/pricing action on this
+  // controller (PDR-009).
+  @Patch(':offerId/status')
+  @RequireVendorRole('OWNER')
+  async updateStatus(
+    @Param('vendorId') vendorId: string,
+    @Param('offerId') offerId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: UpdateVendorOfferStatusDto,
+    @Req() req: Request,
+  ) {
+    const offer = await this.prisma.vendorOffer.findUnique({
+      where: { id: offerId },
+    });
+    if (!offer || offer.vendorId !== vendorId) {
+      throw new NotFoundException({
+        code: 'VENDOR_OFFER_NOT_FOUND',
+        message: 'Offer not found',
+      });
+    }
+    const updated = await this.prisma.vendorOffer.update({
+      where: { id: offerId },
+      data: { status: dto.status },
+    });
+    await this.auditLog.record({
+      actorId: user.id,
+      correlationId: req.correlationId,
+      action: 'vendor_offer.status_updated',
+      entityType: 'VendorOffer',
+      entityId: offerId,
+      beforeState: { status: offer.status },
+      afterState: { status: updated.status },
+    });
+    return this.offerToDto(updated);
   }
 
   // Sprint 3 remediation (FR-MATCH-012, Sec 3.2, S3-B03 - not PDR-012,

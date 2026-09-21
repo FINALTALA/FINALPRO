@@ -1335,6 +1335,16 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
         .set('Authorization', `Bearer ${owner}`)
         .send({ whatsapp_url: 'https://wa.me/1234567890' })
         .expect(200);
+      // Sprint 8 (RB-STOREF-004, PDR-013) round 1: publish() now also
+      // requires >=1 applicable category - see the dedicated Sprint 8
+      // e2e spec for that requirement's own failure/success coverage;
+      // this test only needs to satisfy it to keep exercising its own
+      // original PDR-007 contact-method assertion below.
+      await request(app.getHttpServer())
+        .put(`/api/v1/vendors/${vendorId}/applicable-categories`)
+        .set('Authorization', `Bearer ${owner}`)
+        .send({ categories: ['WOMEN'] })
+        .expect(200);
 
       const publishRes = await request(app.getHttpServer())
         .post(`/api/v1/vendors/${vendorId}/storefront/publish`)
@@ -1378,6 +1388,13 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
           bio: 'نبيع كل شيء',
           whatsapp_url: 'https://wa.me/1234567890',
         })
+        .expect(200);
+      // Sprint 8 (RB-STOREF-004, PDR-013) round 1: publish() now also
+      // requires >=1 applicable category.
+      await request(app.getHttpServer())
+        .put(`/api/v1/vendors/${vendorId}/applicable-categories`)
+        .set('Authorization', `Bearer ${owner}`)
+        .send({ categories: ['WOMEN'] })
         .expect(200);
       await request(app.getHttpServer())
         .post(`/api/v1/vendors/${vendorId}/storefront/publish`)

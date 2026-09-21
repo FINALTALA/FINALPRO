@@ -6,6 +6,7 @@ import { AuthModule } from './auth/auth.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { CorrelationIdMiddleware } from './common/middleware/correlation-id.middleware';
 import { CustomersModule } from './customers/customers.module';
+import { DiscoveryModule } from './discovery/discovery.module';
 import { HealthModule } from './health/health.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { MatchingModule } from './matching/matching.module';
@@ -38,6 +39,7 @@ import { VendorsModule } from './vendors/vendors.module';
     VendorVerificationModule,
     SubscriptionsModule,
     InventoryModule,
+    DiscoveryModule,
   ],
   providers: [
     {

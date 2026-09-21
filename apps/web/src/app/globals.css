@@ -264,3 +264,187 @@ a {
   gap: 16px;
   padding: 16px 20px 20px;
 }
+
+/* Sprint 8: shared page-width wrapper for discovery/store/comparison
+   pages, wider than the auth-flow .card (420px) since these show
+   grids, not a single form. */
+.wide-shell {
+  width: 100%;
+  max-width: 1100px;
+}
+
+/* Sprint 8 (RB-STOREF-002): store-page section tabs (All/New
+   arrivals/Discounts/custom). */
+.section-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.section-tab {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-radius: 999px;
+  padding: 6px 16px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.section-tab.active {
+  background: var(--color-primary);
+  color: white;
+  border-color: var(--color-primary);
+}
+
+/* Sprint 8 (RB-COMP-001, PDR-016): "grid مناسب: 4-6 بطاقات على
+   desktop و1-2 على mobile" - reused for both the discovery card grid
+   and the comparison page's per-offer grid, the same responsive
+   breakpoints either way. */
+.product-grid {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(1, 1fr);
+  gap: 16px;
+}
+
+@media (min-width: 480px) {
+  .product-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 760px) {
+  .product-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+@media (min-width: 1000px) {
+  .product-grid {
+    grid-template-columns: repeat(6, 1fr);
+  }
+}
+
+.product-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 14px;
+  text-align: right;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-decoration: none;
+  color: var(--color-text);
+}
+
+.product-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  min-height: 2.6em;
+  overflow: hidden;
+}
+
+.product-card-price {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--color-primary);
+}
+
+.product-card-logos {
+  display: flex;
+  gap: 6px;
+}
+
+.store-logo-button {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.store-logo-img,
+.store-logo-placeholder {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-primary);
+  background: var(--color-bg);
+}
+
+.availability-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  width: fit-content;
+}
+
+.availability-available {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.availability-low_stock {
+  background: #fef9c3;
+  color: #854d0e;
+}
+
+.availability-sold_out {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+}
+
+/* Sprint 8 (RB-COMP-001, PDR-016): the comparison-page offer list -
+   simpler row layout than .product-grid, since every offer needs its
+   own price/availability/vendor identity inline. */
+.comparison-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  cursor: pointer;
+}
+
+.comparison-row-store {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.variant-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.variant-chip {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.variant-chip.active {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: white;
+}

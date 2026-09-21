@@ -295,6 +295,8 @@ model Vendor {
   matchReviewCandidates  MatchReviewCandidate[]
   nameChangeRequests     CanonicalNameChangeRequest[]
   importIdentifierRecords ImportIdentifierRecord[]
+  applicableCategories   VendorApplicableCategory[]
+  storeSections          StoreSection[]
 
   @@map("vendors")
 }
@@ -838,6 +840,7 @@ model VendorOffer {
 
   variants OfferVariant[]
   importIdentifierRecords ImportIdentifierRecord[]
+  sectionMemberships StoreSectionOffer[]
 
   @@index([vendorId])
   @@index([canonicalProductId])
@@ -1214,4 +1217,96 @@ model MatchReviewCandidate {
   @@unique([offerVariantId, canonicalVariantId])
   @@index([vendorId, status])
   @@map("match_review_candidates")
+}
+
+/// Sprint 8 (RB-STOREF-004/RB-COMP-001, PDR-013): "Public discovery has
+/// external pages for All, Women, Men, Kids, and Accessories. Stores
+/// choose one or more applicable types at registration and may edit
+/// them." Only the All page is built this sprint (the four segment
+/// pages are Should, deferred) - see VendorApplicableCategory's own
+/// comment for why this field is required only at publish time, not at
+/// registration.
+enum StoreApplicableCategory {
+  WOMEN
+  MEN
+  KIDS
+  ACCESSORIES
+}
+
+/// Sprint 8 (RB-STOREF-004, PDR-013). Deliberately NOT added to
+/// VendorsController.apply()'s request contract - every existing e2e
+/// helper across Sprints 1-7 calls apply() with no knowledge of this
+/// field, and PDR-013's own "choose... at registration and may edit
+/// them" is satisfied just as well by requiring it before the storefront
+/// goes public, the same deferred-enforcement precedent PDR-007's
+/// contact-method requirement already established for
+/// StorefrontController.publish(). A vendor may hold zero, one, or
+/// several rows here before publishing; publishing requires at least
+/// one (enforced in StorefrontController.publish(), alongside the
+/// existing contact-method check).
+model VendorApplicableCategory {
+  id        String                   @id @default(uuid())
+  vendorId  String
+  vendor    Vendor                   @relation(fields: [vendorId], references: [id])
+  category  StoreApplicableCategory
+  createdAt DateTime                 @default(now())
+
+  @@unique([vendorId, category])
+  @@map("vendor_applicable_categories")
+}
+
+/// Sprint 8 (RB-STOREF-002, PDR-012): "Store product sections are one
+/// level: fixed All, automatic New arrivals and Discounts, plus vendor-
+/// created sections... Maximum: 20 custom sections." Only CUSTOM
+/// sections are stored rows here - All/New arrivals/Discounts are
+/// computed on read (see StoreOffersPublicController), never owner-
+/// editable, and never counted against the 20-section cap enforced in
+/// StoreSectionsController.create() (advisory-locked per vendor, so two
+/// concurrent creates can never both slip past the count check).
+model StoreSection {
+  id        String   @id @default(uuid())
+  vendorId  String
+  vendor    Vendor   @relation(fields: [vendorId], references: [id])
+  name      String
+  /// Owner-controlled display order among this vendor's own custom
+  /// sections (the reorder endpoint reassigns these transactionally,
+  /// fully overriding row-creation order).
+  sortOrder Int
+  createdAt DateTime @default(now())
+
+  offers StoreSectionOffer[]
+
+  @@index([vendorId, sortOrder])
+  /// Backs StoreSectionOffer's own composite FK (vendorId, sectionId) ->
+  /// (vendorId, id) - same tenant-safety reasoning as every other
+  /// composite FK in this schema (e.g. OfferVariant's own
+  /// @@unique([vendorId, id])).
+  @@unique([vendorId, id])
+  @@map("store_sections")
+}
+
+/// Many-to-many section membership: "a product can be in several
+/// custom sections" (PDR-012). Both FKs are composite on vendorId - not
+/// sectionId/offerId alone - so a join row can never straddle two
+/// different vendors' data (e.g. vendor A's section referencing vendor
+/// B's offer), the same defensive pattern this schema already applies
+/// everywhere a join spans two vendor-owned tables. onDelete: Restrict
+/// on both sides is deliberate: "delete a section removes only the
+/// grouping" (PDR-012) is implemented by StoreSectionsController
+/// explicitly deleting these join rows first, then the section, in one
+/// transaction - never a DB-level cascade, so the removal is as
+/// auditable/controlled as every other deletion-adjacent action in this
+/// codebase.
+model StoreSectionOffer {
+  id        String       @id @default(uuid())
+  vendorId  String
+  sectionId String
+  section   StoreSection @relation(fields: [vendorId, sectionId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  offerId   String
+  offer     VendorOffer  @relation(fields: [vendorId, offerId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  createdAt DateTime     @default(now())
+
+  @@unique([sectionId, offerId])
+  @@index([vendorId, offerId])
+  @@map("store_section_offers")
 }
