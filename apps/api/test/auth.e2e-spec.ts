@@ -799,6 +799,7 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
         .send({
           legal_name: 'Test Store Ltd',
           branches: [{ name: 'Main branch', is_physical: true }],
+          applicable_categories: ['WOMEN'],
         })
         .expect(201);
 
@@ -844,6 +845,7 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
         .send({
           legal_name: 'Vendor A',
           branches: [{ name: 'A Branch', is_physical: true }],
+          applicable_categories: ['WOMEN'],
         })
         .expect(201);
 
@@ -857,6 +859,7 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
         .send({
           legal_name: 'Vendor B',
           branches: [{ name: 'B Branch', is_physical: false }],
+          applicable_categories: ['WOMEN'],
         })
         .expect(201);
 
@@ -889,6 +892,7 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
       const body = {
         legal_name: distinctiveLegalName,
         branches: [{ name: 'Main branch', is_physical: true }],
+        applicable_categories: ['WOMEN'],
       };
 
       const first = await request(app.getHttpServer())

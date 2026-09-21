@@ -133,6 +133,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
       .send({
         legal_name: unique('Vendor'),
         branches: [{ name: 'Main branch', is_physical: true }],
+        applicable_categories: ['WOMEN'],
       })
       .expect(201);
     return { vendorId: res.body.id, branchId: res.body.branches[0].id };
@@ -481,6 +482,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
             { name: 'Branch A', is_physical: true },
             { name: 'Branch B (no evidence)', is_physical: true },
           ],
+          applicable_categories: ['WOMEN'],
         })
         .expect(201);
       const vendorId = applyRes.body.id;
@@ -653,6 +655,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .send({
           legal_name: unique('Vendor'),
           branches: [{ name: 'Corrected main branch', is_physical: true }],
+          applicable_categories: ['WOMEN'],
         })
         .expect(201);
       expect(reapplied.body.status).toBe('APPLIED');
@@ -792,6 +795,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
             { name: 'Branch A', is_physical: true },
             { name: 'Branch B', is_physical: true },
           ],
+          applicable_categories: ['WOMEN'],
         })
         .expect(201);
       const vendorId = applyRes.body.id;

@@ -170,6 +170,22 @@ export class VendorsController {
       await tx.vendorUser.create({
         data: { userId: user.id, vendorId: created.id, role: 'OWNER' },
       });
+      // Sprint 8 round 2 review fix (RB-STOREF-004, PDR-013): the
+      // approved product decision requires applicable_categories at
+      // REGISTRATION, not merely before publish - created in the SAME
+      // transaction as the vendor row itself, so there is never a
+      // moment where a newly-accepted vendor exists with zero
+      // categories (unlike a pre-existing/historical vendor, which
+      // this migration deliberately never touches - see the owner-only
+      // GET/PUT endpoint on StorefrontController for editing this
+      // afterward, and the storefront-publish gate that still backstops
+      // any vendor, old or new, that somehow reaches publish with none).
+      await tx.vendorApplicableCategory.createMany({
+        data: dto.applicable_categories.map((category) => ({
+          vendorId: created.id,
+          category,
+        })),
+      });
       // Sprint 3 review round 4: createMany() only returns a row count,
       // not the created rows - the response body (which must include
       // each branch's id) can't be built from it without a *separate*,
@@ -214,6 +230,7 @@ export class VendorsController {
           lat: b.lat,
           lng: b.lng,
         })),
+        applicable_categories: dto.applicable_categories,
       };
       await this.idempotencyCompletion.complete(
         tx,

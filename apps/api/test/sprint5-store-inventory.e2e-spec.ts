@@ -94,6 +94,7 @@ describe('Sprint 5 - store type/warehouse/pickup points, delivery zones, barcode
       .send({
         legal_name: unique('Vendor'),
         branches: [{ name: 'Main branch', is_physical: true }],
+        applicable_categories: ['WOMEN'],
       })
       .expect(201);
     return { vendorId: res.body.id, branchId: res.body.branches[0].id };

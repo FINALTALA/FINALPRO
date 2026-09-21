@@ -1,9 +1,19 @@
 "use client";
 
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { apiFetch, ApiError, newIdempotencyKey } from "@/lib/api";
 import { clearSession, getSessionToken } from "@/lib/session";
+
+// Sprint 8 (RB-STOREF-004, PDR-013).
+type ApplicableCategory = "WOMEN" | "MEN" | "KIDS" | "ACCESSORIES";
+const APPLICABLE_CATEGORIES: { value: ApplicableCategory; label: string }[] = [
+  { value: "WOMEN", label: "نسائي" },
+  { value: "MEN", label: "رجالي" },
+  { value: "KIDS", label: "أطفال" },
+  { value: "ACCESSORIES", label: "إكسسوارات" },
+];
 
 interface OwnerStorefrontDto {
   vendor_id: string;
@@ -57,6 +67,9 @@ export default function StorefrontSettingsPage() {
   const router = useRouter();
   const [dto, setDto] = useState<OwnerStorefrontDto | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
+  const [categories, setCategories] = useState<ApplicableCategory[] | null>(
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -81,7 +94,42 @@ export default function StorefrontSettingsPage() {
           err instanceof ApiError ? err.message : "تعذّر تحميل إعدادات المتجر",
         );
       });
+    apiFetch<{ categories: ApplicableCategory[] }>(
+      `/vendors/${params.vendorId}/applicable-categories`,
+    )
+      .then((res) => setCategories(res.categories))
+      .catch(() => {
+        // Non-fatal to the page - the storefront-settings fetch above
+        // already surfaces auth/not-found errors for this same vendor.
+      });
   }, [params.vendorId, router]);
+
+  function toggleCategory(value: ApplicableCategory) {
+    setCategories((prev) => {
+      const current = prev ?? [];
+      return current.includes(value)
+        ? current.filter((c) => c !== value)
+        : [...current, value];
+    });
+  }
+
+  async function saveCategories() {
+    setSaving(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await apiFetch<{ categories: ApplicableCategory[] }>(
+        `/vendors/${params.vendorId}/applicable-categories`,
+        { method: "PUT", body: { categories: categories ?? [] } },
+      );
+      setCategories(res.categories);
+      setNotice("تم حفظ الأنواع المطبّقة على المتجر");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "فشل حفظ الأنواع");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   function updateField(field: keyof FormState, value: string) {
     setForm((prev) => (prev ? { ...prev, [field]: value } : prev));
@@ -226,6 +274,38 @@ export default function StorefrontSettingsPage() {
         <button className="button" onClick={togglePublish} disabled={saving}>
           {dto.is_published ? "إلغاء نشر المتجر" : "نشر المتجر"}
         </button>
+      </div>
+
+      {/* Sprint 8 (RB-STOREF-004, PDR-013): required (>=1) before
+          publish - see StorefrontController.publish()'s own check. */}
+      <div className="card" style={{ maxWidth: 560, marginTop: 16 }}>
+        <div className="field">
+          <label>الأنواع المطبّقة على المتجر (لصفحات الاكتشاف)</label>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+            {APPLICABLE_CATEGORIES.map((c) => (
+              <label
+                key={c.value}
+                style={{ display: "flex", alignItems: "center", gap: 6 }}
+              >
+                <input
+                  type="checkbox"
+                  checked={(categories ?? []).includes(c.value)}
+                  onChange={() => toggleCategory(c.value)}
+                />
+                {c.label}
+              </label>
+            ))}
+          </div>
+        </div>
+        <button className="button" onClick={saveCategories} disabled={saving}>
+          حفظ الأنواع
+        </button>
+      </div>
+
+      <div style={{ maxWidth: 560, width: "100%", marginTop: 16 }}>
+        <Link href={`/vendor/${params.vendorId}/sections`} className="button-link">
+          إدارة أقسام المتجر ←
+        </Link>
       </div>
     </div>
   );

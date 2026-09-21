@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
@@ -17,17 +18,50 @@ interface StorefrontDto {
   is_available: boolean;
 }
 
+interface OfferSummaryDto {
+  id: string;
+  title_ar: string;
+  title_en: string;
+  min_price: string | null;
+  availability: "available" | "low_stock" | "sold_out";
+}
+
+interface CustomSectionDto {
+  id: string;
+  name: string;
+  offers: OfferSummaryDto[];
+}
+
+interface StoreSectionsDto {
+  is_available: boolean;
+  all: OfferSummaryDto[];
+  new_arrivals: OfferSummaryDto[];
+  discounts: OfferSummaryDto[];
+  custom: CustomSectionDto[];
+}
+
+const AVAILABILITY_LABEL: Record<string, string> = {
+  available: "متوفر",
+  low_stock: "كمية محدودة",
+  sold_out: "غير متوفر",
+};
+
 // Sprint 7 (RB-STOREF-001, PDR-011): the public storefront page - no
 // auth, no session, reachable by anyone via the vendor's stable slug.
-// Deliberately minimal (RB-STOREF-002's sections/All/New/Discounts and
-// RB-COMP's comparison card are Sprint 8, out of scope here) - just the
-// store's identity, bio, cover, and external contact links.
 // "المحل غير متاح حالياً" is shown as a status alongside the identity,
 // never a 404 - matches GET /storefronts/:slug's own contract of
 // always resolving for an existing vendor regardless of availability.
+//
+// Sprint 8 (RB-STOREF-002, PDR-012): adds the fixed All / automatic New
+// arrivals+Discounts / owner-created custom sections as tabs, each
+// backed by GET /storefronts/:slug/sections. A product card here routes
+// to /store/:slug/products/:offerId - the same in-store product detail
+// page a comparison-card logo click also lands on.
 export default function StorefrontPage() {
   const params = useParams<{ slug: string }>();
   const [store, setStore] = useState<StorefrontDto | null>(null);
+  const [sections, setSections] = useState<StoreSectionsDto | null>(null);
+  const [activeTab, setActiveTab] = useState<string>("all");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -39,6 +73,16 @@ export default function StorefrontPage() {
             ? "لا يوجد متجر بهذا الرابط"
             : "تعذّر تحميل صفحة المتجر",
         );
+      });
+    apiFetch<StoreSectionsDto>(`/storefronts/${params.slug}/sections`, {
+      auth: false,
+    })
+      .then(setSections)
+      .catch(() => {
+        // Sections are a secondary enhancement to the page's own
+        // identity fetch above - a failure here degrades to no product
+        // grid, not a page-level error (the identity fetch's own error
+        // handling already covers "store not found" for both).
       });
   }, [params.slug]);
 
@@ -113,6 +157,80 @@ export default function StorefrontPage() {
           </div>
         )}
       </div>
+
+      {sections && (
+        <div className="wide-shell" style={{ marginTop: 20 }}>
+          <div className="section-tabs">
+            <button
+              className={`section-tab${activeTab === "all" ? " active" : ""}`}
+              onClick={() => setActiveTab("all")}
+            >
+              الكل
+            </button>
+            <button
+              className={`section-tab${activeTab === "new_arrivals" ? " active" : ""}`}
+              onClick={() => setActiveTab("new_arrivals")}
+            >
+              وصل حديثاً
+            </button>
+            <button
+              className={`section-tab${activeTab === "discounts" ? " active" : ""}`}
+              onClick={() => setActiveTab("discounts")}
+            >
+              تخفيضات
+            </button>
+            {sections.custom.map((section) => (
+              <button
+                key={section.id}
+                className={`section-tab${activeTab === section.id ? " active" : ""}`}
+                onClick={() => setActiveTab(section.id)}
+              >
+                {section.name}
+              </button>
+            ))}
+          </div>
+
+          {(() => {
+            const offers =
+              activeTab === "all"
+                ? sections.all
+                : activeTab === "new_arrivals"
+                  ? sections.new_arrivals
+                  : activeTab === "discounts"
+                    ? sections.discounts
+                    : (sections.custom.find((s) => s.id === activeTab)?.offers ??
+                      []);
+
+            if (offers.length === 0) {
+              return <p className="muted">لا توجد منتجات في هذا القسم.</p>;
+            }
+
+            return (
+              <div className="product-grid">
+                {offers.map((offer) => (
+                  <Link
+                    key={offer.id}
+                    href={`/store/${params.slug}/products/${offer.id}`}
+                    className="product-card"
+                  >
+                    <div className="product-card-name">{offer.title_ar}</div>
+                    {offer.min_price && (
+                      <div className="product-card-price">
+                        {offer.min_price} ₪
+                      </div>
+                    )}
+                    <span
+                      className={`availability-badge availability-${offer.availability}`}
+                    >
+                      {AVAILABILITY_LABEL[offer.availability]}
+                    </span>
+                  </Link>
+                ))}
+              </div>
+            );
+          })()}
+        </div>
+      )}
     </div>
   );
 }
