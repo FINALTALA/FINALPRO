@@ -104,6 +104,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
           { name: 'Branch A', is_physical: true },
           { name: 'Branch B', is_physical: true },
         ],
+        applicable_categories: ['WOMEN'],
       })
       .expect(201);
     return {
@@ -1261,6 +1262,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
         .send({
           legal_name: legalName,
           branches: [{ name: 'A', is_physical: true }],
+          applicable_categories: ['WOMEN'],
         })
         .expect(201);
       const vendorId = res.body.id;

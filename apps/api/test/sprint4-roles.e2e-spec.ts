@@ -102,6 +102,7 @@ describe('Sprint 4 - roles, staff invites, workspace switcher (e2e)', () => {
       .send({
         legal_name: unique('Vendor'),
         branches: [{ name: 'Main branch', is_physical: true }],
+        applicable_categories: ['WOMEN'],
       })
       .expect(201);
     return { vendorId: res.body.id, branchId: res.body.branches[0].id };
@@ -348,6 +349,7 @@ describe('Sprint 4 - roles, staff invites, workspace switcher (e2e)', () => {
             { name: 'Branch A', is_physical: true },
             { name: 'Branch B', is_physical: true },
           ],
+          applicable_categories: ['WOMEN'],
         })
         .expect(201);
       const vendorId = applyRes.body.id;
@@ -424,6 +426,7 @@ describe('Sprint 4 - roles, staff invites, workspace switcher (e2e)', () => {
             { name: 'Branch A', is_physical: true },
             { name: 'Branch B', is_physical: true },
           ],
+          applicable_categories: ['WOMEN'],
         })
         .expect(201);
       const vendorId = applyRes.body.id;
@@ -495,6 +498,7 @@ describe('Sprint 4 - roles, staff invites, workspace switcher (e2e)', () => {
             { name: 'Branch A', is_physical: true },
             { name: 'Branch B', is_physical: true },
           ],
+          applicable_categories: ['WOMEN'],
         })
         .expect(201);
       const vendorId = applyRes.body.id;
@@ -796,6 +800,7 @@ describe('Sprint 4 - roles, staff invites, workspace switcher (e2e)', () => {
             { name: 'Branch A', is_physical: true },
             { name: 'Branch B', is_physical: true },
           ],
+          applicable_categories: ['WOMEN'],
         })
         .expect(201);
       const vendorId = applyRes.body.id;

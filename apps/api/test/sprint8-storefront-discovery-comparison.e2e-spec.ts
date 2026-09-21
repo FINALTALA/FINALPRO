@@ -109,6 +109,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
           { name: 'Branch A', is_physical: true },
           { name: 'Branch B', is_physical: true },
         ],
+        applicable_categories: ['WOMEN'],
       })
       .expect(201);
     return {
@@ -839,15 +840,33 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
   });
 
   describe('RB-STOREF-004: applicable categories', () => {
-    it('owner-only get/put; publish requires at least one category even with a contact method set', async () => {
+    it('owner-only get/put; a vendor is registered WITH a category already (round 2 review fix - PDR-013 requires it at registration, not just before publish), and can edit the set later', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
+
+      // createVendorWithTwoBranches() already registers with ['WOMEN'] -
+      // confirm that landed for real, not just accepted and dropped.
+      const getRes = await request(app.getHttpServer())
+        .get(`/api/v1/vendors/${vendorId}/applicable-categories`)
+        .set('Authorization', `Bearer ${owner}`)
+        .expect(200);
+      expect(getRes.body.categories).toEqual(['WOMEN']);
+
+      // The owner-only edit endpoint (unchanged by the round-2 fix)
+      // still fully replaces the set, and still tolerates an empty
+      // array - StorefrontController.publish()'s own >=1 check is the
+      // backstop for that, not this endpoint's own validation.
+      await request(app.getHttpServer())
+        .put(`/api/v1/vendors/${vendorId}/applicable-categories`)
+        .set('Authorization', `Bearer ${owner}`)
+        .send({ categories: [] })
+        .expect(200);
+
       await request(app.getHttpServer())
         .put(`/api/v1/vendors/${vendorId}/storefront`)
         .set('Authorization', `Bearer ${owner}`)
         .send({ whatsapp_url: 'https://wa.me/1234567890' })
         .expect(200);
-
       const failRes = await request(app.getHttpServer())
         .post(`/api/v1/vendors/${vendorId}/storefront/publish`)
         .set('Authorization', `Bearer ${owner}`);
@@ -860,16 +879,102 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         .send({ categories: ['WOMEN', 'KIDS'] })
         .expect(200);
 
-      const getRes = await request(app.getHttpServer())
+      const getAfter = await request(app.getHttpServer())
         .get(`/api/v1/vendors/${vendorId}/applicable-categories`)
         .set('Authorization', `Bearer ${owner}`)
         .expect(200);
-      expect(getRes.body.categories.sort()).toEqual(['KIDS', 'WOMEN']);
+      expect(getAfter.body.categories.sort()).toEqual(['KIDS', 'WOMEN']);
 
       await request(app.getHttpServer())
         .post(`/api/v1/vendors/${vendorId}/storefront/publish`)
         .set('Authorization', `Bearer ${owner}`)
         .expect(200);
+    });
+
+    it('PDR-013 round 2: registering WITHOUT applicable_categories is refused with a clear 400, registering WITH them persists exactly that set, and duplicates/invalid values are refused', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+
+      const missingLegalName = unique('Vendor');
+      const missingRes = await request(app.getHttpServer())
+        .post('/api/v1/vendors')
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('vendor-apply'))
+        .send({
+          legal_name: missingLegalName,
+          branches: [{ name: 'Main branch', is_physical: true }],
+          applicable_categories: [],
+        });
+      expect(missingRes.status).toBe(400);
+      // The whole transaction (vendor + branches + categories) must
+      // never partially land - confirms this isn't validated too late
+      // to matter.
+      expect(
+        await prisma.vendor.findFirst({
+          where: { legalName: missingLegalName },
+        }),
+      ).toBeNull();
+
+      const missingFieldRes = await request(app.getHttpServer())
+        .post('/api/v1/vendors')
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('vendor-apply'))
+        .send({
+          legal_name: unique('Vendor'),
+          branches: [{ name: 'Main branch', is_physical: true }],
+        });
+      expect(missingFieldRes.status).toBe(400);
+
+      const duplicateRes = await request(app.getHttpServer())
+        .post('/api/v1/vendors')
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('vendor-apply'))
+        .send({
+          legal_name: unique('Vendor'),
+          branches: [{ name: 'Main branch', is_physical: true }],
+          applicable_categories: ['WOMEN', 'WOMEN'],
+        });
+      expect(duplicateRes.status).toBe(400);
+
+      const invalidValueRes = await request(app.getHttpServer())
+        .post('/api/v1/vendors')
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('vendor-apply'))
+        .send({
+          legal_name: unique('Vendor'),
+          branches: [{ name: 'Main branch', is_physical: true }],
+          applicable_categories: ['NOT_A_REAL_CATEGORY'],
+        });
+      expect(invalidValueRes.status).toBe(400);
+
+      const successRes = await request(app.getHttpServer())
+        .post('/api/v1/vendors')
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('vendor-apply'))
+        .send({
+          legal_name: unique('Vendor'),
+          branches: [{ name: 'Main branch', is_physical: true }],
+          applicable_categories: ['MEN', 'ACCESSORIES'],
+        })
+        .expect(201);
+      expect(successRes.body.applicable_categories.sort()).toEqual([
+        'ACCESSORIES',
+        'MEN',
+      ]);
+
+      const persisted = await prisma.vendorApplicableCategory.findMany({
+        where: { vendorId: successRes.body.id },
+      });
+      expect(persisted.map((r) => r.category).sort()).toEqual([
+        'ACCESSORIES',
+        'MEN',
+      ]);
+
+      // Readable straight away via the owner-only endpoint too.
+      const getRes = await request(app.getHttpServer())
+        .get(`/api/v1/vendors/${successRes.body.id}/applicable-categories`)
+        .set('Authorization', `Bearer ${owner}`)
+        .expect(200);
+      expect(getRes.body.categories.sort()).toEqual(['ACCESSORIES', 'MEN']);
     });
 
     it('refuses a BRANCH_EMPLOYEE from reading or editing applicable categories', async () => {

@@ -1233,17 +1233,21 @@ enum StoreApplicableCategory {
   ACCESSORIES
 }
 
-/// Sprint 8 (RB-STOREF-004, PDR-013). Deliberately NOT added to
-/// VendorsController.apply()'s request contract - every existing e2e
-/// helper across Sprints 1-7 calls apply() with no knowledge of this
-/// field, and PDR-013's own "choose... at registration and may edit
-/// them" is satisfied just as well by requiring it before the storefront
-/// goes public, the same deferred-enforcement precedent PDR-007's
-/// contact-method requirement already established for
-/// StorefrontController.publish(). A vendor may hold zero, one, or
-/// several rows here before publishing; publishing requires at least
-/// one (enforced in StorefrontController.publish(), alongside the
-/// existing contact-method check).
+/// Sprint 8 (RB-STOREF-004, PDR-013): "Stores choose one or more
+/// applicable types AT REGISTRATION and may edit them." Round 1 of this
+/// sprint deferred this to storefront-publish time only (the same
+/// precedent PDR-007's contact-method requirement established) - the
+/// product owner's review round 2 corrected this: PDR-013 is explicit
+/// that registration itself is where this is required, not merely
+/// "before going public." VendorsController.apply() now requires
+/// CreateVendorDto.applicable_categories (non-empty) and creates these
+/// rows in the SAME transaction as the vendor itself, so a newly-
+/// accepted vendor can never exist with zero categories. A vendor from
+/// BEFORE this fix (this migration is additive-only and never touches
+/// historical rows) may still hold zero - StorefrontController.publish()
+/// keeps its own >=1 check as the backstop for that pre-existing data,
+/// and the owner-only GET/PUT endpoint there remains how any vendor,
+/// old or new, edits this set later.
 model VendorApplicableCategory {
   id        String                   @id @default(uuid())
   vendorId  String

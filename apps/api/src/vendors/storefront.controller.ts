@@ -131,12 +131,13 @@ export class StorefrontController {
   // moment, not continuously (an owner may still freely edit other
   // storefront fields while unpublished with no contact set yet).
   //
-  // Sprint 8 (RB-STOREF-004, PDR-013): "Stores choose one or more
-  // applicable types [Women/Men/Kids/Accessories] at registration and
-  // may edit them." Deliberately checked HERE, not at
-  // VendorsController.apply() - see UpdateApplicableCategoriesDto's own
-  // comment for why the requirement is deferred to publish time, the
-  // same precedent this exact contact-method check already established.
+  // Sprint 8 round 2 review fix (RB-STOREF-004, PDR-013): PDR-013
+  // requires applicable_categories at REGISTRATION now
+  // (VendorsController.apply() - see CreateVendorDto's own comment),
+  // not merely before publishing - this check stays here too, purely as
+  // a backstop for any vendor row that predates that fix (this
+  // migration never touches historical data), not as the primary
+  // enforcement point anymore.
   @Post(':vendorId/storefront/publish')
   @HttpCode(200)
   @RequireVendorRole('OWNER')
