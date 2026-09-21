@@ -1247,7 +1247,11 @@ enum StoreApplicableCategory {
 /// historical rows) may still hold zero - StorefrontController.publish()
 /// keeps its own >=1 check as the backstop for that pre-existing data,
 /// and the owner-only GET/PUT endpoint there remains how any vendor,
-/// old or new, edits this set later.
+/// old or new, edits this set later. Round 3 review fix:
+/// UpdateApplicableCategoriesDto also requires >=1 now - an ALREADY-
+/// PUBLISHED store clearing every category via that endpoint would
+/// otherwise stay published with none, since publish()'s own check
+/// only ever runs at the moment of publishing, not continuously.
 model VendorApplicableCategory {
   id        String                   @id @default(uuid())
   vendorId  String

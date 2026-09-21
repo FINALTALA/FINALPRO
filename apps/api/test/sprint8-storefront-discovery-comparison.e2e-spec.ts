@@ -840,7 +840,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
   });
 
   describe('RB-STOREF-004: applicable categories', () => {
-    it('owner-only get/put; a vendor is registered WITH a category already (round 2 review fix - PDR-013 requires it at registration, not just before publish), and can edit the set later', async () => {
+    it('owner-only get/put; a vendor is registered WITH a category already (PDR-013 requires it at registration, not just before publish), and can edit WHICH categories apply', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
 
@@ -852,15 +852,68 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         .expect(200);
       expect(getRes.body.categories).toEqual(['WOMEN']);
 
-      // The owner-only edit endpoint (unchanged by the round-2 fix)
-      // still fully replaces the set, and still tolerates an empty
-      // array - StorefrontController.publish()'s own >=1 check is the
-      // backstop for that, not this endpoint's own validation.
       await request(app.getHttpServer())
         .put(`/api/v1/vendors/${vendorId}/applicable-categories`)
         .set('Authorization', `Bearer ${owner}`)
-        .send({ categories: [] })
+        .send({ categories: ['WOMEN', 'KIDS'] })
         .expect(200);
+
+      const getAfter = await request(app.getHttpServer())
+        .get(`/api/v1/vendors/${vendorId}/applicable-categories`)
+        .set('Authorization', `Bearer ${owner}`)
+        .expect(200);
+      expect(getAfter.body.categories.sort()).toEqual(['KIDS', 'WOMEN']);
+
+      await request(app.getHttpServer())
+        .put(`/api/v1/vendors/${vendorId}/storefront`)
+        .set('Authorization', `Bearer ${owner}`)
+        .send({ whatsapp_url: 'https://wa.me/1234567890' })
+        .expect(200);
+      await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/storefront/publish`)
+        .set('Authorization', `Bearer ${owner}`)
+        .expect(200);
+    });
+
+    // Round 3 review fix: a store is ALWAYS required to hold >=1
+    // category from registration onward - editing may change WHICH
+    // categories apply, never clear the set to none. Round 2 left the
+    // edit endpoint accepting an empty array, which would have let an
+    // owner of an ALREADY-PUBLISHED store clear every category and
+    // stay published with none (publish()'s own >=1 check only ever
+    // runs at the moment of publishing, not continuously).
+    it('rejects clearing applicable_categories to empty via the edit endpoint - the previous categories are left unchanged in the database', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId } = await createVendorWithTwoBranches(owner);
+      await request(app.getHttpServer())
+        .put(`/api/v1/vendors/${vendorId}/applicable-categories`)
+        .set('Authorization', `Bearer ${owner}`)
+        .send({ categories: ['WOMEN', 'KIDS'] })
+        .expect(200);
+
+      const res = await request(app.getHttpServer())
+        .put(`/api/v1/vendors/${vendorId}/applicable-categories`)
+        .set('Authorization', `Bearer ${owner}`)
+        .send({ categories: [] });
+      expect(res.status).toBe(400);
+
+      const stillThere = await prisma.vendorApplicableCategory.findMany({
+        where: { vendorId },
+      });
+      expect(stillThere.map((r) => r.category).sort()).toEqual([
+        'KIDS',
+        'WOMEN',
+      ]);
+    });
+
+    it('the publish-time >=1 check still backstops a vendor with zero categories (e.g. historical data predating the registration-time requirement)', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId } = await createVendorWithTwoBranches(owner);
+      // Simulate pre-existing data from before this requirement existed
+      // - direct DB manipulation, not reachable through any endpoint
+      // anymore (registration always creates >=1; the edit endpoint can
+      // no longer clear to zero either, per the fix above).
+      await prisma.vendorApplicableCategory.deleteMany({ where: { vendorId } });
 
       await request(app.getHttpServer())
         .put(`/api/v1/vendors/${vendorId}/storefront`)
@@ -876,15 +929,8 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
       await request(app.getHttpServer())
         .put(`/api/v1/vendors/${vendorId}/applicable-categories`)
         .set('Authorization', `Bearer ${owner}`)
-        .send({ categories: ['WOMEN', 'KIDS'] })
+        .send({ categories: ['ACCESSORIES'] })
         .expect(200);
-
-      const getAfter = await request(app.getHttpServer())
-        .get(`/api/v1/vendors/${vendorId}/applicable-categories`)
-        .set('Authorization', `Bearer ${owner}`)
-        .expect(200);
-      expect(getAfter.body.categories.sort()).toEqual(['KIDS', 'WOMEN']);
-
       await request(app.getHttpServer())
         .post(`/api/v1/vendors/${vendorId}/storefront/publish`)
         .set('Authorization', `Bearer ${owner}`)
