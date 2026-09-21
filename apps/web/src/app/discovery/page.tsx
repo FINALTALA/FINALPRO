@@ -47,6 +47,10 @@ const AVAILABILITY_LABEL: Record<string, string> = {
 // defines - clicking the card opens the cheapest eligible offer inside
 // its store; clicking a store logo opens THAT store's offer instead
 // (PDR-015) - never the comparison page directly and never a cart.
+//
+// Round 4 review fix: the card's own explicit "قارني الأسعار" (compare
+// prices) button is the only way into /compare/:id - it was built in an
+// earlier round but had no link to it anywhere in the UI at all.
 export default function DiscoveryAllPage() {
   const router = useRouter();
   const [data, setData] = useState<DiscoveryPageDto | null>(null);
@@ -135,6 +139,21 @@ export default function DiscoveryAllPage() {
                       </button>
                     ))}
                   </div>
+
+                  {/* Sprint 8 round 4 review fix (RB-COMP-001, PDR-016):
+                      /compare/:id was built but had no link INTO it
+                      anywhere in the UI - this is that link. stopPropagation
+                      so it never also triggers the card's own
+                      cheapest-offer click. */}
+                  <button
+                    className="button-link"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      router.push(`/compare/${card.canonical_product_id}`);
+                    }}
+                  >
+                    قارني الأسعار
+                  </button>
                 </div>
               ))}
             </div>

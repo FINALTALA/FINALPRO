@@ -1,6 +1,6 @@
 "use client";
 
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
 
@@ -14,6 +14,11 @@ interface OfferVariantDto {
   specs_text_ar: string | null;
   specs_text_en: string | null;
   canonical_variant_id: string | null;
+  // Sprint 8 round 4 review fix (RB-COMP-001, PDR-015): null for an
+  // unmatched variant - the signal for whether a "compare prices" link
+  // can be shown at all, never inferred from canonical_variant_id
+  // alone.
+  canonical_product_id: string | null;
   availability: "available" | "low_stock" | "sold_out";
 }
 
@@ -40,6 +45,7 @@ const AVAILABILITY_LABEL: Record<string, string> = {
 // this sprint).
 export default function StoreProductPage() {
   const params = useParams<{ slug: string; offerId: string }>();
+  const router = useRouter();
   const [offer, setOffer] = useState<OfferDetailDto | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -111,6 +117,23 @@ export default function StoreProductPage() {
                 <p className="muted" style={{ marginTop: 8 }}>
                   {v.specs_text_ar}
                 </p>
+              )}
+              {/* Sprint 8 round 4 review fix: a customer who arrived
+                  here via a comparison-card store-logo click had no way
+                  back into the comparison for this same product - shown
+                  only when this variant has a CONFIRMED canonical match
+                  (never for an unmatched offer, which has no comparison
+                  target at all). */}
+              {v.canonical_product_id && (
+                <button
+                  className="button-link"
+                  style={{ marginTop: 8 }}
+                  onClick={() =>
+                    router.push(`/compare/${v.canonical_product_id}`)
+                  }
+                >
+                  قارني الأسعار
+                </button>
               )}
             </div>
           ))}

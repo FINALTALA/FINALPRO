@@ -155,7 +155,21 @@ export class StoreOffersPublicController {
     const offer = await this.prisma.vendorOffer.findUnique({
       where: { id: offerId },
       include: {
-        variants: { include: { branchStocks: { select: { quantity: true } } } },
+        variants: {
+          include: {
+            branchStocks: { select: { quantity: true } },
+            // Round 4 review fix (RB-COMP-001, PDR-015): the store
+            // product page needs to offer a "compare prices" link back
+            // to this variant's canonical product WHEN it has a
+            // confirmed match - canonicalVariantId alone doesn't carry
+            // the canonical_product_id a comparison link needs, and
+            // nothing else in this codebase exposes that mapping
+            // publicly yet. Only the id is selected - never any other
+            // CanonicalProductVariant field (gtin/mpn/
+            // platformProductBarcode etc. stay internal).
+            canonicalVariant: { select: { canonicalProductId: true } },
+          },
+        },
       },
     });
     const isAvailable =
@@ -193,6 +207,10 @@ export class StoreOffersPublicController {
           specs_text_ar: v.specsTextAr,
           specs_text_en: v.specsTextEn,
           canonical_variant_id: v.canonicalVariantId,
+          // null for an unmatched variant - the frontend's own
+          // signal for "no comparison link to show," never guessed
+          // from canonical_variant_id's mere presence.
+          canonical_product_id: v.canonicalVariant?.canonicalProductId ?? null,
           availability: bucketForStock(totalStock),
         };
       }),

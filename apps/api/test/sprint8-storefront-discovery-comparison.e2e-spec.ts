@@ -811,6 +811,56 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
       expect(JSON.stringify(res.body)).not.toMatch(/quantity/i);
     });
 
+    // Round 4 review fix (RB-COMP-001, PDR-015): the "compare prices"
+    // link the store product page now shows for a matched variant needs
+    // canonical_product_id in this exact response - this proves the
+    // data is actually there for a CONFIRMED match, and absent (never
+    // guessed from canonical_variant_id) for a genuinely unmatched one.
+    it('reports canonical_product_id for a confirmed-match variant, and null for an unmatched one', async () => {
+      const matched = await setupEligibleOffer();
+      const matchedRes = await request(app.getHttpServer())
+        .get(`/api/v1/storefronts/${matched.slug}/offers/${matched.offerId}`)
+        .expect(200);
+      expect(matchedRes.body.variants[0].canonical_variant_id).toBe(
+        matched.canonicalVariantId,
+      );
+      expect(matchedRes.body.variants[0].canonical_product_id).toBe(
+        matched.canonicalProductId,
+      );
+
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId } = await createVendorWithTwoBranches(owner);
+      await activateVendorSubscription(owner, vendorId);
+      const unmatchedOffer = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/offers`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('offer'))
+        .send({ title_ar: 'غير مطابق', title_en: 'Unmatched' })
+        .expect(201);
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/offers/${unmatchedOffer.body.id}/variants`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('variant'))
+        .send({ seller_sku: unique('sku'), base_price: 50 })
+        .expect(201);
+      await request(app.getHttpServer())
+        .patch(
+          `/api/v1/vendors/${vendorId}/offers/${unmatchedOffer.body.id}/status`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .send({ status: 'ACTIVE' })
+        .expect(200);
+      const slug = await publishStorefront(owner, vendorId);
+
+      const unmatchedRes = await request(app.getHttpServer())
+        .get(`/api/v1/storefronts/${slug}/offers/${unmatchedOffer.body.id}`)
+        .expect(200);
+      expect(unmatchedRes.body.variants[0].canonical_variant_id).toBeNull();
+      expect(unmatchedRes.body.variants[0].canonical_product_id).toBeNull();
+    });
+
     it("404s for another vendor's offer id, an INACTIVE offer, or a nonexistent offer", async () => {
       const setupA = await setupEligibleOffer();
       const setupB = await setupEligibleOffer();
