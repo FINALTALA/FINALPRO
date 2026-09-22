@@ -1187,7 +1187,7 @@ describe('Sprint 9 - BranchOrder model + delivery-window calendar setup (e2e)', 
       expect(branchOrder.deliveryWindowId).toBe(window.id);
     });
 
-    it('PDR-024: a window with a non-terminal BranchOrder attached cannot be updated or deleted; it becomes editable again once the order reaches a terminal status', async () => {
+    it('PDR-024: a window with a non-terminal BranchOrder attached cannot be updated or deleted; it becomes editable (but still never deletable) once the order reaches a terminal status', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId, branchAId } = await seedEligibleVendorAndOffer(owner);
       const window = await request(app.getHttpServer())
@@ -1233,6 +1233,9 @@ describe('Sprint 9 - BranchOrder model + delivery-window calendar setup (e2e)', 
         'DELIVERY_WINDOW_HAS_ACTIVE_ORDERS',
       );
 
+      // A hard delete is blocked by the SAME still-active order, but
+      // with the distinct "has order history" code - not the
+      // "has active orders" one update() uses.
       const blockedDelete = await request(app.getHttpServer())
         .delete(
           `/api/v1/vendors/${vendorId}/branches/${branchAId}/delivery-windows/${window.body.id}`,
@@ -1240,11 +1243,12 @@ describe('Sprint 9 - BranchOrder model + delivery-window calendar setup (e2e)', 
         .set('Authorization', `Bearer ${owner}`);
       expect(blockedDelete.status).toBe(409);
       expect(blockedDelete.body.error.code).toBe(
-        'DELIVERY_WINDOW_HAS_ACTIVE_ORDERS',
+        'DELIVERY_WINDOW_HAS_ORDER_HISTORY',
       );
 
-      // Once the order reaches a terminal status, the window is no
-      // longer blocked.
+      // Once the order reaches a terminal status, editing the window
+      // (time/capacity) is allowed again - a terminal order's own
+      // history doesn't depend on the window's live fields.
       await prisma.branchOrder.update({
         where: { id: branchOrder.id },
         data: { status: 'CANCELLED' },
@@ -1262,6 +1266,130 @@ describe('Sprint 9 - BranchOrder model + delivery-window calendar setup (e2e)', 
           capacity: 3,
         })
         .expect(200);
+
+      // But a hard delete is STILL refused, permanently - even a
+      // terminal order's history must never be orphaned by deleting the
+      // window it points to, and deliveryWindowId is never nulled out
+      // to work around this.
+      const stillBlockedDelete = await request(app.getHttpServer())
+        .delete(
+          `/api/v1/vendors/${vendorId}/branches/${branchAId}/delivery-windows/${window.body.id}`,
+        )
+        .set('Authorization', `Bearer ${owner}`);
+      expect(stillBlockedDelete.status).toBe(409);
+      expect(stillBlockedDelete.body.error.code).toBe(
+        'DELIVERY_WINDOW_HAS_ORDER_HISTORY',
+      );
+      const stillThere = await prisma.deliveryWindow.findUnique({
+        where: { id: window.body.id },
+      });
+      expect(stillThere).not.toBeNull();
+      const orderAfter = await prisma.branchOrder.findUniqueOrThrow({
+        where: { id: branchOrder.id },
+      });
+      expect(orderAfter.deliveryWindowId).toBe(window.body.id);
+    });
+
+    it('a window with no order history at all can still be hard-deleted normally', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await seedEligibleVendorAndOffer(owner);
+      const window = await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/branches/${branchAId}/delivery-windows`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .send({
+          day_of_week: 5,
+          start_time: '09:00',
+          end_time: '12:00',
+          capacity: 3,
+        })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .delete(
+          `/api/v1/vendors/${vendorId}/branches/${branchAId}/delivery-windows/${window.body.id}`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .expect(200);
+
+      const gone = await prisma.deliveryWindow.findUnique({
+        where: { id: window.body.id },
+      });
+      expect(gone).toBeNull();
+    });
+
+    it('PDR-024 concurrency: a window delete races a concurrent BranchOrder attaching to it - exactly one side succeeds, and the loser fails cleanly (never a raw 500, never both succeeding)', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await seedEligibleVendorAndOffer(owner);
+      const window = await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/branches/${branchAId}/delivery-windows`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .send({
+          day_of_week: 6,
+          start_time: '09:00',
+          end_time: '12:00',
+          capacity: 3,
+        })
+        .expect(201);
+      const windowId = window.body.id;
+
+      const deletePromise = request(app.getHttpServer())
+        .delete(
+          `/api/v1/vendors/${vendorId}/branches/${branchAId}/delivery-windows/${windowId}`,
+        )
+        .set('Authorization', `Bearer ${owner}`);
+      const attachPromise = prisma.branchOrder
+        .create({
+          data: {
+            customerOrderId: await createCustomerOrder(),
+            vendorId,
+            branchId: branchAId,
+            deliveryWindowId: windowId,
+            fulfilmentMethod: 'DELIVERY',
+            paymentMethod: 'COD',
+            subtotal: 10,
+            total: 10,
+            status: 'PLACED',
+          },
+        })
+        .then(
+          () => ({ ok: true as const }),
+          () => ({ ok: false as const }),
+        );
+
+      const [deleteRes, attachResult] = await Promise.all([
+        deletePromise,
+        attachPromise,
+      ]);
+
+      const deleteSucceeded = deleteRes.status === 200;
+      // Exactly one of the two operations may have won the race.
+      expect(deleteSucceeded).not.toBe(attachResult.ok);
+
+      if (deleteSucceeded) {
+        // The window is really gone, and the order-attach must have
+        // failed (never both true at once).
+        expect(attachResult.ok).toBe(false);
+        const gone = await prisma.deliveryWindow.findUnique({
+          where: { id: windowId },
+        });
+        expect(gone).toBeNull();
+      } else {
+        // The delete must have failed cleanly with the intentional 409
+        // - never an uncaught Postgres RESTRICT 500 - and the window
+        // must still be exactly as it was.
+        expect(deleteRes.status).toBe(409);
+        expect(deleteRes.body.error.code).toBe(
+          'DELIVERY_WINDOW_HAS_ORDER_HISTORY',
+        );
+        const stillThere = await prisma.deliveryWindow.findUnique({
+          where: { id: windowId },
+        });
+        expect(stillThere).not.toBeNull();
+      }
     });
   });
 });

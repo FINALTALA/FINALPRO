@@ -82,6 +82,12 @@ function isExclusionViolation(err: unknown, constraintName: string): boolean {
   );
 }
 
+function isForeignKeyViolation(err: unknown): boolean {
+  return (
+    err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2003'
+  );
+}
+
 // Sprint 9 (RB-FUL-001, PDR-022/024): owner-only setup for a branch's
 // own delivery-slot calendar - recurring weekly windows plus dated
 // exceptions. Deliberately setup-only: no customer-facing slot picker,
@@ -156,17 +162,45 @@ export class DeliveryWindowsController {
     }
   }
 
-  // PDR-024 (Codex review round 1 on commit e12d77a): "a slot that has
-  // orders cannot be changed/deleted without resolving affected
-  // orders." No HTTP endpoint attaches a BranchOrder to a window yet
-  // (Sprint 10's checkout will), but the composite FK and this guard
-  // both exist now, not deferred - a direct/seeded BranchOrder row can
-  // already reference a window today, and this must already refuse to
-  // touch it. "Active" = not yet terminal (COMPLETED/CANCELLED/
-  // REFUNDED), the exact same definition branch-order-state-machine.ts
-  // uses, imported rather than duplicated.
-  private async assertNoActiveOrders(windowId: string): Promise<void> {
-    const blocking = await this.prisma.branchOrder.findFirst({
+  // Codex review round 3 on commit 1febd9a: the previous
+  // assertNoActiveOrders() ran as its own SELECT before the
+  // update/delete transaction even opened, leaving a real gap - a
+  // BranchOrder could attach to this window (via a direct/seeded
+  // Prisma write; no HTTP endpoint does this yet) in between that check
+  // and the actual UPDATE/DELETE. This lock closes it: Postgres takes a
+  // FOR KEY SHARE lock on the referenced row for any concurrent INSERT
+  // that sets deliveryWindowId to this window's id (ordinary FK
+  // enforcement), which conflicts with the FOR UPDATE taken here - so
+  // that concurrent insert is forced to wait until THIS transaction
+  // commits or rolls back. Call this first, before any active-order/
+  // history check, inside the same transaction that will act on the
+  // result.
+  private async lockWindowRow(
+    tx: Prisma.TransactionClient,
+    windowId: string,
+  ): Promise<void> {
+    const rows = await tx.$queryRaw<
+      { id: string }[]
+    >`SELECT id FROM delivery_windows WHERE id = ${windowId} FOR UPDATE`;
+    if (!rows[0]) {
+      throw new NotFoundException({
+        code: 'DELIVERY_WINDOW_NOT_FOUND',
+        message: 'Delivery window not found for this branch',
+      });
+    }
+  }
+
+  // PDR-024: "a slot that has orders cannot be changed/deleted without
+  // resolving affected orders." Used by update() only - editing a
+  // window's own time/capacity doesn't erase anything a terminal order
+  // snapshot depends on, so only a still-active (non-terminal) order
+  // blocks an edit. Must run AFTER lockWindowRow() and inside the same
+  // transaction, or the lock buys nothing.
+  private async assertNoActiveOrders(
+    tx: Prisma.TransactionClient,
+    windowId: string,
+  ): Promise<void> {
+    const blocking = await tx.branchOrder.findFirst({
       where: {
         deliveryWindowId: windowId,
         status: { notIn: [...TERMINAL_BRANCH_ORDER_STATUSES] },
@@ -176,7 +210,37 @@ export class DeliveryWindowsController {
       throw new ConflictException({
         code: 'DELIVERY_WINDOW_HAS_ACTIVE_ORDERS',
         message:
-          'This window has an active (non-terminal) branch order attached to it - resolve or reassign it before changing/deleting the window',
+          'This window has an active (non-terminal) branch order attached to it - resolve or reassign it before changing the window',
+      });
+    }
+  }
+
+  // Codex review round 3 on commit 1febd9a (PDR-024): unlike update(),
+  // a hard DELETE must never proceed if ANY BranchOrder - active OR
+  // terminal - has ever referenced this window. The FK is ON DELETE
+  // RESTRICT specifically so history is never silently lost; without
+  // this check the DELETE would eventually hit that RESTRICT itself and
+  // surface as a raw, uncaught 500 instead of an intentional 409 (the
+  // isForeignKeyViolation() catch in remove() below is a backstop for
+  // the same reason, not the primary guarantee). Deliberately simpler
+  // than a full archive/retire feature: nothing in this sprint selects
+  // windows for customers to book (that's Sprint 10), so there is
+  // nothing yet that a "retire without deleting" action would actually
+  // change - a window with any order history simply stays in place,
+  // unconditionally, and this sprint does not invent an unused
+  // is-retired flag ahead of the feature that would read it.
+  private async assertNoOrderHistory(
+    tx: Prisma.TransactionClient,
+    windowId: string,
+  ): Promise<void> {
+    const anyOrder = await tx.branchOrder.findFirst({
+      where: { deliveryWindowId: windowId },
+    });
+    if (anyOrder) {
+      throw new ConflictException({
+        code: 'DELIVERY_WINDOW_HAS_ORDER_HISTORY',
+        message:
+          "This window has at least one branch order (active or completed) in its history and can never be deleted - it must stay in place to preserve that order's history",
       });
     }
   }
@@ -285,7 +349,6 @@ export class DeliveryWindowsController {
     @Req() req: Request,
   ) {
     const existing = await this.requireWindow(vendorId, branchId, windowId);
-    await this.assertNoActiveOrders(windowId);
     this.validateTimes(dto.start_time, dto.end_time);
     const startMinute = timeToMinutes(dto.start_time);
     const endMinute = timeToMinutes(dto.end_time);
@@ -293,6 +356,8 @@ export class DeliveryWindowsController {
     try {
       return await this.prisma.$transaction(async (tx) => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('finalpro:delivery_windows:' || ${vendorId} || ':' || ${branchId}))`;
+        await this.lockWindowRow(tx, windowId);
+        await this.assertNoActiveOrders(tx, windowId);
 
         const overlapping = await tx.deliveryWindow.findFirst({
           where: {
@@ -347,15 +412,13 @@ export class DeliveryWindowsController {
   }
 
   // PDR-024: "a slot that has orders cannot be changed/deleted without
-  // resolving affected orders" - enforced by assertNoActiveOrders()
-  // above (Codex review round 1 on commit e12d77a added the
-  // deliveryWindowId FK and this check; previously this comment noted
-  // nothing could reference a window yet, which is no longer true - a
-  // direct/seeded BranchOrder row can). This deletion is still
-  // deliberately explicit and two-step (its own exceptions first, then
-  // the window itself), never a DB cascade, so it stays exactly as
-  // auditable/controlled as every other deletion in this codebase (e.g.
-  // StoreSectionsController's own section delete).
+  // resolving affected orders" - a hard delete is stricter still, per
+  // assertNoOrderHistory()'s own comment: ANY order (active or
+  // terminal) blocks it permanently, never just the active ones. This
+  // deletion is deliberately explicit and two-step (its own exceptions
+  // first, then the window itself), never a DB cascade, so it stays
+  // exactly as auditable/controlled as every other deletion in this
+  // codebase (e.g. StoreSectionsController's own section delete).
   @Delete(':windowId')
   @HttpCode(200)
   @RequireVendorRole('OWNER')
@@ -367,11 +430,27 @@ export class DeliveryWindowsController {
     @Req() req: Request,
   ) {
     const existing = await this.requireWindow(vendorId, branchId, windowId);
-    await this.assertNoActiveOrders(windowId);
-    await this.prisma.$transaction(async (tx) => {
-      await tx.deliveryWindowException.deleteMany({ where: { windowId } });
-      await tx.deliveryWindow.delete({ where: { id: windowId } });
-    });
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await this.lockWindowRow(tx, windowId);
+        await this.assertNoOrderHistory(tx, windowId);
+        await tx.deliveryWindowException.deleteMany({ where: { windowId } });
+        await tx.deliveryWindow.delete({ where: { id: windowId } });
+      });
+    } catch (err) {
+      // Backstop, not the primary guarantee (see
+      // assertNoOrderHistory()'s own comment) - structurally shouldn't
+      // fire given the row lock + check above, but a raw RESTRICT
+      // violation must never reach the caller as an unhandled 500.
+      if (isForeignKeyViolation(err)) {
+        throw new ConflictException({
+          code: 'DELIVERY_WINDOW_HAS_ORDER_HISTORY',
+          message:
+            'This window has at least one branch order in its history and can never be deleted',
+        });
+      }
+      throw err;
+    }
     await this.auditLog.record({
       actorId: user.id,
       correlationId: req.correlationId,
