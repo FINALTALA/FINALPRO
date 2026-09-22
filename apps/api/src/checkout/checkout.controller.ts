@@ -42,10 +42,9 @@ export class CheckoutController {
   async quote(
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: QuoteCheckoutDto,
-    @Req() req: Request,
   ) {
     const customerId = await this.requireCustomerId(user);
-    return this.checkoutService.quote(customerId, dto, req.correlationId);
+    return this.checkoutService.quote(customerId, dto);
   }
 
   // Codex review round 2 on commit d0ea80d: a network retry with the

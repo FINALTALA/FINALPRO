@@ -2174,4 +2174,335 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       expect(new Set(codeValues).size).toBe(codeValues.length);
     });
   });
+
+  // ============================================================
+  // Codex review round 3 on commit 3d81c9b - fix #1: quote() must be
+  // genuinely read-only - it must never lock a vendor row, persist the
+  // lazy ACTIVE->EXPIRED subscription transition, or write an AuditLog
+  // row just because someone previewed a cart.
+  // ============================================================
+  describe('quote() eligibility check is read-only (Codex review round 3, fix #1)', () => {
+    it('rejects quote for a lapsed-trial vendor, but never mutates Vendor/VendorSubscription/AuditLog', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
+      const variantId = await createOfferWithStock(vendorId, branchAId, 10, 5);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const itemId = await addToCart(customer, vendorId, variantId, 1);
+
+      // A lapsed trial that hasn't been lazily flipped yet -
+      // Vendor.subscriptionStatus is still ACTIVE (as createOfferWithStock's
+      // own makeVendorEligible() sets it), but the latest
+      // VendorSubscription's periodEnd is already in the past.
+      const subscription = await prisma.vendorSubscription.create({
+        data: {
+          vendorId,
+          status: 'ACTIVE',
+          periodStart: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000),
+          periodEnd: new Date(Date.now() - 1000),
+        },
+      });
+      const auditCountBefore = await prisma.auditLog.count({
+        where: {
+          entityType: 'VendorSubscription',
+          action: 'vendor_subscription.expired',
+        },
+      });
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/checkout/quote')
+        .set('Authorization', `Bearer ${customer}`)
+        .send({ cart_item_ids: [itemId] });
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe('ITEM_NOT_PURCHASABLE');
+
+      const vendorAfter = await prisma.vendor.findUniqueOrThrow({
+        where: { id: vendorId },
+      });
+      expect(vendorAfter.subscriptionStatus).toBe('ACTIVE');
+      const subscriptionAfter =
+        await prisma.vendorSubscription.findUniqueOrThrow({
+          where: { id: subscription.id },
+        });
+      expect(subscriptionAfter.status).toBe('ACTIVE');
+      const auditCountAfter = await prisma.auditLog.count({
+        where: {
+          entityType: 'VendorSubscription',
+          action: 'vendor_subscription.expired',
+        },
+      });
+      expect(auditCountAfter).toBe(auditCountBefore);
+    });
+  });
+
+  // ============================================================
+  // Codex review round 3 on commit 3d81c9b - fix #2: eligibility's own
+  // vendor-row locking (SubscriptionGateService.refreshStatus's FOR
+  // UPDATE) must sort vendorIds canonically too, or a multi-VENDOR
+  // checkout could deadlock against another one locking the same two
+  // vendors in the opposite order - independent of the round-2 fix that
+  // only covered stock/window locks within one vendor.
+  // ============================================================
+  describe('Multi-vendor eligibility locks in canonical order (Codex review round 3, fix #2)', () => {
+    it('two concurrent multi-vendor checkouts submitted with reversed group order never deadlock or 500', async () => {
+      const owner1 = await signup(uniquePhone(), 'a-strong-password');
+      const vendor1 = await createVendorWithTwoBranches(owner1);
+      const owner2 = await signup(uniquePhone(), 'a-strong-password');
+      const vendor2 = await createVendorWithTwoBranches(owner2);
+      const variant1 = await createOfferWithStock(
+        vendor1.vendorId,
+        vendor1.branchAId,
+        10,
+        5,
+      );
+      const variant2 = await createOfferWithStock(
+        vendor2.vendorId,
+        vendor2.branchAId,
+        10,
+        5,
+      );
+      const customerX = await signup(uniquePhone(), 'a-strong-password');
+      const customerY = await signup(uniquePhone(), 'a-strong-password');
+
+      const itemX1 = await addToCart(customerX, vendor1.vendorId, variant1, 1);
+      const itemX2 = await addToCart(customerX, vendor2.vendorId, variant2, 1);
+      const itemY1 = await addToCart(customerY, vendor1.vendorId, variant1, 1);
+      const itemY2 = await addToCart(customerY, vendor2.vendorId, variant2, 1);
+
+      const groupFor = (branchId: string, itemId: string) => ({
+        cart_item_ids: [itemId],
+        branch_id: branchId,
+        fulfilment_method: 'PICKUP' as const,
+        payment_method: 'COD' as const,
+      });
+
+      const [resX, resY] = await Promise.all([
+        request(app.getHttpServer())
+          .post('/api/v1/checkout/reserve')
+          .set('Authorization', `Bearer ${customerX}`)
+          .set('Idempotency-Key', unique('reserve'))
+          .send({
+            groups: [
+              groupFor(vendor1.branchAId, itemX1),
+              groupFor(vendor2.branchAId, itemX2),
+            ],
+          }),
+        request(app.getHttpServer())
+          .post('/api/v1/checkout/reserve')
+          .set('Authorization', `Bearer ${customerY}`)
+          .set('Idempotency-Key', unique('reserve'))
+          .send({
+            groups: [
+              groupFor(vendor2.branchAId, itemY2),
+              groupFor(vendor1.branchAId, itemY1),
+            ],
+          }),
+      ]);
+      expect(resX.status).toBe(201);
+      expect(resY.status).toBe(201);
+    });
+  });
+
+  // ============================================================
+  // Codex review round 3 on commit 3d81c9b - fix #3: consuming/
+  // releasing a reservation's holds must be a single idempotent
+  // transition, serialized on the CheckoutReservation row itself, so a
+  // lazy sweep (lockAndSweepStockRow, triggered by an unrelated POS
+  // movement) and an explicit cancel()/confirm() can never both
+  // decrement the same reservedQuantity.
+  // ============================================================
+  describe('Reservation release is a single idempotent transition (Codex review round 3, fix #3)', () => {
+    it('an expired reservation racing a POS sweep against an explicit cancel never double-releases or goes negative', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
+      const variantId = await createOfferWithStock(vendorId, branchAId, 10, 5);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const itemId = await addToCart(customer, vendorId, variantId, 2);
+
+      const reserved = await request(app.getHttpServer())
+        .post('/api/v1/checkout/reserve')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
+        .send({
+          groups: [
+            {
+              cart_item_ids: [itemId],
+              branch_id: branchAId,
+              fulfilment_method: 'PICKUP',
+              payment_method: 'COD',
+            },
+          ],
+        })
+        .expect(201);
+
+      await prisma.checkoutReservation.update({
+        where: { id: reserved.body.reservation_id },
+        data: { expiresAt: new Date(Date.now() - 1000) },
+      });
+
+      const [posRes, cancelRes] = await Promise.all([
+        request(app.getHttpServer())
+          .post(
+            `/api/v1/vendors/${vendorId}/branches/${branchAId}/stock/${variantId}/movements`,
+          )
+          .set('Authorization', `Bearer ${owner}`)
+          .set('Idempotency-Key', unique('movement'))
+          .send({ quantity_delta: -1, reason: 'DAMAGE', reason_note: 'race' }),
+        request(app.getHttpServer())
+          .post(
+            `/api/v1/checkout/reservations/${reserved.body.reservation_id}/cancel`,
+          )
+          .set('Authorization', `Bearer ${customer}`),
+      ]);
+
+      expect(posRes.status).toBe(201);
+      expect(cancelRes.status).toBe(201);
+
+      const stock = await prisma.branchStock.findFirstOrThrow({
+        where: { offerVariantId: variantId },
+      });
+      // The 2-unit hold is released EXACTLY once (never twice, never
+      // left negative) regardless of which side won the race; the POS
+      // movement separately took 1 real physical unit (5 -> 4).
+      expect(stock.reservedQuantity).toBe(0);
+      expect(stock.quantity).toBe(4);
+    });
+
+    it('confirm racing a concurrent cancel on the same live reservation never double-releases or 500s', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
+      const variantId = await createOfferWithStock(vendorId, branchAId, 10, 5);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const itemId = await addToCart(customer, vendorId, variantId, 1);
+
+      const reserved = await request(app.getHttpServer())
+        .post('/api/v1/checkout/reserve')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
+        .send({
+          groups: [
+            {
+              cart_item_ids: [itemId],
+              branch_id: branchAId,
+              fulfilment_method: 'PICKUP',
+              payment_method: 'COD',
+            },
+          ],
+        })
+        .expect(201);
+
+      const [confirmRes, cancelRes] = await Promise.all([
+        request(app.getHttpServer())
+          .post('/api/v1/checkout/confirm')
+          .set('Authorization', `Bearer ${customer}`)
+          .set('Idempotency-Key', unique('confirm'))
+          .send({ reservation_id: reserved.body.reservation_id }),
+        request(app.getHttpServer())
+          .post(
+            `/api/v1/checkout/reservations/${reserved.body.reservation_id}/cancel`,
+          )
+          .set('Authorization', `Bearer ${customer}`),
+      ]);
+
+      expect([confirmRes.status, cancelRes.status]).not.toContain(500);
+      expect(cancelRes.status).toBe(201);
+      // Exactly one side won: either confirm created the order (and
+      // cancel's own lock-and-check correctly found nothing left to
+      // release), or cancel released it first (and confirm correctly
+      // reports the reservation gone) - never both "succeeding".
+      if (confirmRes.status === 201) {
+        expect(cancelRes.body.released).toBe(false);
+      } else {
+        expect(confirmRes.status).toBe(404);
+        expect(cancelRes.body.released).toBe(true);
+      }
+
+      const stock = await prisma.branchStock.findFirstOrThrow({
+        where: { offerVariantId: variantId },
+      });
+      expect(stock.reservedQuantity).toBe(0);
+    });
+  });
+
+  // ============================================================
+  // Codex review round 3 on commit 3d81c9b - fix #4: every public
+  // availability surface must subtract live reservedQuantity, not just
+  // BranchStock.quantity - the last unit held by a live reservation
+  // must never show as publicly available.
+  // ============================================================
+  describe('Public availability accounts for live reservations (Codex review round 3, fix #4)', () => {
+    it('the last unit held by a live reservation shows sold_out publicly, and recovers after cancel releases it', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
+      const variantId = await createOfferWithStock(vendorId, branchAId, 10, 1);
+      const variant = await prisma.offerVariant.findUniqueOrThrow({
+        where: { id: variantId },
+      });
+      const vendor = await prisma.vendor.findUniqueOrThrow({
+        where: { id: vendorId },
+      });
+
+      const before = await request(app.getHttpServer())
+        .get(
+          `/api/v1/storefronts/${vendor.slug}/offers/${variant.vendorOfferId}`,
+        )
+        .expect(200);
+      const beforeVariant = before.body.variants.find(
+        (v: { id: string }) => v.id === variantId,
+      );
+      expect(beforeVariant.availability).not.toBe('sold_out');
+
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const itemId = await addToCart(customer, vendorId, variantId, 1);
+      const reserved = await request(app.getHttpServer())
+        .post('/api/v1/checkout/reserve')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
+        .send({
+          groups: [
+            {
+              cart_item_ids: [itemId],
+              branch_id: branchAId,
+              fulfilment_method: 'PICKUP',
+              payment_method: 'COD',
+            },
+          ],
+        })
+        .expect(201);
+
+      const during = await request(app.getHttpServer())
+        .get(
+          `/api/v1/storefronts/${vendor.slug}/offers/${variant.vendorOfferId}`,
+        )
+        .expect(200);
+      const duringVariant = during.body.variants.find(
+        (v: { id: string }) => v.id === variantId,
+      );
+      expect(duringVariant.availability).toBe('sold_out');
+
+      const duringSections = await request(app.getHttpServer())
+        .get(`/api/v1/storefronts/${vendor.slug}/sections`)
+        .expect(200);
+      const duringOffer = duringSections.body.all.find(
+        (o: { id: string }) => o.id === variant.vendorOfferId,
+      );
+      expect(duringOffer.availability).toBe('sold_out');
+
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/checkout/reservations/${reserved.body.reservation_id}/cancel`,
+        )
+        .set('Authorization', `Bearer ${customer}`)
+        .expect(201);
+
+      const after = await request(app.getHttpServer())
+        .get(
+          `/api/v1/storefronts/${vendor.slug}/offers/${variant.vendorOfferId}`,
+        )
+        .expect(200);
+      const afterVariant = after.body.variants.find(
+        (v: { id: string }) => v.id === variantId,
+      );
+      expect(afterVariant.availability).not.toBe('sold_out');
+    });
+  });
 });

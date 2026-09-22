@@ -1,5 +1,8 @@
 import { Controller, Get, NotFoundException, Param } from '@nestjs/common';
-import { bucketForStock } from '../common/availability.util';
+import {
+  bucketForStock,
+  totalAvailableStock,
+} from '../common/availability.util';
 import { PrismaService } from '../prisma/prisma.service';
 
 // Sprint 8 (RB-STOREF-002, PDR-012 / RB-COMP-001, PDR-015): the public,
@@ -32,7 +35,7 @@ interface OfferSummaryRow {
   variants: {
     basePrice: unknown;
     salePrice: unknown;
-    branchStocks: { quantity: number }[];
+    branchStocks: { quantity: number; reservedQuantity: number }[];
   }[];
 }
 
@@ -41,7 +44,7 @@ function offerSummaryDto(offer: OfferSummaryRow) {
     (v) => Number(v.salePrice ?? v.basePrice) as number,
   );
   const totalStock = offer.variants.reduce(
-    (sum, v) => sum + v.branchStocks.reduce((s, bs) => s + bs.quantity, 0),
+    (sum, v) => sum + totalAvailableStock(v.branchStocks),
     0,
   );
   return {
@@ -93,7 +96,13 @@ export class StoreOffersPublicController {
       where: { vendorId: vendor.id, status: 'ACTIVE' },
       orderBy: { createdAt: 'desc' },
       include: {
-        variants: { include: { branchStocks: { select: { quantity: true } } } },
+        variants: {
+          include: {
+            branchStocks: {
+              select: { quantity: true, reservedQuantity: true },
+            },
+          },
+        },
       },
     });
 
@@ -117,7 +126,11 @@ export class StoreOffersPublicController {
             offer: {
               include: {
                 variants: {
-                  include: { branchStocks: { select: { quantity: true } } },
+                  include: {
+                    branchStocks: {
+                      select: { quantity: true, reservedQuantity: true },
+                    },
+                  },
                 },
               },
             },
@@ -157,7 +170,9 @@ export class StoreOffersPublicController {
       include: {
         variants: {
           include: {
-            branchStocks: { select: { quantity: true } },
+            branchStocks: {
+              select: { quantity: true, reservedQuantity: true },
+            },
             // Round 4 review fix (RB-COMP-001, PDR-015): the store
             // product page needs to offer a "compare prices" link back
             // to this variant's canonical product WHEN it has a
@@ -198,10 +213,7 @@ export class StoreOffersPublicController {
       title_ar: offer.titleAr,
       title_en: offer.titleEn,
       variants: offer.variants.map((v) => {
-        const totalStock = v.branchStocks.reduce(
-          (sum, bs) => sum + bs.quantity,
-          0,
-        );
+        const totalStock = totalAvailableStock(v.branchStocks);
         return {
           id: v.id,
           seller_sku: v.sellerSku,

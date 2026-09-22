@@ -15,8 +15,14 @@ import { TERMINAL_BRANCH_ORDER_STATUSES } from '../orders/branch-order-state-mac
 import { lockDeliveryWindowRow } from '../delivery-windows/delivery-window-locking.util';
 import { SubscriptionGateService } from '../subscriptions/subscription-gate.service';
 import { groupByVendorAndBranch, GroupingItem } from './checkout-grouping.util';
-import { assertItemsPurchasable } from './purchase-eligibility.util';
-import { lockAndSweepStockRow } from './stock-lock.util';
+import {
+  assertItemsPurchasable,
+  assertItemsPurchasableReadOnly,
+} from './purchase-eligibility.util';
+import {
+  lockAndSweepStockRow,
+  lockReservationRowIfExists,
+} from './stock-lock.util';
 import { computeAvailableSlots } from './slot-availability.util';
 import { SandboxPaymentService } from './sandbox-payment.service';
 import { QuoteCheckoutDto } from './dto/quote-checkout.dto';
@@ -136,11 +142,7 @@ export class CheckoutService {
   // QUOTE - pure read, no reservation, no side effects.
   // ============================================================
 
-  async quote(
-    customerId: string,
-    dto: QuoteCheckoutDto,
-    correlationId: string,
-  ) {
+  async quote(customerId: string, dto: QuoteCheckoutDto) {
     const cartItems = await this.prisma.cartItem.findMany({
       where: { id: { in: dto.cart_item_ids }, customerId },
       include: {
@@ -163,17 +165,23 @@ export class CheckoutService {
     // Codex review round 2: eligibility (offer/vendor/subscription
     // state) must be checked at quote too, not just reserve/confirm -
     // a stale preview showing a now-unsellable item is misleading.
-    // SubscriptionGateService.refreshStatus() itself needs a tx (it
-    // may lazily flip an expired subscription's status) - scoped to
-    // its own small transaction, separate from the plain reads below,
-    // so quote() as a whole is still "no reservation held," just not
-    // literally zero writes ever (the same lazy-expiry-on-read pattern
-    // this codebase already uses for subscriptions elsewhere).
+    //
+    // Codex review round 3 on commit 3d81c9b (fix #1): quote() must
+    // stay genuinely read-only. The round-2 version called
+    // assertItemsPurchasable(), which uses
+    // SubscriptionGateService.refreshStatus() - that takes a `FOR
+    // UPDATE` lock on the vendor row and, if a trial has lapsed,
+    // PERSISTS the ACTIVE->EXPIRED transition and writes an AuditLog
+    // row. Merely previewing a cart must never do any of that.
+    // assertItemsPurchasableReadOnly() uses peekEffectiveStatus()
+    // instead - the same ACTIVE/periodEnd logic, computed by reading
+    // only. Still wrapped in $transaction purely for a consistent
+    // snapshot read across the vendor/offer/subscription rows - no
+    // statement inside ever locks or writes.
     await this.prisma.$transaction((tx) =>
-      assertItemsPurchasable(
+      assertItemsPurchasableReadOnly(
         tx,
         this.subscriptionGate,
-        correlationId,
         cartItems.map((ci) => ({
           vendorId: ci.vendorId,
           offerVariantId: ci.offerVariantId,
@@ -772,6 +780,18 @@ export class CheckoutService {
     reservationId: string,
   ): Promise<{ released: boolean }> {
     return this.prisma.$transaction(async (tx) => {
+      // Codex review round 3 on commit 3d81c9b (fix #3): lock the
+      // CheckoutReservation row itself FIRST, before reading its items -
+      // the same lock, taken the same way, lockAndSweepStockRow() now
+      // takes before touching a stock row that has expired items
+      // belonging to this reservation. Reservation-row-then-stock-rows
+      // is the one consistent global order every release path uses, so
+      // a lazy sweep (triggered by an unrelated POS movement) and an
+      // explicit cancel can never lock in opposite directions.
+      const exists = await lockReservationRowIfExists(tx, reservationId);
+      if (!exists) {
+        return { released: false };
+      }
       const reservation = await tx.checkoutReservation.findUnique({
         where: { id: reservationId },
         include: { items: true, slots: true },
@@ -785,9 +805,24 @@ export class CheckoutService {
     });
   }
 
+  /**
+   * Codex review round 3 on commit 3d81c9b (fix #3): each item's
+   * release is now its own idempotent, atomic step - delete the
+   * CheckoutReservationItem row by id FIRST, and only decrement
+   * reservedQuantity if THIS call is the one that actually deleted it.
+   * A concurrent lockAndSweepStockRow() sweep (or a second call racing
+   * on the same reservation) that already consumed this exact item
+   * simply deletes zero rows here and correctly no-ops, instead of
+   * blindly decrementing a second time from a stale in-memory quantity.
+   * The branch_stock row lock below is still what serializes two
+   * concurrent releases touching the SAME stock row against each
+   * other - this only adds the "did I really just claim this item"
+   * check on top of it.
+   */
   private async releaseReservationHolds(
     tx: Prisma.TransactionClient,
     items: {
+      id: string;
       vendorId: string;
       branchId: string;
       offerVariantId: string;
@@ -802,6 +837,12 @@ export class CheckoutService {
     });
     for (const item of sorted) {
       await tx.$executeRaw`SELECT id FROM branch_stock WHERE "vendorId" = ${item.vendorId} AND "branchId" = ${item.branchId} AND "offerVariantId" = ${item.offerVariantId} FOR UPDATE`;
+      const deleted = await tx.checkoutReservationItem.deleteMany({
+        where: { id: item.id },
+      });
+      if (deleted.count === 0) {
+        continue;
+      }
       await tx.branchStock.updateMany({
         where: {
           vendorId: item.vendorId,
@@ -830,6 +871,13 @@ export class CheckoutService {
     // d0ea80d): a rolled-back transaction can never "release, but
     // still fail" atomically.
     const expiryOutcome = await this.prisma.$transaction(async (tx) => {
+      // Codex review round 3 on commit 3d81c9b (fix #3): lock the
+      // reservation row before reading it or its items - same order as
+      // cancelReservation() and lockAndSweepStockRow() now both use.
+      const exists = await lockReservationRowIfExists(tx, reservationId);
+      if (!exists) {
+        return 'not_found' as const;
+      }
       const reservation = await tx.checkoutReservation.findUnique({
         where: { id: reservationId },
         include: { items: true },
@@ -859,14 +907,42 @@ export class CheckoutService {
     }
 
     return this.prisma.$transaction(async (tx) => {
-      const reservation = await tx.checkoutReservation.findUnique({
-        where: { id: reservationId },
-        include: { items: true, slots: true },
-      });
+      // Codex review round 3 on commit 3d81c9b (fix #3): lock the
+      // reservation row here too, before reading it fresh - a
+      // concurrent lockAndSweepStockRow() sweep that decides (indepen-
+      // dently) this reservation is expired must fully serialize
+      // against this transaction, never interleave with it.
+      const exists = await lockReservationRowIfExists(tx, reservationId);
+      const reservation = exists
+        ? await tx.checkoutReservation.findUnique({
+            where: { id: reservationId },
+            include: { items: true, slots: true },
+          })
+        : null;
       if (!reservation || reservation.customerId !== customerId) {
         throw new NotFoundException({
           code: 'RESERVATION_NOT_FOUND',
           message: 'Reservation not found',
+        });
+      }
+      // Defensive re-check: the expiry-check transaction above already
+      // verified this reservation was not expired and committed, but a
+      // narrow gap exists between that commit and this transaction
+      // starting - if a sweep triggered by something else (e.g. a POS
+      // movement) crossed paths with that exact boundary and released
+      // some or all of this reservation's items in between, this must
+      // never silently create an order with fewer items than the
+      // customer actually reserved.
+      if (
+        reservation.expiresAt.getTime() < Date.now() ||
+        reservation.items.length === 0
+      ) {
+        await this.releaseReservationHolds(tx, reservation.items);
+        await tx.checkoutReservation.delete({ where: { id: reservationId } });
+        throw new ConflictException({
+          code: 'RESERVATION_EXPIRED',
+          message:
+            'This checkout hold has expired - please quote and reserve again',
         });
       }
 

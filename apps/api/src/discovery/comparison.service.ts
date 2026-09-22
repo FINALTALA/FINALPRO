@@ -3,6 +3,7 @@ import { Prisma } from '../../generated/prisma/client';
 import {
   AvailabilityBucket,
   bucketForStock,
+  totalAvailableStock,
 } from '../common/availability.util';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -89,15 +90,12 @@ export class ComparisonService {
           },
         },
         canonicalVariant: { select: { id: true, structuralAttributes: true } },
-        branchStocks: { select: { quantity: true } },
+        branchStocks: { select: { quantity: true, reservedQuantity: true } },
       },
     });
 
     return variants.map((v) => {
-      const totalStock = v.branchStocks.reduce(
-        (sum, bs) => sum + bs.quantity,
-        0,
-      );
+      const totalStock = totalAvailableStock(v.branchStocks);
       return {
         offerVariantId: v.id,
         offerId: v.vendorOfferId,
