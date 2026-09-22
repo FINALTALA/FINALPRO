@@ -34,8 +34,13 @@ export class BranchOrderService {
     correlationId: string,
   ) {
     const rows = await tx.$queryRaw<
-      { id: string; status: BranchOrderStatus; fulfilmentMethod: string }[]
-    >`SELECT id, status, "fulfilmentMethod" FROM branch_orders WHERE id = ${branchOrderId} FOR UPDATE`;
+      {
+        id: string;
+        status: BranchOrderStatus;
+        fulfilmentMethod: string;
+        paymentMethod: string;
+      }[]
+    >`SELECT id, status, "fulfilmentMethod", "paymentMethod" FROM branch_orders WHERE id = ${branchOrderId} FOR UPDATE`;
     const current = rows[0];
     if (!current) {
       throw new NotFoundException({
@@ -48,6 +53,7 @@ export class BranchOrderService {
         current.status,
         to,
         current.fulfilmentMethod as Parameters<typeof canTransition>[2],
+        current.paymentMethod as Parameters<typeof canTransition>[3],
       )
     ) {
       throw new ConflictException({

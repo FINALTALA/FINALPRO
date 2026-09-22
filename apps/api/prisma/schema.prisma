@@ -1429,6 +1429,17 @@ model BranchOrder {
   vendor          Vendor                    @relation(fields: [vendorId], references: [id])
   branchId        String
   branch          StoreBranch               @relation(fields: [vendorId, branchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  /// Nullable, set to null on every row until Sprint 10's checkout
+  /// actually reserves a slot (RB-ORD-002, "reserves a slot on
+  /// RB-FUL-001's calendar") - this sprint adds only the column and its
+  /// tenant/branch-safe FK, never an endpoint to set it (Codex review
+  /// round 1 on commit e12d77a: PDR-024 requires the relationship to
+  /// exist NOW, not deferred, even though nothing populates it yet).
+  /// The composite FK targets DeliveryWindow's own (vendorId, branchId,
+  /// id) - not just (vendorId, id) - so a raw SQL write can never point
+  /// a branch-A order at a branch-B window even within the same vendor.
+  deliveryWindowId String?
+  deliveryWindow  DeliveryWindow?           @relation(fields: [vendorId, branchId, deliveryWindowId], references: [vendorId, branchId, id], onDelete: Restrict, onUpdate: Cascade)
   fulfilmentMethod FulfilmentMethod
   paymentMethod   BranchOrderPaymentMethod
   status          BranchOrderStatus         @default(PLACED)
@@ -1451,6 +1462,7 @@ model BranchOrder {
   @@index([customerOrderId])
   @@index([vendorId, branchId])
   @@index([status])
+  @@index([deliveryWindowId])
   @@map("branch_orders")
 }
 
@@ -1504,10 +1516,17 @@ model DeliveryWindow {
   createdAt   DateTime @default(now())
 
   exceptions DeliveryWindowException[]
+  branchOrders BranchOrder[]
 
   /// Backs DeliveryWindowException's own composite FK (vendorId,
   /// windowId) -> (vendorId, id).
   @@unique([vendorId, id])
+  /// Backs BranchOrder.deliveryWindow's own composite FK (vendorId,
+  /// branchId, deliveryWindowId) -> (vendorId, branchId, id) - the
+  /// three-column target a Postgres FK requires exactly, and the reason
+  /// a branch-A order can never reference a branch-B window even within
+  /// the same vendor (Codex review round 1 on commit e12d77a).
+  @@unique([vendorId, branchId, id])
   @@index([vendorId, branchId, dayOfWeek])
   /// PDR-024's "non-overlapping" requirement, enforced ATOMICALLY at the
   /// DB level (this migration's own hand-written SQL adds a

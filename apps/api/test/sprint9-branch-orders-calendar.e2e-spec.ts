@@ -773,6 +773,16 @@ describe('Sprint 9 - BranchOrder model + delivery-window calendar setup (e2e)', 
       return { vendorId, branchAId, offerId: offer.id, variantId: variant.id };
     }
 
+    async function createCustomerOrder(): Promise<string> {
+      const customer = await prisma.customerProfile.create({
+        data: { user: { create: { phone: uniquePhone(), passwordHash: 'x' } } },
+      });
+      const customerOrder = await prisma.customerOrder.create({
+        data: { customerId: customer.id },
+      });
+      return customerOrder.id;
+    }
+
     it('a well-formed BranchOrder + item can be created directly (sanity baseline)', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId, branchAId, variantId } =
@@ -987,6 +997,271 @@ describe('Sprint 9 - BranchOrder model + delivery-window calendar setup (e2e)', 
         where: { id: branchOrder.id },
       });
       expect(stillPreparing.status).toBe('PREPARING');
+    });
+
+    it('PDR-025: REFUNDED is legal for an ONLINE order but rejected for a COD order, end-to-end against a real DB row', async () => {
+      const ownerPhone = uniquePhone();
+      const owner = await signup(ownerPhone, 'a-strong-password');
+      const ownerUser = await prisma.user.findUniqueOrThrow({
+        where: { phone: ownerPhone },
+      });
+      const { vendorId, branchAId } = await seedEligibleVendorAndOffer(owner);
+      const branchOrderService = app.get(BranchOrderService);
+
+      const onlineOrder = await prisma.branchOrder.create({
+        data: {
+          customerOrderId: await createCustomerOrder(),
+          vendorId,
+          branchId: branchAId,
+          fulfilmentMethod: 'PICKUP',
+          paymentMethod: 'ONLINE',
+          subtotal: 10,
+          total: 10,
+        },
+      });
+      const refunded = await prisma.$transaction((tx) =>
+        branchOrderService.transition(
+          tx,
+          onlineOrder.id,
+          'REFUNDED',
+          ownerUser.id,
+          'corr-refund-online',
+        ),
+      );
+      expect(refunded.status).toBe('REFUNDED');
+
+      const codOrder = await prisma.branchOrder.create({
+        data: {
+          customerOrderId: await createCustomerOrder(),
+          vendorId,
+          branchId: branchAId,
+          fulfilmentMethod: 'PICKUP',
+          paymentMethod: 'COD',
+          subtotal: 10,
+          total: 10,
+        },
+      });
+      await expect(
+        prisma.$transaction((tx) =>
+          branchOrderService.transition(
+            tx,
+            codOrder.id,
+            'REFUNDED',
+            ownerUser.id,
+            'corr-refund-cod',
+          ),
+        ),
+      ).rejects.toThrow();
+      const stillPlaced = await prisma.branchOrder.findUniqueOrThrow({
+        where: { id: codOrder.id },
+      });
+      expect(stillPlaced.status).toBe('PLACED');
+    });
+
+    it('rejects a BranchOrder whose total does not equal subtotal + COALESCE(deliveryFee, 0) (CHECK constraint)', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await seedEligibleVendorAndOffer(owner);
+
+      await expect(
+        prisma.branchOrder.create({
+          data: {
+            customerOrderId: await createCustomerOrder(),
+            vendorId,
+            branchId: branchAId,
+            fulfilmentMethod: 'DELIVERY',
+            paymentMethod: 'COD',
+            subtotal: 20,
+            deliveryFee: 5,
+            total: 30, // should be 25
+          },
+        }),
+      ).rejects.toThrow();
+
+      // Same mismatch with a null deliveryFee (COALESCE(NULL, 0) = 0).
+      await expect(
+        prisma.branchOrder.create({
+          data: {
+            customerOrderId: await createCustomerOrder(),
+            vendorId,
+            branchId: branchAId,
+            fulfilmentMethod: 'PICKUP',
+            paymentMethod: 'COD',
+            subtotal: 10,
+            total: 15,
+          },
+        }),
+      ).rejects.toThrow();
+    });
+
+    it("a BranchOrder's deliveryWindowId cannot reference a window belonging to a DIFFERENT branch, even within the same vendor (composite FK rejects it)", async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId, branchBId } =
+        await createVendorWithTwoBranches(owner);
+      const windowOnBranchB = await prisma.deliveryWindow.create({
+        data: {
+          vendorId,
+          branchId: branchBId,
+          dayOfWeek: 1,
+          startMinute: 540,
+          endMinute: 600,
+          capacity: 3,
+        },
+      });
+
+      await expect(
+        prisma.branchOrder.create({
+          data: {
+            customerOrderId: await createCustomerOrder(),
+            vendorId,
+            branchId: branchAId,
+            deliveryWindowId: windowOnBranchB.id,
+            fulfilmentMethod: 'DELIVERY',
+            paymentMethod: 'COD',
+            subtotal: 10,
+            total: 10,
+          },
+        }),
+      ).rejects.toThrow();
+    });
+
+    it("a BranchOrder's deliveryWindowId cannot reference a DIFFERENT vendor's window (composite FK rejects it)", async () => {
+      const owner1 = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId: vendor1Id, branchAId: branch1Id } =
+        await seedEligibleVendorAndOffer(owner1);
+      const owner2 = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId: vendor2Id, branchAId: branch2Id } =
+        await seedEligibleVendorAndOffer(owner2);
+      const windowOnVendor2 = await prisma.deliveryWindow.create({
+        data: {
+          vendorId: vendor2Id,
+          branchId: branch2Id,
+          dayOfWeek: 1,
+          startMinute: 540,
+          endMinute: 600,
+          capacity: 3,
+        },
+      });
+
+      await expect(
+        prisma.branchOrder.create({
+          data: {
+            customerOrderId: await createCustomerOrder(),
+            vendorId: vendor1Id,
+            branchId: branch1Id,
+            deliveryWindowId: windowOnVendor2.id,
+            fulfilmentMethod: 'DELIVERY',
+            paymentMethod: 'COD',
+            subtotal: 10,
+            total: 10,
+          },
+        }),
+      ).rejects.toThrow();
+    });
+
+    it("a BranchOrder CAN reference its own branch's own window (the well-formed, same-tenant case)", async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await seedEligibleVendorAndOffer(owner);
+      const window = await prisma.deliveryWindow.create({
+        data: {
+          vendorId,
+          branchId: branchAId,
+          dayOfWeek: 2,
+          startMinute: 540,
+          endMinute: 600,
+          capacity: 3,
+        },
+      });
+
+      const branchOrder = await prisma.branchOrder.create({
+        data: {
+          customerOrderId: await createCustomerOrder(),
+          vendorId,
+          branchId: branchAId,
+          deliveryWindowId: window.id,
+          fulfilmentMethod: 'DELIVERY',
+          paymentMethod: 'COD',
+          subtotal: 10,
+          total: 10,
+        },
+      });
+      expect(branchOrder.deliveryWindowId).toBe(window.id);
+    });
+
+    it('PDR-024: a window with a non-terminal BranchOrder attached cannot be updated or deleted; it becomes editable again once the order reaches a terminal status', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await seedEligibleVendorAndOffer(owner);
+      const window = await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/branches/${branchAId}/delivery-windows`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .send({
+          day_of_week: 3,
+          start_time: '09:00',
+          end_time: '12:00',
+          capacity: 3,
+        })
+        .expect(201);
+
+      const branchOrder = await prisma.branchOrder.create({
+        data: {
+          customerOrderId: await createCustomerOrder(),
+          vendorId,
+          branchId: branchAId,
+          deliveryWindowId: window.body.id,
+          fulfilmentMethod: 'DELIVERY',
+          paymentMethod: 'COD',
+          subtotal: 10,
+          total: 10,
+          status: 'PLACED',
+        },
+      });
+
+      const blockedUpdate = await request(app.getHttpServer())
+        .put(
+          `/api/v1/vendors/${vendorId}/branches/${branchAId}/delivery-windows/${window.body.id}`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .send({
+          day_of_week: 3,
+          start_time: '09:00',
+          end_time: '13:00',
+          capacity: 3,
+        });
+      expect(blockedUpdate.status).toBe(409);
+      expect(blockedUpdate.body.error.code).toBe(
+        'DELIVERY_WINDOW_HAS_ACTIVE_ORDERS',
+      );
+
+      const blockedDelete = await request(app.getHttpServer())
+        .delete(
+          `/api/v1/vendors/${vendorId}/branches/${branchAId}/delivery-windows/${window.body.id}`,
+        )
+        .set('Authorization', `Bearer ${owner}`);
+      expect(blockedDelete.status).toBe(409);
+      expect(blockedDelete.body.error.code).toBe(
+        'DELIVERY_WINDOW_HAS_ACTIVE_ORDERS',
+      );
+
+      // Once the order reaches a terminal status, the window is no
+      // longer blocked.
+      await prisma.branchOrder.update({
+        where: { id: branchOrder.id },
+        data: { status: 'CANCELLED' },
+      });
+
+      await request(app.getHttpServer())
+        .put(
+          `/api/v1/vendors/${vendorId}/branches/${branchAId}/delivery-windows/${window.body.id}`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .send({
+          day_of_week: 3,
+          start_time: '09:00',
+          end_time: '13:00',
+          capacity: 3,
+        })
+        .expect(200);
     });
   });
 });

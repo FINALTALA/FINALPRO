@@ -20,7 +20,12 @@ describe('BranchOrderService.transition', () => {
 
   it('locks the row, applies a legal transition, and audits before/after status', async () => {
     tx.$queryRaw.mockResolvedValue([
-      { id: 'bo-1', status: 'PLACED', fulfilmentMethod: 'DELIVERY' },
+      {
+        id: 'bo-1',
+        status: 'PLACED',
+        fulfilmentMethod: 'DELIVERY',
+        paymentMethod: 'ONLINE',
+      },
     ]);
     tx.branchOrder.update.mockResolvedValue({
       id: 'bo-1',
@@ -72,7 +77,12 @@ describe('BranchOrderService.transition', () => {
 
   it('throws ConflictException for an illegal transition, and never writes anything', async () => {
     tx.$queryRaw.mockResolvedValue([
-      { id: 'bo-1', status: 'SENT', fulfilmentMethod: 'DELIVERY' },
+      {
+        id: 'bo-1',
+        status: 'SENT',
+        fulfilmentMethod: 'DELIVERY',
+        paymentMethod: 'ONLINE',
+      },
     ]);
 
     await expect(
@@ -84,11 +94,54 @@ describe('BranchOrderService.transition', () => {
 
   it('is fulfilment-method-aware: SENT is illegal for a PICKUP order even from PREPARING', async () => {
     tx.$queryRaw.mockResolvedValue([
-      { id: 'bo-1', status: 'PREPARING', fulfilmentMethod: 'PICKUP' },
+      {
+        id: 'bo-1',
+        status: 'PREPARING',
+        fulfilmentMethod: 'PICKUP',
+        paymentMethod: 'ONLINE',
+      },
     ]);
 
     await expect(
       service.transition(tx as never, 'bo-1', 'SENT', 'user-1', 'corr-1'),
     ).rejects.toThrow(ConflictException);
+  });
+
+  it('is payment-method-aware: REFUNDED is illegal for a COD order even from PLACED (PDR-025 - nothing was charged online to refund)', async () => {
+    tx.$queryRaw.mockResolvedValue([
+      {
+        id: 'bo-1',
+        status: 'PLACED',
+        fulfilmentMethod: 'PICKUP',
+        paymentMethod: 'COD',
+      },
+    ]);
+
+    await expect(
+      service.transition(tx as never, 'bo-1', 'REFUNDED', 'user-1', 'corr-1'),
+    ).rejects.toThrow(ConflictException);
+    expect(tx.branchOrder.update).not.toHaveBeenCalled();
+    expect(auditLog.record).not.toHaveBeenCalled();
+  });
+
+  it('allows REFUNDED for an ONLINE order from PLACED', async () => {
+    tx.$queryRaw.mockResolvedValue([
+      {
+        id: 'bo-1',
+        status: 'PLACED',
+        fulfilmentMethod: 'PICKUP',
+        paymentMethod: 'ONLINE',
+      },
+    ]);
+    tx.branchOrder.update.mockResolvedValue({ id: 'bo-1', status: 'REFUNDED' });
+
+    const result = await service.transition(
+      tx as never,
+      'bo-1',
+      'REFUNDED',
+      'user-1',
+      'corr-1',
+    );
+    expect(result.status).toBe('REFUNDED');
   });
 });

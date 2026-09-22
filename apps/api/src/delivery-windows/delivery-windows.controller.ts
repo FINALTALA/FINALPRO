@@ -23,6 +23,7 @@ import { VendorMembershipGuard } from '../auth/vendor-membership.guard';
 import { RequireVendorRole } from '../auth/vendor-role.decorator';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { TERMINAL_BRANCH_ORDER_STATUSES } from '../orders/branch-order-state-machine';
 import { CreateDeliveryWindowExceptionDto } from './dto/create-delivery-window-exception.dto';
 import { CreateDeliveryWindowDto } from './dto/create-delivery-window.dto';
 import { UpdateDeliveryWindowDto } from './dto/update-delivery-window.dto';
@@ -155,6 +156,31 @@ export class DeliveryWindowsController {
     }
   }
 
+  // PDR-024 (Codex review round 1 on commit e12d77a): "a slot that has
+  // orders cannot be changed/deleted without resolving affected
+  // orders." No HTTP endpoint attaches a BranchOrder to a window yet
+  // (Sprint 10's checkout will), but the composite FK and this guard
+  // both exist now, not deferred - a direct/seeded BranchOrder row can
+  // already reference a window today, and this must already refuse to
+  // touch it. "Active" = not yet terminal (COMPLETED/CANCELLED/
+  // REFUNDED), the exact same definition branch-order-state-machine.ts
+  // uses, imported rather than duplicated.
+  private async assertNoActiveOrders(windowId: string): Promise<void> {
+    const blocking = await this.prisma.branchOrder.findFirst({
+      where: {
+        deliveryWindowId: windowId,
+        status: { notIn: [...TERMINAL_BRANCH_ORDER_STATUSES] },
+      },
+    });
+    if (blocking) {
+      throw new ConflictException({
+        code: 'DELIVERY_WINDOW_HAS_ACTIVE_ORDERS',
+        message:
+          'This window has an active (non-terminal) branch order attached to it - resolve or reassign it before changing/deleting the window',
+      });
+    }
+  }
+
   @Get()
   @RequireVendorRole('OWNER')
   async list(
@@ -259,6 +285,7 @@ export class DeliveryWindowsController {
     @Req() req: Request,
   ) {
     const existing = await this.requireWindow(vendorId, branchId, windowId);
+    await this.assertNoActiveOrders(windowId);
     this.validateTimes(dto.start_time, dto.end_time);
     const startMinute = timeToMinutes(dto.start_time);
     const endMinute = timeToMinutes(dto.end_time);
@@ -320,17 +347,15 @@ export class DeliveryWindowsController {
   }
 
   // PDR-024: "a slot that has orders cannot be changed/deleted without
-  // resolving affected orders." No BranchOrder anywhere in this
-  // codebase can reference a DeliveryWindow yet (that link is Sprint
-  // 10's own checkout addition - see DeliveryWindow's own schema.prisma
-  // comment) - so there is structurally nothing to "resolve" today.
-  // This deletion is still deliberately explicit and two-step (its own
-  // exceptions first, then the window itself), never a DB cascade, so
-  // it stays exactly as auditable/controlled as every other deletion in
-  // this codebase (e.g. StoreSectionsController's own section delete) -
-  // and so that when Sprint 10 adds the BranchOrder link, it can plug a
-  // "reject if any non-terminal BranchOrder references this window"
-  // check in right here without restructuring this method.
+  // resolving affected orders" - enforced by assertNoActiveOrders()
+  // above (Codex review round 1 on commit e12d77a added the
+  // deliveryWindowId FK and this check; previously this comment noted
+  // nothing could reference a window yet, which is no longer true - a
+  // direct/seeded BranchOrder row can). This deletion is still
+  // deliberately explicit and two-step (its own exceptions first, then
+  // the window itself), never a DB cascade, so it stays exactly as
+  // auditable/controlled as every other deletion in this codebase (e.g.
+  // StoreSectionsController's own section delete).
   @Delete(':windowId')
   @HttpCode(200)
   @RequireVendorRole('OWNER')
@@ -342,6 +367,7 @@ export class DeliveryWindowsController {
     @Req() req: Request,
   ) {
     const existing = await this.requireWindow(vendorId, branchId, windowId);
+    await this.assertNoActiveOrders(windowId);
     await this.prisma.$transaction(async (tx) => {
       await tx.deliveryWindowException.deleteMany({ where: { windowId } });
       await tx.deliveryWindow.delete({ where: { id: windowId } });
