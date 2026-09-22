@@ -306,6 +306,10 @@ export default function StorefrontSettingsPage() {
         <Link href={`/vendor/${params.vendorId}/sections`} className="button-link">
           إدارة أقسام المتجر ←
         </Link>
+        <div style={{ height: 8 }} />
+        <Link href={`/vendor/${params.vendorId}/delivery-windows`} className="button-link">
+          تقويم نوافذ التوصيل ←
+        </Link>
       </div>
     </div>
   );

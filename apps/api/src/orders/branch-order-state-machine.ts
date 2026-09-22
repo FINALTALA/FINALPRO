@@ -1,0 +1,132 @@
+import {
+  BranchOrderPaymentMethod,
+  BranchOrderStatus,
+  FulfilmentMethod,
+} from '../../generated/prisma/client';
+
+/**
+ * Sprint 9 (RB-ORD-001): the BranchOrder transition graph, synthesized
+ * from PDR-025 through PDR-029 and FR-FUL-008/009 - no ready-made
+ * BranchOrder state enum exists anywhere in the SRS to reuse (the only
+ * state machine on record, VendorSuborder's, is explicitly superseded
+ * by FR-ORD-009 - see BranchOrderStatus's own schema.prisma comment for
+ * the full citation). Pure and DB-free by design, so it can be
+ * exhaustively unit-tested without a database - see
+ * branch-order.service.ts for the guarded, transactional wrapper that
+ * actually applies a transition to a real row (nothing calls that
+ * service yet either - no HTTP endpoint exists this sprint; checkout/
+ * fulfilment actions that will call it are Sprint 10-11).
+ */
+interface TransitionRule {
+  to: BranchOrderStatus;
+  /** null = legal regardless of fulfilment method. */
+  fulfilmentMethod: FulfilmentMethod | null;
+  /**
+   * null = legal regardless of payment method. PDR-025 (Codex review
+   * round 1 on commit e12d77a): a financial refund only ever applies to
+   * an ONLINE payment - COD was never charged, so there is nothing to
+   * refund; a COD order that needs undoing before fulfilment is a plain
+   * CANCELLED, never REFUNDED.
+   */
+  paymentMethod: BranchOrderPaymentMethod | null;
+}
+
+const TRANSITIONS: Record<BranchOrderStatus, TransitionRule[]> = {
+  PLACED: [
+    { to: 'PREPARING', fulfilmentMethod: null, paymentMethod: null },
+    // PDR-028: "before preparation: customer cancels item" - modeled at
+    // the whole-BranchOrder level this sprint (per-item cancellation is
+    // RB-FUL-007, Should, deferred). Legal for either payment method -
+    // cancelling is not itself a refund.
+    { to: 'CANCELLED', fulfilmentMethod: null, paymentMethod: null },
+    // PDR-025: the unprepared-at-slot auto-refund path - ONLINE only
+    // (see TransitionRule.paymentMethod's own comment above). Nothing
+    // triggers this automatically yet (no scheduled-job infrastructure
+    // exists in this codebase - the same honestly-documented gap as
+    // every other "would need a cron worker" feature here); the
+    // transition is legal so a future sprint's explicit trigger has a
+    // correct graph to call into.
+    { to: 'REFUNDED', fulfilmentMethod: null, paymentMethod: 'ONLINE' },
+  ],
+  PREPARING: [
+    { to: 'SENT', fulfilmentMethod: 'DELIVERY', paymentMethod: null },
+    { to: 'PICKED_UP', fulfilmentMethod: 'PICKUP', paymentMethod: null },
+    // PDR-028: "after prep/before Sent: staff cancels after external
+    // contact."
+    { to: 'CANCELLED', fulfilmentMethod: null, paymentMethod: null },
+    { to: 'REFUNDED', fulfilmentMethod: null, paymentMethod: 'ONLINE' },
+  ],
+  // PDR-028: "once Sent, neither side self-cancels in-app" - SENT
+  // deliberately has no CANCELLED/REFUNDED entry below, enforced by the
+  // graph itself, not just left to convention.
+  SENT: [
+    { to: 'DELIVERED', fulfilmentMethod: 'DELIVERY', paymentMethod: null },
+  ],
+  // PDR-026: customer confirms, or the (not-yet-built, Sprint 11) 72h
+  // auto-confirm fires.
+  DELIVERED: [
+    { to: 'COMPLETED', fulfilmentMethod: 'DELIVERY', paymentMethod: null },
+  ],
+  // Pickup handover is itself the confirmation - PDR-026's own explicit
+  // customer-confirm step is written for delivery specifically, so
+  // PICKED_UP -> COMPLETED is a direct, always-legal transition rather
+  // than needing its own separate confirm state.
+  PICKED_UP: [
+    { to: 'COMPLETED', fulfilmentMethod: 'PICKUP', paymentMethod: null },
+  ],
+  COMPLETED: [],
+  CANCELLED: [],
+  REFUNDED: [],
+};
+
+/**
+ * PDR-025/PDR-029: an order in any of these three states is done -
+ * nothing about it (including which delivery window it was slotted
+ * into) changes again. Shared with DeliveryWindowsController's own
+ * "a window with active orders can't be edited/deleted" guard, so both
+ * call sites agree on exactly what "active" means without duplicating
+ * the list.
+ */
+export const TERMINAL_BRANCH_ORDER_STATUSES: readonly BranchOrderStatus[] = [
+  'COMPLETED',
+  'CANCELLED',
+  'REFUNDED',
+];
+
+export function isTerminalBranchOrderStatus(
+  status: BranchOrderStatus,
+): boolean {
+  return (TERMINAL_BRANCH_ORDER_STATUSES as BranchOrderStatus[]).includes(
+    status,
+  );
+}
+
+export function canTransition(
+  from: BranchOrderStatus,
+  to: BranchOrderStatus,
+  fulfilmentMethod: FulfilmentMethod,
+  paymentMethod: BranchOrderPaymentMethod,
+): boolean {
+  return TRANSITIONS[from].some(
+    (rule) =>
+      rule.to === to &&
+      (rule.fulfilmentMethod === null ||
+        rule.fulfilmentMethod === fulfilmentMethod) &&
+      (rule.paymentMethod === null || rule.paymentMethod === paymentMethod),
+  );
+}
+
+export function allowedNextStates(
+  from: BranchOrderStatus,
+  fulfilmentMethod: FulfilmentMethod,
+  paymentMethod: BranchOrderPaymentMethod,
+): BranchOrderStatus[] {
+  return TRANSITIONS[from]
+    .filter(
+      (rule) =>
+        (rule.fulfilmentMethod === null ||
+          rule.fulfilmentMethod === fulfilmentMethod) &&
+        (rule.paymentMethod === null || rule.paymentMethod === paymentMethod),
+    )
+    .map((rule) => rule.to);
+}

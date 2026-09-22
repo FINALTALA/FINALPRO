@@ -6,11 +6,13 @@ import { AuthModule } from './auth/auth.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { CorrelationIdMiddleware } from './common/middleware/correlation-id.middleware';
 import { CustomersModule } from './customers/customers.module';
+import { DeliveryWindowsModule } from './delivery-windows/delivery-windows.module';
 import { DiscoveryModule } from './discovery/discovery.module';
 import { HealthModule } from './health/health.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { MatchingModule } from './matching/matching.module';
 import { OffersModule } from './offers/offers.module';
+import { OrdersModule } from './orders/orders.module';
 import { OutboxModule } from './outbox/outbox.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
@@ -40,6 +42,8 @@ import { VendorsModule } from './vendors/vendors.module';
     SubscriptionsModule,
     InventoryModule,
     DiscoveryModule,
+    OrdersModule,
+    DeliveryWindowsModule,
   ],
   providers: [
     {
