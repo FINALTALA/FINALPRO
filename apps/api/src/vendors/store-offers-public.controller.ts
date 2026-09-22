@@ -188,6 +188,11 @@ export class StoreOffersPublicController {
 
     return {
       id: offer.id,
+      // Sprint 10 (RB-ORD-002): the cart's own "add item" call needs
+      // vendor_id (not just the already-public slug) - no more
+      // sensitive than vendor_slug/vendor_display_name, already
+      // exposed on this same public response.
+      vendor_id: vendor.id,
       vendor_slug: vendor.slug,
       vendor_display_name: vendor.displayName ?? vendor.legalName,
       title_ar: offer.titleAr,

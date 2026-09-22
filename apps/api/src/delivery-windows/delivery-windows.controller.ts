@@ -27,6 +27,7 @@ import { TERMINAL_BRANCH_ORDER_STATUSES } from '../orders/branch-order-state-mac
 import { CreateDeliveryWindowExceptionDto } from './dto/create-delivery-window-exception.dto';
 import { CreateDeliveryWindowDto } from './dto/create-delivery-window.dto';
 import { UpdateDeliveryWindowDto } from './dto/update-delivery-window.dto';
+import { lockDeliveryWindowRow } from './delivery-window-locking.util';
 
 function minutesToTime(minutes: number): string {
   const h = Math.floor(minutes / 60)
@@ -162,34 +163,6 @@ export class DeliveryWindowsController {
     }
   }
 
-  // Codex review round 3 on commit 1febd9a: the previous
-  // assertNoActiveOrders() ran as its own SELECT before the
-  // update/delete transaction even opened, leaving a real gap - a
-  // BranchOrder could attach to this window (via a direct/seeded
-  // Prisma write; no HTTP endpoint does this yet) in between that check
-  // and the actual UPDATE/DELETE. This lock closes it: Postgres takes a
-  // FOR KEY SHARE lock on the referenced row for any concurrent INSERT
-  // that sets deliveryWindowId to this window's id (ordinary FK
-  // enforcement), which conflicts with the FOR UPDATE taken here - so
-  // that concurrent insert is forced to wait until THIS transaction
-  // commits or rolls back. Call this first, before any active-order/
-  // history check, inside the same transaction that will act on the
-  // result.
-  private async lockWindowRow(
-    tx: Prisma.TransactionClient,
-    windowId: string,
-  ): Promise<void> {
-    const rows = await tx.$queryRaw<
-      { id: string }[]
-    >`SELECT id FROM delivery_windows WHERE id = ${windowId} FOR UPDATE`;
-    if (!rows[0]) {
-      throw new NotFoundException({
-        code: 'DELIVERY_WINDOW_NOT_FOUND',
-        message: 'Delivery window not found for this branch',
-      });
-    }
-  }
-
   // PDR-024: "a slot that has orders cannot be changed/deleted without
   // resolving affected orders." Used by update() only - editing a
   // window's own time/capacity doesn't erase anything a terminal order
@@ -211,6 +184,35 @@ export class DeliveryWindowsController {
         code: 'DELIVERY_WINDOW_HAS_ACTIVE_ORDERS',
         message:
           'This window has an active (non-terminal) branch order attached to it - resolve or reassign it before changing the window',
+      });
+    }
+  }
+
+  // Sprint 10 (RB-ORD-002, PDR-024): a live (unexpired) checkout hold
+  // on this window is just as real a reason to refuse an edit/delete as
+  // an active BranchOrder - the customer mid-checkout was promised this
+  // exact slot for 10 minutes; changing its time/capacity or deleting
+  // it out from under that promise would break it just as surely as
+  // deleting a window with a real order would. Must run AFTER
+  // lockDeliveryWindowRow() and inside the same transaction, same as
+  // assertNoActiveOrders() above - and for the same reason: the lock
+  // is what stops a NEW reservation from attaching in the gap between
+  // this check and the actual UPDATE/DELETE.
+  private async assertNoActiveReservationSlots(
+    tx: Prisma.TransactionClient,
+    windowId: string,
+  ): Promise<void> {
+    const blocking = await tx.checkoutReservationSlot.findFirst({
+      where: {
+        deliveryWindowId: windowId,
+        reservation: { expiresAt: { gt: new Date() } },
+      },
+    });
+    if (blocking) {
+      throw new ConflictException({
+        code: 'DELIVERY_WINDOW_HAS_ACTIVE_RESERVATION',
+        message:
+          'A customer is currently mid-checkout with a live hold on this window - try again once their 10-minute hold expires',
       });
     }
   }
@@ -356,8 +358,9 @@ export class DeliveryWindowsController {
     try {
       return await this.prisma.$transaction(async (tx) => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('finalpro:delivery_windows:' || ${vendorId} || ':' || ${branchId}))`;
-        await this.lockWindowRow(tx, windowId);
+        await lockDeliveryWindowRow(tx, windowId);
         await this.assertNoActiveOrders(tx, windowId);
+        await this.assertNoActiveReservationSlots(tx, windowId);
 
         const overlapping = await tx.deliveryWindow.findFirst({
           where: {
@@ -432,8 +435,9 @@ export class DeliveryWindowsController {
     const existing = await this.requireWindow(vendorId, branchId, windowId);
     try {
       await this.prisma.$transaction(async (tx) => {
-        await this.lockWindowRow(tx, windowId);
+        await lockDeliveryWindowRow(tx, windowId);
         await this.assertNoOrderHistory(tx, windowId);
+        await this.assertNoActiveReservationSlots(tx, windowId);
         await tx.deliveryWindowException.deleteMany({ where: { windowId } });
         await tx.deliveryWindow.delete({ where: { id: windowId } });
       });

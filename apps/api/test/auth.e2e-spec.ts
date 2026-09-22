@@ -779,11 +779,28 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
           landmark_note: 'Near the main square',
           phone_number_1: '+970591111111',
           phone_number_2: '+970592222222',
+          zone: 'WEST_BANK',
         })
         .expect(201);
 
       expect(res.body.lat).toBe(31.9);
       expect(res.body.phone_number_1).toBe('+970591111111');
+      expect(res.body.zone).toBe('WEST_BANK');
+    });
+
+    it('rejects an address without a zone (Sprint 10, PDR-022: required for delivery checkout to know the fee region)', async () => {
+      const phone = uniquePhone();
+      const token = await signup(phone, 'a-strong-password');
+
+      await request(app.getHttpServer())
+        .post('/api/v1/customers/me/addresses')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          lat: 31.9,
+          lng: 35.2,
+          phone_number_1: '+970591111111',
+        })
+        .expect(400);
     });
   });
 

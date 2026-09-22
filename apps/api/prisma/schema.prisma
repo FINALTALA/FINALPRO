@@ -75,6 +75,8 @@ model CustomerProfile {
 
   addresses Address[]
   orders    CustomerOrder[]
+  cartItems CartItem[]
+  checkoutReservations CheckoutReservation[]
 
   @@map("customer_profiles")
 }
@@ -94,7 +96,22 @@ model Address {
   landmarkNote String?
   phoneNumber1 String
   phoneNumber2 String?
+  /// Sprint 10 (PDR-022, additive, nullable): which of DeliveryZoneRegion's
+  /// three commercial delivery regions (Sprint 5, RB-STORE-002) this
+  /// address is in - required to look up a vendor's per-zone delivery
+  /// fee (VendorDeliveryZone.fee) at checkout. Nullable so pre-existing
+  /// Sprint 2 addresses (created before this field existed) are never
+  /// broken by this migration; an address with a null zone simply
+  /// can't be used for delivery checkout until it's re-saved with one.
+  /// Self-declared by the customer at save time rather than computed
+  /// from lat/lng, since OPEN-012 explicitly leaves the boundary
+  /// source/classification undecided - building a geo-boundary engine
+  /// ahead of that decision would be guessing at an unapproved design.
+  zone         DeliveryZoneRegion?
   createdAt    DateTime        @default(now())
+
+  checkoutReservationSlots CheckoutReservationSlot[]
+  branchOrders             BranchOrder[]
 
   @@index([customerId])
   @@map("addresses")
@@ -377,12 +394,22 @@ enum DeliveryZoneRegion {
 /// codebase already uses elsewhere (e.g. VendorSubscription's lazy
 /// expiry check) rather than seeding three rows for every vendor at
 /// creation time.
+///
+/// Sprint 10 (RB-ORD-003, additive): `fee` is the checkout-time amount
+/// Sprint 5's own comment deferred to this later sprint - nullable,
+/// because `enabled` keeps its existing lazy-default-true meaning
+/// unchanged (a region an owner never touched is still "enabled" in
+/// the Sprint 5 sense) while a NULL fee separately means "this owner
+/// has not priced this region yet." Checkout therefore treats a region
+/// as actually usable for delivery only when BOTH enabled is true AND
+/// fee is set - never inferring or defaulting a fee amount.
 model VendorDeliveryZone {
   id        String             @id @default(uuid())
   vendorId  String
   vendor    Vendor             @relation(fields: [vendorId], references: [id])
   region    DeliveryZoneRegion
   enabled   Boolean            @default(true)
+  fee       Decimal?           @db.Decimal(10, 2)
   createdAt DateTime           @default(now())
 
   @@unique([vendorId, region])
@@ -463,6 +490,7 @@ model StoreBranch {
   stockMovements StockMovement[]
   branchOrders   BranchOrder[]
   deliveryWindows DeliveryWindow[]
+  checkoutReservationItems CheckoutReservationItem[]
 
   /// Backs the composite FKs on VendorUser/StaffInvite (vendorId,
   /// branchId) -> (vendorId, id) - a plain PK-only unique on `id`
@@ -1006,6 +1034,8 @@ model OfferVariant {
   media                  OfferVariantMedia[]
   matchReviewCandidates  MatchReviewCandidate[]
   branchOrderItems       BranchOrderItem[]
+  cartItems              CartItem[]
+  checkoutReservationItems CheckoutReservationItem[]
 
   @@unique([vendorId, sellerSku])
   @@unique([vendorId, storeInventoryBarcode])
@@ -1092,6 +1122,26 @@ model BranchStock {
   /// endpoint (RB-INV-005), which never even attempts a write that
   /// would violate it.
   quantity       Int          @default(0)
+  /// Sprint 10 (RB-ORD-002, additive): units currently held by a live
+  /// (unexpired, unconsumed) CheckoutReservationItem - NOT yet actually
+  /// sold, but not free for a NEW reservation either. `quantity -
+  /// reservedQuantity` is "truly available right now." This column is
+  /// the reason a 10-minute checkout hold is a REAL guarantee and not
+  /// just a checkout-side promise: EVERY path that decrements
+  /// `quantity` (today, only InventoryController's stock-movement
+  /// endpoint - RB-INV-003/005/PDR-020's manual/POS-sale path) must
+  /// also respect it, or a concurrent physical sale could sell stock
+  /// out from under an already-"reserved" online checkout, only for
+  /// that checkout's own confirm step to fail later - exactly what
+  /// PDR-023/RB-ORD-002's 10-minute reservation promises never happens.
+  /// A DB-level CHECK (reservedQuantity >= 0 AND quantity >=
+  /// reservedQuantity), hand-written in this model's own migration, is
+  /// the backstop; the real guarantee is that every writer of
+  /// `quantity` uses the same `quantity + delta - reservedQuantity >=
+  /// 0` conditional-UPDATE shape (true for both a decrement, where this
+  /// is the actual reservation-respecting guard, and an increase, where
+  /// it is always trivially satisfied - restocking is never blocked).
+  reservedQuantity Int        @default(0)
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
@@ -1348,6 +1398,7 @@ model CustomerOrder {
   createdAt  DateTime @default(now())
 
   branchOrders BranchOrder[]
+  paymentTransactions PaymentTransaction[]
 
   @@index([customerId])
   @@map("customer_orders")
@@ -1440,6 +1491,42 @@ model BranchOrder {
   /// a branch-A order at a branch-B window even within the same vendor.
   deliveryWindowId String?
   deliveryWindow  DeliveryWindow?           @relation(fields: [vendorId, branchId, deliveryWindowId], references: [vendorId, branchId, id], onDelete: Restrict, onUpdate: Cascade)
+  /// Sprint 10 (RB-ORD-002, PDR-024, additive): the ONE specific
+  /// calendar date, within deliveryWindowId's own recurring weekly
+  /// template, that this order actually occupies - deliberately
+  /// separate from deliveryWindowId itself, since a single recurring
+  /// window (e.g. "every Tuesday 10:00-14:00") backs many different
+  /// real dates, and slot CAPACITY is tracked per exact date, never per
+  /// window-in-general (see CheckoutReservationSlot's own comment for
+  /// the matching reservation-time counterpart). Null for PICKUP orders
+  /// and for any DELIVERY order not yet slotted.
+  scheduledDate   DateTime?                 @db.Date
+  /// Sprint 10 (RB-ORD-004): the six-digit pay-at-pickup verification
+  /// code, generated at checkout confirm for PICKUP orders only (null
+  /// for DELIVERY). Deliberately NOT enforced unique across branches or
+  /// even within one branch - it is a courtesy identifier staff read
+  /// alongside the customer's own name/phone (also shown), not a
+  /// security credential like an OTP, so a rare collision between two
+  /// concurrently-active pickups at the same branch is a minor UX
+  /// annoyance staff can already resolve via the name/phone shown next
+  /// to it, not a security issue worth a uniqueness-retry loop.
+  pickupCode      String?
+  /// Sprint 10 (RB-ORD-003, PDR-005): set only for an ONLINE-paid
+  /// BranchOrder, pointing at the ONE sandbox transaction that covers
+  /// every ONLINE BranchOrder in the same checkout. A plain (not
+  /// composite) FK - PaymentTransaction is scoped to the checkout/
+  /// CustomerOrder, not to any single vendor, so there is no tenant-
+  /// safety dimension to enforce here the way there is for
+  /// vendor-owned rows elsewhere in this schema. Null for COD.
+  paymentTransactionId String?
+  paymentTransaction PaymentTransaction?    @relation(fields: [paymentTransactionId], references: [id])
+  /// Sprint 10 (RB-ORD-002): the delivery address, set only for
+  /// DELIVERY orders (null for PICKUP). Plain FK - Address is
+  /// customer-scoped, not vendor-scoped, so there is no tenant
+  /// dimension to compose against, the same reasoning as
+  /// paymentTransactionId above.
+  addressId       String?
+  address         Address?                  @relation(fields: [addressId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   fulfilmentMethod FulfilmentMethod
   paymentMethod   BranchOrderPaymentMethod
   status          BranchOrderStatus         @default(PLACED)
@@ -1463,6 +1550,8 @@ model BranchOrder {
   @@index([vendorId, branchId])
   @@index([status])
   @@index([deliveryWindowId])
+  @@index([deliveryWindowId, scheduledDate])
+  @@index([paymentTransactionId])
   @@map("branch_orders")
 }
 
@@ -1517,6 +1606,7 @@ model DeliveryWindow {
 
   exceptions DeliveryWindowException[]
   branchOrders BranchOrder[]
+  checkoutReservationSlots CheckoutReservationSlot[]
 
   /// Backs DeliveryWindowException's own composite FK (vendorId,
   /// windowId) -> (vendorId, id).
@@ -1560,4 +1650,191 @@ model DeliveryWindowException {
   /// exception is PUT-by-id, not a second POST for the same date.
   @@unique([windowId, exceptionDate])
   @@map("delivery_window_exceptions")
+}
+
+// ============================================================
+// Sprint 10 (RB-ORD-002, RB-ORD-003, RB-ORD-004): real checkout,
+// sandbox payment, and pay-at-pickup codes. PDR-002/003/004/005/022/
+// 023/029. Explicitly OUT of scope: the full Orders UI, the Sent/
+// Delivered/customer-confirm lifecycle loop, notifications, returns,
+// and cancellation/failed-delivery workflows (all Sprint 11 -
+// FR-FUL-008/009's later states, PDR-025 through PDR-028).
+//
+// The 10-minute reservation (RB-ORD-002) is a REAL, DB-backed hold -
+// not just a signed quote that expires client-side. Reviewed and
+// corrected before implementation: a stateless "price/selection was
+// valid when you looked" token alone does not reserve anything, so two
+// checkouts could both see valid availability for the same last unit/
+// slot and only one would succeed at confirm - a broken promise, not a
+// reservation. See CheckoutReservation's own comment for the actual
+// design, and BranchStock.reservedQuantity's own comment for why every
+// stock-decrementing path (not just checkout) has to respect it.
+// ============================================================
+
+// PDR-022's zone/fee model is NOT redefined here - Sprint 5 already
+// built VendorDeliveryZone/DeliveryZoneRegion (RB-STORE-002), explicitly
+// deferring only the fee amount to this sprint (see VendorDeliveryZone's
+// own comment, now amended with the `fee` field, and
+// VendorsController.listDeliveryZones/updateDeliveryZone). Discovered
+// via a genuine route collision during e2e testing - an earlier draft
+// of this sprint's work mistakenly created a parallel DeliveryZone
+// enum/VendorDeliveryZoneSetting model and controller before finding
+// the existing one; that duplicate has been removed.
+
+/// PDR-002/003: a signed-in customer's server-side cart, persisted
+/// across devices - fulfilment is deliberately NOT chosen here (no
+/// branch/pickup/delivery field on this model at all); the customer
+/// only selects WHICH lines to buy at checkout time (RB-ORD-002),
+/// forming BranchOrders from that selection. No guest cart exists
+/// anywhere in this schema - PDR-002 restricts cart/checkout to signed-
+/// in customers only, enforced at the controller (SessionAuthGuard),
+/// not modeled here.
+model CartItem {
+  id             String       @id @default(uuid())
+  customerId     String
+  customer       CustomerProfile @relation(fields: [customerId], references: [id])
+  vendorId       String
+  offerVariantId String
+  /// Composite FK (vendorId, offerVariantId) -> OfferVariant(vendorId,
+  /// id) - same tenant-safety pattern this schema already uses
+  /// everywhere a row references a vendor-owned OfferVariant.
+  offerVariant   OfferVariant @relation(fields: [vendorId, offerVariantId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  quantity       Int
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  /// One cart line per (customer, variant) - adding an already-present
+  /// variant again updates quantity, never creates a duplicate row.
+  @@unique([customerId, vendorId, offerVariantId])
+  @@index([customerId])
+  @@map("cart_items")
+}
+
+enum PaymentTransactionStatus {
+  SUCCEEDED
+  FAILED
+}
+
+/// PDR-005/RB-ORD-003: "Online-paid BranchOrders in the same checkout
+/// are charged through one sandbox electronic transaction." One row
+/// per checkout that has at least one ONLINE BranchOrder - COD/pay-at-
+/// pickup BranchOrders in the same checkout never reference one (see
+/// BranchOrder.paymentTransactionId's own comment). `amount` is the
+/// sum of exactly those ONLINE BranchOrders' own totals - never mixed
+/// with COD amounts (PDR-001: ILS-only, no cross-currency or cross-
+/// payment-method pooling). sandboxReference is a mock reference
+/// string only - there is no real payment gateway anywhere in this
+/// codebase (RB-ORD-003: "no gateway حقيقي ولا أسرار دفع ولا تكامل
+/// خارجي").
+model PaymentTransaction {
+  id               String                    @id @default(uuid())
+  customerOrderId  String
+  customerOrder    CustomerOrder             @relation(fields: [customerOrderId], references: [id])
+  amount           Decimal                   @db.Decimal(10, 2)
+  status           PaymentTransactionStatus
+  sandboxReference String
+  createdAt        DateTime                  @default(now())
+
+  branchOrders BranchOrder[]
+
+  @@index([customerOrderId])
+  @@map("payment_transactions")
+}
+
+/// RB-ORD-002's real, DB-backed 10-minute hold - see this section's own
+/// top comment for why a stateless token alone is not a reservation.
+/// One row per checkout attempt (POST /checkout/reserve), owned by
+/// exactly one customer, expiring exactly 10 minutes after creation
+/// with no renewal. Expiry is purely LAZY: nothing ever runs on a
+/// timer to clean these up (this codebase has no scheduled-job
+/// infrastructure, the same honestly-documented gap as every other
+/// deferred cron-like feature here) - an expired reservation simply
+/// stops counting toward "currently held" the next time ANY
+/// reserve/confirm/cancel touches the same stock row or delivery-slot
+/// date under that operation's own lock, and is deleted at that point
+/// (see CheckoutService's own comments for the exact sweep). A
+/// reservation converts into real BranchOrders atomically at confirm
+/// (this row and its items/slots are deleted in the same transaction
+/// that creates the orders), or is explicitly released early via
+/// POST /checkout/reservations/:id/cancel (idempotent - releasing an
+/// already-gone reservation is a no-op success, not an error).
+model CheckoutReservation {
+  id         String   @id @default(uuid())
+  customerId String
+  customer   CustomerProfile @relation(fields: [customerId], references: [id])
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  items CheckoutReservationItem[]
+  slots CheckoutReservationSlot[]
+
+  @@index([customerId])
+  @@index([expiresAt])
+  @@map("checkout_reservations")
+}
+
+/// One held quantity of one variant at one branch. Two composite FKs
+/// sharing vendorId (to StoreBranch and to OfferVariant) - the same
+/// established tenant-safety pattern as BranchOrderItem - rather than a
+/// single FK to BranchStock itself, since BranchStock's own unique key
+/// (branchId, offerVariantId) doesn't include vendorId; going through
+/// StoreBranch/OfferVariant's own vendorId-inclusive unique keys gives
+/// the identical tenant-safety guarantee without needing a new
+/// constraint on BranchStock. unitPriceAtReserve is compared against
+/// the CURRENT price at confirm time - a mismatch is surfaced to the
+/// customer as an explicit price-change error, never silently charged.
+/// fulfilmentMethod/paymentMethod are repeated on every item row of
+/// the same (vendorId, branchId) group (PDR-004: one branch = one
+/// fulfilment method = one payment choice, so every item in that group
+/// always agrees) - a deliberate denormalization rather than a
+/// separate "reservation group" table, so confirm() can reconstruct
+/// each BranchOrder-to-be directly from the items it already has to
+/// read, without a third table whose only job would be mapping.
+model CheckoutReservationItem {
+  id             String   @id @default(uuid())
+  reservationId  String
+  reservation    CheckoutReservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  vendorId       String
+  branchId       String
+  branch         StoreBranch  @relation(fields: [vendorId, branchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  offerVariantId String
+  offerVariant   OfferVariant @relation(fields: [vendorId, offerVariantId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  quantity       Int
+  unitPriceAtReserve Decimal  @db.Decimal(10, 2)
+  fulfilmentMethod FulfilmentMethod
+  paymentMethod  BranchOrderPaymentMethod
+  createdAt      DateTime @default(now())
+
+  @@index([vendorId, branchId, offerVariantId])
+  @@map("checkout_reservation_items")
+}
+
+/// One held unit of capacity on one (deliveryWindowId, scheduledDate)
+/// pair - the date is part of the hold itself, never a bare reference
+/// to the recurring window (matching BranchOrder.scheduledDate's own
+/// reasoning: a weekly-recurring window backs many different real
+/// dates, and capacity is a per-date fact). Composite FK to
+/// DeliveryWindow's own (vendorId, branchId, id) target - the same
+/// tenant/branch-safe FK BranchOrder.deliveryWindow already uses.
+/// deliveryFeeAtReserve mirrors CheckoutReservationItem's own
+/// unitPriceAtReserve - re-validated at confirm, never silently
+/// re-priced if the vendor changes their zone fee mid-checkout.
+model CheckoutReservationSlot {
+  id               String   @id @default(uuid())
+  reservationId    String
+  reservation      CheckoutReservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  vendorId         String
+  branchId         String
+  deliveryWindowId String
+  deliveryWindow   DeliveryWindow @relation(fields: [vendorId, branchId, deliveryWindowId], references: [vendorId, branchId, id], onDelete: Restrict, onUpdate: Cascade)
+  scheduledDate    DateTime @db.Date
+  deliveryFeeAtReserve Decimal @db.Decimal(10, 2)
+  /// The address this slot's eventual BranchOrder will deliver to -
+  /// also how confirm() re-derives the zone to re-validate
+  /// deliveryFeeAtReserve against the vendor's CURRENT fee.
+  addressId        String
+  address          Address  @relation(fields: [addressId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([deliveryWindowId, scheduledDate])
+  @@map("checkout_reservation_slots")
 }

@@ -216,12 +216,24 @@ export class InventoryController {
         VALUES (${newStockId}, ${vendorId}, ${branchId}, ${offerVariantId}, 0, now(), now())
         ON CONFLICT ("branchId", "offerVariantId") DO NOTHING
       `;
+      // Sprint 10 (RB-ORD-002): the "- reservedQuantity" guard is the
+      // reason a customer's 10-minute checkout hold is a REAL
+      // guarantee - without it, this physical/manual movement (the
+      // only other writer of branch_stock.quantity in this codebase)
+      // could sell stock a live online reservation is already holding,
+      // and that checkout's own confirm step would only discover the
+      // shortfall later. The guard is a no-op for every INCREASE
+      // (quantity_delta > 0): quantity already >= reservedQuantity by
+      // this table's own CHECK invariant, so adding a positive delta
+      // can never make the condition false - restocking is never
+      // blocked. See BranchStock.reservedQuantity's own schema.prisma
+      // comment for the full design.
       const updated = await tx.$queryRaw<{ id: string; quantity: number }[]>`
         UPDATE branch_stock
         SET quantity = quantity + ${dto.quantity_delta}, "updatedAt" = now()
         WHERE "branchId" = ${branchId}
           AND "offerVariantId" = ${offerVariantId}
-          AND quantity + ${dto.quantity_delta} >= 0
+          AND quantity + ${dto.quantity_delta} - "reservedQuantity" >= 0
         RETURNING id, quantity
       `;
       if (updated.length === 0) {

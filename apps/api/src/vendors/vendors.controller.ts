@@ -725,11 +725,18 @@ export class VendorsController {
     const rows = await this.prisma.vendorDeliveryZone.findMany({
       where: { vendorId },
     });
-    const byRegion = new Map(rows.map((r) => [r.region, r.enabled]));
-    return ALL_DELIVERY_ZONE_REGIONS.map((region) => ({
-      region,
-      enabled: byRegion.get(region) ?? true,
-    }));
+    const byRegion = new Map(rows.map((r) => [r.region, r]));
+    return ALL_DELIVERY_ZONE_REGIONS.map((region) => {
+      const row = byRegion.get(region);
+      return {
+        region,
+        enabled: row?.enabled ?? true,
+        // Sprint 10 (RB-ORD-003): null until an owner explicitly sets
+        // one - never defaulted, since checkout must never charge (or
+        // silently waive) a fee nobody actually configured.
+        fee: row?.fee != null ? Number(row.fee) : null,
+      };
+    });
   }
 
   // Owner-only write (store-wide delivery configuration, PDR-009).
@@ -753,10 +760,21 @@ export class VendorsController {
     }
     const typedRegion = region as DeliveryZoneRegion;
 
+    // dto.fee omitted -> leave any previously-set fee untouched (a
+    // toggle of `enabled` alone must never silently wipe out a price
+    // the owner already configured).
     const zone = await this.prisma.vendorDeliveryZone.upsert({
       where: { vendorId_region: { vendorId, region: typedRegion } },
-      create: { vendorId, region: typedRegion, enabled: dto.enabled },
-      update: { enabled: dto.enabled },
+      create: {
+        vendorId,
+        region: typedRegion,
+        enabled: dto.enabled,
+        fee: dto.fee,
+      },
+      update: {
+        enabled: dto.enabled,
+        ...(dto.fee !== undefined ? { fee: dto.fee } : {}),
+      },
     });
     await this.auditLog.record({
       actorId: user.id,
@@ -764,8 +782,16 @@ export class VendorsController {
       action: 'vendor_delivery_zone.updated',
       entityType: 'VendorDeliveryZone',
       entityId: zone.id,
-      afterState: { region: zone.region, enabled: zone.enabled },
+      afterState: {
+        region: zone.region,
+        enabled: zone.enabled,
+        fee: zone.fee != null ? Number(zone.fee) : null,
+      },
     });
-    return { region: zone.region, enabled: zone.enabled };
+    return {
+      region: zone.region,
+      enabled: zone.enabled,
+      fee: zone.fee != null ? Number(zone.fee) : null,
+    };
   }
 }

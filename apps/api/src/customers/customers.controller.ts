@@ -56,6 +56,7 @@ export class CustomersController {
         landmarkNote: dto.landmark_note,
         phoneNumber1: dto.phone_number_1,
         phoneNumber2: dto.phone_number_2,
+        zone: dto.zone,
       },
     });
 
@@ -72,14 +73,43 @@ export class CustomersController {
       },
     });
 
-    return {
-      id: address.id,
-      label: address.label,
-      lat: address.lat,
-      lng: address.lng,
-      landmark_note: address.landmarkNote,
-      phone_number_1: address.phoneNumber1,
-      phone_number_2: address.phoneNumber2,
-    };
+    return addressDto(address);
   }
+
+  // Sprint 10 (RB-ORD-002): checkout needs the customer to pick a
+  // saved address - a minimal LIST, not the full edit/delete
+  // management screen BL-AUTH-004b still defers past FYP Must scope.
+  @Get('addresses')
+  async listAddresses(@CurrentUser() user: AuthenticatedUser) {
+    const profile = await this.prisma.customerProfile.findUniqueOrThrow({
+      where: { userId: user.id },
+    });
+    const addresses = await this.prisma.address.findMany({
+      where: { customerId: profile.id },
+      orderBy: { createdAt: 'desc' },
+    });
+    return addresses.map(addressDto);
+  }
+}
+
+function addressDto(address: {
+  id: string;
+  label: string | null;
+  lat: number;
+  lng: number;
+  landmarkNote: string | null;
+  phoneNumber1: string;
+  phoneNumber2: string | null;
+  zone: string | null;
+}) {
+  return {
+    id: address.id,
+    label: address.label,
+    lat: address.lat,
+    lng: address.lng,
+    landmark_note: address.landmarkNote,
+    phone_number_1: address.phoneNumber1,
+    phone_number_2: address.phoneNumber2,
+    zone: address.zone,
+  };
 }
