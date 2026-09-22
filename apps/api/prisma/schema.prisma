@@ -74,6 +74,7 @@ model CustomerProfile {
   displayName String?
 
   addresses Address[]
+  orders    CustomerOrder[]
 
   @@map("customer_profiles")
 }
@@ -297,6 +298,8 @@ model Vendor {
   importIdentifierRecords ImportIdentifierRecord[]
   applicableCategories   VendorApplicableCategory[]
   storeSections          StoreSection[]
+  branchOrders           BranchOrder[]
+  deliveryWindows        DeliveryWindow[]
 
   @@map("vendors")
 }
@@ -458,6 +461,8 @@ model StoreBranch {
   staffInvites   StaffInvite[]
   branchStocks   BranchStock[]
   stockMovements StockMovement[]
+  branchOrders   BranchOrder[]
+  deliveryWindows DeliveryWindow[]
 
   /// Backs the composite FKs on VendorUser/StaffInvite (vendorId,
   /// branchId) -> (vendorId, id) - a plain PK-only unique on `id`
@@ -1000,6 +1005,7 @@ model OfferVariant {
   stockMovements         StockMovement[]
   media                  OfferVariantMedia[]
   matchReviewCandidates  MatchReviewCandidate[]
+  branchOrderItems       BranchOrderItem[]
 
   @@unique([vendorId, sellerSku])
   @@unique([vendorId, storeInventoryBarcode])
@@ -1317,4 +1323,222 @@ model StoreSectionOffer {
   @@unique([sectionId, offerId])
   @@index([vendorId, offerId])
   @@map("store_section_offers")
+}
+
+// ============================================================
+// Sprint 9 (RB-ORD-001): BranchOrder data model + state machine.
+// Checkout, real order creation, payment processing, pickup codes and
+// the Orders UI are explicitly OUT of scope this sprint (RB-ORD-002/
+// 003/004/005, Sprints 10-11) - nothing here is ever written by any
+// HTTP endpoint yet. This is schema plus a tested, standalone state-
+// machine service (see src/orders/branch-order-state-machine.ts and
+// branch-order.service.ts) that Sprint 10's checkout will call once it
+// exists. No stock is decremented or reserved by anything in this
+// sprint (RB-ORD-002's own job).
+// ============================================================
+
+/// PDR-004/BR-028: "A checkout has one parent CustomerOrder and one or
+/// more BranchOrders." Deliberately minimal this sprint - no totals,
+/// no payment reference, nothing checkout (Sprint 10) would compute -
+/// just the grouping parent shape RB-ORD-001 asks for.
+model CustomerOrder {
+  id         String   @id @default(uuid())
+  customerId String
+  customer   CustomerProfile @relation(fields: [customerId], references: [id])
+  createdAt  DateTime @default(now())
+
+  branchOrders BranchOrder[]
+
+  @@index([customerId])
+  @@map("customer_orders")
+}
+
+/// PDR-004: "the operational unit - fulfilled by the same physical
+/// branch, one fulfilment method, one delivery fee where relevant, one
+/// status flow, one payment choice."
+enum FulfilmentMethod {
+  PICKUP
+  DELIVERY
+}
+
+/// PDR-005: online-paid vs COD/pay-at-pickup - which sandbox payment
+/// path a BranchOrder will use once RB-ORD-003 (Sprint 10) actually
+/// implements either. No FX, ILS only (PDR-001/005).
+enum BranchOrderPaymentMethod {
+  ONLINE
+  COD
+}
+
+/// Sprint 9 (RB-ORD-001): there is no pre-existing BranchOrder state
+/// enum anywhere in the SRS to reuse - the only state machine on record
+/// (VendorSuborder, docs/srs/03-business-rules-data-model.md's own
+/// stateDiagram) is explicitly superseded (FR-ORD-009). This is
+/// synthesized from the NEW PDR text (PDR-025 through PDR-029) and
+/// FR-FUL-008/009, not copied from an authoritative enum - see
+/// branch-order-state-machine.ts for the full transition graph this
+/// enum drives and the exact PDR line each transition cites.
+enum BranchOrderStatus {
+  /// Exists, awaiting the branch to act. Nothing creates this state yet
+  /// (Sprint 10's checkout will) - the initial value every future row
+  /// starts at.
+  PLACED
+  /// FR-FUL-009: "Branch staff explicitly starts preparation."
+  PREPARING
+  /// DELIVERY only - FR-FUL-009: "marks Sent on courier hand-off."
+  SENT
+  /// DELIVERY only - FR-FUL-009/PDR-026: "marks Delivered after
+  /// external confirmation" (the courier told them, not the customer).
+  DELIVERED
+  /// PICKUP only - the pickup-handover action (docs/srs/04-api-
+  /// integration-nfr.md's own action list: "pickup handover").
+  PICKED_UP
+  /// PDR-026: customer confirms receipt in the Orders UI, or the 72h
+  /// auto-confirm fires (neither exists yet - Sprint 11, RB-FUL-002/
+  /// 003) - terminal success. For PICKUP, handover IS confirmation
+  /// (PDR-026's confirm step is written for delivery specifically); see
+  /// branch-order-state-machine.ts for why PICKED_UP -> COMPLETED is a
+  /// direct, always-legal transition.
+  COMPLETED
+  /// PDR-028: before preparation (customer-initiated) or after prep but
+  /// before Sent (staff-initiated, after external contact) - "once
+  /// Sent, neither side self-cancels in-app," so this is unreachable
+  /// from SENT/DELIVERED/PICKED_UP/COMPLETED by design (enforced by the
+  /// transition graph, not just convention).
+  CANCELLED
+  /// PDR-025's unprepared-at-slot auto-refund path for an ONLINE
+  /// BranchOrder - the state exists so the graph is complete, but
+  /// nothing triggers it automatically yet (no scheduled-job
+  /// infrastructure exists in this codebase, the same honestly-
+  /// documented gap as every other "would need a cron worker" feature
+  /// here) - reachable only via an explicit, manual transition call
+  /// until a future sprint wires the real trigger.
+  REFUNDED
+}
+
+/// PDR-004: "all selected items ... travel together." Composite FKs on
+/// vendorId for BOTH the branch-order and offer-variant relations - the
+/// same tenant-safety pattern this schema already applies everywhere a
+/// row spans two vendor-owned tables (e.g. BranchStock) - so a raw SQL
+/// write can never attach vendor A's branch order to vendor B's offer
+/// variant, or vice versa.
+model BranchOrder {
+  id              String                    @id @default(uuid())
+  customerOrderId String
+  customerOrder   CustomerOrder             @relation(fields: [customerOrderId], references: [id])
+  vendorId        String
+  vendor          Vendor                    @relation(fields: [vendorId], references: [id])
+  branchId        String
+  branch          StoreBranch               @relation(fields: [vendorId, branchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  fulfilmentMethod FulfilmentMethod
+  paymentMethod   BranchOrderPaymentMethod
+  status          BranchOrderStatus         @default(PLACED)
+  /// Sum of this BranchOrder's own items only (PDR-001: ILS-only, no
+  /// FX). Computed by Sprint 10's checkout, not anything in this
+  /// sprint.
+  subtotal        Decimal                   @db.Decimal(10, 2)
+  /// Null for PICKUP (PDR-022: delivery fees are store-wide by region -
+  /// computed by checkout, not stored as a flat default here).
+  deliveryFee     Decimal?                  @db.Decimal(10, 2)
+  total           Decimal                   @db.Decimal(10, 2)
+  createdAt       DateTime                  @default(now())
+  updatedAt       DateTime                  @updatedAt
+
+  items BranchOrderItem[]
+
+  /// Backs BranchOrderItem's own composite FK (vendorId,
+  /// branchOrderId) -> (vendorId, id).
+  @@unique([vendorId, id])
+  @@index([customerOrderId])
+  @@index([vendorId, branchId])
+  @@index([status])
+  @@map("branch_orders")
+}
+
+model BranchOrderItem {
+  id             String      @id @default(uuid())
+  vendorId       String
+  branchOrderId  String
+  branchOrder    BranchOrder @relation(fields: [vendorId, branchOrderId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  offerVariantId String
+  offerVariant   OfferVariant @relation(fields: [vendorId, offerVariantId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  quantity       Int
+  /// Snapshot of OfferVariant.basePrice/salePrice at order time - never
+  /// re-read live, so a later price change never rewrites history.
+  unitPrice      Decimal     @db.Decimal(10, 2)
+  createdAt      DateTime    @default(now())
+
+  @@index([branchOrderId])
+  @@map("branch_order_items")
+}
+
+// ============================================================
+// Sprint 9 (RB-FUL-001): branch delivery-slot calendar SETUP only.
+// PDR-024: "Delivery slot calendars belong to branches. Slots have
+// configurable non-overlapping start/end times, capacity, normal hours
+// and exceptions." The customer-facing next-3-days slot PICKER and the
+// 10-minute reservation hold are RB-ORD-002 (Sprint 10, which "reserves
+// a slot on RB-FUL-001's calendar" per the replan's own binding-order
+// note) - nothing here is ever read by a customer-facing endpoint yet.
+// ============================================================
+
+/// A recurring weekly template ("normal hours" per PDR-024) - e.g.
+/// "every Tuesday, 10:00-14:00, capacity 5." dayOfWeek: 0=Sunday..
+/// 6=Saturday (this platform's own week-start convention, matching
+/// common Palestine/Middle-East usage - documented explicitly since
+/// Prisma/Postgres have no implicit day-of-week convention of their
+/// own). start/endMinute are minutes-since-midnight (0-1439/1-1440) -
+/// deliberately plain integers, not a "HH:MM" string, so overlap
+/// comparison (both the app-level pre-check and the DB-level EXCLUDE
+/// constraint below) is exact integer-range math, never string/
+/// timezone-parsing-dependent.
+model DeliveryWindow {
+  id          String   @id @default(uuid())
+  vendorId    String
+  vendor      Vendor   @relation(fields: [vendorId], references: [id])
+  branchId    String
+  branch      StoreBranch @relation(fields: [vendorId, branchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  dayOfWeek   Int
+  startMinute Int
+  endMinute   Int
+  capacity    Int
+  createdAt   DateTime @default(now())
+
+  exceptions DeliveryWindowException[]
+
+  /// Backs DeliveryWindowException's own composite FK (vendorId,
+  /// windowId) -> (vendorId, id).
+  @@unique([vendorId, id])
+  @@index([vendorId, branchId, dayOfWeek])
+  /// PDR-024's "non-overlapping" requirement, enforced ATOMICALLY at the
+  /// DB level (this migration's own hand-written SQL adds a
+  /// btree_gist-backed EXCLUDE constraint on (branchId, dayOfWeek,
+  /// int4range(startMinute, endMinute))) - not representable via
+  /// Prisma's schema DSL, the same already-established pattern this
+  /// schema uses for every constraint Prisma's DSL can't express (e.g.
+  /// StaffInvite's partial unique index). The application layer also
+  /// pre-checks under a per-(vendorId, branchId) advisory lock for a
+  /// clean 409 in the common case, but the EXCLUDE constraint is the
+  /// real, unconditional guarantee - "لا تعتمد على تحقق الواجهة."
+  @@map("delivery_windows")
+}
+
+/// PDR-024's "exceptions" - a dated override for one specific calendar
+/// date: either a full closure (isClosed) or a capacity override for
+/// that one date (e.g. reduced capacity for a holiday) - never both
+/// meaningfully at once, validated in the controller (a closed
+/// exception's capacityOverride is always null).
+model DeliveryWindowException {
+  id               String   @id @default(uuid())
+  vendorId         String
+  windowId         String
+  window           DeliveryWindow @relation(fields: [vendorId, windowId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  exceptionDate    DateTime @db.Date
+  isClosed         Boolean  @default(false)
+  capacityOverride Int?
+  createdAt        DateTime @default(now())
+
+  /// At most one exception per (window, date) - editing an existing
+  /// exception is PUT-by-id, not a second POST for the same date.
+  @@unique([windowId, exceptionDate])
+  @@map("delivery_window_exceptions")
 }
