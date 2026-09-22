@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { apiFetch, ApiError } from "@/lib/api";
+import { apiFetch, ApiError, newIdempotencyKey } from "@/lib/api";
 import { clearSession, getSessionToken } from "@/lib/session";
 
 interface QuoteItem {
@@ -88,6 +88,12 @@ export default function CheckoutPage() {
   const [busy, setBusy] = useState(false);
   const [reservation, setReservation] = useState<ReserveResponse | null>(null);
   const [expiresInMinutes, setExpiresInMinutes] = useState(0);
+  // Generated once per reservation, not per confirm() call - a
+  // double-click or network retry of the SAME confirm attempt must
+  // reuse the same key so the backend's IdempotencyInterceptor can
+  // recognize and safely replay it, rather than treating each retry
+  // as a brand-new request.
+  const [confirmIdempotencyKey, setConfirmIdempotencyKey] = useState("");
   const [confirmed, setConfirmed] = useState<ConfirmedBranchOrder[] | null>(null);
 
   function groupKey(g: QuoteGroup): string {
@@ -172,11 +178,13 @@ export default function CheckoutPage() {
       const res = await apiFetch<ReserveResponse>("/checkout/reserve", {
         method: "POST",
         body: { groups },
+        idempotencyKey: newIdempotencyKey("checkout-reserve"),
       });
       setReservation(res);
       setExpiresInMinutes(
         Math.max(0, Math.round((new Date(res.expires_at).getTime() - Date.now()) / 60000)),
       );
+      setConfirmIdempotencyKey(newIdempotencyKey("checkout-confirm"));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "تعذّر حجز الطلب");
     } finally {
@@ -191,7 +199,11 @@ export default function CheckoutPage() {
     try {
       const res = await apiFetch<{ branch_orders: ConfirmedBranchOrder[] }>(
         "/checkout/confirm",
-        { method: "POST", body: { reservation_id: reservation.reservation_id } },
+        {
+          method: "POST",
+          body: { reservation_id: reservation.reservation_id },
+          idempotencyKey: confirmIdempotencyKey,
+        },
       );
       setConfirmed(res.branch_orders);
       sessionStorage.removeItem("checkout_cart_item_ids");

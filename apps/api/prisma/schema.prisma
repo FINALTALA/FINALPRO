@@ -1502,14 +1502,19 @@ model BranchOrder {
   /// and for any DELIVERY order not yet slotted.
   scheduledDate   DateTime?                 @db.Date
   /// Sprint 10 (RB-ORD-004): the six-digit pay-at-pickup verification
-  /// code, generated at checkout confirm for PICKUP orders only (null
-  /// for DELIVERY). Deliberately NOT enforced unique across branches or
-  /// even within one branch - it is a courtesy identifier staff read
-  /// alongside the customer's own name/phone (also shown), not a
-  /// security credential like an OTP, so a rare collision between two
-  /// concurrently-active pickups at the same branch is a minor UX
-  /// annoyance staff can already resolve via the name/phone shown next
-  /// to it, not a security issue worth a uniqueness-retry loop.
+  /// code, generated (with a bounded retry-on-collision loop) at
+  /// checkout confirm for PICKUP orders only (null for DELIVERY).
+  /// Codex review round 1 on commit d0ea80d: an earlier version of this
+  /// comment argued uniqueness didn't matter since staff also see
+  /// name/phone - but a staff member scanning/matching by code alone
+  /// (the actual pickup workflow) genuinely cannot disambiguate two
+  /// simultaneously-active identical codes at the same branch, so this
+  /// migration adds a hand-written PARTIAL unique index on (branchId,
+  /// pickupCode) - scoped to fulfilmentMethod = PICKUP and a
+  /// non-terminal status, not representable via Prisma's schema DSL
+  /// (same already-established pattern as e.g. StaffInvite's own
+  /// partial unique index). A terminal order's code is free to be
+  /// reused by a later active one.
   pickupCode      String?
   /// Sprint 10 (RB-ORD-003, PDR-005): set only for an ONLINE-paid
   /// BranchOrder, pointing at the ONE sandbox transaction that covers
@@ -1703,6 +1708,8 @@ model CartItem {
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
+  checkoutReservationItems CheckoutReservationItem[]
+
   /// One cart line per (customer, variant) - adding an already-present
   /// variant again updates quantity, never creates a duplicate row.
   @@unique([customerId, vendorId, offerVariantId])
@@ -1804,6 +1811,20 @@ model CheckoutReservationItem {
   fulfilmentMethod FulfilmentMethod
   paymentMethod  BranchOrderPaymentMethod
   createdAt      DateTime @default(now())
+  /// Codex review round 1 on commit d0ea80d: confirm() previously
+  /// removed a purchased cart LINE by matching (customerId, vendorId,
+  /// offerVariantId), which deletes the whole line even if the
+  /// customer raised its quantity during the 10-minute hold - losing
+  /// the extra, never-reserved units. Tracking the exact source
+  /// CartItem lets confirm() decrement only the reserved amount from
+  /// that specific row (deleting it only once it reaches zero).
+  /// Nullable + SET NULL (not RESTRICT/CASCADE): the customer may
+  /// still freely edit or delete this cart line during the hold - if
+  /// it's gone by confirm time, there's nothing left to reconcile, and
+  /// that must never block or fail the checkout itself (the stock hold
+  /// is authoritative, not the cart).
+  cartItemId     String?
+  cartItem       CartItem? @relation(fields: [cartItemId], references: [id], onDelete: SetNull, onUpdate: Cascade)
 
   @@index([vendorId, branchId, offerVariantId])
   @@map("checkout_reservation_items")

@@ -22,6 +22,7 @@ import {
 import { VendorMembershipGuard } from '../auth/vendor-membership.guard';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
+import { lockAndSweepStockRow } from '../checkout/stock-lock.util';
 import { OutboxEventService } from '../outbox/outbox-event.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateStockMovementDto } from './dto/create-stock-movement.dto';
@@ -216,18 +217,23 @@ export class InventoryController {
         VALUES (${newStockId}, ${vendorId}, ${branchId}, ${offerVariantId}, 0, now(), now())
         ON CONFLICT ("branchId", "offerVariantId") DO NOTHING
       `;
-      // Sprint 10 (RB-ORD-002): the "- reservedQuantity" guard is the
-      // reason a customer's 10-minute checkout hold is a REAL
-      // guarantee - without it, this physical/manual movement (the
-      // only other writer of branch_stock.quantity in this codebase)
-      // could sell stock a live online reservation is already holding,
-      // and that checkout's own confirm step would only discover the
-      // shortfall later. The guard is a no-op for every INCREASE
-      // (quantity_delta > 0): quantity already >= reservedQuantity by
-      // this table's own CHECK invariant, so adding a positive delta
-      // can never make the condition false - restocking is never
-      // blocked. See BranchStock.reservedQuantity's own schema.prisma
-      // comment for the full design.
+      // Codex review round 2 on commit d0ea80d: the "- reservedQuantity"
+      // guard below is only correct against a FRESH reservedQuantity -
+      // a hold that expired 10 minutes ago but was never swept (because
+      // nobody has since tried to RE-reserve against this exact row)
+      // would otherwise sit there blocking a legitimate physical sale
+      // indefinitely, which is not what "lazy expiry" is supposed to
+      // mean. lockAndSweepStockRow() locks this row and releases any
+      // expired holds on it - the same shared primitive reserve() uses
+      // - before the conditional UPDATE below even runs, so this sale
+      // is judged against the TRUE current hold, not a stale one.
+      await lockAndSweepStockRow(tx, vendorId, branchId, offerVariantId);
+      // The guard is a no-op for every INCREASE (quantity_delta > 0):
+      // quantity already >= reservedQuantity by this table's own CHECK
+      // invariant, so adding a positive delta can never make the
+      // condition false - restocking is never blocked. See
+      // BranchStock.reservedQuantity's own schema.prisma comment for
+      // the full design.
       const updated = await tx.$queryRaw<{ id: string; quantity: number }[]>`
         UPDATE branch_stock
         SET quantity = quantity + ${dto.quantity_delta}, "updatedAt" = now()

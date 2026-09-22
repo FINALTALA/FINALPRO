@@ -7,14 +7,21 @@ import {
   Param,
   Post,
   Put,
+  Req,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { Request } from 'express';
 import { CurrentUser } from '../auth/current-user.decorator';
 import {
   AuthenticatedUser,
   SessionAuthGuard,
 } from '../auth/session-auth.guard';
+import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
+import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
+import { assertItemsPurchasable } from '../checkout/purchase-eligibility.util';
+import { SubscriptionGateService } from '../subscriptions/subscription-gate.service';
 import { AddCartItemDto } from './dto/add-cart-item.dto';
 import { UpdateCartItemDto } from './dto/update-cart-item.dto';
 
@@ -54,7 +61,11 @@ function cartItemDto(item: {
 @Controller('cart')
 @UseGuards(SessionAuthGuard)
 export class CartController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly subscriptionGate: SubscriptionGateService,
+    private readonly idempotencyCompletion: IdempotencyCompletionService,
+  ) {}
 
   private async requireCustomerId(user: AuthenticatedUser): Promise<string> {
     const profile = await this.prisma.customerProfile.findUniqueOrThrow({
@@ -90,10 +101,20 @@ export class CartController {
   // Adding an already-present (customer, vendor, variant) line
   // increments its quantity rather than creating a duplicate row - the
   // model's own @@unique enforces this is the only possible outcome.
+  // Codex review round 2 on commit d0ea80d:
+  //  - eligibility (offer/vendor/subscription state) is now checked
+  //    here too, not just at checkout - reusing the exact same
+  //    predicate quote/reserve/confirm use (assertItemsPurchasable).
+  //  - IdempotencyInterceptor + recording completion inside the same
+  //    transaction, so a network retry can never double the quantity -
+  //    the exact bug flagged in review (a plain upsert's own
+  //    `increment` is NOT naturally idempotent on retry).
   @Post('items')
+  @UseInterceptors(IdempotencyInterceptor)
   async addItem(
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: AddCartItemDto,
+    @Req() req: Request,
   ) {
     const customerId = await this.requireCustomerId(user);
     const variant = await this.prisma.offerVariant.findUnique({
@@ -106,24 +127,40 @@ export class CartController {
       });
     }
 
-    const item = await this.prisma.cartItem.upsert({
-      where: {
-        customerId_vendorId_offerVariantId: {
+    const responseBody = await this.prisma.$transaction(async (tx) => {
+      await assertItemsPurchasable(
+        tx,
+        this.subscriptionGate,
+        req.correlationId,
+        [{ vendorId: dto.vendor_id, offerVariantId: dto.offer_variant_id }],
+      );
+      const item = await tx.cartItem.upsert({
+        where: {
+          customerId_vendorId_offerVariantId: {
+            customerId,
+            vendorId: dto.vendor_id,
+            offerVariantId: dto.offer_variant_id,
+          },
+        },
+        create: {
           customerId,
           vendorId: dto.vendor_id,
           offerVariantId: dto.offer_variant_id,
+          quantity: dto.quantity,
         },
-      },
-      create: {
-        customerId,
-        vendorId: dto.vendor_id,
-        offerVariantId: dto.offer_variant_id,
-        quantity: dto.quantity,
-      },
-      update: { quantity: { increment: dto.quantity } },
-      include: this.itemInclude(),
+        update: { quantity: { increment: dto.quantity } },
+        include: this.itemInclude(),
+      });
+      const body = cartItemDto(item);
+      await this.idempotencyCompletion.complete(
+        tx,
+        req.idempotencyClaimId,
+        body,
+        201,
+      );
+      return body;
     });
-    return cartItemDto(item);
+    return responseBody;
   }
 
   @Put('items/:id')

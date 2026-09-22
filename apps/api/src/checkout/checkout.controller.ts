@@ -1,10 +1,19 @@
-import { Body, Controller, Param, Post, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Param,
+  Post,
+  Req,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
 import { Request } from 'express';
 import { CurrentUser } from '../auth/current-user.decorator';
 import {
   AuthenticatedUser,
   SessionAuthGuard,
 } from '../auth/session-auth.guard';
+import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
 import { CheckoutService } from './checkout.service';
 import { ConfirmCheckoutDto } from './dto/confirm-checkout.dto';
@@ -33,21 +42,37 @@ export class CheckoutController {
   async quote(
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: QuoteCheckoutDto,
+    @Req() req: Request,
   ) {
     const customerId = await this.requireCustomerId(user);
-    return this.checkoutService.quote(customerId, dto);
+    return this.checkoutService.quote(customerId, dto, req.correlationId);
   }
 
+  // Codex review round 2 on commit d0ea80d: a network retry with the
+  // same Idempotency-Key must never create a second reservation -
+  // IdempotencyInterceptor + the handler recording completion inside
+  // its own transaction (see CheckoutService.reserve's own
+  // idempotencyCompletion.complete() call) is the exact pattern this
+  // codebase already established for every other mutating, resource-
+  // creating endpoint (e.g. InventoryController.createMovement).
   @Post('reserve')
+  @UseInterceptors(IdempotencyInterceptor)
   async reserve(
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: ReserveCheckoutDto,
+    @Req() req: Request,
   ) {
     const customerId = await this.requireCustomerId(user);
-    return this.checkoutService.reserve(customerId, dto);
+    return this.checkoutService.reserve(
+      customerId,
+      dto,
+      req.correlationId,
+      req.idempotencyClaimId,
+    );
   }
 
   @Post('confirm')
+  @UseInterceptors(IdempotencyInterceptor)
   async confirm(
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: ConfirmCheckoutDto,
@@ -59,6 +84,7 @@ export class CheckoutController {
       dto.reservation_id,
       user.id,
       req.correlationId,
+      req.idempotencyClaimId,
     );
   }
 

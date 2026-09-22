@@ -5,16 +5,21 @@ import { useEffect, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
 import { clearSession, getSessionToken } from "@/lib/session";
 
+// Sprint 10 (RB-ORD-004, PDR-009): a branch employee's view of this
+// endpoint returns only the minimal fields RB-ORD-004 names (name,
+// phone, pickup code) - the owner reaching this same route gets a
+// wider DTO server-side (see BranchOrdersStaffController's own
+// comment), so the extra fields here are optional and simply unused
+// by this deliberately minimal page rather than assumed present.
 interface OrderRow {
   id: string;
-  status: string;
-  fulfilment_method: string;
-  payment_method: string;
-  total: number;
-  created_at: string;
   customer_name: string | null;
   customer_phone: string;
   pickup_code: string | null;
+  status?: string;
+  fulfilment_method?: string;
+  payment_method?: string;
+  total?: number;
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -28,12 +33,12 @@ const STATUS_LABELS: Record<string, string> = {
   REFUNDED: "مسترد",
 };
 
-// Sprint 10 (RB-ORD-004, PDR-009): a branch employee's read-only view
-// of their OWN branch's orders only - VendorMembershipGuard itself
-// refuses this route server-side if the employee's own assigned
-// branch doesn't match :branchId, the same guard behavior every other
-// per-branch page in this codebase already relies on. Deliberately
-// NOT the full Orders UI - see VendorOrdersPage's own comment.
+// A branch employee's read-only view of their OWN branch's orders
+// only - VendorMembershipGuard itself refuses this route server-side
+// if the employee's own assigned branch doesn't match :branchId, the
+// same guard behavior every other per-branch page in this codebase
+// already relies on. Deliberately NOT the full Orders UI - see
+// VendorOrdersPage's own comment.
 export default function BranchOrdersPage() {
   const params = useParams<{ vendorId: string; branchId: string }>();
   const router = useRouter();
@@ -88,12 +93,15 @@ export default function BranchOrdersPage() {
           <div key={o.id} className="card">
             <div style={{ display: "flex", justifyContent: "space-between" }}>
               <span>{o.customer_name ?? "—"} — {o.customer_phone}</span>
-              <span className="muted">{STATUS_LABELS[o.status] ?? o.status}</span>
+              {o.status && <span className="muted">{STATUS_LABELS[o.status] ?? o.status}</span>}
             </div>
-            <div className="muted">
-              {o.fulfilment_method === "PICKUP" ? "استلام من المحل" : "توصيل"} ·{" "}
-              {o.payment_method === "ONLINE" ? "دفع إلكتروني" : "دفع عند الاستلام"} · {o.total} ₪
-            </div>
+            {(o.fulfilment_method || o.payment_method || o.total !== undefined) && (
+              <div className="muted">
+                {o.fulfilment_method && (o.fulfilment_method === "PICKUP" ? "استلام من المحل" : "توصيل")}
+                {o.payment_method && ` · ${o.payment_method === "ONLINE" ? "دفع إلكتروني" : "دفع عند الاستلام"}`}
+                {o.total !== undefined && ` · ${o.total} ₪`}
+              </div>
+            )}
             {o.pickup_code && (
               <div style={{ fontWeight: 600, marginTop: 4 }}>رمز الاستلام: {o.pickup_code}</div>
             )}

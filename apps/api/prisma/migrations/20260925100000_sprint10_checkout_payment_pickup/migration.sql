@@ -45,6 +45,20 @@ CREATE INDEX "branch_orders_paymentTransactionId_idx" ON "branch_orders"("paymen
 -- AddForeignKey
 ALTER TABLE "branch_orders" ADD CONSTRAINT "branch_orders_addressId_fkey" FOREIGN KEY ("addressId") REFERENCES "addresses"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
+-- Codex review round 1 on commit d0ea80d (RB-ORD-004): a partial
+-- unique index, not representable in Prisma's schema DSL (same
+-- already-established pattern as e.g. StaffInvite's own partial unique
+-- index) - two simultaneously-ACTIVE pickup orders at the same branch
+-- can never share a pickup code, closing the collision gap a staff
+-- member matching by code alone could otherwise hit. Scoped to
+-- fulfilmentMethod = 'PICKUP' and a non-terminal status only - a
+-- terminal order's code is free to be reused by a later active one,
+-- and DELIVERY orders never set a code at all.
+CREATE UNIQUE INDEX "branch_orders_active_pickup_code_key" ON "branch_orders"("branchId", "pickupCode")
+  WHERE "pickupCode" IS NOT NULL
+    AND "fulfilmentMethod" = 'PICKUP'
+    AND "status" NOT IN ('COMPLETED', 'CANCELLED', 'REFUNDED');
+
 -- AlterTable: vendor_delivery_zones (Sprint 5) gains the fee amount
 -- that sprint's own migration comment explicitly deferred to RB-ORD-003
 -- - nullable, since "enabled" keeps its existing lazy-default-true
@@ -138,6 +152,7 @@ CREATE TABLE "checkout_reservation_items" (
     "fulfilmentMethod" "FulfilmentMethod" NOT NULL,
     "paymentMethod" "BranchOrderPaymentMethod" NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "cartItemId" TEXT,
 
     CONSTRAINT "checkout_reservation_items_pkey" PRIMARY KEY ("id")
 );
@@ -157,6 +172,16 @@ ALTER TABLE "checkout_reservation_items" ADD CONSTRAINT "checkout_reservation_it
 
 -- AddForeignKey (composite - against offer_variants' own (vendorId, id)).
 ALTER TABLE "checkout_reservation_items" ADD CONSTRAINT "checkout_reservation_items_vendorId_offerVariantId_fkey" FOREIGN KEY ("vendorId", "offerVariantId") REFERENCES "offer_variants"("vendorId", "id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey (plain, SET NULL - Codex review round 1 on commit
+-- d0ea80d: tracks the exact source cart line so confirm() can
+-- decrement only the reserved amount from it, never bulk-delete the
+-- whole line and lose quantity the customer added during the hold.
+-- SET NULL, not RESTRICT: the customer may still freely edit/delete
+-- this cart line while the hold is live - the stock hold itself stays
+-- valid regardless, only the cart-reconciliation step at confirm has
+-- nothing left to do if it's gone).
+ALTER TABLE "checkout_reservation_items" ADD CONSTRAINT "checkout_reservation_items_cartItemId_fkey" FOREIGN KEY ("cartItemId") REFERENCES "cart_items"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- CreateTable
 CREATE TABLE "checkout_reservation_slots" (

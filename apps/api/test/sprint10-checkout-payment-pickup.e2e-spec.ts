@@ -144,14 +144,35 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
     return accept.body;
   }
 
+  // Codex review round 2 on commit d0ea80d (fix #3): checkout now
+  // re-checks purchase eligibility (offer ACTIVE, vendor ACTIVE +
+  // published, subscription ACTIVE) at every stage - a freshly-applied
+  // test vendor (status: APPLIED, subscriptionStatus: NONE,
+  // storefrontPublished: false by default) and a freshly-created offer
+  // (status: DRAFT by default) would now correctly fail that check, so
+  // this fixture explicitly makes the vendor/offer eligible, the same
+  // way a real vendor would be after verification + subscribing +
+  // publishing - none of which this sprint's own tests are about.
+  async function makeVendorEligible(vendorId: string): Promise<void> {
+    await prisma.vendor.update({
+      where: { id: vendorId },
+      data: {
+        status: 'ACTIVE',
+        subscriptionStatus: 'ACTIVE',
+        storefrontPublished: true,
+      },
+    });
+  }
+
   async function createOfferWithStock(
     vendorId: string,
     branchId: string,
     price: number,
     quantity: number,
   ): Promise<string> {
+    await makeVendorEligible(vendorId);
     const offer = await prisma.vendorOffer.create({
-      data: { vendorId, titleAr: 'م', titleEn: 'P' },
+      data: { vendorId, titleAr: 'م', titleEn: 'P', status: 'ACTIVE' },
     });
     const variant = await prisma.offerVariant.create({
       data: {
@@ -228,6 +249,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
     const res = await request(app.getHttpServer())
       .post('/api/v1/cart/items')
       .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', unique('cart-add'))
       .send({ vendor_id: vendorId, offer_variant_id: offerVariantId, quantity })
       .expect(201);
     return res.body.id;
@@ -246,6 +268,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const added = await request(app.getHttpServer())
         .post('/api/v1/cart/items')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('cart-add'))
         .send({ vendor_id: vendorId, offer_variant_id: variantId, quantity: 2 })
         .expect(201);
       expect(added.body.quantity).toBe(2);
@@ -254,6 +277,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const addedAgain = await request(app.getHttpServer())
         .post('/api/v1/cart/items')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('cart-add'))
         .send({ vendor_id: vendorId, offer_variant_id: variantId, quantity: 3 })
         .expect(201);
       expect(addedAgain.body.quantity).toBe(5);
@@ -375,6 +399,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const reserved = await request(app.getHttpServer())
         .post('/api/v1/checkout/reserve')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
         .send({
           groups: [
             {
@@ -406,6 +431,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const res = await request(app.getHttpServer())
         .post('/api/v1/checkout/reserve')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
         .send({
           groups: [
             {
@@ -445,6 +471,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const res = await request(app.getHttpServer())
         .post('/api/v1/checkout/reserve')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
         .send({
           groups: [
             {
@@ -481,6 +508,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const reserved = await request(app.getHttpServer())
         .post('/api/v1/checkout/reserve')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
         .send({
           groups: [
             {
@@ -520,6 +548,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const res = await request(app.getHttpServer())
         .post('/api/v1/checkout/reserve')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
         .send({
           groups: [
             {
@@ -559,6 +588,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const tooFar = await request(app.getHttpServer())
         .post('/api/v1/checkout/reserve')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
         .send({
           groups: [
             {
@@ -579,6 +609,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const wrongDay = await request(app.getHttpServer())
         .post('/api/v1/checkout/reserve')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
         .send({
           groups: [
             {
@@ -612,6 +643,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const dupBranch = await request(app.getHttpServer())
         .post('/api/v1/checkout/reserve')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
         .send({
           groups: [
             {
@@ -659,6 +691,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const reserved = await request(app.getHttpServer())
         .post('/api/v1/checkout/reserve')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
         .send({
           groups: [
             {
@@ -674,6 +707,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const confirmed = await request(app.getHttpServer())
         .post('/api/v1/checkout/confirm')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('confirm'))
         .send({ reservation_id: reserved.body.reservation_id })
         .expect(201);
       expect(confirmed.body.branch_orders).toHaveLength(1);
@@ -722,6 +756,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const reserved = await request(app.getHttpServer())
         .post('/api/v1/checkout/reserve')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
         .send({
           groups: [
             {
@@ -740,6 +775,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const confirmed = await request(app.getHttpServer())
         .post('/api/v1/checkout/confirm')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('confirm'))
         .send({ reservation_id: reserved.body.reservation_id })
         .expect(201);
       expect(confirmed.body.branch_orders[0].total).toBe(25);
@@ -781,6 +817,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const reserved = await request(app.getHttpServer())
         .post('/api/v1/checkout/reserve')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
         .send({
           groups: [
             {
@@ -802,6 +839,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const confirmed = await request(app.getHttpServer())
         .post('/api/v1/checkout/confirm')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('confirm'))
         .send({ reservation_id: reserved.body.reservation_id })
         .expect(201);
       expect(confirmed.body.branch_orders).toHaveLength(2);
@@ -827,6 +865,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const reserved = await request(app.getHttpServer())
         .post('/api/v1/checkout/reserve')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
         .send({
           groups: [
             {
@@ -847,6 +886,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const res = await request(app.getHttpServer())
         .post('/api/v1/checkout/confirm')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('confirm'))
         .send({ reservation_id: reserved.body.reservation_id });
       expect(res.status).toBe(409);
       expect(res.body.error.code).toBe('CHECKOUT_PRICE_CHANGED');
@@ -872,6 +912,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const reserved = await request(app.getHttpServer())
         .post('/api/v1/checkout/reserve')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
         .send({
           groups: [
             {
@@ -892,6 +933,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const res = await request(app.getHttpServer())
         .post('/api/v1/checkout/confirm')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('confirm'))
         .send({ reservation_id: reserved.body.reservation_id });
       expect(res.status).toBe(409);
       expect(res.body.error.code).toBe('RESERVATION_EXPIRED');
@@ -913,6 +955,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const reserved = await request(app.getHttpServer())
         .post('/api/v1/checkout/reserve')
         .set('Authorization', `Bearer ${customerA}`)
+        .set('Idempotency-Key', unique('reserve'))
         .send({
           groups: [
             {
@@ -928,6 +971,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const res = await request(app.getHttpServer())
         .post('/api/v1/checkout/confirm')
         .set('Authorization', `Bearer ${customerB}`)
+        .set('Idempotency-Key', unique('confirm'))
         .send({ reservation_id: reserved.body.reservation_id });
       expect(res.status).toBe(404);
     });
@@ -947,6 +991,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const reserved = await request(app.getHttpServer())
         .post('/api/v1/checkout/reserve')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
         .send({
           groups: [
             {
@@ -1008,10 +1053,12 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         request(app.getHttpServer())
           .post('/api/v1/checkout/reserve')
           .set('Authorization', `Bearer ${customerA}`)
+          .set('Idempotency-Key', unique('reserve'))
           .send({ groups: [{ ...body.groups[0], cart_item_ids: [itemA] }] }),
         request(app.getHttpServer())
           .post('/api/v1/checkout/reserve')
           .set('Authorization', `Bearer ${customerB}`)
+          .set('Idempotency-Key', unique('reserve'))
           .send({ groups: [{ ...body.groups[0], cart_item_ids: [itemB] }] }),
       ]);
       const statuses = [resA.status, resB.status].sort();
@@ -1050,6 +1097,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         request(app.getHttpServer())
           .post('/api/v1/checkout/reserve')
           .set('Authorization', `Bearer ${customerA}`)
+          .set('Idempotency-Key', unique('reserve'))
           .send({
             groups: [
               {
@@ -1066,6 +1114,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         request(app.getHttpServer())
           .post('/api/v1/checkout/reserve')
           .set('Authorization', `Bearer ${customerB}`)
+          .set('Idempotency-Key', unique('reserve'))
           .send({
             groups: [
               {
@@ -1099,6 +1148,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/v1/checkout/reserve')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
         .send({
           groups: [
             {
@@ -1158,6 +1208,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/v1/checkout/reserve')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
         .send({
           groups: [
             {
@@ -1281,6 +1332,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const reserved = await request(app.getHttpServer())
         .post('/api/v1/checkout/reserve')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
         .send({
           groups: [
             {
@@ -1295,6 +1347,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const confirmed = await request(app.getHttpServer())
         .post('/api/v1/checkout/confirm')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('confirm'))
         .send({ reservation_id: reserved.body.reservation_id })
         .expect(201);
       return {
@@ -1328,6 +1381,16 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       expect(list.body[0].customer_phone).toBeTruthy();
       expect(list.body[0]).not.toHaveProperty('address');
       expect(list.body[0]).not.toHaveProperty('customer_address');
+      // Codex review round 2 (fix #6): the employee DTO must be
+      // genuinely minimal, not just missing address - status, total,
+      // payment_method, and created_at are all owner-only fields.
+      expect(list.body[0]).not.toHaveProperty('status');
+      expect(list.body[0]).not.toHaveProperty('total');
+      expect(list.body[0]).not.toHaveProperty('payment_method');
+      expect(list.body[0]).not.toHaveProperty('created_at');
+      expect(Object.keys(list.body[0]).sort()).toEqual(
+        ['customer_name', 'customer_phone', 'id', 'pickup_code'].sort(),
+      );
 
       const forbiddenBranch = await request(app.getHttpServer())
         .get(`/api/v1/vendors/${vendorId}/branches/${branchBId}/orders`)
@@ -1387,6 +1450,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const reserved = await request(app.getHttpServer())
         .post('/api/v1/checkout/reserve')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
         .send({
           groups: [
             {
@@ -1404,6 +1468,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/v1/checkout/confirm')
         .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('confirm'))
         .send({ reservation_id: reserved.body.reservation_id })
         .expect(201);
 
@@ -1413,6 +1478,700 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .expect(200);
       expect(list.body[0].fulfilment_method).toBe('DELIVERY');
       expect(list.body[0].pickup_code).toBeNull();
+    });
+  });
+
+  // ============================================================
+  // Codex review round 2 on commit d0ea80d - fix #1: lazy expiry must
+  // be swept everywhere availability is read or stock is decremented,
+  // not only when a NEW reserve() attempt happens to touch the same
+  // row.
+  // ============================================================
+  describe('Lazy expiry sweeping (Codex review round 2, fix #1)', () => {
+    it('an expired reservation is swept by a POS movement with no new reserve attempt, and a fresh quote sees recovered availability', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
+      const variantId = await createOfferWithStock(vendorId, branchAId, 10, 2);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const itemId = await addToCart(customer, vendorId, variantId, 2);
+
+      const reserved = await request(app.getHttpServer())
+        .post('/api/v1/checkout/reserve')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
+        .send({
+          groups: [
+            {
+              cart_item_ids: [itemId],
+              branch_id: branchAId,
+              fulfilment_method: 'PICKUP',
+              payment_method: 'COD',
+            },
+          ],
+        })
+        .expect(201);
+
+      await prisma.checkoutReservation.update({
+        where: { id: reserved.body.reservation_id },
+        data: { expiresAt: new Date(Date.now() - 1000) },
+      });
+
+      // The stale reservedQuantity=2 must be swept by the movement path
+      // itself (lockAndSweepStockRow) - no fresh reserve() call happens
+      // anywhere in this test to clean it up first.
+      const movement = await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/branches/${branchAId}/stock/${variantId}/movements`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('movement'))
+        .send({ quantity_delta: -2, reason: 'DAMAGE', reason_note: 'test' });
+      expect(movement.status).toBe(201);
+
+      const stock = await prisma.branchStock.findFirstOrThrow({
+        where: { offerVariantId: variantId },
+      });
+      expect(stock.quantity).toBe(0);
+      expect(stock.reservedQuantity).toBe(0);
+
+      const secondItem = await addToCart(customer, vendorId, variantId, 1);
+      const quote = await request(app.getHttpServer())
+        .post('/api/v1/checkout/quote')
+        .set('Authorization', `Bearer ${customer}`)
+        .send({ cart_item_ids: [secondItem] })
+        .expect(201);
+      expect(quote.body.groups).toEqual([]);
+      expect(quote.body.unavailable_items).toEqual([
+        { cart_item_id: secondItem, reason: 'NO_BRANCH_HAS_SUFFICIENT_STOCK' },
+      ]);
+    });
+
+    it('quote shows availability recovered from an expired reservation even without any sweep ever running', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
+      const variantId = await createOfferWithStock(vendorId, branchAId, 10, 1);
+      const customerA = await signup(uniquePhone(), 'a-strong-password');
+      const customerB = await signup(uniquePhone(), 'a-strong-password');
+      const itemA = await addToCart(customerA, vendorId, variantId, 1);
+
+      const reserved = await request(app.getHttpServer())
+        .post('/api/v1/checkout/reserve')
+        .set('Authorization', `Bearer ${customerA}`)
+        .set('Idempotency-Key', unique('reserve'))
+        .send({
+          groups: [
+            {
+              cart_item_ids: [itemA],
+              branch_id: branchAId,
+              fulfilment_method: 'PICKUP',
+              payment_method: 'COD',
+            },
+          ],
+        })
+        .expect(201);
+
+      await prisma.checkoutReservation.update({
+        where: { id: reserved.body.reservation_id },
+        data: { expiresAt: new Date(Date.now() - 1000) },
+      });
+
+      // BranchStock.reservedQuantity is still the stale, unswept value
+      // of 1 here - quote() must ignore it and compute live
+      // availability directly from unexpired CheckoutReservationItem
+      // rows instead, entirely read-only.
+      const itemB = await addToCart(customerB, vendorId, variantId, 1);
+      const quote = await request(app.getHttpServer())
+        .post('/api/v1/checkout/quote')
+        .set('Authorization', `Bearer ${customerB}`)
+        .send({ cart_item_ids: [itemB] })
+        .expect(201);
+      expect(quote.body.groups).toHaveLength(1);
+      expect(quote.body.unavailable_items).toEqual([]);
+    });
+  });
+
+  // ============================================================
+  // Codex review round 2 on commit d0ea80d - fix #2: confirm() must
+  // reconcile only the exact reserved quantity against the ORIGINAL
+  // cart line, never bulk-delete it, so a customer who raises the same
+  // line's quantity during the 10-minute hold keeps the extra units.
+  // ============================================================
+  describe('Cart reconciliation preserves concurrent edits (Codex review round 2, fix #2)', () => {
+    it('reserving quantity 1 then raising the same cart line to 2 leaves exactly 1 unit in the cart after confirm', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
+      const variantId = await createOfferWithStock(vendorId, branchAId, 10, 5);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const itemId = await addToCart(customer, vendorId, variantId, 1);
+
+      const reserved = await request(app.getHttpServer())
+        .post('/api/v1/checkout/reserve')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
+        .send({
+          groups: [
+            {
+              cart_item_ids: [itemId],
+              branch_id: branchAId,
+              fulfilment_method: 'PICKUP',
+              payment_method: 'COD',
+            },
+          ],
+        })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .put(`/api/v1/cart/items/${itemId}`)
+        .set('Authorization', `Bearer ${customer}`)
+        .send({ quantity: 2 })
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/checkout/confirm')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('confirm'))
+        .send({ reservation_id: reserved.body.reservation_id })
+        .expect(201);
+
+      const cart = await request(app.getHttpServer())
+        .get('/api/v1/cart')
+        .set('Authorization', `Bearer ${customer}`)
+        .expect(200);
+      expect(cart.body).toHaveLength(1);
+      expect(cart.body[0].id).toBe(itemId);
+      expect(cart.body[0].quantity).toBe(1);
+    });
+  });
+
+  // ============================================================
+  // Codex review round 2 on commit d0ea80d - fix #3: a central
+  // purchasability predicate re-checked at add-to-cart, quote, reserve,
+  // AND confirm (state can change during the hold).
+  // ============================================================
+  describe('Purchase eligibility re-checked at every stage (Codex review round 2, fix #3)', () => {
+    async function createIneligibleOffer(
+      vendorId: string,
+      branchId: string,
+      opts: { vendorEligible: boolean; offerActive: boolean },
+    ): Promise<string> {
+      if (opts.vendorEligible) {
+        await makeVendorEligible(vendorId);
+      }
+      const offer = await prisma.vendorOffer.create({
+        data: {
+          vendorId,
+          titleAr: 'م',
+          titleEn: 'P',
+          status: opts.offerActive ? 'ACTIVE' : 'DRAFT',
+        },
+      });
+      const variant = await prisma.offerVariant.create({
+        data: {
+          vendorId,
+          vendorOfferId: offer.id,
+          sellerSku: unique('sku'),
+          basePrice: 10,
+          storeInventoryBarcode: unique('barcode'),
+        },
+      });
+      await prisma.branchStock.create({
+        data: { vendorId, branchId, offerVariantId: variant.id, quantity: 5 },
+      });
+      return variant.id;
+    }
+
+    it('rejects add-to-cart when the offer is DRAFT (vendor otherwise eligible)', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
+      const variantId = await createIneligibleOffer(vendorId, branchAId, {
+        vendorEligible: true,
+        offerActive: false,
+      });
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/cart/items')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('cart-add'))
+        .send({
+          vendor_id: vendorId,
+          offer_variant_id: variantId,
+          quantity: 1,
+        });
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe('ITEM_NOT_PURCHASABLE');
+    });
+
+    it('rejects add-to-cart when the vendor is unpublished/not ACTIVE (offer otherwise ACTIVE)', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
+      const variantId = await createIneligibleOffer(vendorId, branchAId, {
+        vendorEligible: false,
+        offerActive: true,
+      });
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/cart/items')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('cart-add'))
+        .send({
+          vendor_id: vendorId,
+          offer_variant_id: variantId,
+          quantity: 1,
+        });
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe('ITEM_NOT_PURCHASABLE');
+    });
+
+    it('rejects quote when the item became ineligible after it was added to the cart', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
+      const variantId = await createOfferWithStock(vendorId, branchAId, 10, 5);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const itemId = await addToCart(customer, vendorId, variantId, 1);
+
+      await prisma.vendor.update({
+        where: { id: vendorId },
+        data: { storefrontPublished: false },
+      });
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/checkout/quote')
+        .set('Authorization', `Bearer ${customer}`)
+        .send({ cart_item_ids: [itemId] });
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe('ITEM_NOT_PURCHASABLE');
+    });
+
+    it('rejects reserve when the item became ineligible after quote', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
+      const variantId = await createOfferWithStock(vendorId, branchAId, 10, 5);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const itemId = await addToCart(customer, vendorId, variantId, 1);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/checkout/quote')
+        .set('Authorization', `Bearer ${customer}`)
+        .send({ cart_item_ids: [itemId] })
+        .expect(201);
+
+      await prisma.vendorOffer.updateMany({
+        where: { vendorId },
+        data: { status: 'DRAFT' },
+      });
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/checkout/reserve')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
+        .send({
+          groups: [
+            {
+              cart_item_ids: [itemId],
+              branch_id: branchAId,
+              fulfilment_method: 'PICKUP',
+              payment_method: 'COD',
+            },
+          ],
+        });
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe('ITEM_NOT_PURCHASABLE');
+
+      const stock = await prisma.branchStock.findFirstOrThrow({
+        where: { offerVariantId: variantId },
+      });
+      expect(stock.reservedQuantity).toBe(0);
+    });
+
+    it('rejects confirm when eligibility changes DURING the hold, and never creates an order', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
+      const variantId = await createOfferWithStock(vendorId, branchAId, 10, 5);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const itemId = await addToCart(customer, vendorId, variantId, 1);
+
+      const reserved = await request(app.getHttpServer())
+        .post('/api/v1/checkout/reserve')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
+        .send({
+          groups: [
+            {
+              cart_item_ids: [itemId],
+              branch_id: branchAId,
+              fulfilment_method: 'PICKUP',
+              payment_method: 'COD',
+            },
+          ],
+        })
+        .expect(201);
+
+      await prisma.vendor.update({
+        where: { id: vendorId },
+        data: { status: 'SUSPENDED' },
+      });
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/checkout/confirm')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('confirm'))
+        .send({ reservation_id: reserved.body.reservation_id });
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe('ITEM_NOT_PURCHASABLE');
+
+      const branchOrders = await prisma.branchOrder.findMany({
+        where: { vendorId, branchId: branchAId },
+      });
+      expect(branchOrders).toHaveLength(0);
+    });
+  });
+
+  // ============================================================
+  // Codex review round 2 on commit d0ea80d - fix #4: every stock/window
+  // lock is taken in a single canonical order regardless of the order
+  // the client's own groups happened to list them in, so two concurrent
+  // multi-branch checkouts locking in opposite orders never deadlock.
+  // ============================================================
+  describe('Checkout concurrency: reversed lock order (Codex review round 2, fix #4)', () => {
+    it('two concurrent multi-branch checkouts submitted with reversed group order never deadlock or 500', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId, branchBId } =
+        await createVendorWithTwoBranches(owner);
+      const variantA = await createOfferWithStock(vendorId, branchAId, 10, 5);
+      const variantB = await createOfferWithStock(vendorId, branchBId, 10, 5);
+      const customerX = await signup(uniquePhone(), 'a-strong-password');
+      const customerY = await signup(uniquePhone(), 'a-strong-password');
+
+      const itemXA = await addToCart(customerX, vendorId, variantA, 1);
+      const itemXB = await addToCart(customerX, vendorId, variantB, 1);
+      const itemYA = await addToCart(customerY, vendorId, variantA, 1);
+      const itemYB = await addToCart(customerY, vendorId, variantB, 1);
+
+      const groupFor = (branchId: string, itemId: string) => ({
+        cart_item_ids: [itemId],
+        branch_id: branchId,
+        fulfilment_method: 'PICKUP' as const,
+        payment_method: 'COD' as const,
+      });
+
+      const [resX, resY] = await Promise.all([
+        request(app.getHttpServer())
+          .post('/api/v1/checkout/reserve')
+          .set('Authorization', `Bearer ${customerX}`)
+          .set('Idempotency-Key', unique('reserve'))
+          .send({
+            groups: [groupFor(branchAId, itemXA), groupFor(branchBId, itemXB)],
+          }),
+        request(app.getHttpServer())
+          .post('/api/v1/checkout/reserve')
+          .set('Authorization', `Bearer ${customerY}`)
+          .set('Idempotency-Key', unique('reserve'))
+          .send({
+            groups: [groupFor(branchBId, itemYB), groupFor(branchAId, itemYA)],
+          }),
+      ]);
+      expect(resX.status).toBe(201);
+      expect(resY.status).toBe(201);
+    });
+  });
+
+  // ============================================================
+  // Codex review round 2 on commit d0ea80d - fix #5: a network retry of
+  // a financial/reservation-creating endpoint must never double-create;
+  // a different body under the same key must be rejected, not replayed
+  // or silently re-executed.
+  // ============================================================
+  describe('Idempotency on cart-add, reserve, and confirm (Codex review round 2, fix #5)', () => {
+    it('cart/items: same key + same body replays without doubling quantity; a different body under the same key is rejected', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
+      const variantId = await createOfferWithStock(vendorId, branchAId, 10, 5);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const key = unique('cart-add-idem');
+
+      const first = await request(app.getHttpServer())
+        .post('/api/v1/cart/items')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', key)
+        .send({ vendor_id: vendorId, offer_variant_id: variantId, quantity: 1 })
+        .expect(201);
+
+      const replay = await request(app.getHttpServer())
+        .post('/api/v1/cart/items')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', key)
+        .send({ vendor_id: vendorId, offer_variant_id: variantId, quantity: 1 })
+        .expect(201);
+      expect(replay.body).toEqual(first.body);
+
+      const list = await request(app.getHttpServer())
+        .get('/api/v1/cart')
+        .set('Authorization', `Bearer ${customer}`)
+        .expect(200);
+      expect(list.body[0].quantity).toBe(1);
+
+      const conflicting = await request(app.getHttpServer())
+        .post('/api/v1/cart/items')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', key)
+        .send({
+          vendor_id: vendorId,
+          offer_variant_id: variantId,
+          quantity: 99,
+        });
+      expect(conflicting.status).toBe(409);
+    });
+
+    it('checkout/reserve: same key + same body replays the same reservation without doubling the hold; a different body under the same key is rejected', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
+      const variantId = await createOfferWithStock(vendorId, branchAId, 10, 5);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const itemId = await addToCart(customer, vendorId, variantId, 1);
+      const reserveKey = unique('reserve-idem');
+      const reserveBody = {
+        groups: [
+          {
+            cart_item_ids: [itemId],
+            branch_id: branchAId,
+            fulfilment_method: 'PICKUP',
+            payment_method: 'COD',
+          },
+        ],
+      };
+
+      const firstReserve = await request(app.getHttpServer())
+        .post('/api/v1/checkout/reserve')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', reserveKey)
+        .send(reserveBody)
+        .expect(201);
+
+      const replayReserve = await request(app.getHttpServer())
+        .post('/api/v1/checkout/reserve')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', reserveKey)
+        .send(reserveBody)
+        .expect(201);
+      expect(replayReserve.body.reservation_id).toBe(
+        firstReserve.body.reservation_id,
+      );
+
+      const stock = await prisma.branchStock.findFirstOrThrow({
+        where: { offerVariantId: variantId },
+      });
+      expect(stock.reservedQuantity).toBe(1);
+
+      const conflictingReserve = await request(app.getHttpServer())
+        .post('/api/v1/checkout/reserve')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', reserveKey)
+        .send({
+          groups: [
+            {
+              ...reserveBody.groups[0],
+              payment_method: 'ONLINE',
+            },
+          ],
+        });
+      expect(conflictingReserve.status).toBe(409);
+    });
+
+    it('checkout/confirm: same key + same body replays the same order without creating a duplicate; a different body under the same key is rejected', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
+      const variantId = await createOfferWithStock(vendorId, branchAId, 10, 5);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const itemId = await addToCart(customer, vendorId, variantId, 1);
+
+      const reserved = await request(app.getHttpServer())
+        .post('/api/v1/checkout/reserve')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
+        .send({
+          groups: [
+            {
+              cart_item_ids: [itemId],
+              branch_id: branchAId,
+              fulfilment_method: 'PICKUP',
+              payment_method: 'COD',
+            },
+          ],
+        })
+        .expect(201);
+
+      const confirmKey = unique('confirm-idem');
+      const confirmBody = { reservation_id: reserved.body.reservation_id };
+
+      const firstConfirm = await request(app.getHttpServer())
+        .post('/api/v1/checkout/confirm')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', confirmKey)
+        .send(confirmBody)
+        .expect(201);
+
+      const replayConfirm = await request(app.getHttpServer())
+        .post('/api/v1/checkout/confirm')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', confirmKey)
+        .send(confirmBody)
+        .expect(201);
+      expect(replayConfirm.body).toEqual(firstConfirm.body);
+
+      const orders = await prisma.branchOrder.findMany({
+        where: { vendorId, branchId: branchAId },
+      });
+      expect(orders).toHaveLength(1);
+
+      const conflictingConfirm = await request(app.getHttpServer())
+        .post('/api/v1/checkout/confirm')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', confirmKey)
+        .send({
+          reservation_id: '00000000-0000-0000-0000-000000000000',
+        });
+      expect(conflictingConfirm.status).toBe(409);
+    });
+  });
+
+  // ============================================================
+  // Codex review round 2 on commit d0ea80d - fix #7: a partial unique
+  // index on (branchId, pickupCode) for active PICKUP orders makes a
+  // collision a real (if rare) possibility - confirm() must retry with
+  // a fresh code rather than surfacing the raw unique-violation or,
+  // worse, letting two active orders at the same branch share a code.
+  // ============================================================
+  describe('Pickup code collision retry (Codex review round 2, fix #7)', () => {
+    it('a partial unique index rejects a second simultaneously-active identical code at the same branch', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
+      const customerPhone = uniquePhone();
+      await signup(customerPhone, 'a-strong-password');
+      const user = await prisma.user.findUniqueOrThrow({
+        where: { phone: customerPhone },
+      });
+      const customerProfile = await prisma.customerProfile.findUniqueOrThrow({
+        where: { userId: user.id },
+      });
+      const customerOrder = await prisma.customerOrder.create({
+        data: { customerId: customerProfile.id },
+      });
+      await prisma.branchOrder.create({
+        data: {
+          customerOrderId: customerOrder.id,
+          vendorId,
+          branchId: branchAId,
+          fulfilmentMethod: 'PICKUP',
+          paymentMethod: 'COD',
+          status: 'PLACED',
+          subtotal: 1,
+          total: 1,
+          pickupCode: '000000',
+        },
+      });
+
+      await expect(
+        prisma.branchOrder.create({
+          data: {
+            customerOrderId: customerOrder.id,
+            vendorId,
+            branchId: branchAId,
+            fulfilmentMethod: 'PICKUP',
+            paymentMethod: 'COD',
+            status: 'PLACED',
+            subtotal: 1,
+            total: 1,
+            pickupCode: '000000',
+          },
+        }),
+      ).rejects.toThrow();
+    });
+
+    it('confirm() retries with a fresh code when its first attempt collides with an existing active code at the branch', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
+      const variantId = await createOfferWithStock(vendorId, branchAId, 10, 5);
+      const customerPhone = uniquePhone();
+      const customer = await signup(customerPhone, 'a-strong-password');
+      const itemId = await addToCart(customer, vendorId, variantId, 1);
+
+      const reserved = await request(app.getHttpServer())
+        .post('/api/v1/checkout/reserve')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
+        .send({
+          groups: [
+            {
+              cart_item_ids: [itemId],
+              branch_id: branchAId,
+              fulfilment_method: 'PICKUP',
+              payment_method: 'COD',
+            },
+          ],
+        })
+        .expect(201);
+
+      // Pre-seed an existing ACTIVE PICKUP order at the same branch
+      // holding the exact code generatePickupCode()'s first (mocked)
+      // attempt will produce - Math.random() is the ONLY caller of
+      // Math.random anywhere in apps/api/src, so pinning it here only
+      // affects the pickup-code generator, nothing else in this request.
+      const user = await prisma.user.findUniqueOrThrow({
+        where: { phone: customerPhone },
+      });
+      const customerProfile = await prisma.customerProfile.findUniqueOrThrow({
+        where: { userId: user.id },
+      });
+      const otherOrder = await prisma.customerOrder.create({
+        data: { customerId: customerProfile.id },
+      });
+      await prisma.branchOrder.create({
+        data: {
+          customerOrderId: otherOrder.id,
+          vendorId,
+          branchId: branchAId,
+          fulfilmentMethod: 'PICKUP',
+          paymentMethod: 'COD',
+          status: 'PLACED',
+          subtotal: 1,
+          total: 1,
+          pickupCode: '000000',
+        },
+      });
+
+      const randomSpy = jest
+        .spyOn(Math, 'random')
+        .mockReturnValueOnce(0) // first attempt -> '000000' -> collides
+        .mockReturnValueOnce(0.5); // retry -> '500000' -> succeeds
+      let confirmed: request.Response;
+      try {
+        confirmed = await request(app.getHttpServer())
+          .post('/api/v1/checkout/confirm')
+          .set('Authorization', `Bearer ${customer}`)
+          .set('Idempotency-Key', unique('confirm'))
+          .send({ reservation_id: reserved.body.reservation_id })
+          .expect(201);
+      } finally {
+        randomSpy.mockRestore();
+      }
+      // The exact retry code depends on how many Math.random() calls
+      // land before the colliding attempt (Prisma's own internals may
+      // consume some) - what matters is that confirm() never 500s and
+      // never lands on the code that was already active at this branch.
+      expect(confirmed.body.branch_orders[0].pickup_code).not.toBe('000000');
+
+      const activeCodes = await prisma.branchOrder.findMany({
+        where: {
+          branchId: branchAId,
+          fulfilmentMethod: 'PICKUP',
+          status: { notIn: ['COMPLETED', 'CANCELLED', 'REFUNDED'] },
+        },
+        select: { pickupCode: true },
+      });
+      const codeValues = activeCodes.map((c) => c.pickupCode);
+      expect(new Set(codeValues).size).toBe(codeValues.length);
     });
   });
 });

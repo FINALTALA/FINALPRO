@@ -2,7 +2,7 @@
 
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { apiFetch, ApiError } from "@/lib/api";
+import { apiFetch, ApiError, newIdempotencyKey } from "@/lib/api";
 import { getSessionToken } from "@/lib/session";
 
 interface OfferVariantDto {
@@ -69,6 +69,7 @@ export default function StoreProductPage() {
       await apiFetch("/cart/items", {
         method: "POST",
         body: { vendor_id: offer.vendor_id, offer_variant_id: variantId, quantity: 1 },
+        idempotencyKey: newIdempotencyKey("cart-add"),
       });
       setAddedId(variantId);
       setTimeout(() => setAddedId((prev) => (prev === variantId ? null : prev)), 2000);

@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { AuditLogService } from '../audit/audit-log.service';
+import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import {
   BranchOrderPaymentMethod,
   FulfilmentMethod,
@@ -12,17 +13,17 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { TERMINAL_BRANCH_ORDER_STATUSES } from '../orders/branch-order-state-machine';
 import { lockDeliveryWindowRow } from '../delivery-windows/delivery-window-locking.util';
-import {
-  BranchAvailability,
-  GroupingItem,
-  groupByVendorAndBranch,
-} from './checkout-grouping.util';
+import { SubscriptionGateService } from '../subscriptions/subscription-gate.service';
+import { groupByVendorAndBranch, GroupingItem } from './checkout-grouping.util';
+import { assertItemsPurchasable } from './purchase-eligibility.util';
+import { lockAndSweepStockRow } from './stock-lock.util';
 import { computeAvailableSlots } from './slot-availability.util';
 import { SandboxPaymentService } from './sandbox-payment.service';
 import { QuoteCheckoutDto } from './dto/quote-checkout.dto';
 import { ReserveCheckoutDto } from './dto/reserve-checkout.dto';
 
 const RESERVATION_TTL_MS = 10 * 60 * 1000;
+const PICKUP_CODE_MAX_ATTEMPTS = 10;
 
 function effectivePrice(variant: {
   basePrice: unknown;
@@ -46,26 +47,70 @@ function parseDateOnly(s: string): Date {
  * only when BOTH `enabled` is true (Sprint 5's own lazy-default-true
  * convention - no row at all still counts as enabled) AND `fee` has
  * been explicitly set by the owner (never defaulted or inferred - see
- * VendorDeliveryZone's own schema.prisma comment). Centralized here so
- * quote(), reserveDeliverySlot(), and confirm()'s re-validation all
- * agree on exactly the same rule.
+ * VendorDeliveryZone's own schema.prisma comment).
  */
 function resolveDeliveryFee(
   row: { enabled: boolean; fee: unknown } | null,
 ): number | null {
-  if (!row) return null; // no row = enabled, but never priced yet.
+  if (!row) return null;
   if (!row.enabled) return null;
   if (row.fee === null || row.fee === undefined) return null;
   return Number(row.fee);
 }
 
 function generatePickupCode(): string {
-  // Sprint 10 (RB-ORD-004): a courtesy identifier, not a security
-  // credential - see BranchOrder.pickupCode's own schema.prisma
-  // comment for why no uniqueness/retry-loop is needed.
   return Math.floor(Math.random() * 1_000_000)
     .toString()
     .padStart(6, '0');
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  return (
+    err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002'
+  );
+}
+
+/**
+ * Codex review round 2 on commit d0ea80d (deadlock fix): every
+ * transaction that locks more than one BranchStock/DeliveryWindow row
+ * must acquire those locks in the EXACT same global order, or two
+ * concurrent multi-item/multi-branch checkouts can lock in opposite
+ * orders and deadlock. Sorting by these string keys before locking (in
+ * reserve()) and before the final decrement (in confirm()) is what
+ * makes that order consistent across every caller, regardless of what
+ * order the customer's own request happened to list groups/items in.
+ */
+function stockLockKey(
+  vendorId: string,
+  branchId: string,
+  offerVariantId: string,
+): string {
+  return `${vendorId}:${branchId}:${offerVariantId}`;
+}
+function windowLockKey(
+  vendorId: string,
+  branchId: string,
+  windowId: string,
+  scheduledDate: string,
+): string {
+  return `${vendorId}:${branchId}:${windowId}:${scheduledDate}`;
+}
+
+interface ResolvedItem {
+  cartItemId: string;
+  offerVariantId: string;
+  quantity: number;
+  unitPrice: number;
+}
+interface ResolvedGroup {
+  vendorId: string;
+  branchId: string;
+  items: ResolvedItem[];
+  fulfilmentMethod: FulfilmentMethod;
+  paymentMethod: BranchOrderPaymentMethod;
+  addressId?: string;
+  windowId?: string;
+  scheduledDate?: string;
 }
 
 /**
@@ -83,13 +128,19 @@ export class CheckoutService {
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
     private readonly sandboxPayment: SandboxPaymentService,
+    private readonly subscriptionGate: SubscriptionGateService,
+    private readonly idempotencyCompletion: IdempotencyCompletionService,
   ) {}
 
   // ============================================================
   // QUOTE - pure read, no reservation, no side effects.
   // ============================================================
 
-  async quote(customerId: string, dto: QuoteCheckoutDto) {
+  async quote(
+    customerId: string,
+    dto: QuoteCheckoutDto,
+    correlationId: string,
+  ) {
     const cartItems = await this.prisma.cartItem.findMany({
       where: { id: { in: dto.cart_item_ids }, customerId },
       include: {
@@ -108,6 +159,27 @@ export class CheckoutService {
         message: 'One or more cart items were not found in your cart',
       });
     }
+
+    // Codex review round 2: eligibility (offer/vendor/subscription
+    // state) must be checked at quote too, not just reserve/confirm -
+    // a stale preview showing a now-unsellable item is misleading.
+    // SubscriptionGateService.refreshStatus() itself needs a tx (it
+    // may lazily flip an expired subscription's status) - scoped to
+    // its own small transaction, separate from the plain reads below,
+    // so quote() as a whole is still "no reservation held," just not
+    // literally zero writes ever (the same lazy-expiry-on-read pattern
+    // this codebase already uses for subscriptions elsewhere).
+    await this.prisma.$transaction((tx) =>
+      assertItemsPurchasable(
+        tx,
+        this.subscriptionGate,
+        correlationId,
+        cartItems.map((ci) => ({
+          vendorId: ci.vendorId,
+          offerVariantId: ci.offerVariantId,
+        })),
+      ),
+    );
 
     const addressRow = dto.address_id
       ? await this.prisma.address.findFirst({
@@ -208,10 +280,6 @@ export class CheckoutService {
           subtotal,
           fragmented: g.fragmented,
           eligible_branches: eligibleBranches,
-          // "Suggested" = first in the deterministic order the
-          // grouping util already sorted eligibleBranchIds into - NEVER
-          // presented as nearest-by-distance (see
-          // checkout-grouping.util.ts's own top comment).
           suggested_branch_id: g.eligibleBranchIds[0] ?? null,
         };
       }),
@@ -226,9 +294,22 @@ export class CheckoutService {
     };
   }
 
+  /**
+   * Codex review round 2 (lazy-expiry fix): quote must stay read-only,
+   * so this ignores the (possibly stale) BranchStock.reservedQuantity
+   * counter entirely and instead sums only LIVE (unexpired)
+   * CheckoutReservationItem rows directly, batched in one query - the
+   * mathematically correct "available right now" figure without
+   * taking any lock or writing anything.
+   */
   private async buildAvailabilityMap(
     items: GroupingItem[],
-  ): Promise<Map<string, BranchAvailability[]>> {
+  ): Promise<
+    Map<
+      string,
+      { branchId: string; availableQuantity: number; createdAt: Date }[]
+    >
+  > {
     const variantIds = [...new Set(items.map((i) => i.offerVariantId))];
     const stocks = await this.prisma.branchStock.findMany({
       where: { offerVariantId: { in: variantIds } },
@@ -241,12 +322,36 @@ export class CheckoutService {
       branches.map((b) => [b.id, b.createdAt]),
     );
 
-    const map = new Map<string, BranchAvailability[]>();
+    const liveReservations = await this.prisma.checkoutReservationItem.findMany(
+      {
+        where: {
+          offerVariantId: { in: variantIds },
+          branchId: { in: branchIds },
+          reservation: { expiresAt: { gt: new Date() } },
+        },
+        select: { branchId: true, offerVariantId: true, quantity: true },
+      },
+    );
+    const liveReservedByKey = new Map<string, number>();
+    for (const r of liveReservations) {
+      const key = `${r.branchId}:${r.offerVariantId}`;
+      liveReservedByKey.set(
+        key,
+        (liveReservedByKey.get(key) ?? 0) + r.quantity,
+      );
+    }
+
+    const map = new Map<
+      string,
+      { branchId: string; availableQuantity: number; createdAt: Date }[]
+    >();
     for (const stock of stocks) {
+      const key = `${stock.branchId}:${stock.offerVariantId}`;
+      const liveReserved = liveReservedByKey.get(key) ?? 0;
       const list = map.get(stock.offerVariantId) ?? [];
       list.push({
         branchId: stock.branchId,
-        availableQuantity: stock.quantity - stock.reservedQuantity,
+        availableQuantity: stock.quantity - liveReserved,
         createdAt: branchCreatedAtById.get(stock.branchId) ?? new Date(0),
       });
       map.set(stock.offerVariantId, list);
@@ -258,7 +363,12 @@ export class CheckoutService {
   // RESERVE - the real, atomic 10-minute hold.
   // ============================================================
 
-  async reserve(customerId: string, dto: ReserveCheckoutDto) {
+  async reserve(
+    customerId: string,
+    dto: ReserveCheckoutDto,
+    correlationId: string,
+    idempotencyClaimId: string | undefined,
+  ) {
     const branchIds = dto.groups.map((g) => g.branch_id);
     if (new Set(branchIds).size !== branchIds.length) {
       throw new ConflictException({
@@ -292,10 +402,8 @@ export class CheckoutService {
       }
       const cartItemById = new Map(cartItems.map((ci) => [ci.id, ci]));
 
-      const reservation = await tx.checkoutReservation.create({
-        data: { customerId, expiresAt },
-      });
-
+      // Phase 1: resolve every group (read-only validation, no locks yet).
+      const resolvedGroups: ResolvedGroup[] = [];
       for (const group of dto.groups) {
         const branch = await tx.storeBranch.findUnique({
           where: { id: group.branch_id },
@@ -307,8 +415,7 @@ export class CheckoutService {
           });
         }
         const vendorId = branch.vendorId;
-
-        const groupItems = group.cart_item_ids.map((id) => {
+        const items: ResolvedItem[] = group.cart_item_ids.map((id) => {
           const ci = cartItemById.get(id);
           if (!ci || ci.vendorId !== vendorId) {
             throw new ConflictException({
@@ -317,7 +424,12 @@ export class CheckoutService {
                 "A cart item in this group does not belong to the selected branch's vendor",
             });
           }
-          return ci;
+          return {
+            cartItemId: id,
+            offerVariantId: ci.offerVariantId,
+            quantity: ci.quantity,
+            unitPrice: effectivePrice(ci.offerVariant),
+          };
         });
 
         if (group.fulfilment_method === 'PICKUP') {
@@ -327,132 +439,171 @@ export class CheckoutService {
               message: 'This branch cannot be used for pickup',
             });
           }
-        } else {
-          if (
-            !group.address_id ||
-            !group.delivery_window_id ||
-            !group.scheduled_date
-          ) {
-            throw new ConflictException({
-              code: 'DELIVERY_REQUIRES_ADDRESS_AND_SLOT',
-              message:
-                'A DELIVERY group requires address_id, delivery_window_id, and scheduled_date',
-            });
-          }
+        } else if (
+          !group.address_id ||
+          !group.delivery_window_id ||
+          !group.scheduled_date
+        ) {
+          throw new ConflictException({
+            code: 'DELIVERY_REQUIRES_ADDRESS_AND_SLOT',
+            message:
+              'A DELIVERY group requires address_id, delivery_window_id, and scheduled_date',
+          });
         }
 
-        for (const ci of groupItems) {
-          await this.reserveStockUnit(
-            tx,
-            reservation.id,
-            vendorId,
-            group.branch_id,
-            ci.offerVariantId,
-            ci.quantity,
-            effectivePrice(ci.offerVariant),
-            group.fulfilment_method,
-            group.payment_method,
+        resolvedGroups.push({
+          vendorId,
+          branchId: branch.id,
+          items,
+          fulfilmentMethod: group.fulfilment_method,
+          paymentMethod: group.payment_method,
+          addressId: group.address_id,
+          windowId: group.delivery_window_id,
+          scheduledDate: group.scheduled_date,
+        });
+      }
+
+      // Eligibility - every item, before any lock is taken.
+      await assertItemsPurchasable(
+        tx,
+        this.subscriptionGate,
+        correlationId,
+        resolvedGroups.flatMap((g) =>
+          g.items.map((i) => ({
+            vendorId: g.vendorId,
+            offerVariantId: i.offerVariantId,
+          })),
+        ),
+      );
+
+      // Phase 2: lock EVERY stock row, then EVERY window row, both in
+      // canonical order - see stockLockKey/windowLockKey's own comment
+      // for why this ordering is what actually prevents deadlock.
+      const stockKeys = new Map<
+        string,
+        { vendorId: string; branchId: string; offerVariantId: string }
+      >();
+      for (const g of resolvedGroups) {
+        for (const item of g.items) {
+          stockKeys.set(
+            stockLockKey(g.vendorId, g.branchId, item.offerVariantId),
+            {
+              vendorId: g.vendorId,
+              branchId: g.branchId,
+              offerVariantId: item.offerVariantId,
+            },
           );
         }
+      }
+      const sortedStockKeys = [...stockKeys.keys()].sort();
 
-        if (group.fulfilment_method === 'DELIVERY') {
-          await this.reserveDeliverySlot(
+      const windowIdByKey = new Map<string, string>();
+      for (const g of resolvedGroups) {
+        if (g.fulfilmentMethod === 'DELIVERY') {
+          windowIdByKey.set(
+            windowLockKey(
+              g.vendorId,
+              g.branchId,
+              g.windowId!,
+              g.scheduledDate!,
+            ),
+            g.windowId!,
+          );
+        }
+      }
+      const sortedWindowIds = [...new Set([...windowIdByKey.values()])].sort();
+
+      const lockedStock = new Map<
+        string,
+        { id: string; quantity: number; reservedQuantity: number }
+      >();
+      for (const key of sortedStockKeys) {
+        const { vendorId, branchId, offerVariantId } = stockKeys.get(key)!;
+        const locked = await lockAndSweepStockRow(
+          tx,
+          vendorId,
+          branchId,
+          offerVariantId,
+        );
+        if (!locked) {
+          throw new ConflictException({
+            code: 'INSUFFICIENT_STOCK',
+            message: 'No stock recorded for this item at the selected branch',
+          });
+        }
+        lockedStock.set(key, locked);
+      }
+      for (const windowId of sortedWindowIds) {
+        await lockDeliveryWindowRow(tx, windowId);
+      }
+
+      // Phase 3: locks held - check availability and write.
+      const reservation = await tx.checkoutReservation.create({
+        data: { customerId, expiresAt },
+      });
+
+      for (const g of resolvedGroups) {
+        for (const item of g.items) {
+          const key = stockLockKey(g.vendorId, g.branchId, item.offerVariantId);
+          const stock = lockedStock.get(key)!;
+          const available = stock.quantity - stock.reservedQuantity;
+          if (available < item.quantity) {
+            throw new ConflictException({
+              code: 'INSUFFICIENT_STOCK',
+              message: `Only ${available} unit(s) available for this item at this branch`,
+            });
+          }
+          await tx.branchStock.update({
+            where: { id: stock.id },
+            data: { reservedQuantity: { increment: item.quantity } },
+          });
+          stock.reservedQuantity += item.quantity;
+          await tx.checkoutReservationItem.create({
+            data: {
+              reservationId: reservation.id,
+              vendorId: g.vendorId,
+              branchId: g.branchId,
+              offerVariantId: item.offerVariantId,
+              quantity: item.quantity,
+              unitPriceAtReserve: item.unitPrice,
+              fulfilmentMethod: g.fulfilmentMethod,
+              paymentMethod: g.paymentMethod,
+              cartItemId: item.cartItemId,
+            },
+          });
+        }
+
+        if (g.fulfilmentMethod === 'DELIVERY') {
+          await this.reserveDeliverySlotAlreadyLocked(
             tx,
             reservation.id,
             customerId,
-            vendorId,
-            group.branch_id,
-            group.address_id!,
-            group.delivery_window_id!,
-            group.scheduled_date!,
+            g.vendorId,
+            g.branchId,
+            g.addressId!,
+            g.windowId!,
+            g.scheduledDate!,
           );
         }
       }
 
-      return this.reservationSummary(tx, reservation.id);
+      const responseBody = await this.reservationSummary(tx, reservation.id);
+      await this.idempotencyCompletion.complete(
+        tx,
+        idempotencyClaimId,
+        responseBody,
+        201,
+      );
+      return responseBody;
     });
   }
 
-  private async reserveStockUnit(
-    tx: Prisma.TransactionClient,
-    reservationId: string,
-    vendorId: string,
-    branchId: string,
-    offerVariantId: string,
-    quantity: number,
-    unitPrice: number,
-    fulfilmentMethod: FulfilmentMethod,
-    paymentMethod: BranchOrderPaymentMethod,
-  ): Promise<void> {
-    // Lock the specific BranchStock row FIRST - every writer of this
-    // row (this reserve, checkout confirm's real decrement,
-    // InventoryController's POS/manual decrement) takes the same lock
-    // on the same row, so they fully serialize against each other.
-    const rows = await tx.$queryRaw<
-      { id: string; quantity: number; reservedQuantity: number }[]
-    >`SELECT id, quantity, "reservedQuantity" FROM branch_stock
-      WHERE "vendorId" = ${vendorId} AND "branchId" = ${branchId} AND "offerVariantId" = ${offerVariantId}
-      FOR UPDATE`;
-    const stock = rows[0];
-    if (!stock) {
-      throw new ConflictException({
-        code: 'INSUFFICIENT_STOCK',
-        message: 'No stock recorded for this item at the selected branch',
-      });
-    }
-
-    // Lazily release any of THIS row's expired holds before checking
-    // availability - see CheckoutReservation's own schema.prisma
-    // comment for why this sweep (not a scheduled job) is how expiry
-    // actually takes effect.
-    const expired = await tx.checkoutReservationItem.findMany({
-      where: {
-        vendorId,
-        branchId,
-        offerVariantId,
-        reservation: { expiresAt: { lt: new Date() } },
-      },
-    });
-    let currentlyReserved = stock.reservedQuantity;
-    if (expired.length > 0) {
-      const releasedQty = expired.reduce((sum, e) => sum + e.quantity, 0);
-      await tx.checkoutReservationItem.deleteMany({
-        where: { id: { in: expired.map((e) => e.id) } },
-      });
-      await tx.branchStock.update({
-        where: { id: stock.id },
-        data: { reservedQuantity: { decrement: releasedQty } },
-      });
-      currentlyReserved -= releasedQty;
-    }
-
-    const available = stock.quantity - currentlyReserved;
-    if (available < quantity) {
-      throw new ConflictException({
-        code: 'INSUFFICIENT_STOCK',
-        message: `Only ${available} unit(s) available for this item at this branch`,
-      });
-    }
-
-    await tx.branchStock.update({
-      where: { id: stock.id },
-      data: { reservedQuantity: { increment: quantity } },
-    });
-    await tx.checkoutReservationItem.create({
-      data: {
-        reservationId,
-        vendorId,
-        branchId,
-        offerVariantId,
-        quantity,
-        unitPriceAtReserve: unitPrice,
-        fulfilmentMethod,
-        paymentMethod,
-      },
-    });
-  }
-
-  private async reserveDeliverySlot(
+  /**
+   * Assumes the caller already locked this window row (in canonical
+   * order, alongside every other lock this transaction needs) - see
+   * reserve()'s own Phase 2 comment.
+   */
+  private async reserveDeliverySlotAlreadyLocked(
     tx: Prisma.TransactionClient,
     reservationId: string,
     customerId: string,
@@ -501,14 +652,12 @@ export class CheckoutService {
         message: 'Delivery window not found for this branch',
       });
     }
-    await lockDeliveryWindowRow(tx, windowId);
 
     const scheduledDate = parseDateOnly(scheduledDateStr);
     const today = utcDateOnly(new Date());
     const diffDays = Math.round(
       (scheduledDate.getTime() - today.getTime()) / 86_400_000,
     );
-    // PDR-023: "the next three days" - today, tomorrow, the day after.
     if (diffDays < 0 || diffDays > 2) {
       throw new ConflictException({
         code: 'INVALID_SLOT_DATE',
@@ -628,9 +777,6 @@ export class CheckoutService {
         include: { items: true, slots: true },
       });
       if (!reservation || reservation.customerId !== customerId) {
-        // Idempotent: cancelling an already-gone (or never-owned)
-        // reservation is a benign no-op, not an error - the caller's
-        // goal ("this hold should not exist") is already true.
         return { released: false };
       }
       await this.releaseReservationHolds(tx, reservation.items);
@@ -648,7 +794,13 @@ export class CheckoutService {
       quantity: number;
     }[],
   ): Promise<void> {
-    for (const item of items) {
+    // Canonical order - see stockLockKey's own comment.
+    const sorted = [...items].sort((a, b) => {
+      const ka = stockLockKey(a.vendorId, a.branchId, a.offerVariantId);
+      const kb = stockLockKey(b.vendorId, b.branchId, b.offerVariantId);
+      return ka < kb ? -1 : ka > kb ? 1 : 0;
+    });
+    for (const item of sorted) {
       await tx.$executeRaw`SELECT id FROM branch_stock WHERE "vendorId" = ${item.vendorId} AND "branchId" = ${item.branchId} AND "offerVariantId" = ${item.offerVariantId} FOR UPDATE`;
       await tx.branchStock.updateMany({
         where: {
@@ -670,15 +822,13 @@ export class CheckoutService {
     reservationId: string,
     actorId: string,
     correlationId: string,
+    idempotencyClaimId: string | undefined,
   ) {
     // Expiry is checked (and, if expired, released) in its OWN
-    // transaction, committed BEFORE the error is thrown - if this were
-    // inside the same transaction as the rejection below, Prisma would
-    // roll back the whole thing INCLUDING the release, leaving the
-    // stock/slot hold stuck until some unrelated future reserve()
-    // happens to sweep it. A rolled-back transaction can never
-    // "release, but still fail" atomically; the two have to be
-    // separate commits.
+    // transaction, committed BEFORE the error is thrown - see this
+    // method's own long-standing comment (unchanged from commit
+    // d0ea80d): a rolled-back transaction can never "release, but
+    // still fail" atomically.
     const expiryOutcome = await this.prisma.$transaction(async (tx) => {
       const reservation = await tx.checkoutReservation.findUnique({
         where: { id: reservationId },
@@ -714,16 +864,25 @@ export class CheckoutService {
         include: { items: true, slots: true },
       });
       if (!reservation || reservation.customerId !== customerId) {
-        // Genuinely rare TOCTOU (e.g. cancelled between the two
-        // transactions above) - same response as the first check.
         throw new NotFoundException({
           code: 'RESERVATION_NOT_FOUND',
           message: 'Reservation not found',
         });
       }
 
-      // Re-validate every item's price against what was snapshotted at
-      // reserve time - never silently charge a changed price.
+      // Codex review round 2: eligibility can change DURING the
+      // 10-minute hold (owner unpublishes, offer goes DRAFT,
+      // subscription lapses) - re-check at confirm, not just reserve.
+      await assertItemsPurchasable(
+        tx,
+        this.subscriptionGate,
+        correlationId,
+        reservation.items.map((i) => ({
+          vendorId: i.vendorId,
+          offerVariantId: i.offerVariantId,
+        })),
+      );
+
       const priceChanges: {
         offer_variant_id: string;
         old_price: number;
@@ -782,12 +941,6 @@ export class CheckoutService {
       }
 
       if (priceChanges.length > 0 || feeChanges.length > 0) {
-        // HttpExceptionFilter's response shape is fixed to
-        // {code, message, details, correlation_id} (Part 4, H.1) and
-        // drops any other field on the exception body - so the diff
-        // itself is encoded directly into `message`, never silently
-        // lost, rather than added as a custom field nothing would ever
-        // surface to the caller.
         const priceLines = priceChanges.map(
           (c) =>
             `variant ${c.offer_variant_id}: ${c.old_price} -> ${c.new_price}`,
@@ -802,10 +955,6 @@ export class CheckoutService {
         });
       }
 
-      // Group reservation items by (vendorId, branchId) - PDR-004: one
-      // BranchOrder per branch, and every item in that group already
-      // agrees on fulfilment/payment method (see
-      // CheckoutReservationItem's own schema.prisma comment).
       const itemsByBranch = new Map<string, typeof reservation.items>();
       for (const item of reservation.items) {
         const key = `${item.vendorId}:${item.branchId}`;
@@ -817,8 +966,32 @@ export class CheckoutService {
         reservation.slots.map((s) => [`${s.vendorId}:${s.branchId}`, s]),
       );
 
-      // Sandbox payment: one transaction for the sum of every
-      // ONLINE-paid group's total (PDR-005/RB-ORD-003).
+      // Codex review round 2 (deadlock fix): the real decrement locks
+      // one row per statement - sort ALL items by canonical stock key
+      // FIRST, decrement in that global order, before any BranchOrder
+      // is created, so lock-acquisition order never depends on how the
+      // items happened to group by branch.
+      const sortedItems = [...reservation.items].sort((a, b) => {
+        const ka = stockLockKey(a.vendorId, a.branchId, a.offerVariantId);
+        const kb = stockLockKey(b.vendorId, b.branchId, b.offerVariantId);
+        return ka < kb ? -1 : ka > kb ? 1 : 0;
+      });
+      for (const item of sortedItems) {
+        const updated = await tx.$queryRaw<{ id: string }[]>`
+          UPDATE branch_stock
+          SET quantity = quantity - ${item.quantity}, "reservedQuantity" = "reservedQuantity" - ${item.quantity}, "updatedAt" = now()
+          WHERE "vendorId" = ${item.vendorId} AND "branchId" = ${item.branchId} AND "offerVariantId" = ${item.offerVariantId}
+            AND quantity - ${item.quantity} >= 0 AND "reservedQuantity" - ${item.quantity} >= 0
+          RETURNING id
+        `;
+        if (updated.length === 0) {
+          throw new ConflictException({
+            code: 'INSUFFICIENT_STOCK',
+            message: 'Stock changed unexpectedly - please try again',
+          });
+        }
+      }
+
       let onlineTotal = 0;
       for (const [key, items] of itemsByBranch) {
         if (items[0].paymentMethod !== 'ONLINE') continue;
@@ -873,47 +1046,31 @@ export class CheckoutService {
         );
         const deliveryFee = slot ? Number(slot.deliveryFeeAtReserve) : null;
         const total = subtotal + (deliveryFee ?? 0);
-        const pickupCode =
-          fulfilmentMethod === 'PICKUP' ? generatePickupCode() : null;
 
-        const branchOrder = await tx.branchOrder.create({
-          data: {
-            customerOrderId: customerOrder.id,
-            vendorId,
-            branchId,
-            deliveryWindowId: slot?.deliveryWindowId,
-            scheduledDate: slot?.scheduledDate,
-            addressId: slot?.addressId,
-            fulfilmentMethod,
-            paymentMethod,
-            subtotal,
-            deliveryFee,
-            total,
-            pickupCode,
-            paymentTransactionId:
-              paymentMethod === 'ONLINE' ? paymentTransactionId : null,
-          },
-        });
+        const baseData = {
+          customerOrderId: customerOrder.id,
+          vendorId,
+          branchId,
+          deliveryWindowId: slot?.deliveryWindowId,
+          scheduledDate: slot?.scheduledDate,
+          addressId: slot?.addressId,
+          fulfilmentMethod,
+          paymentMethod,
+          subtotal,
+          deliveryFee,
+          total,
+          paymentTransactionId:
+            paymentMethod === 'ONLINE' ? paymentTransactionId : null,
+        };
 
-        // Real, final stock decrement - the reservation's hold is
-        // "spent" here, atomically, against the true physical
-        // counter (see reserveStockUnit's own comment on why this is
-        // still the authoritative check even though the reservation
-        // already held it virtually).
+        const branchOrder =
+          fulfilmentMethod === 'PICKUP'
+            ? await this.createPickupBranchOrderWithRetry(tx, baseData)
+            : await tx.branchOrder.create({
+                data: { ...baseData, pickupCode: null },
+              });
+
         for (const item of items) {
-          const updated = await tx.$queryRaw<{ id: string }[]>`
-            UPDATE branch_stock
-            SET quantity = quantity - ${item.quantity}, "reservedQuantity" = "reservedQuantity" - ${item.quantity}, "updatedAt" = now()
-            WHERE "vendorId" = ${item.vendorId} AND "branchId" = ${item.branchId} AND "offerVariantId" = ${item.offerVariantId}
-              AND quantity - ${item.quantity} >= 0 AND "reservedQuantity" - ${item.quantity} >= 0
-            RETURNING id
-          `;
-          if (updated.length === 0) {
-            throw new ConflictException({
-              code: 'INSUFFICIENT_STOCK',
-              message: 'Stock changed unexpectedly - please try again',
-            });
-          }
           await tx.branchOrderItem.create({
             data: {
               vendorId: item.vendorId,
@@ -943,45 +1100,99 @@ export class CheckoutService {
 
         createdBranchOrders.push({
           id: branchOrder.id,
-          pickup_code: pickupCode,
+          pickup_code: branchOrder.pickupCode,
           fulfilment_method: fulfilmentMethod,
           total,
         });
       }
 
-      // Consumed - the cart lines that were actually purchased are
-      // removed; anything the customer left unselected at quote time
-      // was never part of this reservation and stays untouched.
-      const cartItemIdsToRemove = await tx.cartItem.findMany({
-        where: {
-          customerId,
-          vendorId: {
-            in: [...new Set(reservation.items.map((i) => i.vendorId))],
-          },
-          offerVariantId: {
-            in: [...new Set(reservation.items.map((i) => i.offerVariantId))],
-          },
-        },
-        select: { id: true, vendorId: true, offerVariantId: true },
-      });
-      const purchasedKeys = new Set(
-        reservation.items.map((i) => `${i.vendorId}:${i.offerVariantId}`),
-      );
-      const idsToDelete = cartItemIdsToRemove
-        .filter((ci) =>
-          purchasedKeys.has(`${ci.vendorId}:${ci.offerVariantId}`),
-        )
-        .map((ci) => ci.id);
-      if (idsToDelete.length > 0) {
-        await tx.cartItem.deleteMany({ where: { id: { in: idsToDelete } } });
+      // Codex review round 2 (fix #2): decrement only the RESERVED
+      // amount from the ORIGINAL cart line (tracked via cartItemId at
+      // reserve time), never bulk-delete by vendor+variant match - a
+      // customer who raised this line's quantity during the hold keeps
+      // the extra, never-reserved units. Two conditional statements,
+      // not one: cart_items.quantity has its own CHECK (quantity > 0),
+      // so an UPDATE can never be the one to write it down to exactly
+      // zero - the first statement only succeeds when positive
+      // quantity remains; if it matches nothing, the line is either
+      // already gone or exactly (or over-)consumed, and the second,
+      // separately-scoped DELETE removes it in precisely that case (a
+      // concurrent quantity bump between the two re-evaluates fresh
+      // under this same transaction's snapshot, so it's never wrongly
+      // deleted). If the line was deleted or its quantity dropped
+      // below what's being reconciled, both statements simply match
+      // zero rows: the cart is secondary bookkeeping that must never
+      // block a valid checkout.
+      for (const item of reservation.items) {
+        if (!item.cartItemId) continue;
+        const updated = await tx.$queryRaw<{ id: string }[]>`
+          UPDATE cart_items
+          SET quantity = quantity - ${item.quantity}, "updatedAt" = now()
+          WHERE id = ${item.cartItemId} AND quantity - ${item.quantity} > 0
+          RETURNING id
+        `;
+        if (updated.length === 0) {
+          await tx.cartItem.deleteMany({
+            where: { id: item.cartItemId, quantity: { lte: item.quantity } },
+          });
+        }
       }
 
       await tx.checkoutReservation.delete({ where: { id: reservationId } });
 
-      return {
+      const responseBody = {
         customer_order_id: customerOrder.id,
         branch_orders: createdBranchOrders,
       };
+      await this.idempotencyCompletion.complete(
+        tx,
+        idempotencyClaimId,
+        responseBody,
+        201,
+      );
+      return responseBody;
     });
+  }
+
+  /**
+   * Codex review round 2 (fix #7): a partial unique index on
+   * (branchId, pickupCode) for active PICKUP orders (see
+   * BranchOrder.pickupCode's own schema.prisma comment) makes a
+   * collision a real, if rare, possibility - retried with a fresh
+   * random code rather than ever surfacing the raw unique-violation.
+   *
+   * Found via the round-2 collision e2e test: a plain try/catch around
+   * tx.branchOrder.create() is NOT enough - Postgres aborts the WHOLE
+   * transaction the instant one statement errors (25P02, "current
+   * transaction is aborted"), so a caught P2002 still leaves every
+   * later statement on this same `tx` failing until a rollback happens.
+   * Each attempt is wrapped in its own SAVEPOINT so a collision only
+   * rolls back that one failed INSERT, not the entire confirm()
+   * transaction (the BranchOrders/stock decrements already written for
+   * OTHER branches in this same checkout must survive).
+   */
+  private async createPickupBranchOrderWithRetry(
+    tx: Prisma.TransactionClient,
+    baseData: Prisma.BranchOrderUncheckedCreateInput,
+  ) {
+    for (let attempt = 0; attempt < PICKUP_CODE_MAX_ATTEMPTS; attempt++) {
+      await tx.$executeRaw`SAVEPOINT pickup_code_attempt`;
+      try {
+        const order = await tx.branchOrder.create({
+          data: { ...baseData, pickupCode: generatePickupCode() },
+        });
+        await tx.$executeRaw`RELEASE SAVEPOINT pickup_code_attempt`;
+        return order;
+      } catch (err) {
+        await tx.$executeRaw`ROLLBACK TO SAVEPOINT pickup_code_attempt`;
+        if (isUniqueViolation(err) && attempt < PICKUP_CODE_MAX_ATTEMPTS - 1) {
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error(
+      'unreachable: pickup code retry loop exhausted without returning or throwing',
+    );
   }
 }
