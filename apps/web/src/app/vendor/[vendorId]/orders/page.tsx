@@ -77,8 +77,8 @@ export default function VendorOrdersPage() {
     <div className="page-shell">
       <div className="top-bar">
         <div className="brand" style={{ margin: 0 }}>طلبات جميع الفروع</div>
-        <Link href={`/vendor/${params.vendorId}/storefront`} className="button-link">
-          العودة لإعدادات المتجر
+        <Link href={`/vendor/${params.vendorId}`} className="button-link">
+          لوحة المتجر
         </Link>
       </div>
 

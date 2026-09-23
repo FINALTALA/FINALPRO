@@ -203,10 +203,40 @@ export default function StorefrontSettingsPage() {
         <div className="brand" style={{ margin: 0 }}>
           إعدادات صفحة المتجر
         </div>
-        <span className={`badge${dto.is_published ? " badge-active" : ""}`}>
-          {dto.is_published ? "منشور" : "غير منشور"}
-        </span>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <span className={`badge${dto.is_published ? " badge-active" : ""}`}>
+            {dto.is_published ? "منشور" : "غير منشور"}
+          </span>
+          <Link href={`/vendor/${params.vendorId}`} className="button-link">
+            لوحة المتجر
+          </Link>
+          <Link href={`/store/${dto.slug}`} className="button-link">
+            عرض الصفحة العامة
+          </Link>
+        </div>
       </div>
+
+      {/* Sprint 13: live preview of the logo/cover as entered below.
+          Links only - there is no upload backend; a broken URL simply
+          shows no image here before it is ever saved. */}
+      {form && (
+        <div className="preview-box" style={{ maxWidth: 560, width: "100%" }} aria-label="معاينة">
+          <div
+            className="preview-cover"
+            style={{
+              backgroundColor: form.cover_color || undefined,
+              backgroundImage: form.cover_image_url ? `url(${form.cover_image_url})` : undefined,
+            }}
+          />
+          {form.logo_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={form.logo_url} alt="معاينة الشعار" className="preview-logo" />
+          ) : (
+            <div className="preview-logo" />
+          )}
+          <div style={{ padding: "0 16px 14px", fontWeight: 700 }}>{form.display_name}</div>
+        </div>
+      )}
 
       {error && <div className="error-banner" style={{ maxWidth: 560, width: "100%" }}>{error}</div>}
       {notice && <p className="muted" style={{ maxWidth: 560, width: "100%" }}>{notice}</p>}
