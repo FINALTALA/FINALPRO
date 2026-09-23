@@ -1545,6 +1545,33 @@ model BranchOrder {
   total           Decimal                   @db.Decimal(10, 2)
   createdAt       DateTime                  @default(now())
   updatedAt       DateTime                  @updatedAt
+  /// Sprint 11 (RB-FUL-002, PDR-026, additive): set the moment the
+  /// DELIVERY status transition SENT -> DELIVERED succeeds (written in
+  /// the same transaction as that transition, via
+  /// BranchOrderService.transition()'s own optional extra-data param -
+  /// never a separate, unguarded write). Drives the 48h-reminder/
+  /// 72h-auto-confirm lazy-reconciliation clock (see
+  /// FulfilmentReconciliationService). Null for PICKUP orders (pickup
+  /// handover confirms itself - see BranchOrderStatus's own PICKED_UP
+  /// comment) and for any DELIVERY order not yet Delivered.
+  deliveredAt     DateTime?
+  /// Sprint 11 (RB-FUL-002/003, additive): idempotency guard for the
+  /// one-time 48-hour post-Delivered reminder - set exactly once, under
+  /// the same row lock the reconciliation sweep already takes, so two
+  /// concurrent sweeps can never both enqueue the reminder outbox
+  /// event. Null until the reminder actually fires.
+  confirmReminderSentAt DateTime?
+  /// Sprint 11 (RB-FUL-002, PDR-026, additive): when the customer
+  /// reported "not received" (with notReceivedReason). A non-null value
+  /// here FREEZES the 48h-reminder/72h-auto-confirm clock entirely -
+  /// the order only resumes toward auto-confirm once staff resolves the
+  /// issue externally and re-requests confirmation (which clears both
+  /// fields and restarts deliveredAt). Null means no open report.
+  notReceivedReportedAt DateTime?
+  /// The customer's own free-text reason for the report above -
+  /// required by PDR-026 ("a 'not received' report requires a
+  /// reason"). Null exactly when notReceivedReportedAt is null.
+  notReceivedReason String?
 
   items BranchOrderItem[]
 

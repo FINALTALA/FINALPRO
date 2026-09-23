@@ -1381,19 +1381,29 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       expect(list.body[0]).not.toHaveProperty('address');
       expect(list.body[0]).not.toHaveProperty('customer_address');
       // Codex review round 2 (fix #6): the employee DTO must be
-      // genuinely minimal, not just missing address - status, total,
-      // payment_method, and created_at are all owner-only fields.
-      expect(list.body[0]).not.toHaveProperty('status');
+      // genuinely minimal - total, payment_method, and created_at are
+      // all owner-only fields, never exposed to a BRANCH_EMPLOYEE.
       expect(list.body[0]).not.toHaveProperty('total');
       expect(list.body[0]).not.toHaveProperty('payment_method');
       expect(list.body[0]).not.toHaveProperty('created_at');
-      // Codex review round 4 on commit 95a8430 (fix #3): `id` itself is
-      // also owner-only now - the agreed employee surface is exactly
-      // name + phone + pickup code, nothing else (no internal
-      // identifier just for a frontend React-key purpose).
-      expect(list.body[0]).not.toHaveProperty('id');
+      // Sprint 11 (RB-FUL-002, PDR-009): `id`, `status`, and
+      // `fulfilment_method` are back - round 4 (this same file, its
+      // own earlier revision) removed `id` when this list was purely
+      // read-only; Sprint 11 gives the employee real actions
+      // (start-preparation, mark-sent, mark-delivered, pickup-handover)
+      // that genuinely need a way to target and gate on a specific
+      // order, not a React-key convenience. See
+      // branch-orders-staff.controller.ts's own employeeOrderDto
+      // comment for the full reasoning.
       expect(Object.keys(list.body[0]).sort()).toEqual(
-        ['customer_name', 'customer_phone', 'pickup_code'].sort(),
+        [
+          'id',
+          'status',
+          'fulfilment_method',
+          'customer_name',
+          'customer_phone',
+          'pickup_code',
+        ].sort(),
       );
 
       const forbiddenBranch = await request(app.getHttpServer())

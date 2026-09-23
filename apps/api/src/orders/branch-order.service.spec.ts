@@ -124,6 +124,59 @@ describe('BranchOrderService.transition', () => {
     expect(auditLog.record).not.toHaveBeenCalled();
   });
 
+  it('merges extraData into the same atomic update() call as the status write (Sprint 11)', async () => {
+    tx.$queryRaw.mockResolvedValue([
+      {
+        id: 'bo-1',
+        status: 'SENT',
+        fulfilmentMethod: 'DELIVERY',
+        paymentMethod: 'ONLINE',
+      },
+    ]);
+    const deliveredAt = new Date('2026-09-26T12:00:00.000Z');
+    tx.branchOrder.update.mockResolvedValue({
+      id: 'bo-1',
+      status: 'DELIVERED',
+      deliveredAt,
+    });
+
+    await service.transition(
+      tx as never,
+      'bo-1',
+      'DELIVERED',
+      'user-1',
+      'corr-1',
+      { deliveredAt },
+    );
+
+    expect(tx.branchOrder.update).toHaveBeenCalledWith({
+      where: { id: 'bo-1' },
+      data: { deliveredAt, status: 'DELIVERED' },
+    });
+  });
+
+  it('accepts a null actorId for a system-triggered transition (Sprint 11 auto-confirm)', async () => {
+    tx.$queryRaw.mockResolvedValue([
+      {
+        id: 'bo-1',
+        status: 'DELIVERED',
+        fulfilmentMethod: 'DELIVERY',
+        paymentMethod: 'ONLINE',
+      },
+    ]);
+    tx.branchOrder.update.mockResolvedValue({
+      id: 'bo-1',
+      status: 'COMPLETED',
+    });
+
+    await service.transition(tx as never, 'bo-1', 'COMPLETED', null, 'corr-1');
+
+    expect(auditLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: null }),
+      tx,
+    );
+  });
+
   it('allows REFUNDED for an ONLINE order from PLACED', async () => {
     tx.$queryRaw.mockResolvedValue([
       {
