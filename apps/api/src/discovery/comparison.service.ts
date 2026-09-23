@@ -20,6 +20,7 @@ export interface EligibleOffer {
   vendorCreatedAt: Date;
   price: number;
   availability: AvailabilityBucket;
+  imageUrl: string | null;
 }
 
 export interface ComparisonCard {
@@ -28,6 +29,12 @@ export interface ComparisonCard {
   canonicalNameEn: string;
   lowestPrice: number;
   lowestPriceAvailability: AvailabilityBucket;
+  imageUrl: string | null;
+  brandName: string | null;
+  categoryName: string | null;
+  storeCount: number;
+  colors: string[];
+  sizes: string[];
   cheapestOffer: {
     vendorId: string;
     vendorSlug: string;
@@ -46,6 +53,67 @@ export interface ComparisonCard {
 }
 
 const MAX_CARD_LOGOS = 5;
+
+/** PRIMARY media first, else the earliest additional one, else null. */
+export function primaryMediaUrl(
+  media: { url: string; kind: string }[],
+): string | null {
+  const primary = media.find((m) => m.kind === 'PRIMARY');
+  return (primary ?? media[0])?.url ?? null;
+}
+
+/**
+ * Sprint 13: colour/size option values shown on cards, read from the
+ * canonical variants' own structural attributes (never invented - a
+ * product whose variants carry neither key simply shows none).
+ */
+function distinctAttributeValues(
+  offers: { structuralAttributes: Prisma.JsonValue }[],
+  keys: string[],
+): string[] {
+  const values = new Set<string>();
+  for (const offer of offers) {
+    const attrs = offer.structuralAttributes;
+    if (attrs === null || typeof attrs !== 'object' || Array.isArray(attrs)) {
+      continue;
+    }
+    for (const key of keys) {
+      const value = (attrs as Record<string, unknown>)[key];
+      if (typeof value === 'string' && value.trim() !== '') {
+        values.add(value.trim());
+      }
+    }
+  }
+  return Array.from(values);
+}
+
+/**
+ * Sprint 13: the one definition of "an eligible offer's vendor" used by
+ * every public listing (discovery, search, following feed). A product is
+ * listed only if at least one CONFIRMED, ACTIVE offer belongs to a
+ * published, ACTIVE store that also satisfies `vendorFilter`.
+ */
+export function eligibleProductWhere(
+  vendorFilter: Prisma.VendorWhereInput = {},
+): Prisma.CanonicalProductWhereInput {
+  return {
+    variants: {
+      some: {
+        confirmedOfferVariants: {
+          some: {
+            vendorOffer: { status: 'ACTIVE' },
+            vendor: {
+              AND: [
+                { storefrontPublished: true, status: 'ACTIVE' },
+                vendorFilter,
+              ],
+            },
+          },
+        },
+      },
+    },
+  };
+}
 
 /**
  * Sprint 8 (RB-COMP-001, PDR-015/016/017): the single source of truth
@@ -92,6 +160,10 @@ export class ComparisonService {
         },
         canonicalVariant: { select: { id: true, structuralAttributes: true } },
         branchStocks: { select: { branchId: true, quantity: true } },
+        media: {
+          select: { url: true, kind: true },
+          orderBy: { createdAt: 'asc' },
+        },
       },
     });
 
@@ -132,6 +204,7 @@ export class ComparisonService {
         vendorCreatedAt: v.vendor.createdAt,
         price: Number(v.salePrice ?? v.basePrice),
         availability: bucketForStock(totalStock),
+        imageUrl: primaryMediaUrl(v.media),
       };
     });
   }
@@ -165,6 +238,8 @@ export class ComparisonService {
       id: string;
       canonicalNameAr: string | null;
       canonicalNameEn: string | null;
+      brand?: { name: string } | null;
+      category?: { nameAr: string } | null;
     },
     eligibleOffers: EligibleOffer[],
   ): ComparisonCard | null {
@@ -205,6 +280,15 @@ export class ComparisonService {
       canonicalNameEn: nameEn,
       lowestPrice: cheapest.price,
       lowestPriceAvailability: cheapest.availability,
+      imageUrl:
+        cheapest.imageUrl ??
+        rankedStores.find((o) => o.imageUrl !== null)?.imageUrl ??
+        null,
+      brandName: canonicalProduct.brand?.name ?? null,
+      categoryName: canonicalProduct.category?.nameAr ?? null,
+      storeCount: cheapestPerVendor.size,
+      colors: distinctAttributeValues(eligibleOffers, ['color', 'colour']),
+      sizes: distinctAttributeValues(eligibleOffers, ['size']),
       cheapestOffer: {
         vendorId: cheapest.vendorId,
         vendorSlug: cheapest.vendorSlug,
@@ -220,6 +304,41 @@ export class ComparisonService {
         offerVariantId: o.offerVariantId,
         price: o.price,
       })),
+    };
+  }
+
+  /**
+   * Builds the public global cards for a page of canonical products
+   * matching `where` (already restricted to eligible products by the
+   * caller via eligibleProductWhere()).
+   */
+  async listCards(
+    where: Prisma.CanonicalProductWhereInput,
+    page: number,
+    pageSize: number,
+  ) {
+    const [total, products] = await Promise.all([
+      this.prisma.canonicalProduct.count({ where }),
+      this.prisma.canonicalProduct.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: {
+          brand: { select: { name: true } },
+          category: { select: { nameAr: true } },
+        },
+      }),
+    ]);
+    const cards = await Promise.all(
+      products.map(async (product) => {
+        const eligible = await this.findEligibleOffers(product.id);
+        return this.buildCard(product, eligible);
+      }),
+    );
+    return {
+      total,
+      cards: cards.filter((c): c is ComparisonCard => c !== null),
     };
   }
 }

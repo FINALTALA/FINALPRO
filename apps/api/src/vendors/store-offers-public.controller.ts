@@ -1,4 +1,5 @@
 import { Controller, Get, NotFoundException, Param } from '@nestjs/common';
+import { primaryMediaUrl } from '../discovery/comparison.service';
 import {
   bucketForStock,
   liveReservedQuantityByKey,
@@ -38,6 +39,7 @@ interface OfferSummaryRow {
     basePrice: unknown;
     salePrice: unknown;
     branchStocks: { branchId: string; quantity: number }[];
+    media: { url: string; kind: string }[];
   }[];
 }
 
@@ -78,6 +80,12 @@ function offerSummaryDto(
     // offer becomes sellable at all.
     min_price: prices.length > 0 ? Math.min(...prices).toFixed(2) : null,
     availability: bucketForStock(totalStock),
+    // Sprint 13: the offer's card image - the first variant that has
+    // one (PRIMARY preferred within a variant), never a placeholder.
+    image_url:
+      offer.variants
+        .map((v) => primaryMediaUrl(v.media))
+        .find((url) => url !== null) ?? null,
   };
 }
 
@@ -134,6 +142,7 @@ export class StoreOffersPublicController {
         variants: {
           include: {
             branchStocks: { select: { branchId: true, quantity: true } },
+            media: { select: { url: true, kind: true } },
           },
         },
       },
@@ -163,6 +172,7 @@ export class StoreOffersPublicController {
                     branchStocks: {
                       select: { branchId: true, quantity: true },
                     },
+                    media: { select: { url: true, kind: true } },
                   },
                 },
               },
@@ -219,6 +229,7 @@ export class StoreOffersPublicController {
         variants: {
           include: {
             branchStocks: { select: { branchId: true, quantity: true } },
+            media: { select: { url: true, kind: true } },
             // Round 4 review fix (RB-COMP-001, PDR-015): the store
             // product page needs to offer a "compare prices" link back
             // to this variant's canonical product WHEN it has a
@@ -228,7 +239,9 @@ export class StoreOffersPublicController {
             // publicly yet. Only the id is selected - never any other
             // CanonicalProductVariant field (gtin/mpn/
             // platformProductBarcode etc. stay internal).
-            canonicalVariant: { select: { canonicalProductId: true } },
+            canonicalVariant: {
+              select: { canonicalProductId: true, structuralAttributes: true },
+            },
           },
         },
       },
@@ -268,6 +281,18 @@ export class StoreOffersPublicController {
       vendor_display_name: vendor.displayName ?? vendor.legalName,
       title_ar: offer.titleAr,
       title_en: offer.titleEn,
+      // Sprint 13: every image of every variant, PRIMARY first, unique.
+      images: Array.from(
+        new Set(
+          offer.variants.flatMap((v) =>
+            [...v.media]
+              .sort((a, b) =>
+                a.kind === b.kind ? 0 : a.kind === 'PRIMARY' ? -1 : 1,
+              )
+              .map((m) => m.url),
+          ),
+        ),
+      ),
       variants: offer.variants.map((v) => {
         const totalStock = totalAvailableStockLive(
           v.branchStocks.map((bs) => ({
@@ -291,6 +316,10 @@ export class StoreOffersPublicController {
           // signal for "no comparison link to show," never guessed
           // from canonical_variant_id's mere presence.
           canonical_product_id: v.canonicalVariant?.canonicalProductId ?? null,
+          // Sprint 13: the real option values (colour/size...) of a
+          // matched variant; null for an unmatched one.
+          structural_attributes:
+            v.canonicalVariant?.structuralAttributes ?? null,
           availability: bucketForStock(totalStock),
         };
       }),
