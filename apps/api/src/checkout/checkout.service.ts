@@ -28,7 +28,10 @@ import {
   lockReservationRowsSorted,
 } from './stock-lock.util';
 import { computeAvailableSlots } from './slot-availability.util';
-import { SandboxPaymentService } from './sandbox-payment.service';
+import {
+  SandboxCardToken,
+  SandboxPaymentService,
+} from './sandbox-payment.service';
 import { QuoteCheckoutDto } from './dto/quote-checkout.dto';
 import { ReserveCheckoutDto } from './dto/reserve-checkout.dto';
 
@@ -904,6 +907,7 @@ export class CheckoutService {
     actorId: string,
     correlationId: string,
     idempotencyClaimId: string | undefined,
+    sandboxCardToken?: SandboxCardToken,
   ) {
     // Expiry is checked (and, if expired, released) in its OWN
     // transaction, committed BEFORE the error is thrown - see this
@@ -1068,6 +1072,12 @@ export class CheckoutService {
         throw new ConflictException({
           code: 'CHECKOUT_PRICE_CHANGED',
           message: `One or more prices changed since this checkout was reserved: ${[...priceLines, ...feeLines].join('; ')}`,
+          // Structured diff for the UI (the message text above is kept
+          // as-is for existing clients).
+          details: [
+            ...priceChanges.map((c) => ({ type: 'price_change', ...c })),
+            ...feeChanges.map((c) => ({ type: 'delivery_fee_change', ...c })),
+          ],
         });
       }
 
@@ -1126,11 +1136,18 @@ export class CheckoutService {
 
       let paymentTransactionId: string | null = null;
       if (onlineTotal > 0) {
-        const result = await this.sandboxPayment.charge(onlineTotal);
+        const result = await this.sandboxPayment.charge(
+          onlineTotal,
+          sandboxCardToken,
+        );
         if (!result.success) {
+          // Everything above (stock decrement, order rows) rolls back with
+          // this throw, so the reservation stays live and the customer can
+          // retry inside the same 10-minute hold.
           throw new ConflictException({
             code: 'PAYMENT_FAILED',
             message: 'The sandbox payment was not successful',
+            details: [{ decline_code: result.declineCode ?? 'card_declined' }],
           });
         }
         const transaction = await tx.paymentTransaction.create({

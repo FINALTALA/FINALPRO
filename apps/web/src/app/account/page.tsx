@@ -2,9 +2,11 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { EmptyState, ErrorBanner } from "@/components/States";
 import { workspaceEntry } from "@/lib/nav";
+import AddressForm, { SavedAddress } from "@/components/AddressForm";
+import { logout } from "@/lib/auth";
 import { clearSession, setActiveWorkspace } from "@/lib/session";
 import { useFetch } from "@/lib/useFetch";
 import { useActiveWorkspace, useHydrated, useSessionToken, useWorkspaces } from "@/lib/useSession";
@@ -27,6 +29,9 @@ export default function AccountPage() {
   const me = useFetch<MeDto>(token ? "/customers/me" : null, true);
   const workspaces = useWorkspaces(token);
   const active = useActiveWorkspace();
+  const addressList = useFetch<SavedAddress[]>(token ? "/customers/me/addresses" : null, true);
+  const [added, setAdded] = useState<SavedAddress[]>([]);
+  const [showAddressForm, setShowAddressForm] = useState(false);
 
   useEffect(() => {
     if (me.status === 401) {
@@ -78,6 +83,46 @@ export default function AccountPage() {
         </div>
 
         <div className="section-heading">
+          <h2>عناوين التوصيل</h2>
+          {!showAddressForm && (
+            <button className="button-link" onClick={() => setShowAddressForm(true)}>
+              + عنوان جديد
+            </button>
+          )}
+        </div>
+        {addressList.error && addressList.status !== 401 && <ErrorBanner message={addressList.error} />}
+        {showAddressForm && (
+          <div className="card" style={{ maxWidth: "none", marginBottom: 12 }}>
+            <AddressForm
+              onCancel={() => setShowAddressForm(false)}
+              onCreated={(a) => {
+                setAdded((prev) => [a, ...prev]);
+                setShowAddressForm(false);
+              }}
+            />
+          </div>
+        )}
+        {(() => {
+          const all = [...added, ...(addressList.data ?? []).filter((a) => !added.some((n) => n.id === a.id))];
+          if (addressList.loading) return <div className="skeleton" style={{ height: 56 }} />;
+          if (all.length === 0 && !showAddressForm) {
+            return <p className="muted">لا توجد عناوين محفوظة بعد. أضيفي عنواناً لتتمكني من الطلب بالتوصيل.</p>;
+          }
+          return (
+            <ul className="address-list">
+              {all.map((a) => (
+                <li key={a.id}>
+                  <strong>{a.label ?? "عنوان"}</strong>
+                  <span className="muted">
+                    {a.landmark_note ?? ""} · <span dir="ltr">{a.phone_number_1}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          );
+        })()}
+
+        <div className="section-heading">
           <h2>مساحات العمل</h2>
         </div>
         {workspaces === null && <p className="muted">جارٍ التحميل...</p>}
@@ -120,8 +165,8 @@ export default function AccountPage() {
         <div style={{ marginTop: 24 }}>
           <button
             className="button button-secondary"
-            onClick={() => {
-              clearSession();
+            onClick={async () => {
+              await logout();
               router.replace("/login");
             }}
           >

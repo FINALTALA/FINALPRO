@@ -2,7 +2,12 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import AddressForm, { SavedAddress } from "@/components/AddressForm";
+import SandboxCardForm from "@/components/SandboxCardForm";
 import { apiFetch, ApiError, newIdempotencyKey } from "@/lib/api";
+import { formatDelta, hasChanges, parsePriceChange, PriceChangeSummary } from "@/lib/price-change";
+import { CardResult, declineMessage, SandboxCardToken } from "@/lib/sandbox-card";
+import { allGroupsFulfillable, availableMethods, coerceMethod, defaultMethod, FulfilmentMethod } from "@/lib/fulfilment";
 import { clearSession, getSessionToken } from "@/lib/session";
 
 interface QuoteItem {
@@ -51,7 +56,7 @@ interface AddressDto {
 
 interface GroupChoice {
   branchId: string;
-  fulfilmentMethod: "PICKUP" | "DELIVERY";
+  fulfilmentMethod: FulfilmentMethod | null;
   paymentMethod: "ONLINE" | "COD";
   addressId: string;
   deliveryWindowId: string;
@@ -61,7 +66,12 @@ interface GroupChoice {
 interface ReserveResponse {
   reservation_id: string;
   expires_at: string;
-  items: { unit_price: number; quantity: number }[];
+  items: {
+    offer_variant_id: string;
+    unit_price: number;
+    quantity: number;
+    payment_method: "ONLINE" | "COD";
+  }[];
   slots: { delivery_fee: number; scheduled_date: string }[];
 }
 
@@ -95,6 +105,11 @@ export default function CheckoutPage() {
   // as a brand-new request.
   const [confirmIdempotencyKey, setConfirmIdempotencyKey] = useState("");
   const [confirmed, setConfirmed] = useState<ConfirmedBranchOrder[] | null>(null);
+  // Sprint 14: which group is adding a new address inline, the sandbox
+  // payment outcome, and the price/fee diff when CHECKOUT_PRICE_CHANGED.
+  const [addingAddressFor, setAddingAddressFor] = useState<string | null>(null);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [priceChange, setPriceChange] = useState<PriceChangeSummary | null>(null);
 
   function groupKey(g: QuoteGroup): string {
     return `${g.vendor_id}:${g.cart_item_ids.join(",")}`;
@@ -127,7 +142,11 @@ export default function CheckoutPage() {
           const branchId = g.suggested_branch_id ?? g.eligible_branches[0]?.branch_id ?? "";
           initial[groupKey(g)] = {
             branchId,
-            fulfilmentMethod: "PICKUP",
+            // A valid default for THIS branch: pick-up if it is physical,
+            // otherwise delivery if it has slots, otherwise none.
+            fulfilmentMethod: defaultMethod(
+              g.eligible_branches.find((b) => b.branch_id === branchId),
+            ),
             paymentMethod: "COD",
             addressId: "",
             deliveryWindowId: "",
@@ -156,6 +175,20 @@ export default function CheckoutPage() {
 
   async function reserve() {
     if (!quote) return;
+    if (!allGroupsFulfillable(quote.groups.map((g) => choices[groupKey(g)]?.fulfilmentMethod ?? null))) {
+      setError("لا توجد طريقة استلام أو توصيل متاحة لأحد الفروع - اختاري فرعاً آخر.");
+      return;
+    }
+    for (const g of quote.groups) {
+      const choice = choices[groupKey(g)];
+      if (
+        choice?.fulfilmentMethod === "DELIVERY" &&
+        (!choice.addressId || !choice.deliveryWindowId || !choice.scheduledDate)
+      ) {
+        setError("اختاري عنوان التوصيل والموعد قبل المتابعة.");
+        return;
+      }
+    }
     setBusy(true);
     setError(null);
     try {
@@ -164,7 +197,7 @@ export default function CheckoutPage() {
         return {
           cart_item_ids: g.cart_item_ids,
           branch_id: choice.branchId,
-          fulfilment_method: choice.fulfilmentMethod,
+          fulfilment_method: choice.fulfilmentMethod as FulfilmentMethod,
           payment_method: choice.paymentMethod,
           ...(choice.fulfilmentMethod === "DELIVERY"
             ? {
@@ -192,23 +225,49 @@ export default function CheckoutPage() {
     }
   }
 
-  async function confirm() {
+  async function confirm(card?: CardResult) {
     if (!reservation) return;
-    setBusy(true);
     setError(null);
+    setPaymentError(null);
+    if (card && !card.ok) {
+      // Not a sandbox test card / bad expiry / bad CVC: nothing is sent.
+      setPaymentError(card.error);
+      return;
+    }
+    const token: SandboxCardToken | undefined = card?.ok ? card.token : undefined;
+    setBusy(true);
     try {
       const res = await apiFetch<{ branch_orders: ConfirmedBranchOrder[] }>(
         "/checkout/confirm",
         {
           method: "POST",
-          body: { reservation_id: reservation.reservation_id },
+          body: {
+            reservation_id: reservation.reservation_id,
+            ...(token ? { sandbox_card_token: token } : {}),
+          },
           idempotencyKey: confirmIdempotencyKey,
         },
       );
       setConfirmed(res.branch_orders);
       sessionStorage.removeItem("checkout_cart_item_ids");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "تعذّر تأكيد الطلب");
+      if (err instanceof ApiError && err.code === "PAYMENT_FAILED") {
+        // Nothing was created and the reservation is still held: show
+        // why, and use a FRESH idempotency key so the next card is a new
+        // attempt rather than a replay of this decline.
+        const detail = err.details[0] as { decline_code?: string } | undefined;
+        setPaymentError(declineMessage(detail?.decline_code));
+        setConfirmIdempotencyKey(newIdempotencyKey("checkout-confirm"));
+      } else if (err instanceof ApiError && err.code === "CHECKOUT_PRICE_CHANGED") {
+        const summary = parsePriceChange(err.details);
+        if (hasChanges(summary)) setPriceChange(summary);
+        else setError(err.message);
+      } else if (err instanceof ApiError && err.code === "RESERVATION_EXPIRED") {
+        setError("انتهت مدة الحجز. ابدئي الطلب من جديد.");
+        setReservation(null);
+      } else {
+        setError(err instanceof ApiError ? err.message : "تعذّر تأكيد الطلب");
+      }
     } finally {
       setBusy(false);
     }
@@ -221,6 +280,15 @@ export default function CheckoutPage() {
       }).catch(() => {});
     }
     setReservation(null);
+    setPriceChange(null);
+    setPaymentError(null);
+  }
+
+  // Sprint 14: after CHECKOUT_PRICE_CHANGED the customer reviews the new
+  // prices by releasing the hold and re-quoting the same cart selection.
+  async function reviewNewPrices() {
+    await cancelReservationAndRestart();
+    window.location.reload();
   }
 
   if (error && !quote) {
@@ -271,28 +339,91 @@ export default function CheckoutPage() {
     const total =
       reservation.items.reduce((s, i) => s + i.unit_price * i.quantity, 0) +
       reservation.slots.reduce((s, sl) => s + sl.delivery_fee, 0);
+    const hasOnline = reservation.items.some((i) => i.payment_method === "ONLINE");
+    const titleByVariant = new Map<string, string>();
+    for (const g of quote.groups) {
+      for (const it of g.items) titleByVariant.set(it.offer_variant_id, it.title_ar);
+    }
     return (
       <div className="page-shell">
         <div className="top-bar">
           <div className="brand" style={{ margin: 0 }}>تأكيد الطلب</div>
         </div>
         {error && <div className="error-banner" style={{ maxWidth: 560 }}>{error}</div>}
-        <div className="card" style={{ maxWidth: 560 }}>
-          <p className="muted">
-            الحجز صالح لمدة {expiresIn} دقيقة تقريباً - أكملي الدفع قبل انتهاء الوقت.
-          </p>
-          <div className="product-card-price" style={{ marginTop: 8 }}>
-            الإجمالي: {total} ₪
+
+        {priceChange && (
+          <div className="card price-diff" style={{ maxWidth: 560 }} role="alert">
+            <strong>تغيّرت الأسعار منذ حجزك</strong>
+            <p className="muted" style={{ margin: "6px 0 10px" }}>
+              لم يتم خصم أي مبلغ ولم يُنشأ أي طلب. راجعي الأسعار الجديدة ثم أكملي.
+            </p>
+            <ul>
+              {priceChange.prices.map((c) => (
+                <li key={c.offerVariantId}>
+                  <span>{titleByVariant.get(c.offerVariantId) ?? "منتج"}</span>
+                  <span>
+                    <s>{c.oldPrice} ₪</s> ← <strong>{c.newPrice} ₪</strong> (<bdi dir="ltr">{formatDelta(c.oldPrice, c.newPrice)}</bdi>)
+                  </span>
+                </li>
+              ))}
+              {priceChange.fees.map((c) => (
+                <li key={c.deliveryWindowId}>
+                  <span>رسوم التوصيل</span>
+                  <span>
+                    <s>{c.oldFee} ₪</s> ←{" "}
+                    <strong>{c.newFee === null ? "غير متاح" : `${c.newFee} ₪`}</strong>
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+              <button className="button" onClick={reviewNewPrices} disabled={busy}>
+                مراجعة بالأسعار الجديدة
+              </button>
+              <button className="button-link" onClick={cancelReservationAndRestart} disabled={busy}>
+                إلغاء والعودة
+              </button>
+            </div>
           </div>
-          <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-            <button className="button" onClick={confirm} disabled={busy}>
-              تأكيد الدفع
-            </button>
-            <button className="button-link" onClick={cancelReservationAndRestart} disabled={busy}>
-              إلغاء والعودة
-            </button>
+        )}
+
+        {!priceChange && (
+          <div className="card" style={{ maxWidth: 560 }}>
+            <p className="muted">
+              الحجز صالح لمدة {expiresIn} دقيقة تقريباً - أكملي الدفع قبل انتهاء الوقت.
+            </p>
+            <div className="product-card-price" style={{ marginTop: 8 }}>
+              الإجمالي: {total} ₪
+            </div>
+
+            {hasOnline ? (
+              <>
+                {paymentError && (
+                  <div className="error-banner" role="alert" style={{ marginTop: 12 }}>
+                    {paymentError}
+                  </div>
+                )}
+                <div style={{ marginTop: 12 }}>
+                  <SandboxCardForm busy={busy} onPay={(r) => void confirm(r)} />
+                </div>
+                <div style={{ marginTop: 10 }}>
+                  <button className="button-link" onClick={cancelReservationAndRestart} disabled={busy}>
+                    إلغاء والعودة
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+                <button className="button" onClick={() => void confirm()} disabled={busy}>
+                  تأكيد الطلب
+                </button>
+                <button className="button-link" onClick={cancelReservationAndRestart} disabled={busy}>
+                  إلغاء والعودة
+                </button>
+              </div>
+            )}
           </div>
-        </div>
+        )}
       </div>
     );
   }
@@ -332,7 +463,19 @@ export default function CheckoutPage() {
                 <label>الفرع</label>
                 <select
                   value={choice.branchId}
-                  onChange={(e) => updateChoice(key, { branchId: e.target.value })}
+                  onChange={(e) =>
+                    updateChoice(key, {
+                      branchId: e.target.value,
+                      // Switching branch must never leave an invalid method.
+                      fulfilmentMethod: coerceMethod(
+                        branchFor(g, e.target.value),
+                        choice.fulfilmentMethod,
+                      ),
+                      addressId: "",
+                      deliveryWindowId: "",
+                      scheduledDate: "",
+                    })
+                  }
                 >
                   {g.eligible_branches.map((b) => (
                     <option key={b.branch_id} value={b.branch_id}>
@@ -345,18 +488,27 @@ export default function CheckoutPage() {
               <div className="field">
                 <label>طريقة الاستلام</label>
                 <select
-                  value={choice.fulfilmentMethod}
+                  value={choice.fulfilmentMethod ?? ""}
+                  disabled={choice.fulfilmentMethod === null}
                   onChange={(e) =>
                     updateChoice(key, {
-                      fulfilmentMethod: e.target.value as "PICKUP" | "DELIVERY",
+                      fulfilmentMethod: e.target.value as FulfilmentMethod,
                     })
                   }
                 >
-                  {branch?.is_physical && <option value="PICKUP">استلام من المحل</option>}
-                  {branch && branch.available_slots.length > 0 && (
+                  {availableMethods(branch).includes("PICKUP") && (
+                    <option value="PICKUP">استلام من المحل</option>
+                  )}
+                  {availableMethods(branch).includes("DELIVERY") && (
                     <option value="DELIVERY">توصيل</option>
                   )}
+                  {choice.fulfilmentMethod === null && <option value="">غير متاح</option>}
                 </select>
+                {choice.fulfilmentMethod === null && (
+                  <p className="cart-line-note" role="alert" style={{ margin: "6px 0 0" }}>
+                    لا توجد طريقة استلام أو توصيل متاحة لهذا الفرع حالياً - اختاري فرعاً آخر.
+                  </p>
+                )}
               </div>
 
               {choice.fulfilmentMethod === "DELIVERY" && branch && (
@@ -374,12 +526,32 @@ export default function CheckoutPage() {
                         </option>
                       ))}
                     </select>
-                    {addresses.length === 0 && (
-                      <p className="muted">
-                        لا توجد عناوين محفوظة - <a href="#" onClick={(e) => { e.preventDefault(); router.push("/cart"); }}>أضيفي عنواناً أولاً</a>.
-                      </p>
+                    {addresses.length === 0 && addingAddressFor !== key && (
+                      <p className="muted">لا توجد عناوين محفوظة بعد.</p>
+                    )}
+                    {addingAddressFor !== key && (
+                      <button
+                        type="button"
+                        className="button-link"
+                        style={{ alignSelf: "flex-start" }}
+                        onClick={() => setAddingAddressFor(key)}
+                      >
+                        + عنوان جديد
+                      </button>
                     )}
                   </div>
+                  {addingAddressFor === key && (
+                    <div className="card" style={{ maxWidth: "none", marginBottom: 16 }}>
+                      <AddressForm
+                        onCancel={() => setAddingAddressFor(null)}
+                        onCreated={(created: SavedAddress) => {
+                          setAddresses((prev) => [created, ...(prev ?? [])]);
+                          updateChoice(key, { addressId: created.id });
+                          setAddingAddressFor(null);
+                        }}
+                      />
+                    </div>
+                  )}
                   <div className="field">
                     <label>الموعد (خلال الأيام الثلاثة القادمة)</label>
                     <select
@@ -422,7 +594,14 @@ export default function CheckoutPage() {
         })}
 
         {quote.groups.length > 0 && (
-          <button className="button" onClick={reserve} disabled={busy}>
+          <button
+            className="button"
+            onClick={reserve}
+            disabled={
+              busy ||
+              !allGroupsFulfillable(quote.groups.map((g) => choices[groupKey(g)]?.fulfilmentMethod ?? null))
+            }
+          >
             متابعة
           </button>
         )}

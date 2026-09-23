@@ -11,6 +11,7 @@ import {
   NotFoundException,
   Post,
   Req,
+  UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
@@ -21,6 +22,8 @@ import { IdempotencyCompletionService } from '../common/idempotency/idempotency-
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { IdempotencyTtl } from '../common/idempotency/idempotency-ttl.decorator';
 import { Prisma } from '../../generated/prisma/client';
+import { CurrentUser } from './current-user.decorator';
+import { AuthenticatedUser, SessionAuthGuard } from './session-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
 import { OtpRequestDto } from './dto/otp-request.dto';
@@ -340,6 +343,27 @@ export class AuthController {
     });
 
     return { session_token: token };
+  }
+
+  // Sprint 14: server-side logout. Revokes ONLY the calling session
+  // (the bearer token SessionAuthGuard just validated) - never another
+  // session, never another user's. The token comes from this same
+  // request's own header, so there is no id anyone could substitute.
+  @Post('logout')
+  @HttpCode(200)
+  @UseGuards(SessionAuthGuard)
+  async logout(@CurrentUser() user: AuthenticatedUser, @Req() req: Request) {
+    const header = req.header('Authorization') ?? '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+    await this.sessions.revoke(token, user.id);
+    await this.auditLog.record({
+      actorId: user.id,
+      correlationId: req.correlationId,
+      action: 'user.logout',
+      entityType: 'User',
+      entityId: user.id,
+    });
+    return { logged_out: true };
   }
 
   @Post('password/reset-request')

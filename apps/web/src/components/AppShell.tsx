@@ -19,7 +19,8 @@ import {
   mobileTabs,
   workspaceEntry,
 } from "@/lib/nav";
-import { clearSession, setActiveWorkspace } from "@/lib/session";
+import { logout } from "@/lib/auth";
+import { setActiveWorkspace } from "@/lib/session";
 import {
   useActiveWorkspace,
   useCartCount,
@@ -89,9 +90,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
     router.push(entry.href);
   }
 
-  function logout() {
-    clearSession();
+  async function signOut() {
     setMenuOpen(false);
+    await logout();
     router.replace("/login");
   }
 
@@ -198,7 +199,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
                     >
                       حسابي
                     </Link>
-                    <button role="menuitem" className="menu-item" onClick={logout}>
+                    <button role="menuitem" className="menu-item" onClick={() => void signOut()}>
                       تسجيل الخروج
                     </button>
                   </div>

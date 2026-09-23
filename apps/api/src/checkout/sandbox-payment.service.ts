@@ -1,9 +1,27 @@
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 
+/**
+ * Sprint 14: sandbox card tokens. The browser's sandbox card form maps
+ * ONLY the documented test card numbers to one of these tokens and sends
+ * the token - a card number, expiry or CVC never reaches this API, is
+ * never stored, and is never logged. (Same idea as a real gateway's
+ * test tokens.) Sending no token keeps the pre-Sprint-14 behaviour: the
+ * sandbox charge succeeds.
+ */
+export const SANDBOX_CARD_TOKENS = [
+  'tok_sandbox_visa',
+  'tok_sandbox_declined',
+  'tok_sandbox_insufficient_funds',
+] as const;
+export type SandboxCardToken = (typeof SANDBOX_CARD_TOKENS)[number];
+
+export type SandboxDeclineCode = 'card_declined' | 'insufficient_funds';
+
 export interface SandboxChargeResult {
   success: boolean;
   reference: string;
+  declineCode?: SandboxDeclineCode;
 }
 
 /**
@@ -18,15 +36,21 @@ export interface SandboxChargeResult {
  */
 @Injectable()
 export class SandboxPaymentService {
-  // Always succeeds by design - there is no real failure mode to
-  // simulate honestly without inventing arbitrary behaviour a real
-  // gateway never specified. The interface still returns a
-  // success/failure shape (rather than always resolving) so
-  // CheckoutService's own "payment failed -> roll back everything"
-  // path is real, reachable code, exercised in tests via a mocked
-  // SandboxPaymentService that returns success: false.
-  async charge(amount: number): Promise<SandboxChargeResult> {
+  // Succeeds unless the (sandbox) card token asks for a decline - the
+  // decline outcomes are the documented sandbox test tokens above, not
+  // invented gateway behaviour.
+  async charge(
+    amount: number,
+    cardToken?: SandboxCardToken,
+  ): Promise<SandboxChargeResult> {
     void amount;
-    return { success: true, reference: `sandbox_${randomUUID()}` };
+    const reference = `sandbox_${randomUUID()}`;
+    if (cardToken === 'tok_sandbox_declined') {
+      return { success: false, reference, declineCode: 'card_declined' };
+    }
+    if (cardToken === 'tok_sandbox_insufficient_funds') {
+      return { success: false, reference, declineCode: 'insufficient_funds' };
+    }
+    return { success: true, reference };
   }
 }

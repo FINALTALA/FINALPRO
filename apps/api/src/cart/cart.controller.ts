@@ -19,6 +19,11 @@ import {
 } from '../auth/session-auth.guard';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
+import {
+  bucketForStock,
+  liveReservedQuantityByKey,
+  maxSingleBranchAvailable,
+} from '../common/availability.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { assertItemsPurchasable } from '../checkout/purchase-eligibility.util';
 import { SubscriptionGateService } from '../subscriptions/subscription-gate.service';
@@ -87,15 +92,64 @@ export class CartController {
     } as const;
   }
 
+  // Sprint 14 (PDR-017, approved baseline 3.4): the cart is the one
+  // surface that may show a quantity limit - each line reports its
+  // availability bucket, the maximum currently available to buy
+  // (`max_quantity` - the most ONE branch can fulfil, live-reservation
+  // aware, since checkout never splits a line across branches; 0 when
+  // the line can't be bought at all) and whether the offer/store is still purchasable.
+  // Purely additive fields; add/update responses are unchanged, and the
+  // real stock/eligibility enforcement stays in quote/reserve/confirm.
   @Get()
   async list(@CurrentUser() user: AuthenticatedUser) {
     const customerId = await this.requireCustomerId(user);
     const items = await this.prisma.cartItem.findMany({
       where: { customerId },
       orderBy: { createdAt: 'desc' },
-      include: this.itemInclude(),
+      include: {
+        offerVariant: {
+          select: {
+            basePrice: true,
+            salePrice: true,
+            sellerSku: true,
+            vendorOffer: {
+              select: { titleAr: true, titleEn: true, status: true },
+            },
+            vendor: { select: { storefrontPublished: true, status: true } },
+            branchStocks: { select: { branchId: true, quantity: true } },
+          },
+        },
+      },
     });
-    return items.map(cartItemDto);
+    const liveReserved = await liveReservedQuantityByKey(
+      this.prisma,
+      items.flatMap((i) =>
+        i.offerVariant.branchStocks.map((bs) => ({
+          branchId: bs.branchId,
+          offerVariantId: i.offerVariantId,
+        })),
+      ),
+    );
+    return items.map((item) => {
+      const available = maxSingleBranchAvailable(
+        item.offerVariant.branchStocks.map((bs) => ({
+          branchId: bs.branchId,
+          offerVariantId: item.offerVariantId,
+          quantity: bs.quantity,
+        })),
+        liveReserved,
+      );
+      const purchasable =
+        item.offerVariant.vendorOffer.status === 'ACTIVE' &&
+        item.offerVariant.vendor.storefrontPublished &&
+        item.offerVariant.vendor.status === 'ACTIVE';
+      return {
+        ...cartItemDto(item),
+        availability: bucketForStock(purchasable ? available : 0),
+        max_quantity: purchasable ? available : 0,
+        purchasable,
+      };
+    });
   }
 
   // Adding an already-present (customer, vendor, variant) line

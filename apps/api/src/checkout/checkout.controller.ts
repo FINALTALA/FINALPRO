@@ -84,6 +84,7 @@ export class CheckoutController {
       user.id,
       req.correlationId,
       req.idempotencyClaimId,
+      dto.sandbox_card_token,
     );
   }
 

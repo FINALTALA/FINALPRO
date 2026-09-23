@@ -46,9 +46,14 @@ export class HttpExceptionFilter implements ExceptionFilter {
       } else if (typeof body === 'object' && body !== null) {
         const asRecord = body as Record<string, unknown>;
         message = (asRecord.message as string) ?? exception.message;
+        // Validation errors arrive as an array `message`; a business
+        // error may instead supply its own structured `details` array
+        // (e.g. the price/fee diff of CHECKOUT_PRICE_CHANGED).
         details = Array.isArray(asRecord.message)
           ? (asRecord.message as unknown[])
-          : [];
+          : Array.isArray(asRecord.details)
+            ? (asRecord.details as unknown[])
+            : [];
         customCode =
           typeof asRecord.code === 'string' ? asRecord.code : undefined;
       }

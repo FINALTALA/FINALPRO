@@ -1342,3 +1342,88 @@ textarea:focus {
   object-fit: cover;
   background: var(--color-navy);
 }
+
+/* ---------- Sprint 14: address form, cart lines, price diff, card form ---------- */
+.form-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0 12px;
+}
+@media (min-width: 560px) {
+  .form-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+.form-row > .field,
+.address-form .field,
+.card-form .field {
+  min-width: 0;
+}
+.address-form input,
+.address-form select,
+.card-form input {
+  width: 100%;
+  min-width: 0;
+}
+.field-error {
+  color: var(--color-danger);
+  font-size: 13px;
+}
+.field input[aria-invalid="true"],
+.field select[aria-invalid="true"] {
+  border-color: var(--color-danger);
+}
+.address-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.address-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+.cart-line-dim {
+  opacity: 0.6;
+  background: var(--color-surface-2);
+}
+.cart-line-note {
+  color: var(--color-danger);
+  font-size: 14px;
+}
+.price-diff ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.price-diff li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  background: var(--color-warning-bg);
+  border-radius: var(--radius-sm);
+}
+.card-form .test-cards {
+  margin: 4px 0 14px;
+  color: var(--color-text-muted);
+}
+.card-form .test-cards ul {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
