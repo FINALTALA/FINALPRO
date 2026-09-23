@@ -770,26 +770,68 @@ describe('Sprint 14 - delivery checkout completeness (e2e)', () => {
       expect(orders).toBe(1);
     });
 
-    it('accepts only the documented sandbox tokens - a card number or unknown token is a 400 and never charged or stored', async () => {
+    it('accepts only the documented sandbox tokens - an invalid token is a 400 that charges nothing and consumes nothing', async () => {
       const s = await setupOnline();
-      const before = await ordersFor(s.buyer.customerId);
+      const stockBefore = await stockOf(s.branch.id, s.variant.id);
+      const ordersBefore = await ordersFor(s.buyer.customerId);
+      const branchOrdersBefore = await prisma.branchOrder.count({
+        where: { vendorId: s.vendor.id },
+      });
+
       for (const bad of [
         '4242424242424242',
         'tok_visa',
         '4242 4242 4242 4242',
         '',
       ]) {
-        await confirm(s.buyer.token, s.reservationId, {
-          sandbox_card_token: bad,
-        }).expect(400);
+        const key = unique('confirm-invalid');
+        await confirm(
+          s.buyer.token,
+          s.reservationId,
+          { sandbox_card_token: bad },
+          key,
+        ).expect(400);
+
+        // Nothing was charged or created...
+        expect(await ordersFor(s.buyer.customerId)).toEqual(ordersBefore);
+        expect(
+          await prisma.branchOrder.count({ where: { vendorId: s.vendor.id } }),
+        ).toBe(branchOrdersBefore);
+        // ...and nothing was consumed: stock, hold and cart line intact.
+        const stock = await stockOf(s.branch.id, s.variant.id);
+        expect(stock.quantity).toBe(stockBefore.quantity);
+        expect(stock.reservedQuantity).toBe(stockBefore.reservedQuantity);
+        expect(
+          await prisma.checkoutReservation.findUnique({
+            where: { id: s.reservationId },
+          }),
+        ).not.toBeNull();
+        expect(
+          await prisma.cartItem.findUnique({ where: { id: s.item } }),
+        ).not.toBeNull();
+
+        // The idempotency interceptor runs before request validation, so
+        // a claim for this key may exist - but it must never be a
+        // completed one and must hold no stored response.
+        const claims = await prisma.idempotencyKey.findMany({
+          where: { key },
+        });
+        expect(claims.length).toBeLessThanOrEqual(1);
+        for (const claim of claims) {
+          expect(claim.status).not.toBe('COMPLETED');
+          expect(claim.responseBody).toBeNull();
+        }
       }
-      expect(await ordersFor(s.buyer.customerId)).toEqual(before);
-      const claims = await prisma.idempotencyKey.findMany({
-        where: { requestPath: { contains: 'checkout/confirm' } },
+
+      // Nothing was consumed, so the same reservation still pays normally
+      // with a valid sandbox token.
+      const ok = await confirm(s.buyer.token, s.reservationId, {
+        sandbox_card_token: 'tok_sandbox_visa',
       });
-      for (const c of claims) {
-        expect(JSON.stringify(c)).not.toContain('4242');
-      }
+      expect([200, 201]).toContain(ok.status);
+      const ordersAfter = await ordersFor(s.buyer.customerId);
+      expect(ordersAfter.customerOrders).toBe(ordersBefore.customerOrders + 1);
+      expect(ordersAfter.payments).toBe(ordersBefore.payments + 1);
     });
 
     it('a COD-only checkout ignores the card token entirely (nothing is charged, even with a declining token)', async () => {
