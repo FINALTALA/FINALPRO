@@ -11,6 +11,7 @@ export class ApiError extends Error {
     public status: number,
     public code: string,
     message: string,
+    public details: unknown[] = [],
   ) {
     super(message);
   }
@@ -60,6 +61,7 @@ export async function apiFetch<T>(
       res.status,
       parsed?.error?.code ?? "UNKNOWN_ERROR",
       parsed?.error?.message ?? "Something went wrong",
+      Array.isArray(parsed?.error?.details) ? parsed.error.details : [],
     );
   }
   return parsed as T;

@@ -1,0 +1,319 @@
+import { chromium } from "playwright";
+import fs from "fs";
+import { createRequire } from "module";
+
+const require = createRequire("/workspace/package.json");
+const { Client } = require("pg");
+
+const API = "http://localhost:3011/api/v1";
+const WEB = "http://localhost:3010";
+const OUT = "/tmp/shots/s14";
+const LOG = "/tmp/api14.log";
+fs.mkdirSync(OUT, { recursive: true });
+
+const db = new Client({ connectionString: process.env.DATABASE_URL_PLAIN });
+await db.connect();
+// Known starting state: no live holds from earlier runs, full stock.
+for (const t of ["checkout_reservation_slots", "checkout_reservation_items", "checkout_reservations"]) await db.query(`delete from ${t}`);
+await db.query(`update branch_stock set quantity=25, "reservedQuantity"=0`);
+
+async function api(path, opts = {}) {
+  const res = await fetch(`${API}${path}`, {
+    method: opts.method ?? "GET",
+    headers: {
+      "Content-Type": "application/json",
+      ...(opts.token ? { Authorization: `Bearer ${opts.token}` } : {}),
+    },
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  const text = await res.text();
+  return { status: res.status, body: text ? JSON.parse(text) : {} };
+}
+
+function otpFor(phone) {
+  const text = fs.readFileSync(LOG, "utf8");
+  const re = new RegExp(`OTP for ${phone.replace("+", "\\+")}: (\\d{6})`, "g");
+  let m;
+  let last = null;
+  while ((m = re.exec(text))) last = m[1];
+  return last;
+}
+async function waitOtp(phone) {
+  for (let i = 0; i < 40; i++) {
+    const c = otpFor(phone);
+    if (c) return c;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  throw new Error("no OTP for " + phone);
+}
+
+async function go(p, url) {
+  try {
+    await p.goto(url, { waitUntil: "networkidle" });
+  } catch {
+    await p.waitForTimeout(800);
+    await p.goto(url, { waitUntil: "networkidle" });
+  }
+}
+
+const results = [];
+function record(name, ok, extra = "") {
+  results.push({ name, ok });
+  console.log(ok ? "PASS" : "FAIL", name, ok ? "" : extra);
+}
+
+const browser = await chromium.launch();
+const phone = `+97056${String(Math.floor(1000000 + Math.random() * 8999999))}`;
+const password1 = "first-password-1";
+const password2 = "second-password-2";
+
+// Demo product (vendor one) to buy.
+const cards = (await api("/discovery/all")).body.items;
+const card = cards[0];
+const slug = card.cheapest_offer.vendor_slug;
+const offerId = card.cheapest_offer.offer_id;
+const offer = (await api(`/storefronts/${slug}/offers/${offerId}`)).body;
+const variantId = offer.variants[0].id;
+const vendorId = offer.vendor_id;
+
+const ctx = await browser.newContext({
+  viewport: { width: 1280, height: 900 },
+  locale: "ar",
+  permissions: ["geolocation"],
+  geolocation: { latitude: 31.9038, longitude: 35.2034 },
+});
+const page = await ctx.newPage();
+const bodies = [];
+const requests = [];
+page.on("request", (r) => {
+  if (r.url().startsWith(API)) {
+    requests.push({ method: r.method(), url: r.url().replace(API, "") });
+    if (r.postData()) bodies.push(r.postData());
+  }
+});
+const errors = [];
+page.on("pageerror", (e) => errors.push(String(e)));
+
+// ---------- A. new user registers through the UI ----------
+await go(page, `${WEB}/register`);
+await page.locator("#phone").fill(phone);
+await page.getByRole("button", { name: "إرسال رمز التحقق" }).click();
+await page.locator("#code").waitFor();
+await page.locator("#code").fill(await waitOtp(phone));
+await page.getByRole("button", { name: "تحقّق" }).click();
+await page.locator("#password").waitFor();
+await page.locator("#password").fill(password1);
+await page.getByRole("button", { name: "إنشاء الحساب" }).click();
+await page.waitForURL(`${WEB}/`, { timeout: 20000 });
+const token1 = await page.evaluate(() => localStorage.getItem("finalpro_session_token"));
+record("A1 new customer registers via UI and is signed in", Boolean(token1));
+
+// ---------- B. add to cart -> cart -> checkout (delivery) ----------
+await go(page, `${WEB}/store/${slug}/products/${offerId}`);
+await page.getByRole("button", { name: "أضيفي للسلة" }).click();
+await page.getByText("أُضيف إلى السلة").waitFor();
+await go(page, `${WEB}/cart`);
+const line = page.locator('[data-line-state="ok"]').first();
+record("B1 cart line is available and selectable", (await line.count()) === 1 && (await line.locator('input[type="checkbox"]').isEnabled()));
+await page.getByRole("button", { name: "متابعة للدفع" }).click();
+await page.waitForURL("**/checkout");
+await page.locator("div.field", { hasText: "طريقة الاستلام" }).locator("select").waitFor();
+await page.locator("div.field", { hasText: "طريقة الاستلام" }).locator("select").selectOption("DELIVERY");
+
+// ---------- C. address creation inside checkout ----------
+const emptyMsg = await page.getByText("لا توجد عناوين محفوظة بعد").count();
+record("C1 a new customer sees the empty-address state with an add button", emptyMsg === 1 && (await page.getByRole("button", { name: "+ عنوان جديد" }).count()) === 1);
+await page.getByRole("button", { name: "+ عنوان جديد" }).click();
+
+// validation first: nothing is sent for an invalid form
+const before = requests.filter((r) => r.url.includes("/customers/me/addresses") && r.method === "POST").length;
+await page.locator("#addr-lat").fill("95");
+await page.locator("#addr-lng").fill("35.2");
+await page.locator("#addr-phone1").fill("123");
+await page.getByRole("button", { name: "حفظ العنوان" }).click();
+const invalidShown = (await page.locator(".field-error").count()) >= 3;
+const afterInvalid = requests.filter((r) => r.url.includes("/customers/me/addresses") && r.method === "POST").length;
+record("C2 invalid address shows field errors and sends nothing", invalidShown && afterInvalid === before);
+
+// optional geolocation: fills lat/lng only, saves nothing
+await page.locator("#addr-lat").fill("");
+await page.locator("#addr-lng").fill("");
+await page.getByRole("button", { name: "استخدمي موقعي الحالي (اختياري)" }).click();
+await page.waitForFunction(() => document.querySelector("#addr-lat")?.value !== "");
+const latValue = await page.locator("#addr-lat").inputValue();
+const savedDuringGeo = requests.filter((r) => r.url.includes("/customers/me/addresses") && r.method === "POST").length;
+record("C3 geolocation fills lat/lng only and saves nothing", latValue.startsWith("31.9038") && savedDuringGeo === before);
+
+await page.locator("#addr-zone").selectOption("WEST_BANK");
+await page.locator("#addr-landmark").fill("بجانب الدوار الرئيسي");
+await page.locator("#addr-phone1").fill("0591234567");
+await page.screenshot({ path: `${OUT}/01-address-form-desktop.png` });
+await page.getByRole("button", { name: "حفظ العنوان" }).click();
+await page.getByText("لا توجد عناوين محفوظة بعد").waitFor({ state: "detached" }).catch(() => {});
+await page.waitForFunction(() => document.querySelector('select option[value]:not([value=""])') !== null);
+const postsAfter = requests.filter((r) => r.url.includes("/customers/me/addresses") && r.method === "POST").length;
+record("C4 address saved once and selected for delivery", postsAfter === before + 1);
+
+// slot + online payment
+const slotSelect = page.locator("div.field", { hasText: "الموعد" }).locator("select");
+const slotOptions = await slotSelect.locator("option").count();
+await slotSelect.selectOption({ index: 1 });
+await page.locator("div.field", { hasText: "طريقة الدفع" }).locator("select").selectOption("ONLINE");
+record("C5 delivery slots are offered", slotOptions > 1);
+await page.getByRole("button", { name: "متابعة", exact: true }).click();
+await page.getByText("الحجز صالح").waitFor();
+await page.screenshot({ path: `${OUT}/02-card-form-desktop.png` });
+
+// ---------- D. sandbox card: decline, retry, success ----------
+async function payWith(number) {
+  await page.locator("#card-number").fill(number);
+  await page.locator("#card-expiry").fill("1230");
+  await page.locator("#card-cvc").fill("123");
+  await page.getByRole("button", { name: "ادفعي الآن (تجريبي)" }).click();
+}
+const confirmsBefore = requests.filter((r) => r.url === "/checkout/confirm").length;
+await payWith("5555555555554444");
+await page.locator("[role=alert]").first().waitFor();
+const notTestCard = await page.locator("[role=alert]").first().innerText();
+record("D1 a non-test card is refused in the browser and nothing is sent", notTestCard.includes("تجريبي") && requests.filter((r) => r.url === "/checkout/confirm").length === confirmsBefore);
+
+await payWith("4000000000000002");
+await page.getByText("رُفضت البطاقة").waitFor();
+const reservationsAfterDecline = (await db.query(`select count(*)::int as n from checkout_reservations r join customer_profiles c on c.id=r."customerId" join users u on u.id=c."userId" where u.phone=$1`, [phone])).rows[0].n;
+const ordersAfterDecline = (await db.query(`select count(*)::int as n from customer_orders o join customer_profiles c on c.id=o."customerId" join users u on u.id=c."userId" where u.phone=$1`, [phone])).rows[0].n;
+record("D2 a declined card shows the reason; reservation kept; no order created", reservationsAfterDecline === 1 && ordersAfterDecline === 0);
+await page.screenshot({ path: `${OUT}/03-card-declined-desktop.png` });
+
+await payWith("4000000000009995");
+await page.getByText("الرصيد غير كافٍ").waitFor();
+record("D3 insufficient funds is reported separately", true);
+
+await payWith("4242424242424242");
+await page.getByText("تم إنشاء الطلب").waitFor({ timeout: 20000 });
+const finalOrders = (await db.query(`select bo.status, bo."fulfilmentMethod" as fm from branch_orders bo join customer_orders o on o.id=bo."customerOrderId" join customer_profiles c on c.id=o."customerId" join users u on u.id=c."userId" where u.phone=$1`, [phone])).rows;
+const payments = (await db.query(`select count(*)::int as n from payment_transactions p join customer_orders o on o.id=p."customerOrderId" join customer_profiles c on c.id=o."customerId" join users u on u.id=c."userId" where u.phone=$1 and p.status='SUCCEEDED'`, [phone])).rows[0].n;
+record("D4 retry with a good card creates exactly one delivery order and one payment", finalOrders.length === 1 && finalOrders[0].fm === "DELIVERY" && payments === 1, JSON.stringify(finalOrders));
+await page.screenshot({ path: `${OUT}/04-order-created-desktop.png` });
+
+const sentBodies = bodies.join("\n");
+record("D5 no card number, expiry or CVC ever left the browser", !/4242|4000|5555|"123"/.test(sentBodies.replace(/reservation_id/g, "")) && !sentBodies.includes("cvc") && /tok_sandbox_declined/.test(sentBodies) && /tok_sandbox_visa/.test(sentBodies));
+
+// ---------- E. price change diff (COD pickup keeps this independent of the card) ----------
+await go(page, `${WEB}/store/${slug}/products/${offerId}`);
+await page.getByRole("button", { name: "أضيفي للسلة" }).click();
+await page.getByText("أُضيف إلى السلة").waitFor();
+await go(page, `${WEB}/cart`);
+await page.getByRole("button", { name: "متابعة للدفع" }).click();
+await page.waitForURL("**/checkout");
+await page.getByRole("button", { name: "متابعة", exact: true }).click();
+await page.getByText("الحجز صالح").waitFor();
+const oldPrice = Number(offer.variants[0].sale_price ?? offer.variants[0].base_price);
+await db.query(`update offer_variants set "basePrice"=$1 where id=$2`, [oldPrice + 37, variantId]);
+await page.getByRole("button", { name: "تأكيد الطلب" }).click();
+await page.getByText("تغيّرت الأسعار منذ حجزك").waitFor();
+const diffText = await page.locator(".price-diff").innerText();
+const ordersNow = (await db.query(`select count(*)::int as n from customer_orders o join customer_profiles c on c.id=o."customerId" join users u on u.id=c."userId" where u.phone=$1`, [phone])).rows[0].n;
+record("E1 price change shows old -> new and the delta; nothing was created", diffText.includes(String(oldPrice)) && diffText.includes(String(oldPrice + 37)) && diffText.includes("+37") && ordersNow === 1, diffText);
+await page.screenshot({ path: `${OUT}/05-price-change-desktop.png` });
+await page.getByRole("button", { name: "مراجعة بالأسعار الجديدة" }).click();
+await page.waitForLoadState("networkidle");
+await page.getByText(`${oldPrice + 37} ₪`).first().waitFor({ timeout: 15000 });
+record("E2 reviewing re-quotes at the new price", true);
+await db.query(`update offer_variants set "basePrice"=$1 where id=$2`, [oldPrice, variantId]);
+
+// ---------- F. cart availability ----------
+await go(page, `${WEB}/cart`);
+const cartRow = (await db.query(`select ci.id, ci."vendorId", ci."offerVariantId" from cart_items ci join customer_profiles c on c.id=ci."customerId" join users u on u.id=c."userId" where u.phone=$1 limit 1`, [phone])).rows[0];
+await db.query(`update branch_stock set quantity=0, "reservedQuantity"=0 where "offerVariantId"=$1`, [cartRow.offerVariantId]);
+await page.reload({ waitUntil: "networkidle" });
+const soldOutLine = page.locator('[data-line-state="sold_out"]').first();
+const checkboxDisabled = await soldOutLine.locator('input[type="checkbox"]').isDisabled();
+const hasBadge = (await soldOutLine.getByText("غير متوفر").count()) > 0;
+const removeVisible = await soldOutLine.getByRole("button", { name: "حذف" }).isVisible();
+record("F1 a sold-out line is dimmed, unselectable, badged, and can be removed", checkboxDisabled && hasBadge && removeVisible);
+await page.screenshot({ path: `${OUT}/06-cart-soldout-desktop.png` });
+
+await db.query(`update branch_stock set quantity=2, "reservedQuantity"=0 where "offerVariantId"=$1`, [cartRow.offerVariantId]);
+await db.query(`update cart_items set quantity=5 where id=$1`, [cartRow.id]);
+// Holds left by earlier runs would (correctly) reduce the maximum; expire them so this step measures a known stock of 2.
+for (const t of ["checkout_reservation_slots", "checkout_reservation_items", "checkout_reservations"]) await db.query(`delete from ${t}`);
+await page.reload({ waitUntil: "networkidle" });
+const exceeds = page.locator('[data-line-state="exceeds_max"]').first();
+const msg = await exceeds.innerText();
+const proceedDisabled = await page.getByRole("button", { name: "متابعة للدفع" }).isDisabled();
+record("F2 quantity above the maximum shows the max and blocks checkout until adjusted", msg.includes("2") && (proceedDisabled || (await exceeds.locator('input[type="checkbox"]').isDisabled())), msg);
+await page.screenshot({ path: `${OUT}/07-cart-max-quantity-desktop.png` });
+await exceeds.getByRole("button", { name: /اضبطي الكمية على 2/ }).click();
+await page.locator('[data-line-state="ok"], [data-line-state="ok"] ').first().waitFor();
+record("F3 adjusting to the maximum makes the line purchasable again", true);
+await db.query(`update branch_stock set quantity=20, "reservedQuantity"=0 where "offerVariantId"=$1`, [cartRow.offerVariantId]);
+
+// ---------- G. logout revokes the session server-side ----------
+await go(page, `${WEB}/account`);
+const tokenBeforeLogout = await page.evaluate(() => localStorage.getItem("finalpro_session_token"));
+await page.getByRole("button", { name: "تسجيل الخروج" }).click();
+await page.waitForURL("**/login");
+const still = await api("/customers/me", { token: tokenBeforeLogout });
+record("G1 logout revokes the session on the server (old token is refused)", still.status === 401);
+
+// ---------- H. reset password ----------
+await go(page, `${WEB}/login`);
+await page.getByRole("link", { name: "نسيتِ كلمة المرور؟" }).click();
+await page.locator("#rp-phone").fill(phone);
+await page.getByRole("button", { name: "إرسال رمز التحقق" }).click();
+await page.locator("#rp-code").waitFor();
+await page.locator("#rp-code").fill(await waitOtp(phone));
+await page.locator("#rp-password").fill(password2);
+await page.getByRole("button", { name: "تعيين كلمة المرور" }).click();
+await page.waitForURL(`${WEB}/`, { timeout: 20000 });
+const login2 = await api("/auth/login", { method: "POST", body: { phone, password: password2 } });
+const loginOld = await api("/auth/login", { method: "POST", body: { phone, password: password1 } });
+record("H1 reset password over the OTP APIs signs in and the old password stops working", login2.status === 200 && loginOld.status === 400);
+
+// ---------- I. mobile: new CTAs are clear of the bottom bar ----------
+const mctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, locale: "ar" });
+await mctx.addInitScript((t) => localStorage.setItem("finalpro_session_token", t), login2.body.session_token);
+const mp = await mctx.newPage();
+async function clear(name, locator) {
+  await locator.first().scrollIntoViewIfNeeded();
+  await mp.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await mp.waitForTimeout(250);
+  const m = await locator.first().evaluate((node) => {
+    const r = node.getBoundingClientRect();
+    const nav = document.querySelector(".bottom-nav").getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return { bottom: r.bottom, navTop: nav.top, ok: r.bottom <= nav.top && (hit === node || node.contains(hit)) };
+  });
+  let clickable = true;
+  try {
+    await locator.first().click({ trial: true, timeout: 3000 });
+  } catch {
+    clickable = false;
+  }
+  record(`I mobile: ${name} is visible, above the bar, clickable`, m.ok && clickable, JSON.stringify(m));
+  const overflow = await mp.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  record(`I mobile: no horizontal overflow on the page of ${name}`, overflow <= 0, String(overflow));
+}
+await go(mp, `${WEB}/account`);
+await mp.getByRole("button", { name: "+ عنوان جديد" }).click();
+await clear("save address", mp.getByRole("button", { name: "حفظ العنوان" }));
+await mp.screenshot({ path: `${OUT}/08-address-form-mobile.png` });
+await go(mp, `${WEB}/cart`);
+await clear("cart proceed", mp.getByRole("button", { name: "متابعة للدفع" }));
+await mp.screenshot({ path: `${OUT}/09-cart-mobile.png` });
+await mp.getByRole("button", { name: "متابعة للدفع" }).click();
+await mp.waitForURL("**/checkout");
+await mp.locator("div.field", { hasText: "طريقة الدفع" }).locator("select").waitFor();
+await mp.locator("div.field", { hasText: "طريقة الدفع" }).locator("select").selectOption("ONLINE");
+await clear("checkout continue", mp.getByRole("button", { name: "متابعة", exact: true }));
+await mp.getByRole("button", { name: "متابعة", exact: true }).click();
+await mp.getByText("الحجز صالح").waitFor();
+await clear("pay now", mp.getByRole("button", { name: "ادفعي الآن (تجريبي)" }));
+await mp.screenshot({ path: `${OUT}/10-card-form-mobile.png` });
+await mp.getByRole("button", { name: "إلغاء والعودة" }).first().click();
+
+record("Z no uncaught page errors", errors.length === 0, errors.join(" | "));
+await browser.close();
+await db.end();
+const failed = results.filter((r) => !r.ok).length;
+console.log(failed === 0 ? `ALL ${results.length} OK` : `${failed} FAILED of ${results.length}`);

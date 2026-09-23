@@ -73,6 +73,9 @@ function LoginForm() {
         <button className="button button-block" type="submit" disabled={loading}>
           {loading ? "جارٍ الدخول..." : "دخول"}
         </button>
+        <p className="muted" style={{ textAlign: "center", marginBottom: 6 }}>
+          <Link href="/reset-password">نسيتِ كلمة المرور؟</Link>
+        </p>
         <p className="muted" style={{ textAlign: "center", marginBottom: 0 }}>
           ليس لديك حساب؟ <Link href="/register">إنشاء حساب</Link>
         </p>
