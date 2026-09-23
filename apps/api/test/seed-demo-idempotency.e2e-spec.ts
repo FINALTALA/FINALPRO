@@ -1,48 +1,43 @@
-import { execFileSync } from 'child_process';
-import * as path from 'path';
-import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../generated/prisma/client';
 import { snapshotDemoCounts } from './helpers/seed-demo-snapshot';
-
-const API_ROOT = path.resolve(__dirname, '..');
+import { SeedTestDatabases, runSeedOn } from './helpers/seed-demo-db';
 
 /**
  * Sprint 12: proves scripts/seed-demo.ts's own idempotency claim by
- * actually running the real script (not an imported function - the
- * exact command a developer would type) TWICE against a real database,
- * and asserting every demo-created row count is identical after both
- * runs.
+ * actually running the real script (the exact command a developer would
+ * type) TWICE and asserting every demo-created row count is identical.
+ * Runs against a throwaway "..._test" database - never against the base
+ * database in DATABASE_URL, which the seed's guard rightly refuses.
  */
 describe('Sprint 12 demo seed idempotency', () => {
+  const dbs = new SeedTestDatabases('finalpro_seedidem_test');
   let prisma: PrismaClient;
+  let url: string;
 
-  beforeAll(() => {
-    const connectionString = process.env.DATABASE_URL;
-    if (!connectionString) {
-      throw new Error('DATABASE_URL is not set for this test run');
-    }
-    prisma = new PrismaClient({ adapter: new PrismaPg(connectionString) });
-  });
+  beforeAll(async () => {
+    await dbs.setUp();
+    ({ prisma, url } = await dbs.clone('run'));
+  }, 180_000);
 
   afterAll(async () => {
-    await prisma.$disconnect();
+    await prisma?.$disconnect();
+    await dbs.tearDown();
+  });
+
+  it('runs against a database whose name contains "test"', () => {
+    expect(new URL(url).pathname).toContain('test');
   });
 
   it('running the seed script twice produces identical demo-data row counts - no duplication', async () => {
-    const runSeed = () =>
-      execFileSync('npx', ['ts-node', 'scripts/seed-demo.ts'], {
-        cwd: API_ROOT,
-        env: process.env,
-        stdio: 'pipe',
-      });
-
-    runSeed();
+    const first = runSeedOn(url);
+    expect(first.ok).toBe(true);
     const afterFirst = await snapshotDemoCounts(prisma);
     for (const value of Object.values(afterFirst)) {
       expect(value).toBeGreaterThan(0);
     }
 
-    runSeed();
+    const second = runSeedOn(url);
+    expect(second.ok).toBe(true);
     const afterSecond = await snapshotDemoCounts(prisma);
     expect(afterSecond).toEqual(afterFirst);
   }, 120_000);
