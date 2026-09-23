@@ -343,7 +343,27 @@ async function preflightVendorUser(
   branchId: string | null,
   label: string,
 ): Promise<VendorUser | null> {
-  if (!userId || !vendorId) return null;
+  if (!userId) return null;
+  if (role === 'BRANCH_EMPLOYEE') {
+    // vendor_users_employee_userId_key: UNIQUE(userId) WHERE role =
+    // 'BRANCH_EMPLOYEE', across every vendor. An assignment anywhere
+    // other than exactly the required demo branch would make the
+    // create() below fail with a raw constraint error.
+    const anyEmployeeRow = await prisma.vendorUser.findFirst({
+      where: { userId, role: 'BRANCH_EMPLOYEE' },
+    });
+    if (
+      anyEmployeeRow &&
+      (anyEmployeeRow.vendorId !== vendorId ||
+        anyEmployeeRow.branchId !== branchId)
+    ) {
+      conflict(
+        `${label} membership`,
+        `this account is already a BRANCH_EMPLOYEE elsewhere (vendorId "${anyEmployeeRow.vendorId}", branchId "${anyEmployeeRow.branchId}"), not at the required demo branch.`,
+      );
+    }
+  }
+  if (!vendorId) return null;
   const existing = await prisma.vendorUser.findUnique({
     where: { userId_vendorId: { userId, vendorId } },
   });
@@ -399,9 +419,30 @@ async function preflightDeliveryWindow(
   capacity: number,
 ): Promise<DeliveryWindow | null> {
   if (!vendorId || !branchId) return null;
-  const existing = await prisma.deliveryWindow.findFirst({
-    where: { vendorId, branchId, dayOfWeek, startMinute, endMinute },
+  // delivery_windows_no_overlap: EXCLUDE on (branchId, dayOfWeek,
+  // int4range(startMinute, endMinute) &&). Any overlapping window other
+  // than the exact required one would make create() fail with a raw
+  // constraint error.
+  const overlapping = await prisma.deliveryWindow.findMany({
+    where: {
+      branchId,
+      dayOfWeek,
+      startMinute: { lt: endMinute },
+      endMinute: { gt: startMinute },
+    },
   });
+  const foreign = overlapping.find(
+    (w) => w.startMinute !== startMinute || w.endMinute !== endMinute,
+  );
+  if (foreign) {
+    conflict(
+      `delivery window (day ${dayOfWeek})`,
+      `an overlapping window ${foreign.startMinute}-${foreign.endMinute} already exists on this branch/day; the required ${startMinute}-${endMinute} window cannot coexist with it.`,
+    );
+  }
+  const existing = overlapping.find(
+    (w) => w.vendorId === vendorId && w.startMinute === startMinute,
+  );
   if (!existing) return null;
   if (existing.capacity !== capacity) {
     conflict(
@@ -510,6 +551,17 @@ async function preflightCanonicalVariant(
   expectedCanonicalProductId: string | null,
   structuralAttributes: { color: string; size: string },
 ): Promise<CanonicalProductVariant | null> {
+  // platformProductBarcode is globally unique too: if it's held by a row
+  // other than the one this GTIN identifies, create() would fail raw.
+  const barcodeHolder = await prisma.canonicalProductVariant.findUnique({
+    where: { platformProductBarcode: CANONICAL_PLATFORM_BARCODE },
+  });
+  if (barcodeHolder && barcodeHolder.gtin !== CANONICAL_GTIN) {
+    conflict(
+      `canonical product variant (platform barcode ${CANONICAL_PLATFORM_BARCODE})`,
+      `the barcode is already held by a different variant (id "${barcodeHolder.id}", gtin "${barcodeHolder.gtin}"), not the demo variant with gtin ${CANONICAL_GTIN}.`,
+    );
+  }
   const existing = await prisma.canonicalProductVariant.findUnique({
     where: { gtin: CANONICAL_GTIN },
   });
@@ -578,6 +630,22 @@ async function preflightOfferVariant(
   basePrice: number,
 ): Promise<OfferVariant | null> {
   if (!vendorId) return null;
+  // @@unique([vendorId, storeInventoryBarcode]): a row with a different
+  // SKU holding the demo barcode would make create() fail raw.
+  const barcodeHolder = await prisma.offerVariant.findUnique({
+    where: {
+      vendorId_storeInventoryBarcode: {
+        vendorId,
+        storeInventoryBarcode: `DEMO-${sellerSku}`,
+      },
+    },
+  });
+  if (barcodeHolder && barcodeHolder.sellerSku !== sellerSku) {
+    conflict(
+      `offer variant (store barcode DEMO-${sellerSku})`,
+      `the barcode is already held by a different variant (id "${barcodeHolder.id}", sellerSku "${barcodeHolder.sellerSku}").`,
+    );
+  }
   const existing = await prisma.offerVariant.findUnique({
     where: { vendorId_sellerSku: { vendorId, sellerSku } },
   });
