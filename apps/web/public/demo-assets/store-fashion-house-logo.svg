@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="شعار تجريبي">
+  <circle cx="128" cy="128" r="128" fill="#12233f"/>
+  <circle cx="128" cy="128" r="112" fill="none" stroke="#2a9d8f" stroke-width="4"/>
+  <path d="M128 70c9 0 16 7 16 15 0 6-4 10-9 13l-7 4 79 46c6 4 4 13-3 13H52c-7 0-9-9-3-13l79-46v-9" fill="none" stroke="#f4efe6" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
