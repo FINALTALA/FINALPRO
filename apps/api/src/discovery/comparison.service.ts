@@ -137,15 +137,24 @@ export function eligibleProductWhere(
 export class ComparisonService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * `vendorFilter` narrows WHICH stores' offers count (default: every
+   * published, ACTIVE store). Only the Following feed passes one - so a
+   * followed-store card is built from followed stores' offers alone;
+   * discovery and comparison never pass it and stay global.
+   */
   async findEligibleOffers(
     canonicalProductId: string,
+    vendorFilter: Prisma.VendorWhereInput = {},
   ): Promise<EligibleOffer[]> {
     const variants = await this.prisma.offerVariant.findMany({
       where: {
         canonicalVariantId: { not: null },
         canonicalVariant: { canonicalProductId },
         vendorOffer: { status: 'ACTIVE' },
-        vendor: { storefrontPublished: true, status: 'ACTIVE' },
+        vendor: {
+          AND: [{ storefrontPublished: true, status: 'ACTIVE' }, vendorFilter],
+        },
       },
       include: {
         vendor: {
@@ -316,6 +325,7 @@ export class ComparisonService {
     where: Prisma.CanonicalProductWhereInput,
     page: number,
     pageSize: number,
+    vendorFilter: Prisma.VendorWhereInput = {},
   ) {
     const [total, products] = await Promise.all([
       this.prisma.canonicalProduct.count({ where }),
@@ -332,7 +342,10 @@ export class ComparisonService {
     ]);
     const cards = await Promise.all(
       products.map(async (product) => {
-        const eligible = await this.findEligibleOffers(product.id);
+        const eligible = await this.findEligibleOffers(
+          product.id,
+          vendorFilter,
+        );
         return this.buildCard(product, eligible);
       }),
     );

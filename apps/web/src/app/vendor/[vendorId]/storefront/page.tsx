@@ -136,15 +136,26 @@ export default function StorefrontSettingsPage() {
   }
 
   async function save() {
-    if (!form) return;
+    if (!form || !dto) return;
+    // Send only the fields the owner actually changed. Demo stores keep
+    // relative asset paths (/demo-assets/...) that the API's URL
+    // validation rightly rejects as user input - re-sending an
+    // untouched value would make every save fail.
+    const original = toForm(dto);
+    const body: Record<string, string> = {};
+    for (const key of Object.keys(form) as (keyof FormState)[]) {
+      const value = form[key].trim();
+      if (value !== "" && value !== original[key].trim()) body[key] = value;
+    }
+    if (Object.keys(body).length === 0) {
+      setError(null);
+      setNotice("لا توجد تغييرات للحفظ");
+      return;
+    }
     setSaving(true);
     setError(null);
     setNotice(null);
     try {
-      const body: Record<string, string> = {};
-      for (const [key, value] of Object.entries(form)) {
-        if (value.trim() !== "") body[key] = value.trim();
-      }
       const updated = await apiFetch<OwnerStorefrontDto>(
         `/vendors/${params.vendorId}/storefront`,
         { method: "PUT", body },

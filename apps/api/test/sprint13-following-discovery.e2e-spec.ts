@@ -456,9 +456,33 @@ describe('Sprint 13 - following, segments, search, card enrichment (e2e)', () =>
         (c: { canonical_product_id: string }) =>
           c.canonical_product_id === shared.product.id,
       );
-      // A global card: it still compares against the non-followed store.
-      expect(sharedCard.store_count).toBe(2);
-      expect(sharedCard.lowest_price).toBe('80.00');
+      // The Following card is built from the FOLLOWED store's offer only:
+      // 100 (not the non-followed store's 80), one store, one logo.
+      expect(sharedCard.lowest_price).toBe('100.00');
+      expect(sharedCard.store_count).toBe(1);
+      expect(sharedCard.store_logos).toHaveLength(1);
+      expect(sharedCard.store_logos[0].vendor_slug).toBe(followed.slug);
+      expect(sharedCard.cheapest_offer.vendor_slug).toBe(followed.slug);
+
+      // ...while public discovery / comparison for the same product stays
+      // global: 80 and two stores.
+      const global = await request(app.getHttpServer())
+        .get(`/api/v1/canonical-products/${shared.product.id}/comparison-card`)
+        .expect(200);
+      expect(global.body.lowest_price).toBe('80.00');
+      expect(global.body.store_count).toBe(2);
+      expect(global.body.store_logos).toHaveLength(2);
+      const disc = await request(app.getHttpServer())
+        .get(
+          `/api/v1/discovery/all?page_size=50&q=${encodeURIComponent('مشترك')}`,
+        )
+        .expect(200);
+      const discShared = disc.body.items.find(
+        (c: { canonical_product_id: string }) =>
+          c.canonical_product_id === shared.product.id,
+      );
+      expect(discShared.lowest_price).toBe('80.00');
+      expect(discShared.store_count).toBe(2);
     });
 
     it('an account following nobody has an empty feed and list', async () => {
@@ -698,6 +722,70 @@ describe('Sprint 13 - following, segments, search, card enrichment (e2e)', () =>
         .get(`/api/v1/storefronts/${store.slug}/offers/${offer.id}`)
         .expect(200);
       expect(detail.body.images).toEqual([]);
+    });
+  });
+  describe('owner storefront settings with demo (relative) asset URLs', () => {
+    async function makeOwnedDemoStore() {
+      const owner = await getUser('a');
+      const store = await makeStore({ logoUrl: '/demo-assets/logo.svg' });
+      await prisma.vendor.update({
+        where: { id: store.id },
+        data: {
+          coverImageUrl: '/demo-assets/cover.svg',
+          bio: 'وصف قديم',
+        },
+      });
+      await prisma.vendorUser.create({
+        data: { userId: owner.userId, vendorId: store.id, role: 'OWNER' },
+      });
+      return { owner, store };
+    }
+
+    it('an owner can change only the name and bio; relative demo asset URLs stay unchanged', async () => {
+      const { owner, store } = await makeOwnedDemoStore();
+      const res = await request(app.getHttpServer())
+        .put(`/api/v1/vendors/${store.id}/storefront`)
+        .set(auth(owner.token))
+        .send({ display_name: 'اسم جديد', bio: 'وصف جديد' })
+        .expect(200);
+      expect(res.body.display_name).toBe('اسم جديد');
+      expect(res.body.bio).toBe('وصف جديد');
+      expect(res.body.logo_url).toBe('/demo-assets/logo.svg');
+      expect(res.body.cover_image_url).toBe('/demo-assets/cover.svg');
+      const row = await prisma.vendor.findUniqueOrThrow({
+        where: { id: store.id },
+      });
+      expect(row.logoUrl).toBe('/demo-assets/logo.svg');
+      expect(row.coverImageUrl).toBe('/demo-assets/cover.svg');
+    });
+
+    it('the API still refuses an arbitrary relative URL sent by a user (no widening)', async () => {
+      const { owner, store } = await makeOwnedDemoStore();
+      for (const body of [
+        { logo_url: '/anything/else.svg' },
+        { cover_image_url: '/demo-assets/cover.svg' },
+      ]) {
+        await request(app.getHttpServer())
+          .put(`/api/v1/vendors/${store.id}/storefront`)
+          .set(auth(owner.token))
+          .send(body)
+          .expect(400);
+      }
+      const row = await prisma.vendor.findUniqueOrThrow({
+        where: { id: store.id },
+      });
+      expect(row.logoUrl).toBe('/demo-assets/logo.svg');
+    });
+
+    it('a valid absolute URL is still accepted and replaces the demo asset', async () => {
+      const { owner, store } = await makeOwnedDemoStore();
+      const res = await request(app.getHttpServer())
+        .put(`/api/v1/vendors/${store.id}/storefront`)
+        .set(auth(owner.token))
+        .send({ logo_url: 'https://example.com/logo.png' })
+        .expect(200);
+      expect(res.body.logo_url).toBe('https://example.com/logo.png');
+      expect(res.body.cover_image_url).toBe('/demo-assets/cover.svg');
     });
   });
 });

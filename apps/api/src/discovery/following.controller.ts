@@ -86,13 +86,17 @@ export class FollowingController {
   ) {
     const page = clampInt(pageRaw, 1, 1, 1_000_000);
     const pageSize = clampInt(pageSizeRaw, DEFAULT_PAGE_SIZE, 1, MAX_PAGE_SIZE);
-    const where = eligibleProductWhere({
-      followers: { some: { userId: user.id } },
-    });
+    // The card itself (lowest price, store count, logos, cheapest offer)
+    // is built from the FOLLOWED stores' offers only - not from every
+    // store that sells the product. "قارني الأسعار" still opens the
+    // public, global comparison.
+    const followedStores = { followers: { some: { userId: user.id } } };
+    const where = eligibleProductWhere(followedStores);
     const { total, cards } = await this.comparison.listCards(
       where,
       page,
       pageSize,
+      followedStores,
     );
     return {
       page,

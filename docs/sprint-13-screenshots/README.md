@@ -74,3 +74,13 @@ Captured from the built app against the seeded demo data (headless Chromium; the
 ### السلة (جوال)
 ![السلة (جوال)](24-cart-mobile.png)
 
+## Mobile bottom-navigation check (390x844, real viewport, scrolled to the end)
+
+Headless Chromium confirms each CTA is visible, above the bottom bar, not covered (hit-test) and clickable
+(Playwright trial click): product "أضيفي للسلة" and "قارني الأسعار", Following card CTA, cart "متابعة للدفع",
+checkout "متابعة". The same check fails on 4 pages when the bottom padding fix is removed (negative control).
+
+![product](mobile-product-bottom.png)
+![following](mobile-following-bottom.png)
+![cart](mobile-cart-bottom.png)
+![checkout](mobile-checkout-bottom.png)
