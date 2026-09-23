@@ -1,5 +1,9 @@
 import { Controller, Get, NotFoundException, Param } from '@nestjs/common';
-import { bucketForStock } from '../common/availability.util';
+import {
+  bucketForStock,
+  liveReservedQuantityByKey,
+  totalAvailableStockLive,
+} from '../common/availability.util';
 import { PrismaService } from '../prisma/prisma.service';
 
 // Sprint 8 (RB-STOREF-002, PDR-012 / RB-COMP-001, PDR-015): the public,
@@ -30,18 +34,39 @@ interface OfferSummaryRow {
   titleEn: string;
   createdAt: Date;
   variants: {
+    id: string;
     basePrice: unknown;
     salePrice: unknown;
-    branchStocks: { quantity: number }[];
+    branchStocks: { branchId: string; quantity: number }[];
   }[];
 }
 
-function offerSummaryDto(offer: OfferSummaryRow) {
+// Codex review round 4 on commit 95a8430 (fix #2): totalAvailableStock()
+// (round 3) summed BranchStock.reservedQuantity - a counter that only
+// decreases when something later touches that exact row. A reservation
+// whose 10-minute hold quietly expired with no further interaction
+// still read as held. liveReservedByKey (from
+// liveReservedQuantityByKey(), computed ONCE per request/batched across
+// every offer this response includes) is looked up per branch/variant
+// pair instead - the live figure, always current, never stale.
+function offerSummaryDto(
+  offer: OfferSummaryRow,
+  liveReservedByKey: Map<string, number>,
+) {
   const prices = offer.variants.map(
     (v) => Number(v.salePrice ?? v.basePrice) as number,
   );
   const totalStock = offer.variants.reduce(
-    (sum, v) => sum + v.branchStocks.reduce((s, bs) => s + bs.quantity, 0),
+    (sum, v) =>
+      sum +
+      totalAvailableStockLive(
+        v.branchStocks.map((bs) => ({
+          branchId: bs.branchId,
+          offerVariantId: v.id,
+          quantity: bs.quantity,
+        })),
+        liveReservedByKey,
+      ),
     0,
   );
   return {
@@ -54,6 +79,19 @@ function offerSummaryDto(offer: OfferSummaryRow) {
     min_price: prices.length > 0 ? Math.min(...prices).toFixed(2) : null,
     availability: bucketForStock(totalStock),
   };
+}
+
+function collectStockKeys(
+  offers: OfferSummaryRow[],
+): { branchId: string; offerVariantId: string }[] {
+  return offers.flatMap((o) =>
+    o.variants.flatMap((v) =>
+      v.branchStocks.map((bs) => ({
+        branchId: bs.branchId,
+        offerVariantId: v.id,
+      })),
+    ),
+  );
 }
 
 @Controller('storefronts/:slug')
@@ -93,7 +131,11 @@ export class StoreOffersPublicController {
       where: { vendorId: vendor.id, status: 'ACTIVE' },
       orderBy: { createdAt: 'desc' },
       include: {
-        variants: { include: { branchStocks: { select: { quantity: true } } } },
+        variants: {
+          include: {
+            branchStocks: { select: { branchId: true, quantity: true } },
+          },
+        },
       },
     });
 
@@ -117,7 +159,11 @@ export class StoreOffersPublicController {
             offer: {
               include: {
                 variants: {
-                  include: { branchStocks: { select: { quantity: true } } },
+                  include: {
+                    branchStocks: {
+                      select: { branchId: true, quantity: true },
+                    },
+                  },
                 },
               },
             },
@@ -125,12 +171,27 @@ export class StoreOffersPublicController {
         },
       },
     });
+    const customSectionOffers = customSections.flatMap((section) =>
+      section.offers
+        .filter((m) => m.offer.status === 'ACTIVE')
+        .map((m) => m.offer),
+    );
+
+    // One batched live-reservation read for the WHOLE response (the
+    // "all" list, new arrivals, discounts, and every custom section all
+    // share it) - never one query per offer.
+    const liveReservedByKey = await liveReservedQuantityByKey(this.prisma, [
+      ...collectStockKeys(offers),
+      ...collectStockKeys(customSectionOffers),
+    ]);
 
     return {
       is_available: true,
-      all: offers.map(offerSummaryDto),
-      new_arrivals: newArrivals.map(offerSummaryDto),
-      discounts: discounts.map(offerSummaryDto),
+      all: offers.map((o) => offerSummaryDto(o, liveReservedByKey)),
+      new_arrivals: newArrivals.map((o) =>
+        offerSummaryDto(o, liveReservedByKey),
+      ),
+      discounts: discounts.map((o) => offerSummaryDto(o, liveReservedByKey)),
       custom: customSections.map((section) => ({
         id: section.id,
         name: section.name,
@@ -141,7 +202,7 @@ export class StoreOffersPublicController {
         // other non-ACTIVE offer.
         offers: section.offers
           .filter((m) => m.offer.status === 'ACTIVE')
-          .map((m) => offerSummaryDto(m.offer)),
+          .map((m) => offerSummaryDto(m.offer, liveReservedByKey)),
       })),
     };
   }
@@ -157,7 +218,7 @@ export class StoreOffersPublicController {
       include: {
         variants: {
           include: {
-            branchStocks: { select: { quantity: true } },
+            branchStocks: { select: { branchId: true, quantity: true } },
             // Round 4 review fix (RB-COMP-001, PDR-015): the store
             // product page needs to offer a "compare prices" link back
             // to this variant's canonical product WHEN it has a
@@ -186,16 +247,35 @@ export class StoreOffersPublicController {
       });
     }
 
+    const liveReservedByKey = await liveReservedQuantityByKey(
+      this.prisma,
+      offer.variants.flatMap((v) =>
+        v.branchStocks.map((bs) => ({
+          branchId: bs.branchId,
+          offerVariantId: v.id,
+        })),
+      ),
+    );
+
     return {
       id: offer.id,
+      // Sprint 10 (RB-ORD-002): the cart's own "add item" call needs
+      // vendor_id (not just the already-public slug) - no more
+      // sensitive than vendor_slug/vendor_display_name, already
+      // exposed on this same public response.
+      vendor_id: vendor.id,
       vendor_slug: vendor.slug,
       vendor_display_name: vendor.displayName ?? vendor.legalName,
       title_ar: offer.titleAr,
       title_en: offer.titleEn,
       variants: offer.variants.map((v) => {
-        const totalStock = v.branchStocks.reduce(
-          (sum, bs) => sum + bs.quantity,
-          0,
+        const totalStock = totalAvailableStockLive(
+          v.branchStocks.map((bs) => ({
+            branchId: bs.branchId,
+            offerVariantId: v.id,
+            quantity: bs.quantity,
+          })),
+          liveReservedByKey,
         );
         return {
           id: v.id,

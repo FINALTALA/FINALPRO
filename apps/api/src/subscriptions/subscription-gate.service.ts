@@ -86,4 +86,39 @@ export class SubscriptionGateService {
     );
     return 'EXPIRED';
   }
+
+  /**
+   * Codex review round 3 on commit 3d81c9b: checkout's quote() is a
+   * read-only preview - it must never take a `FOR UPDATE` lock, write
+   * the lazy ACTIVE->EXPIRED transition, or emit an AuditLog row just
+   * because someone previewed a cart. This computes the SAME effective
+   * status refreshStatus() would settle on (same ACTIVE/periodEnd
+   * logic), purely by reading - never persists the transition, so a
+   * genuinely-expired trial is correctly reported as EXPIRED to the
+   * caller without being the one to actually flip it in the database.
+   * reserve()/confirm() (and cart add-to-cart) still call the real
+   * refreshStatus() above, since THEY are actual mutations already
+   * happening inside a real transaction, and persisting the transition
+   * there is what makes the ACTIVE->EXPIRED flip eventually durable at
+   * all under this codebase's lazy-expiry-on-read design.
+   */
+  async peekEffectiveStatus(
+    tx: Prisma.TransactionClient,
+    vendorId: string,
+  ): Promise<SubscriptionStatus> {
+    const vendor = await tx.vendor.findUniqueOrThrow({
+      where: { id: vendorId },
+    });
+    if (vendor.subscriptionStatus !== 'ACTIVE') {
+      return vendor.subscriptionStatus;
+    }
+    const current = await tx.vendorSubscription.findFirst({
+      where: { vendorId },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!current || current.periodEnd > new Date()) {
+      return vendor.subscriptionStatus;
+    }
+    return 'EXPIRED';
+  }
 }

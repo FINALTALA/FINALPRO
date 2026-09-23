@@ -3,7 +3,9 @@ import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
+import { CartModule } from './cart/cart.module';
 import { CatalogModule } from './catalog/catalog.module';
+import { CheckoutModule } from './checkout/checkout.module';
 import { CorrelationIdMiddleware } from './common/middleware/correlation-id.middleware';
 import { CustomersModule } from './customers/customers.module';
 import { DeliveryWindowsModule } from './delivery-windows/delivery-windows.module';
@@ -44,6 +46,8 @@ import { VendorsModule } from './vendors/vendors.module';
     DiscoveryModule,
     OrdersModule,
     DeliveryWindowsModule,
+    CartModule,
+    CheckoutModule,
   ],
   providers: [
     {

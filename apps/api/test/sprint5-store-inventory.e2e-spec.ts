@@ -510,10 +510,13 @@ describe('Sprint 5 - store type/warehouse/pickup points, delivery zones, barcode
           a.region.localeCompare(b.region),
         ),
       ).toEqual(
+        // Sprint 10 (RB-ORD-003) added `fee` alongside `enabled` - null
+        // on every region here since none has been priced by an owner
+        // yet (see VendorDeliveryZone's own schema.prisma comment).
         [
-          { region: 'INSIDE', enabled: true },
-          { region: 'JERUSALEM', enabled: true },
-          { region: 'WEST_BANK', enabled: true },
+          { region: 'INSIDE', enabled: true, fee: null },
+          { region: 'JERUSALEM', enabled: true, fee: null },
+          { region: 'WEST_BANK', enabled: true, fee: null },
         ].sort((a, b) => a.region.localeCompare(b.region)),
       );
 
