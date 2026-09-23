@@ -16,6 +16,13 @@ import { clearSession, getSessionToken } from "@/lib/session";
 // comment for why: without them, a branch employee has no way to
 // target or gate the fulfilment actions below on their own branch's
 // orders. total/payment_method/created_at/address stay owner-only.
+// Codex review on commit f940a80: the owner's own DTO carries the full
+// not_received_reported_at timestamp (and, server-side, the reason -
+// unused here); the employee's own DTO carries only the minimal
+// has_open_not_received_report boolean instead (see employeeOrderDto's
+// own comment). openReportFor() below reads whichever one is actually
+// present so the same page works correctly for both roles without
+// ever showing the employee a timestamp/reason they were never sent.
 interface OrderRow {
   id: string;
   status: string;
@@ -25,6 +32,12 @@ interface OrderRow {
   pickup_code: string | null;
   payment_method?: string;
   total?: number;
+  not_received_reported_at?: string | null;
+  has_open_not_received_report?: boolean;
+}
+
+function openReportFor(o: OrderRow): boolean {
+  return o.has_open_not_received_report ?? !!o.not_received_reported_at;
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -198,7 +211,7 @@ export default function BranchOrdersPage() {
                 </div>
               )}
 
-              {o.status === "DELIVERED" && (
+              {o.status === "DELIVERED" && openReportFor(o) && (
                 <button
                   className="button-link"
                   disabled={busyId === o.id}

@@ -1012,8 +1012,9 @@ describe('Sprint 11 - Orders UI, fulfilment loop, notification dispatch (e2e)', 
       expect(employeeList.body[0]).not.toHaveProperty('total');
       expect(employeeList.body[0]).not.toHaveProperty('payment_method');
       expect(employeeList.body[0]).not.toHaveProperty('created_at');
-      // id/status/fulfilment_method are legitimately present for the
-      // employee now - see employeeOrderDto's own comment.
+      // id/status/fulfilment_method/has_open_not_received_report are
+      // legitimately present for the employee now - see
+      // employeeOrderDto's own comment.
       expect(Object.keys(employeeList.body[0]).sort()).toEqual(
         [
           'id',
@@ -1022,6 +1023,7 @@ describe('Sprint 11 - Orders UI, fulfilment loop, notification dispatch (e2e)', 
           'customer_name',
           'customer_phone',
           'pickup_code',
+          'has_open_not_received_report',
         ].sort(),
       );
     });
@@ -1198,6 +1200,79 @@ describe('Sprint 11 - Orders UI, fulfilment loop, notification dispatch (e2e)', 
         .set('Authorization', `Bearer ${customer}`)
         .send({});
       expect(res.status).toBe(400);
+    });
+
+    it('rejects a whitespace-only reason (backend-enforced, not just the frontend) and creates no report, AuditLog, or Outbox event', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
+      const variantId = await createOfferWithStock(vendorId, branchAId, 10, 5);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const { branchOrderId } = await placeDeliveryOrder(
+        owner,
+        customer,
+        vendorId,
+        branchAId,
+        variantId,
+      );
+      await staffAction(
+        owner,
+        vendorId,
+        branchAId,
+        branchOrderId,
+        'start-preparation',
+      ).expect(201);
+      await staffAction(
+        owner,
+        vendorId,
+        branchAId,
+        branchOrderId,
+        'mark-sent',
+      ).expect(201);
+      await staffAction(
+        owner,
+        vendorId,
+        branchAId,
+        branchOrderId,
+        'mark-delivered',
+      ).expect(201);
+
+      const auditCountBefore = await prisma.auditLog.count({
+        where: {
+          entityType: 'BranchOrder',
+          entityId: branchOrderId,
+          action: 'branch_order.not_received_reported',
+        },
+      });
+      const outboxCountBefore = await prisma.outboxEvent.count({
+        where: { eventType: 'branch_order.not_received_reported' },
+      });
+
+      const res = await request(app.getHttpServer())
+        .post(
+          `/api/v1/customers/me/orders/${branchOrderId}/report-not-received`,
+        )
+        .set('Authorization', `Bearer ${customer}`)
+        .send({ reason: '   ' });
+      expect(res.status).toBe(400);
+
+      const order = await prisma.branchOrder.findUniqueOrThrow({
+        where: { id: branchOrderId },
+      });
+      expect(order.notReceivedReportedAt).toBeNull();
+      expect(order.notReceivedReason).toBeNull();
+
+      const auditCountAfter = await prisma.auditLog.count({
+        where: {
+          entityType: 'BranchOrder',
+          entityId: branchOrderId,
+          action: 'branch_order.not_received_reported',
+        },
+      });
+      const outboxCountAfter = await prisma.outboxEvent.count({
+        where: { eventType: 'branch_order.not_received_reported' },
+      });
+      expect(auditCountAfter).toBe(auditCountBefore);
+      expect(outboxCountAfter).toBe(outboxCountBefore);
     });
 
     it('rejects reporting on an order that is not DELIVERED/DELIVERY', async () => {
@@ -1385,6 +1460,96 @@ describe('Sprint 11 - Orders UI, fulfilment loop, notification dispatch (e2e)', 
       );
       expect(second.status).toBe(409);
       expect(second.body.error.code).toBe('NO_PENDING_NOT_RECEIVED_REPORT');
+    });
+
+    it("the employee DTO's has_open_not_received_report toggles true only while a report is open, and never carries the reason/timestamp", async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
+      const variantId = await createOfferWithStock(vendorId, branchAId, 10, 5);
+      const employeePhone = uniquePhone();
+      const accepted = await inviteAndAcceptAsNewUser(
+        owner,
+        vendorId,
+        branchAId,
+        employeePhone,
+        'employee-password',
+      );
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const { branchOrderId } = await placeDeliveryOrder(
+        owner,
+        customer,
+        vendorId,
+        branchAId,
+        variantId,
+      );
+      await staffAction(
+        owner,
+        vendorId,
+        branchAId,
+        branchOrderId,
+        'start-preparation',
+      ).expect(201);
+      await staffAction(
+        owner,
+        vendorId,
+        branchAId,
+        branchOrderId,
+        'mark-sent',
+      ).expect(201);
+      await staffAction(
+        owner,
+        vendorId,
+        branchAId,
+        branchOrderId,
+        'mark-delivered',
+      ).expect(201);
+
+      const beforeReport = await request(app.getHttpServer())
+        .get(`/api/v1/vendors/${vendorId}/branches/${branchAId}/orders`)
+        .set('Authorization', `Bearer ${accepted.session_token}`)
+        .expect(200);
+      const beforeOrder = beforeReport.body.find(
+        (o: { id: string }) => o.id === branchOrderId,
+      );
+      expect(beforeOrder.has_open_not_received_report).toBe(false);
+      expect(beforeOrder).not.toHaveProperty('not_received_reported_at');
+      expect(beforeOrder).not.toHaveProperty('not_received_reason');
+
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/customers/me/orders/${branchOrderId}/report-not-received`,
+        )
+        .set('Authorization', `Bearer ${customer}`)
+        .send({ reason: 'courier never showed up' })
+        .expect(201);
+
+      const duringReport = await request(app.getHttpServer())
+        .get(`/api/v1/vendors/${vendorId}/branches/${branchAId}/orders`)
+        .set('Authorization', `Bearer ${accepted.session_token}`)
+        .expect(200);
+      const duringOrder = duringReport.body.find(
+        (o: { id: string }) => o.id === branchOrderId,
+      );
+      expect(duringOrder.has_open_not_received_report).toBe(true);
+      expect(duringOrder).not.toHaveProperty('not_received_reported_at');
+      expect(duringOrder).not.toHaveProperty('not_received_reason');
+
+      await staffAction(
+        owner,
+        vendorId,
+        branchAId,
+        branchOrderId,
+        'rerequest-confirmation',
+      ).expect(201);
+
+      const afterResolve = await request(app.getHttpServer())
+        .get(`/api/v1/vendors/${vendorId}/branches/${branchAId}/orders`)
+        .set('Authorization', `Bearer ${accepted.session_token}`)
+        .expect(200);
+      const afterOrder = afterResolve.body.find(
+        (o: { id: string }) => o.id === branchOrderId,
+      );
+      expect(afterOrder.has_open_not_received_report).toBe(false);
     });
   });
 });

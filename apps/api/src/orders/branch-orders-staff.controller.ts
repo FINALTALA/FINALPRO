@@ -88,6 +88,15 @@ function ownerOrderDto(o: BranchOrderRow) {
 // nothing in this sprint's actions needs them, and PDR-009's "cannot
 // edit ... another branch" boundary is unaffected (VendorMembershipGuard
 // still scopes every action to the employee's own assigned branch).
+//
+// Codex review on commit f940a80: the employee's own orders page
+// showed a "re-request confirmation" button on every DELIVERED order,
+// even though the backend only accepts that action when a "not
+// received" report is actually open - confusing, and only discoverable
+// by clicking it and getting a 409. `has_open_not_received_report` is
+// the minimum operational signal to gate that button correctly - a
+// plain boolean, never the report's timestamp or reason text, which
+// stay owner-only (not_received_reported_at/not_received_reason above).
 function employeeOrderDto(o: BranchOrderRow) {
   return {
     id: o.id,
@@ -96,6 +105,7 @@ function employeeOrderDto(o: BranchOrderRow) {
     customer_name: o.customerOrder.customer.displayName,
     customer_phone: o.customerOrder.customer.user.phone,
     pickup_code: o.fulfilmentMethod === 'PICKUP' ? o.pickupCode : null,
+    has_open_not_received_report: o.notReceivedReportedAt !== null,
   };
 }
 
@@ -166,7 +176,16 @@ export class BranchOrdersStaffController {
       include: ORDER_INCLUDE,
     });
     const isEmployee = req.vendorMembership?.role === 'BRANCH_EMPLOYEE';
-    return orders.map(isEmployee ? employeeOrderDto : ownerOrderDto);
+    // Two genuinely different response shapes now (the employee DTO
+    // carries has_open_not_received_report, the owner DTO carries the
+    // full timestamp/reason instead) - branching the whole .map() call,
+    // rather than selecting between the two functions for one shared
+    // .map(), keeps each one's own return type exact instead of
+    // TypeScript widening it to their intersection.
+    if (isEmployee) {
+      return orders.map(employeeOrderDto);
+    }
+    return orders.map(ownerOrderDto);
   }
 
   // PDR-009: "The owner controls ... all store inventory/orders."

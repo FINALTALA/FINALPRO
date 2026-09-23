@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
@@ -247,8 +248,17 @@ export default function OrdersPage() {
 
               {hasOpenReport && (
                 <div className="error-banner" style={{ marginTop: 12 }}>
-                  تم إبلاغ المتجر بعدم استلام الطلب («{o.not_received_reason}»). يرجى التواصل مع
-                  المتجر مباشرة لحل المشكلة.
+                  <div>
+                    تم إبلاغ المتجر بعدم استلام الطلب («{o.not_received_reason}»). لا يوجد
+                    نظام شكاوى داخل المنصة - يرجى التواصل مع المتجر مباشرة لحل المشكلة.
+                  </div>
+                  <Link
+                    href={`/store/${o.vendor_slug}`}
+                    className="button"
+                    style={{ display: "inline-block", marginTop: 8 }}
+                  >
+                    فتح صفحة المتجر والتواصل
+                  </Link>
                 </div>
               )}
             </div>

@@ -1395,6 +1395,10 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       // order, not a React-key convenience. See
       // branch-orders-staff.controller.ts's own employeeOrderDto
       // comment for the full reasoning.
+      // has_open_not_received_report (Codex review on commit f940a80):
+      // the minimal operational signal for gating the employee's own
+      // "re-request confirmation" button - never the report's
+      // timestamp or reason text, which stay owner-only.
       expect(Object.keys(list.body[0]).sort()).toEqual(
         [
           'id',
@@ -1403,6 +1407,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
           'customer_name',
           'customer_phone',
           'pickup_code',
+          'has_open_not_received_report',
         ].sort(),
       );
 
