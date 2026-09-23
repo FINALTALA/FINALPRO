@@ -56,66 +56,71 @@ async function main() {
   const prisma = new PrismaClient({ adapter: new PrismaPg(connectionString) });
 
   try {
-    await prisma.$transaction(async (tx) => {
-      for (const asset of STORE_ASSETS) {
-        const vendor = await tx.vendor.findUnique({
-          where: { slug: asset.slug },
-        });
-        if (!vendor) {
-          console.log(
-            `  ${asset.slug}: not found - run scripts/seed-demo.ts first, skipped.`,
-          );
-          continue;
-        }
-
-        const fill: {
-          logoUrl?: string;
-          coverImageUrl?: string;
-          coverColor?: string;
-          bio?: string;
-        } = {};
-        if (vendor.logoUrl === null) fill.logoUrl = asset.logoUrl;
-        if (vendor.coverImageUrl === null)
-          fill.coverImageUrl = asset.coverImageUrl;
-        if (vendor.coverColor === null) fill.coverColor = asset.coverColor;
-        if (vendor.bio === null) fill.bio = asset.bio;
-        if (Object.keys(fill).length > 0) {
-          await tx.vendor.update({ where: { id: vendor.id }, data: fill });
-          console.log(
-            `  ${asset.slug}: filled ${Object.keys(fill).join(', ')}.`,
-          );
-        } else {
-          console.log(`  ${asset.slug}: store assets already set - untouched.`);
-        }
-
-        const variant = await tx.offerVariant.findUnique({
-          where: {
-            vendorId_sellerSku: {
-              vendorId: vendor.id,
-              sellerSku: asset.sellerSku,
-            },
-          },
-          include: { media: { select: { id: true } } },
-        });
-        if (!variant) {
-          console.log(`  ${asset.slug}: demo variant not found - skipped.`);
-        } else if (variant.media.length === 0) {
-          await tx.offerVariantMedia.create({
-            data: {
-              vendorId: vendor.id,
-              offerVariantId: variant.id,
-              url: PRODUCT_IMAGE,
-              kind: 'PRIMARY',
-            },
+    await prisma.$transaction(
+      async (tx) => {
+        for (const asset of STORE_ASSETS) {
+          const vendor = await tx.vendor.findUnique({
+            where: { slug: asset.slug },
           });
-          console.log(`  ${asset.slug}: demo product image added.`);
-        } else {
-          console.log(
-            `  ${asset.slug}: product media already present - untouched.`,
-          );
+          if (!vendor) {
+            console.log(
+              `  ${asset.slug}: not found - run scripts/seed-demo.ts first, skipped.`,
+            );
+            continue;
+          }
+
+          const fill: {
+            logoUrl?: string;
+            coverImageUrl?: string;
+            coverColor?: string;
+            bio?: string;
+          } = {};
+          if (vendor.logoUrl === null) fill.logoUrl = asset.logoUrl;
+          if (vendor.coverImageUrl === null)
+            fill.coverImageUrl = asset.coverImageUrl;
+          if (vendor.coverColor === null) fill.coverColor = asset.coverColor;
+          if (vendor.bio === null) fill.bio = asset.bio;
+          if (Object.keys(fill).length > 0) {
+            await tx.vendor.update({ where: { id: vendor.id }, data: fill });
+            console.log(
+              `  ${asset.slug}: filled ${Object.keys(fill).join(', ')}.`,
+            );
+          } else {
+            console.log(
+              `  ${asset.slug}: store assets already set - untouched.`,
+            );
+          }
+
+          const variant = await tx.offerVariant.findUnique({
+            where: {
+              vendorId_sellerSku: {
+                vendorId: vendor.id,
+                sellerSku: asset.sellerSku,
+              },
+            },
+            include: { media: { select: { id: true } } },
+          });
+          if (!variant) {
+            console.log(`  ${asset.slug}: demo variant not found - skipped.`);
+          } else if (variant.media.length === 0) {
+            await tx.offerVariantMedia.create({
+              data: {
+                vendorId: vendor.id,
+                offerVariantId: variant.id,
+                url: PRODUCT_IMAGE,
+                kind: 'PRIMARY',
+              },
+            });
+            console.log(`  ${asset.slug}: demo product image added.`);
+          } else {
+            console.log(
+              `  ${asset.slug}: product media already present - untouched.`,
+            );
+          }
         }
-      }
-    });
+      },
+      { timeout: 20_000 },
+    );
     console.log('Demo assets done.');
   } finally {
     await prisma.$disconnect();
