@@ -1095,6 +1095,9 @@ textarea:focus {
   gap: 10px;
   margin: 8px 0 14px;
 }
+.price-row .availability-badge {
+  align-self: center;
+}
 .price-now {
   font-size: 30px;
   font-weight: 800;
