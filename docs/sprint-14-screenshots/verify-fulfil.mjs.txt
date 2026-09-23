@@ -1,0 +1,112 @@
+import { chromium } from "playwright";
+import { createRequire } from "module";
+
+const require = createRequire("/workspace/package.json");
+const { Client } = require("pg");
+
+const API = "http://localhost:3011/api/v1";
+const WEB = "http://localhost:3010";
+
+const db = new Client({ connectionString: process.env.DATABASE_URL_PLAIN });
+await db.connect();
+const results = [];
+function record(name, ok, extra = "") {
+  results.push({ name, ok });
+  console.log(ok ? "PASS" : "FAIL", name, ok ? "" : extra);
+}
+async function api(path, opts = {}) {
+  const res = await fetch(`${API}${path}`, {
+    method: opts.method ?? "GET",
+    headers: {
+      "Content-Type": "application/json",
+      ...(opts.token ? { Authorization: `Bearer ${opts.token}` } : {}),
+      ...(opts.idem ? { "Idempotency-Key": opts.idem } : {}),
+    },
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  const text = await res.text();
+  return { status: res.status, body: text ? JSON.parse(text) : {} };
+}
+
+let browser;
+try {
+  // Known state: no leftover holds/cart lines, full stock.
+  for (const t of ["checkout_reservation_slots", "checkout_reservation_items", "checkout_reservations"]) await db.query(`delete from ${t}`);
+  await db.query(`delete from cart_items`);
+  await db.query(`update branch_stock set quantity=25, "reservedQuantity"=0`);
+
+  const login = (await api("/auth/login", { method: "POST", body: { phone: "+970560000003", password: "DemoCustomer#2026" } })).body.session_token;
+  const card = (await api("/discovery/all")).body.items[0];
+  const slug = card.cheapest_offer.vendor_slug;
+  const offer = (await api(`/storefronts/${slug}/offers/${card.cheapest_offer.offer_id}`)).body;
+  const variantId = offer.variants[0].id;
+  const vendorId = offer.vendor_id;
+  const branchA = (await db.query(`select id from store_branches where "vendorId"=$1 and name='الفرع الرئيسي'`, [vendorId])).rows[0].id;
+  const branchB = (await db.query(`select id from store_branches where "vendorId"=$1 and name='فرع رام الله'`, [vendorId])).rows[0].id;
+  const addLine = async (quantity) =>
+    api("/cart/items", { method: "POST", token: login, idem: `f-${Date.now()}-${Math.random()}`, body: { vendor_id: vendorId, offer_variant_id: variantId, quantity } });
+
+  browser = await chromium.launch();
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "ar" });
+  await ctx.addInitScript((t) => localStorage.setItem("finalpro_session_token", t), login);
+  const page = await ctx.newPage();
+  const methodSelect = () => page.locator("div.field", { hasText: "طريقة الاستلام" }).locator("select");
+  async function openCheckout() {
+    await page.goto(`${WEB}/cart`, { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "متابعة للدفع" }).click();
+    await page.waitForURL("**/checkout");
+    await page.locator("div.field", { hasText: "الفرع" }).first().locator("select").waitFor();
+  }
+
+  // 1. physical branch: PICKUP is the default
+  await addLine(1);
+  await openCheckout();
+  record("1 physical branch defaults to pick-up", (await methodSelect().inputValue()) === "PICKUP");
+
+  // 2. online-only branch with delivery slots: DELIVERY default, no pick-up option, reservation works
+  await db.query(`update store_branches set "isPhysical"=false where id=$1`, [branchA]);
+  await openCheckout();
+  const options = await methodSelect().locator("option").allInnerTexts();
+  const value = await methodSelect().inputValue();
+  record("2 online-only branch with slots defaults to delivery with no pick-up option", value === "DELIVERY" && options.length === 1 && options[0] === "توصيل", JSON.stringify({ value, options }));
+  const addr = page.locator("div.field", { hasText: "العنوان" }).locator("select").first();
+  await addr.selectOption({ index: 1 });
+  await page.locator("div.field", { hasText: "الموعد" }).locator("select").selectOption({ index: 1 });
+  await page.getByRole("button", { name: "متابعة", exact: true }).click();
+  await page.getByText("الحجز صالح").waitFor({ timeout: 15000 });
+  record("3 delivery from an online-only branch reserves without PICKUP_REQUIRES_PHYSICAL_BRANCH", true);
+  await page.getByRole("button", { name: "إلغاء والعودة" }).first().click();
+
+  // 3. no valid method: clear message and no reservation possible
+  for (const t of ["checkout_reservation_slots", "checkout_reservation_items", "checkout_reservations"]) await db.query(`delete from ${t}`);
+  await db.query(`delete from delivery_window_exceptions where "windowId" in (select id from delivery_windows where "branchId"=$1)`, [branchA]);
+  await db.query(`delete from delivery_windows where "branchId"=$1`, [branchA]);
+  await openCheckout();
+  const warning = await page.getByText("لا توجد طريقة استلام أو توصيل متاحة لهذا الفرع").count();
+  const continueDisabled = await page.getByRole("button", { name: "متابعة", exact: true }).isDisabled();
+  record("4 a branch with no valid method shows a clear message and blocks reservation", warning >= 1 && continueDisabled);
+  await page.screenshot({ path: "/tmp/shots/fulfil-none.png", fullPage: true });
+
+  // 4. cart max is a single branch, not the sum
+  await db.query(`update store_branches set "isPhysical"=true where id=$1`, [branchA]);
+  await db.query(`insert into branch_stock (id,"vendorId","branchId","offerVariantId",quantity,"reservedQuantity","updatedAt") values (gen_random_uuid(),$1,$2,$3,5,0,now()) on conflict ("branchId","offerVariantId") do update set quantity=5`, [vendorId, branchB, variantId]);
+  await db.query(`update branch_stock set quantity=5, "reservedQuantity"=0 where "branchId"=$1 and "offerVariantId"=$2`, [branchA, variantId]);
+  await db.query(`update cart_items set quantity=6`);
+  await page.goto(`${WEB}/cart`, { waitUntil: "networkidle" });
+  const line = page.locator('[data-line-state="exceeds_max"]').first();
+  const text = await line.innerText();
+  const proceedBlocked = await line.locator('input[type="checkbox"]').isDisabled();
+  record("5 5+5 units in two branches: cart max is 5 and quantity 6 cannot be selected for checkout", text.includes("5") && !text.includes("10") && proceedBlocked, JSON.stringify(text));
+  await page.screenshot({ path: "/tmp/shots/fulfil-cart-max.png", fullPage: true });
+  await line.getByRole("button", { name: /اضبطي الكمية على 5/ }).click();
+  await page.locator('[data-line-state="ok"]').first().waitFor();
+  await page.getByRole("button", { name: "متابعة للدفع" }).click();
+  await page.waitForURL("**/checkout");
+  await page.getByRole("button", { name: "متابعة", exact: true }).waitFor();
+  record("6 adjusted to the maximum, checkout opens with the line quotable", (await page.getByText("لا توجد عناصر متاحة").count()) === 0);
+} finally {
+  if (browser) await browser.close();
+  await db.end();
+}
+const failed = results.filter((r) => !r.ok).length;
+console.log(failed === 0 ? `ALL ${results.length} OK` : `${failed} FAILED of ${results.length}`);

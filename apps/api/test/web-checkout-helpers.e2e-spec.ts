@@ -19,6 +19,12 @@ import {
   lineState,
 } from '../../web/src/lib/cart';
 import {
+  allGroupsFulfillable,
+  availableMethods,
+  coerceMethod,
+  defaultMethod,
+} from '../../web/src/lib/fulfilment';
+import {
   formatDelta,
   hasChanges,
   parsePriceChange,
@@ -218,5 +224,45 @@ describe('Sprint 14 - price change diff', () => {
   it('shows the direction of a change', () => {
     expect(formatDelta(20, 99)).toBe('+79 ₪');
     expect(formatDelta(50, 45.5)).toBe('-4.5 ₪');
+  });
+});
+
+describe('Sprint 14 review - default fulfilment per branch', () => {
+  const physicalWithSlots = { is_physical: true, available_slots: [{}] };
+  const physicalNoSlots = { is_physical: true, available_slots: [] };
+  const onlineWithSlots = { is_physical: false, available_slots: [{}] };
+  const onlineNoSlots = { is_physical: false, available_slots: [] };
+
+  it('a physical branch defaults to pick-up', () => {
+    expect(defaultMethod(physicalWithSlots)).toBe('PICKUP');
+    expect(defaultMethod(physicalNoSlots)).toBe('PICKUP');
+    expect(availableMethods(physicalWithSlots)).toEqual(['PICKUP', 'DELIVERY']);
+  });
+
+  it('an online-only branch with delivery slots defaults to DELIVERY and offers no pick-up', () => {
+    expect(defaultMethod(onlineWithSlots)).toBe('DELIVERY');
+    expect(availableMethods(onlineWithSlots)).toEqual(['DELIVERY']);
+  });
+
+  it('a branch with no valid method has no default and blocks reservation', () => {
+    expect(defaultMethod(onlineNoSlots)).toBeNull();
+    expect(availableMethods(onlineNoSlots)).toEqual([]);
+    expect(allGroupsFulfillable([defaultMethod(onlineNoSlots)])).toBe(false);
+    expect(allGroupsFulfillable([])).toBe(false);
+    expect(
+      allGroupsFulfillable([defaultMethod(physicalNoSlots), 'DELIVERY']),
+    ).toBe(true);
+  });
+
+  it('switching branch never leaves an invalid method behind', () => {
+    // PICKUP chosen on a physical branch, then an online-only branch is picked.
+    expect(coerceMethod(onlineWithSlots, 'PICKUP')).toBe('DELIVERY');
+    // DELIVERY chosen, then a physical branch without slots is picked.
+    expect(coerceMethod(physicalNoSlots, 'DELIVERY')).toBe('PICKUP');
+    // A still-valid choice is kept.
+    expect(coerceMethod(physicalWithSlots, 'DELIVERY')).toBe('DELIVERY');
+    // Nothing valid at all.
+    expect(coerceMethod(onlineNoSlots, 'PICKUP')).toBeNull();
+    expect(coerceMethod(undefined, null)).toBeNull();
   });
 });

@@ -80,3 +80,27 @@ export function totalAvailableStockLive(
     return sum + Math.max(0, bs.quantity - reserved);
   }, 0);
 }
+
+/**
+ * Sprint 14 review fix: the largest quantity of ONE cart line that a
+ * single branch can actually fulfil right now - `max` over branches of
+ * `max(0, quantity - live reservations)`, NOT the sum. Checkout grouping
+ * only assigns a line to a branch whose own available quantity covers
+ * the whole line and never splits one line across two branches, so a
+ * cart must not offer more than one branch can supply. Only LIVE holds
+ * count (see liveReservedQuantityByKey).
+ */
+export function maxSingleBranchAvailable(
+  branchStocks: {
+    branchId: string;
+    offerVariantId: string;
+    quantity: number;
+  }[],
+  liveReservedByKey: Map<string, number>,
+): number {
+  return branchStocks.reduce((max, bs) => {
+    const key = `${bs.branchId}:${bs.offerVariantId}`;
+    const reserved = liveReservedByKey.get(key) ?? 0;
+    return Math.max(max, bs.quantity - reserved);
+  }, 0);
+}

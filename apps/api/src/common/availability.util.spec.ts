@@ -1,4 +1,8 @@
-import { bucketForStock, totalAvailableStockLive } from './availability.util';
+import {
+  bucketForStock,
+  maxSingleBranchAvailable,
+  totalAvailableStockLive,
+} from './availability.util';
 
 describe('availability.util', () => {
   it('is sold_out at zero or negative stock', () => {
@@ -63,5 +67,40 @@ describe('totalAvailableStockLive', () => {
 
   it('is zero for no branch stock rows at all', () => {
     expect(totalAvailableStockLive([], new Map())).toBe(0);
+  });
+});
+
+describe('maxSingleBranchAvailable', () => {
+  const stock = (branchId: string, quantity: number) => ({
+    branchId,
+    offerVariantId: 'v',
+    quantity,
+  });
+
+  it('is the largest single branch, never the sum across branches', () => {
+    expect(
+      maxSingleBranchAvailable([stock('a', 5), stock('b', 5)], new Map()),
+    ).toBe(5);
+    expect(
+      maxSingleBranchAvailable([stock('a', 2), stock('b', 7)], new Map()),
+    ).toBe(7);
+  });
+
+  it('subtracts only that branch own live reservations', () => {
+    const live = new Map([
+      ['a:v', 3],
+      ['b:v', 5],
+    ]);
+    // a: 5-3=2, b: 5-5=0 -> best single branch is a with 2
+    expect(maxSingleBranchAvailable([stock('a', 5), stock('b', 5)], live)).toBe(
+      2,
+    );
+  });
+
+  it('is 0 when there is no stock row or every branch is fully held', () => {
+    expect(maxSingleBranchAvailable([], new Map())).toBe(0);
+    expect(
+      maxSingleBranchAvailable([stock('a', 2)], new Map([['a:v', 9]])),
+    ).toBe(0);
   });
 });

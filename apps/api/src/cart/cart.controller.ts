@@ -22,7 +22,7 @@ import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interc
 import {
   bucketForStock,
   liveReservedQuantityByKey,
-  totalAvailableStockLive,
+  maxSingleBranchAvailable,
 } from '../common/availability.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { assertItemsPurchasable } from '../checkout/purchase-eligibility.util';
@@ -95,8 +95,9 @@ export class CartController {
   // Sprint 14 (PDR-017, approved baseline 3.4): the cart is the one
   // surface that may show a quantity limit - each line reports its
   // availability bucket, the maximum currently available to buy
-  // (`max_quantity`, live-reservation aware, 0 when the line can't be
-  // bought at all) and whether the offer/store is still purchasable.
+  // (`max_quantity` - the most ONE branch can fulfil, live-reservation
+  // aware, since checkout never splits a line across branches; 0 when
+  // the line can't be bought at all) and whether the offer/store is still purchasable.
   // Purely additive fields; add/update responses are unchanged, and the
   // real stock/eligibility enforcement stays in quote/reserve/confirm.
   @Get()
@@ -130,7 +131,7 @@ export class CartController {
       ),
     );
     return items.map((item) => {
-      const available = totalAvailableStockLive(
+      const available = maxSingleBranchAvailable(
         item.offerVariant.branchStocks.map((bs) => ({
           branchId: bs.branchId,
           offerVariantId: item.offerVariantId,

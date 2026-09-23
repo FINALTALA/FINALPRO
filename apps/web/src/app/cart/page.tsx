@@ -34,25 +34,28 @@ export default function CartPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const knownIds = useRef<Set<string>>(new Set());
+  const selectable = useRef<Map<string, boolean>>(new Map());
 
   function load() {
     apiFetch<CartItemDto[]>("/cart")
       .then((res) => {
         setItems(res);
-        // Snapshot which lines were already known BEFORE updating the
-        // ref, so the state updater below stays pure (React may run it
-        // twice in development).
-        const known = knownIds.current;
-        knownIds.current = new Set(res.map((i) => i.id));
+        // Snapshot the previous per-line "could be selected" state BEFORE
+        // updating the ref, so the state updater below stays pure (React
+        // may run it twice in development).
+        const before = selectable.current;
+        selectable.current = new Map(res.map((i) => [i.id, canSelect(i)]));
         setSelected((prev) => {
           const next = new Set<string>();
           for (const item of res) {
-            // A line seen for the first time starts selected if it can
-            // be bought; a line the customer already had keeps their
-            // choice - but never stays selected once it can't be bought.
-            const isNew = !known.has(item.id);
-            if (canSelect(item) && (isNew || prev.has(item.id))) next.add(item.id);
+            if (!canSelect(item)) continue; // never selected while it cannot be bought
+            // Selected when: first time seen, or it just became valid again
+            // (the customer adjusted it), or the customer already had it
+            // selected.
+            const wasSelectable = before.get(item.id);
+            if (wasSelectable === undefined || wasSelectable === false || prev.has(item.id)) {
+              next.add(item.id);
+            }
           }
           return next;
         });

@@ -31,3 +31,13 @@ Captured from the built app against the seeded demo data (headless Chromium). Th
 
 ### Card form (mobile), clear of the bottom bar
 ![Card form (mobile), clear of the bottom bar](10-card-form-mobile.png)
+
+## Review round (Codex)
+
+`verify-fulfil.mjs.txt` (6 checks, all passing): a physical branch defaults to pick-up; an online-only branch with delivery slots defaults to delivery with no pick-up option and reserves without PICKUP_REQUIRES_PHYSICAL_BRANCH; a branch with no valid method shows a clear message and blocks reservation; with 5 + 5 units in two branches the cart maximum is 5 and quantity 6 cannot be selected for checkout; adjusting to the maximum re-selects the line and checkout quotes it.
+
+### No valid fulfilment method
+![No valid fulfilment method](fulfil-none.png)
+
+### Two branches, 5 + 5 units: maximum is 5
+![Cart maximum across branches](fulfil-cart-max.png)

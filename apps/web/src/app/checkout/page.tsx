@@ -7,6 +7,7 @@ import SandboxCardForm from "@/components/SandboxCardForm";
 import { apiFetch, ApiError, newIdempotencyKey } from "@/lib/api";
 import { formatDelta, hasChanges, parsePriceChange, PriceChangeSummary } from "@/lib/price-change";
 import { CardResult, declineMessage, SandboxCardToken } from "@/lib/sandbox-card";
+import { allGroupsFulfillable, availableMethods, coerceMethod, defaultMethod, FulfilmentMethod } from "@/lib/fulfilment";
 import { clearSession, getSessionToken } from "@/lib/session";
 
 interface QuoteItem {
@@ -55,7 +56,7 @@ interface AddressDto {
 
 interface GroupChoice {
   branchId: string;
-  fulfilmentMethod: "PICKUP" | "DELIVERY";
+  fulfilmentMethod: FulfilmentMethod | null;
   paymentMethod: "ONLINE" | "COD";
   addressId: string;
   deliveryWindowId: string;
@@ -141,7 +142,11 @@ export default function CheckoutPage() {
           const branchId = g.suggested_branch_id ?? g.eligible_branches[0]?.branch_id ?? "";
           initial[groupKey(g)] = {
             branchId,
-            fulfilmentMethod: "PICKUP",
+            // A valid default for THIS branch: pick-up if it is physical,
+            // otherwise delivery if it has slots, otherwise none.
+            fulfilmentMethod: defaultMethod(
+              g.eligible_branches.find((b) => b.branch_id === branchId),
+            ),
             paymentMethod: "COD",
             addressId: "",
             deliveryWindowId: "",
@@ -170,6 +175,10 @@ export default function CheckoutPage() {
 
   async function reserve() {
     if (!quote) return;
+    if (!allGroupsFulfillable(quote.groups.map((g) => choices[groupKey(g)]?.fulfilmentMethod ?? null))) {
+      setError("لا توجد طريقة استلام أو توصيل متاحة لأحد الفروع - اختاري فرعاً آخر.");
+      return;
+    }
     for (const g of quote.groups) {
       const choice = choices[groupKey(g)];
       if (
@@ -188,7 +197,7 @@ export default function CheckoutPage() {
         return {
           cart_item_ids: g.cart_item_ids,
           branch_id: choice.branchId,
-          fulfilment_method: choice.fulfilmentMethod,
+          fulfilment_method: choice.fulfilmentMethod as FulfilmentMethod,
           payment_method: choice.paymentMethod,
           ...(choice.fulfilmentMethod === "DELIVERY"
             ? {
@@ -454,7 +463,19 @@ export default function CheckoutPage() {
                 <label>الفرع</label>
                 <select
                   value={choice.branchId}
-                  onChange={(e) => updateChoice(key, { branchId: e.target.value })}
+                  onChange={(e) =>
+                    updateChoice(key, {
+                      branchId: e.target.value,
+                      // Switching branch must never leave an invalid method.
+                      fulfilmentMethod: coerceMethod(
+                        branchFor(g, e.target.value),
+                        choice.fulfilmentMethod,
+                      ),
+                      addressId: "",
+                      deliveryWindowId: "",
+                      scheduledDate: "",
+                    })
+                  }
                 >
                   {g.eligible_branches.map((b) => (
                     <option key={b.branch_id} value={b.branch_id}>
@@ -467,18 +488,27 @@ export default function CheckoutPage() {
               <div className="field">
                 <label>طريقة الاستلام</label>
                 <select
-                  value={choice.fulfilmentMethod}
+                  value={choice.fulfilmentMethod ?? ""}
+                  disabled={choice.fulfilmentMethod === null}
                   onChange={(e) =>
                     updateChoice(key, {
-                      fulfilmentMethod: e.target.value as "PICKUP" | "DELIVERY",
+                      fulfilmentMethod: e.target.value as FulfilmentMethod,
                     })
                   }
                 >
-                  {branch?.is_physical && <option value="PICKUP">استلام من المحل</option>}
-                  {branch && branch.available_slots.length > 0 && (
+                  {availableMethods(branch).includes("PICKUP") && (
+                    <option value="PICKUP">استلام من المحل</option>
+                  )}
+                  {availableMethods(branch).includes("DELIVERY") && (
                     <option value="DELIVERY">توصيل</option>
                   )}
+                  {choice.fulfilmentMethod === null && <option value="">غير متاح</option>}
                 </select>
+                {choice.fulfilmentMethod === null && (
+                  <p className="cart-line-note" role="alert" style={{ margin: "6px 0 0" }}>
+                    لا توجد طريقة استلام أو توصيل متاحة لهذا الفرع حالياً - اختاري فرعاً آخر.
+                  </p>
+                )}
               </div>
 
               {choice.fulfilmentMethod === "DELIVERY" && branch && (
@@ -564,7 +594,14 @@ export default function CheckoutPage() {
         })}
 
         {quote.groups.length > 0 && (
-          <button className="button" onClick={reserve} disabled={busy}>
+          <button
+            className="button"
+            onClick={reserve}
+            disabled={
+              busy ||
+              !allGroupsFulfillable(quote.groups.map((g) => choices[groupKey(g)]?.fulfilmentMethod ?? null))
+            }
+          >
             متابعة
           </button>
         )}

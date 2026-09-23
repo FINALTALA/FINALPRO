@@ -512,6 +512,101 @@ describe('Sprint 14 - delivery checkout completeness (e2e)', () => {
       }
     });
 
+    async function addSecondBranchWithStock(
+      vendorId: string,
+      variantId: string,
+      quantity: number,
+    ) {
+      const second = await prisma.storeBranch.create({
+        data: {
+          vendorId,
+          name: 'Second',
+          isPhysical: true,
+          verificationStatus: 'APPROVED',
+        },
+      });
+      await prisma.branchStock.create({
+        data: {
+          vendorId,
+          branchId: second.id,
+          offerVariantId: variantId,
+          quantity,
+        },
+      });
+      return second;
+    }
+
+    it('max_quantity is what ONE branch can fulfil, not the sum across branches (checkout never splits a line)', async () => {
+      const a = await getUser('a');
+      const { vendor, branch } = await makeStore();
+      const { variant } = await makeOffer(vendor.id, branch.id, { stock: 5 });
+      await addSecondBranchWithStock(vendor.id, variant.id, 5);
+      const line = await addToCart(a.token, vendor.id, variant.id, 5);
+
+      expect(await cartLine(a.token, line)).toMatchObject({
+        max_quantity: 5,
+        purchasable: true,
+      });
+
+      // 6 is more than either branch can supply on its own: the cart
+      // reports the limit up front (5), and checkout agrees - the line is
+      // not offered, so there is no late checkout surprise.
+      await request(app.getHttpServer())
+        .put(`/api/v1/cart/items/${line}`)
+        .set(auth(a.token))
+        .send({ quantity: 6 })
+        .expect(200);
+      const over = await cartLine(a.token, line);
+      expect(over.max_quantity).toBe(5);
+      expect(over.quantity).toBeGreaterThan(over.max_quantity);
+      const quote = await request(app.getHttpServer())
+        .post('/api/v1/checkout/quote')
+        .set(auth(a.token))
+        .send({ cart_item_ids: [line] })
+        .expect(201);
+      expect(quote.body.groups).toEqual([]);
+      expect(
+        quote.body.unavailable_items.map(
+          (u: { cart_item_id: string }) => u.cart_item_id,
+        ),
+      ).toContain(line);
+
+      // Adjusted to the reported maximum, the same line is quotable.
+      await request(app.getHttpServer())
+        .put(`/api/v1/cart/items/${line}`)
+        .set(auth(a.token))
+        .send({ quantity: over.max_quantity })
+        .expect(200);
+      const ok = await request(app.getHttpServer())
+        .post('/api/v1/checkout/quote')
+        .set(auth(a.token))
+        .send({ cart_item_ids: [line] })
+        .expect(201);
+      expect(ok.body.groups).toHaveLength(1);
+      expect(ok.body.unavailable_items).toEqual([]);
+    });
+
+    it('live holds are subtracted per branch: the best single branch decides the maximum', async () => {
+      const a = await getUser('a');
+      const b = await getUser('b');
+      const { vendor, branch } = await makeStore();
+      const { variant } = await makeOffer(vendor.id, branch.id, { stock: 5 });
+      const second = await addSecondBranchWithStock(vendor.id, variant.id, 5);
+      const aLine = await addToCart(a.token, vendor.id, variant.id, 1);
+
+      // Another customer holds 3 at the first branch and all 5 at the
+      // second: 5-3=2 and 5-5=0, so the best single branch offers 2.
+      const bLine1 = await addToCart(b.token, vendor.id, variant.id, 3);
+      await reservePickup(b.token, branch.id, [bLine1], 'COD');
+      await prisma.cartItem.delete({ where: { id: bLine1 } });
+      const bLine2 = await addToCart(b.token, vendor.id, variant.id, 5);
+      await reservePickup(b.token, second.id, [bLine2], 'COD');
+
+      expect(await cartLine(a.token, aLine)).toMatchObject({
+        max_quantity: 2,
+      });
+    });
+
     it("never shows another customer's lines", async () => {
       const a = await getUser('a');
       const b = await getUser('b');
@@ -752,6 +847,122 @@ describe('Sprint 14 - delivery checkout completeness (e2e)', () => {
       });
       expect(orders).toBe(1);
       expect((await stockOf(s.branch.id, s.variant.id)).quantity).toBe(4);
+    });
+  });
+
+  describe('online-only branch fulfilment (Sprint 14 review)', () => {
+    async function onlineOnlyStore(withWindows: boolean) {
+      const { vendor, branch } = await makeStore();
+      await prisma.storeBranch.update({
+        where: { id: branch.id },
+        data: { isPhysical: false },
+      });
+      if (withWindows) {
+        for (let day = 0; day <= 6; day++) {
+          await prisma.deliveryWindow.create({
+            data: {
+              vendorId: vendor.id,
+              branchId: branch.id,
+              dayOfWeek: day,
+              startMinute: 9 * 60,
+              endMinute: 18 * 60,
+              capacity: 5,
+            },
+          });
+        }
+        await prisma.vendorDeliveryZone.create({
+          data: {
+            vendorId: vendor.id,
+            region: 'WEST_BANK',
+            enabled: true,
+            fee: 10,
+          },
+        });
+      }
+      const { variant } = await makeOffer(vendor.id, branch.id, { stock: 5 });
+      return { vendor, branch, variant };
+    }
+
+    it('reports is_physical=false with delivery slots; pick-up is refused and delivery is reservable', async () => {
+      const buyer = await getUser('a');
+      const { vendor, branch, variant } = await onlineOnlyStore(true);
+      const address = await request(app.getHttpServer())
+        .post('/api/v1/customers/me/addresses')
+        .set(auth(buyer.token))
+        .send({
+          lat: 31.9,
+          lng: 35.2,
+          phone_number_1: '+970591234567',
+          zone: 'WEST_BANK',
+        })
+        .expect(201);
+      const line = await addToCart(buyer.token, vendor.id, variant.id);
+
+      const quote = await request(app.getHttpServer())
+        .post('/api/v1/checkout/quote')
+        .set(auth(buyer.token))
+        .send({ cart_item_ids: [line], address_id: address.body.id })
+        .expect(201);
+      const eligible = quote.body.groups[0].eligible_branches.find(
+        (b: { branch_id: string }) => b.branch_id === branch.id,
+      );
+      expect(eligible.is_physical).toBe(false);
+      expect(eligible.available_slots.length).toBeGreaterThan(0);
+      const slot = eligible.available_slots[0];
+
+      // The exact 409 the old PICKUP default led to.
+      const pickup = await request(app.getHttpServer())
+        .post('/api/v1/checkout/reserve')
+        .set(auth(buyer.token))
+        .set('Idempotency-Key', unique('reserve'))
+        .send({
+          groups: [
+            {
+              cart_item_ids: [line],
+              branch_id: branch.id,
+              fulfilment_method: 'PICKUP',
+              payment_method: 'COD',
+            },
+          ],
+        })
+        .expect(409);
+      expect(pickup.body.error.code).toBe('PICKUP_REQUIRES_PHYSICAL_BRANCH');
+
+      // The valid default for this branch (DELIVERY) succeeds.
+      await request(app.getHttpServer())
+        .post('/api/v1/checkout/reserve')
+        .set(auth(buyer.token))
+        .set('Idempotency-Key', unique('reserve'))
+        .send({
+          groups: [
+            {
+              cart_item_ids: [line],
+              branch_id: branch.id,
+              fulfilment_method: 'DELIVERY',
+              payment_method: 'COD',
+              address_id: address.body.id,
+              delivery_window_id: slot.delivery_window_id,
+              scheduled_date: slot.date,
+            },
+          ],
+        })
+        .expect(201);
+    });
+
+    it('an online-only branch without delivery slots offers no fulfilment method at all', async () => {
+      const buyer = await getUser('a');
+      const { vendor, branch, variant } = await onlineOnlyStore(false);
+      const line = await addToCart(buyer.token, vendor.id, variant.id);
+      const quote = await request(app.getHttpServer())
+        .post('/api/v1/checkout/quote')
+        .set(auth(buyer.token))
+        .send({ cart_item_ids: [line] })
+        .expect(201);
+      const eligible = quote.body.groups[0].eligible_branches.find(
+        (b: { branch_id: string }) => b.branch_id === branch.id,
+      );
+      expect(eligible.is_physical).toBe(false);
+      expect(eligible.available_slots).toEqual([]);
     });
   });
 
