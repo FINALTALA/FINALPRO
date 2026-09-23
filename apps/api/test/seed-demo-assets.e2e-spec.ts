@@ -15,7 +15,7 @@ function runAssets(databaseUrl: string): { ok: boolean; output: string } {
   try {
     const out = execFileSync(
       'npx',
-      ['ts-node', 'scripts/seed-demo-assets.ts'],
+      ['ts-node', '--transpile-only', 'scripts/seed-demo-assets.ts'],
       {
         cwd: API_ROOT,
         env: { ...process.env, DATABASE_URL: databaseUrl },
@@ -108,16 +108,20 @@ describe('Sprint 13 demo assets script', () => {
 
     let refused = false;
     try {
-      execFileSync('npx', ['ts-node', 'scripts/seed-demo-assets.ts'], {
-        cwd: API_ROOT,
-        env: {
-          ...process.env,
-          DATABASE_URL:
-            'postgresql://finalpro:pw@production.example.com:5432/finalpro_demo',
+      execFileSync(
+        'npx',
+        ['ts-node', '--transpile-only', 'scripts/seed-demo-assets.ts'],
+        {
+          cwd: API_ROOT,
+          env: {
+            ...process.env,
+            DATABASE_URL:
+              'postgresql://finalpro:pw@production.example.com:5432/finalpro_demo',
+          },
+          stdio: 'pipe',
+          timeout: 90_000,
         },
-        stdio: 'pipe',
-        timeout: 90_000,
-      });
+      );
     } catch (err) {
       refused = true;
       expect(

@@ -13,12 +13,16 @@ function runSeedWithRawUrl(databaseUrl: string): {
   output: string;
 } {
   try {
-    const out = execFileSync('npx', ['ts-node', 'scripts/seed-demo.ts'], {
-      cwd: API_ROOT,
-      env: { ...process.env, DATABASE_URL: databaseUrl },
-      stdio: 'pipe',
-      timeout: 90_000,
-    });
+    const out = execFileSync(
+      'npx',
+      ['ts-node', '--transpile-only', 'scripts/seed-demo.ts'],
+      {
+        cwd: API_ROOT,
+        env: { ...process.env, DATABASE_URL: databaseUrl },
+        stdio: 'pipe',
+        timeout: 90_000,
+      },
+    );
     return { ok: true, output: out.toString() };
   } catch (err) {
     const e = err as { stdout?: Buffer; stderr?: Buffer };
