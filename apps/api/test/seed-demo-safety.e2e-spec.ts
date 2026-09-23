@@ -54,7 +54,7 @@ describe('Sprint 12 demo seed safety', () => {
   afterAll(async () => {
     await Promise.all(opened.map((p) => p.$disconnect()));
     await dbs.tearDown();
-  });
+  }, 120_000);
 
   it('rejects a remote host with a demo-looking database name before any connection or write', () => {
     const result = runSeedWithRawUrl(

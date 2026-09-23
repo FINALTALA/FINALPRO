@@ -99,7 +99,7 @@ describe('Sprint 12 demo seed preflight completeness', () => {
       await admin.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${db}"`);
     }
     await admin.$disconnect();
-  });
+  }, 120_000);
 
   it('rejects when the demo employee is already a BRANCH_EMPLOYEE at another vendor', async () => {
     const prisma = await scenarioDb(SCENARIO_DBS[0]);

@@ -44,7 +44,7 @@ describe('Sprint 13 demo assets script', () => {
   afterAll(async () => {
     await Promise.all(opened.map((p) => p.$disconnect()));
     await dbs.tearDown();
-  });
+  }, 120_000);
 
   it('attaches logos, covers, bios and a product image to the demo stores, only where empty, and is a no-op on re-run', async () => {
     const { url, prisma } = await dbs.clone('fill');
