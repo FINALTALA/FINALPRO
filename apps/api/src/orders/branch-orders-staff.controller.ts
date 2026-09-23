@@ -45,13 +45,16 @@ function ownerOrderDto(o: BranchOrderRow) {
 // explicit - "staff view limited to name/phone/code, no address" - and
 // the previous single shared DTO gave a BRANCH_EMPLOYEE the SAME wide
 // surface as the owner (status/total/payment_method/created_at), well
-// beyond what that requirement names. This is deliberately the
-// smallest DTO that still lets a branch employee identify and hand
-// over a pickup order - id only for a React-key-style purpose, never
-// status/total/payment_method/created_at.
+// beyond what that requirement names.
+//
+// Codex review round 4 on commit 95a8430 (fix #3): the agreed surface
+// for staff is name + phone + pickup code ONLY - `id` is an internal
+// identifier, not one of the three, and a React list key is a frontend
+// display concern that must never grow the API's own response shape.
+// The frontend keys its list some other way (index, or
+// phone+pickup_code) instead.
 function employeeOrderDto(o: BranchOrderRow) {
   return {
-    id: o.id,
     customer_name: o.customerOrder.customer.displayName,
     customer_phone: o.customerOrder.customer.user.phone,
     pickup_code: o.fulfilmentMethod === 'PICKUP' ? o.pickupCode : null,

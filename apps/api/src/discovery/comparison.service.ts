@@ -3,7 +3,8 @@ import { Prisma } from '../../generated/prisma/client';
 import {
   AvailabilityBucket,
   bucketForStock,
-  totalAvailableStock,
+  liveReservedQuantityByKey,
+  totalAvailableStockLive,
 } from '../common/availability.util';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -90,12 +91,33 @@ export class ComparisonService {
           },
         },
         canonicalVariant: { select: { id: true, structuralAttributes: true } },
-        branchStocks: { select: { quantity: true, reservedQuantity: true } },
+        branchStocks: { select: { branchId: true, quantity: true } },
       },
     });
 
+    // Codex review round 4 on commit 95a8430 (fix #2): live-reserved,
+    // not the lazily-swept BranchStock.reservedQuantity counter - see
+    // liveReservedQuantityByKey's own doc comment. Batched once for
+    // every variant this call returns.
+    const liveReservedByKey = await liveReservedQuantityByKey(
+      this.prisma,
+      variants.flatMap((v) =>
+        v.branchStocks.map((bs) => ({
+          branchId: bs.branchId,
+          offerVariantId: v.id,
+        })),
+      ),
+    );
+
     return variants.map((v) => {
-      const totalStock = totalAvailableStock(v.branchStocks);
+      const totalStock = totalAvailableStockLive(
+        v.branchStocks.map((bs) => ({
+          branchId: bs.branchId,
+          offerVariantId: v.id,
+          quantity: bs.quantity,
+        })),
+        liveReservedByKey,
+      );
       return {
         offerVariantId: v.id,
         offerId: v.vendorOfferId,

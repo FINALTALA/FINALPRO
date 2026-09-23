@@ -11,8 +11,14 @@ import { clearSession, getSessionToken } from "@/lib/session";
 // wider DTO server-side (see BranchOrdersStaffController's own
 // comment), so the extra fields here are optional and simply unused
 // by this deliberately minimal page rather than assumed present.
+//
+// Codex review round 4 on commit 95a8430 (fix #3): `id` itself is also
+// owner-only now - the employee DTO carries only name/phone/pickup
+// code, never an internal identifier just for a React list key (see
+// the list's own key expression below, which never assumes `id` is
+// present).
 interface OrderRow {
-  id: string;
+  id?: string;
   customer_name: string | null;
   customer_phone: string;
   pickup_code: string | null;
@@ -89,8 +95,8 @@ export default function BranchOrdersPage() {
       {orders.length === 0 && <p className="muted">لا توجد طلبات بعد.</p>}
 
       <div style={{ maxWidth: 720, width: "100%", display: "flex", flexDirection: "column", gap: 10 }}>
-        {orders.map((o) => (
-          <div key={o.id} className="card">
+        {orders.map((o, idx) => (
+          <div key={o.id ?? `${idx}-${o.customer_phone}-${o.pickup_code ?? "none"}`} className="card">
             <div style={{ display: "flex", justifyContent: "space-between" }}>
               <span>{o.customer_name ?? "—"} — {o.customer_phone}</span>
               {o.status && <span className="muted">{STATUS_LABELS[o.status] ?? o.status}</span>}

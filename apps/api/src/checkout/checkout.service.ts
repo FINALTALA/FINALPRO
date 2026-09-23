@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { AuditLogService } from '../audit/audit-log.service';
+import { liveReservedQuantityByKey } from '../common/availability.util';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import {
   BranchOrderPaymentMethod,
@@ -20,8 +21,11 @@ import {
   assertItemsPurchasableReadOnly,
 } from './purchase-eligibility.util';
 import {
-  lockAndSweepStockRow,
+  findExpiredReservationIdsForStockKeys,
+  findExpiredReservationIdsForWindowKeys,
+  lockAndSweepStockRowAssumingReservationsLocked,
   lockReservationRowIfExists,
+  lockReservationRowsSorted,
 } from './stock-lock.util';
 import { computeAvailableSlots } from './slot-availability.util';
 import { SandboxPaymentService } from './sandbox-payment.service';
@@ -309,6 +313,14 @@ export class CheckoutService {
    * CheckoutReservationItem rows directly, batched in one query - the
    * mathematically correct "available right now" figure without
    * taking any lock or writing anything.
+   *
+   * Codex review round 4 on commit 95a8430 (fix #2): the live-
+   * reservation batch query itself now comes from the shared
+   * liveReservedQuantityByKey() - the exact same primitive the public
+   * storefront/offer-detail/comparison surfaces use - so there is only
+   * one implementation of "what's actually held right now" for this
+   * whole codebase to keep correct, not two independently-written
+   * copies of the same query that could quietly drift apart.
    */
   private async buildAvailabilityMap(
     items: GroupingItem[],
@@ -330,24 +342,13 @@ export class CheckoutService {
       branches.map((b) => [b.id, b.createdAt]),
     );
 
-    const liveReservations = await this.prisma.checkoutReservationItem.findMany(
-      {
-        where: {
-          offerVariantId: { in: variantIds },
-          branchId: { in: branchIds },
-          reservation: { expiresAt: { gt: new Date() } },
-        },
-        select: { branchId: true, offerVariantId: true, quantity: true },
-      },
+    const liveReservedByKey = await liveReservedQuantityByKey(
+      this.prisma,
+      stocks.map((s) => ({
+        branchId: s.branchId,
+        offerVariantId: s.offerVariantId,
+      })),
     );
-    const liveReservedByKey = new Map<string, number>();
-    for (const r of liveReservations) {
-      const key = `${r.branchId}:${r.offerVariantId}`;
-      liveReservedByKey.set(
-        key,
-        (liveReservedByKey.get(key) ?? 0) + r.quantity,
-      );
-    }
 
     const map = new Map<
       string,
@@ -471,22 +472,24 @@ export class CheckoutService {
         });
       }
 
-      // Eligibility - every item, before any lock is taken.
-      await assertItemsPurchasable(
-        tx,
-        this.subscriptionGate,
-        correlationId,
-        resolvedGroups.flatMap((g) =>
-          g.items.map((i) => ({
-            vendorId: g.vendorId,
-            offerVariantId: i.offerVariantId,
-          })),
-        ),
-      );
-
-      // Phase 2: lock EVERY stock row, then EVERY window row, both in
-      // canonical order - see stockLockKey/windowLockKey's own comment
-      // for why this ordering is what actually prevents deadlock.
+      // Codex review round 4 on commit 95a8430 (fix #1): one single,
+      // consistent global lock order for this whole transaction -
+      //  (1) every CheckoutReservation row this checkout might need to
+      //      sweep, across EVERY stock/window key it touches, locked
+      //      together in one sorted batch, before anything else;
+      //  (2) vendor rows (eligibility), sorted;
+      //  (3) BranchStock rows, sorted;
+      //  (4) DeliveryWindow rows, sorted.
+      // confirm()/cancelReservation() already lock in this same
+      // relative order (reservation row first, then vendor rows where
+      // applicable, then stock rows - see their own comments). The
+      // round-3 version of this method discovered and locked
+      // reservations ONE STOCK ROW AT A TIME, interleaved with locking
+      // that same row - which meant two different "batches" within one
+      // reserve() call (or between reserve() and a concurrent
+      // cancel()/confirm()) could each hold a lock the other was still
+      // waiting for. Locking the FULL reservation set up front, before
+      // touching any vendor/stock/window row, closes that gap.
       const stockKeys = new Map<
         string,
         { vendorId: string; branchId: string; offerVariantId: string }
@@ -506,6 +509,10 @@ export class CheckoutService {
       const sortedStockKeys = [...stockKeys.keys()].sort();
 
       const windowIdByKey = new Map<string, string>();
+      const windowDateKeys: {
+        deliveryWindowId: string;
+        scheduledDate: Date;
+      }[] = [];
       for (const g of resolvedGroups) {
         if (g.fulfilmentMethod === 'DELIVERY') {
           windowIdByKey.set(
@@ -517,21 +524,54 @@ export class CheckoutService {
             ),
             g.windowId!,
           );
+          windowDateKeys.push({
+            deliveryWindowId: g.windowId!,
+            scheduledDate: parseDateOnly(g.scheduledDate!),
+          });
         }
       }
       const sortedWindowIds = [...new Set([...windowIdByKey.values()])].sort();
 
+      // Position 1: the full reservation-lock set, batched across every
+      // target stock AND window key at once - not discovered/locked
+      // per-row.
+      const [expiredFromStock, expiredFromWindows] = await Promise.all([
+        findExpiredReservationIdsForStockKeys(tx, [...stockKeys.values()]),
+        findExpiredReservationIdsForWindowKeys(tx, windowDateKeys),
+      ]);
+      const reservationIdsToLock = [
+        ...new Set([...expiredFromStock, ...expiredFromWindows]),
+      ];
+      await lockReservationRowsSorted(tx, reservationIdsToLock);
+
+      // Position 2: eligibility - vendor locks, sorted internally.
+      await assertItemsPurchasable(
+        tx,
+        this.subscriptionGate,
+        correlationId,
+        resolvedGroups.flatMap((g) =>
+          g.items.map((i) => ({
+            vendorId: g.vendorId,
+            offerVariantId: i.offerVariantId,
+          })),
+        ),
+      );
+
+      // Position 3, then 4: stock rows, then window rows - using the
+      // reservation locks already held above; never re-discovering or
+      // re-locking a reservation row from inside this loop.
       const lockedStock = new Map<
         string,
         { id: string; quantity: number; reservedQuantity: number }
       >();
       for (const key of sortedStockKeys) {
         const { vendorId, branchId, offerVariantId } = stockKeys.get(key)!;
-        const locked = await lockAndSweepStockRow(
+        const locked = await lockAndSweepStockRowAssumingReservationsLocked(
           tx,
           vendorId,
           branchId,
           offerVariantId,
+          reservationIdsToLock,
         );
         if (!locked) {
           throw new ConflictException({

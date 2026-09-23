@@ -1,4 +1,4 @@
-import { bucketForStock, totalAvailableStock } from './availability.util';
+import { bucketForStock, totalAvailableStockLive } from './availability.util';
 
 describe('availability.util', () => {
   it('is sold_out at zero or negative stock', () => {
@@ -18,25 +18,50 @@ describe('availability.util', () => {
   });
 });
 
-describe('totalAvailableStock', () => {
-  it('subtracts reservedQuantity from quantity per branch, then sums', () => {
+describe('totalAvailableStockLive', () => {
+  it('subtracts the live-reserved figure per branch, then sums', () => {
+    const liveReservedByKey = new Map([['branchA:variant1', 2]]);
     expect(
-      totalAvailableStock([
-        { quantity: 5, reservedQuantity: 2 },
-        { quantity: 3, reservedQuantity: 0 },
-      ]),
+      totalAvailableStockLive(
+        [
+          { branchId: 'branchA', offerVariantId: 'variant1', quantity: 5 },
+          { branchId: 'branchB', offerVariantId: 'variant1', quantity: 3 },
+        ],
+        liveReservedByKey,
+      ),
     ).toBe(6);
   });
 
   it('clamps each branch at zero rather than going negative', () => {
-    expect(totalAvailableStock([{ quantity: 2, reservedQuantity: 5 }])).toBe(0);
+    const liveReservedByKey = new Map([['branchA:variant1', 5]]);
+    expect(
+      totalAvailableStockLive(
+        [{ branchId: 'branchA', offerVariantId: 'variant1', quantity: 2 }],
+        liveReservedByKey,
+      ),
+    ).toBe(0);
   });
 
-  it('the last unit fully reserved reads as zero available', () => {
-    expect(totalAvailableStock([{ quantity: 1, reservedQuantity: 1 }])).toBe(0);
+  it('the last unit fully reserved (live) reads as zero available', () => {
+    const liveReservedByKey = new Map([['branchA:variant1', 1]]);
+    expect(
+      totalAvailableStockLive(
+        [{ branchId: 'branchA', offerVariantId: 'variant1', quantity: 1 }],
+        liveReservedByKey,
+      ),
+    ).toBe(0);
+  });
+
+  it('a key with no entry in the map (nothing live-reserved) counts as fully available', () => {
+    expect(
+      totalAvailableStockLive(
+        [{ branchId: 'branchA', offerVariantId: 'variant1', quantity: 4 }],
+        new Map(),
+      ),
+    ).toBe(4);
   });
 
   it('is zero for no branch stock rows at all', () => {
-    expect(totalAvailableStock([])).toBe(0);
+    expect(totalAvailableStockLive([], new Map())).toBe(0);
   });
 });
