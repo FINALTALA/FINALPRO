@@ -22,7 +22,7 @@ describe('Sprint 12 demo seed idempotency', () => {
   afterAll(async () => {
     await prisma?.$disconnect();
     await dbs.tearDown();
-  });
+  }, 120_000);
 
   it('runs against a database whose name contains "test"', () => {
     expect(new URL(url).pathname).toContain('test');

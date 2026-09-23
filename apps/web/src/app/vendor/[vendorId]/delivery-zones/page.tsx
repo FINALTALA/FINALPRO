@@ -92,8 +92,8 @@ export default function DeliveryZonesPage() {
     <div className="page-shell">
       <div className="top-bar">
         <div className="brand" style={{ margin: 0 }}>مناطق ورسوم التوصيل</div>
-        <Link href={`/vendor/${params.vendorId}/storefront`} className="button-link">
-          العودة لإعدادات المتجر
+        <Link href={`/vendor/${params.vendorId}`} className="button-link">
+          لوحة المتجر
         </Link>
       </div>
 

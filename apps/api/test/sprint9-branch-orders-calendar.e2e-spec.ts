@@ -25,7 +25,7 @@ class FakeSmsService {
 // validates (see feedback memory: +97057/+97058 parse but are not
 // valid PS mobile numbers under that bundle, found the hard way twice
 // already in this project before).
-let phoneSeq = (Date.now() % 1_000_000) + 100_000;
+let phoneSeq = (Date.now() % 1_000_000) + 1_000_000;
 function uniquePhone(): string {
   phoneSeq += 1;
   return `+97056${(phoneSeq % 10_000_000).toString().padStart(7, '0')}`;

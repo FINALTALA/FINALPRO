@@ -1,193 +1,153 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-import { apiFetch, ApiError } from "@/lib/api";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense } from "react";
+import ProductCard from "@/components/ProductCard";
+import { EmptyState, ErrorBanner, SkeletonGrid } from "@/components/States";
+import { useFetch } from "@/lib/useFetch";
+import { CardsPageDto, SEGMENTS, StoreSummaryDto } from "@/lib/types";
 
-interface ComparisonCardDto {
-  canonical_product_id: string;
-  canonical_name_ar: string;
-  canonical_name_en: string;
-  lowest_price: string;
-  lowest_price_availability: "available" | "low_stock" | "sold_out";
-  cheapest_offer: {
-    vendor_id: string;
-    vendor_slug: string;
-    offer_id: string;
-    offer_variant_id: string;
-  };
-  store_logos: {
-    vendor_id: string;
-    vendor_slug: string;
-    display_name: string;
-    logo_url: string | null;
-    offer_id: string;
-    offer_variant_id: string;
-    price: string;
-  }[];
+const PAGE_SIZE = 20;
+
+function buildQuery(params: Record<string, string | number | null>): string {
+  const usp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== null && v !== "" && v !== undefined) usp.set(k, String(v));
+  }
+  const s = usp.toString();
+  return s ? `?${s}` : "";
 }
 
-interface DiscoveryPageDto {
-  page: number;
-  page_size: number;
-  total: number;
-  items: ComparisonCardDto[];
-}
-
-const AVAILABILITY_LABEL: Record<string, string> = {
-  available: "متوفر",
-  low_stock: "كمية محدودة",
-  sold_out: "غير متوفر",
-};
-
-// Sprint 8 (RB-STOREF-004, PDR-013/014/015): the public "All" discovery
-// page - the only discovery surface this sprint builds (the four
-// Women/Men/Kids/Accessories segment pages are RB-STOREF-004b, Should,
-// deferred). Cards are the exact global comparison card RB-COMP-001
-// defines - clicking the card opens the cheapest eligible offer inside
-// its store; clicking a store logo opens THAT store's offer instead
-// (PDR-015) - never the comparison page directly and never a cart.
-//
-// Round 4 review fix: the card's own explicit "قارني الأسعار" (compare
-// prices) button is the only way into /compare/:id - it was built in an
-// earlier round but had no link to it anywhere in the UI at all.
-export default function DiscoveryAllPage() {
+// Sprint 8 (RB-STOREF-004, PDR-013/015): public discovery. Sprint 13:
+// real category segments (?segment=) and search (?q=) backed by
+// GET /discovery/all and GET /discovery/stores - cards keep the exact
+// global-card behaviour (image/name -> cheapest offer in its store;
+// store circles -> that store's offer; "قارني الأسعار" -> comparison).
+function DiscoveryInner() {
   const router = useRouter();
-  const [data, setData] = useState<DiscoveryPageDto | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [page, setPage] = useState(1);
+  const search = useSearchParams();
+  const segment = search.get("segment") ?? "all";
+  const q = search.get("q") ?? "";
+  const page = Math.max(1, Number.parseInt(search.get("page") ?? "1", 10) || 1);
 
-  useEffect(() => {
-    apiFetch<DiscoveryPageDto>(`/discovery/all?page=${page}&page_size=24`, {
-      auth: false,
-    })
-      .then(setData)
-      .catch((err) => {
-        setError(
-          err instanceof ApiError ? err.message : "تعذّر تحميل صفحة الاكتشاف",
-        );
-      });
-  }, [page]);
+  const products = useFetch<CardsPageDto>(
+    `/discovery/all${buildQuery({ page, page_size: PAGE_SIZE, segment: segment === "all" ? null : segment, q })}`,
+  );
+  const stores = useFetch<{ items: StoreSummaryDto[] }>(
+    q ? `/discovery/stores${buildQuery({ q, segment: segment === "all" ? null : segment })}` : null,
+  );
 
-  function openOffer(vendorSlug: string, offerId: string) {
-    router.push(`/store/${vendorSlug}/products/${offerId}`);
+  const totalPages = products.data
+    ? Math.max(1, Math.ceil(products.data.total / products.data.page_size))
+    : 1;
+
+  function go(next: { segment?: string; page?: number }) {
+    router.push(
+      `/discovery${buildQuery({
+        segment: (next.segment ?? segment) === "all" ? null : (next.segment ?? segment),
+        q,
+        page: next.page && next.page > 1 ? next.page : null,
+      })}`,
+    );
   }
 
   return (
     <div className="page-shell">
       <div className="wide-shell">
-        <div className="brand" style={{ textAlign: "right" }}>
-          اكتشف المنتجات
+        <h1 className="page-title">{q ? `نتائج البحث عن «${q}»` : "اكتشف المنتجات"}</h1>
+        <p className="page-subtitle">
+          {q
+            ? "منتجات ومتاجر مطابقة لبحثك."
+            : "منتجات من كل المتاجر، مع أقل سعر وعدد المتاجر التي تبيعها."}
+        </p>
+
+        <div className="category-strip" aria-label="الفئات">
+          {SEGMENTS.map((s) => (
+            <button
+              key={s.key}
+              className={`category-chip${segment === s.key ? " active" : ""}`}
+              onClick={() => go({ segment: s.key, page: 1 })}
+              aria-pressed={segment === s.key}
+            >
+              {s.label}
+            </button>
+          ))}
         </div>
 
-        {error && <div className="error-banner">{error}</div>}
-
-        {!data && !error && <p className="muted">جارٍ التحميل...</p>}
-
-        {data && data.items.length === 0 && (
-          <p className="muted">لا توجد منتجات متاحة للمقارنة حالياً.</p>
+        {q && stores.data && stores.data.items.length > 0 && (
+          <>
+            <div className="section-heading">
+              <h2>المتاجر</h2>
+            </div>
+            <div className="follow-strip">
+              {stores.data.items.map((s) => (
+                <Link key={s.slug} href={`/store/${s.slug}`} className="follow-item">
+                  <div className="follow-item-circle">
+                    {s.logo_url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={s.logo_url} alt={s.display_name} />
+                    ) : (
+                      <span>{s.display_name.slice(0, 1)}</span>
+                    )}
+                  </div>
+                  <span>{s.display_name}</span>
+                </Link>
+              ))}
+            </div>
+          </>
         )}
 
-        {data && data.items.length > 0 && (
+        {q && (
+          <div className="section-heading">
+            <h2>المنتجات</h2>
+          </div>
+        )}
+
+        {products.error && <ErrorBanner message={products.error} />}
+        {products.loading && <SkeletonGrid />}
+
+        {products.data && products.data.items.length === 0 && (
+          <EmptyState
+            title={q ? "لا توجد منتجات مطابقة" : "لا توجد منتجات في هذه الفئة حالياً"}
+            message={q ? "جرّبي كلمات أخرى أو فئة مختلفة." : "جرّبي فئة أخرى أو عودي لاحقاً."}
+            actionHref="/discovery"
+            actionLabel="عرض كل المنتجات"
+          />
+        )}
+
+        {products.data && products.data.items.length > 0 && (
           <>
             <div className="product-grid">
-              {data.items.map((card) => (
-                <div
-                  key={card.canonical_product_id}
-                  className="product-card"
-                  onClick={() =>
-                    openOffer(
-                      card.cheapest_offer.vendor_slug,
-                      card.cheapest_offer.offer_id,
-                    )
-                  }
-                >
-                  <div className="product-card-name">
-                    {card.canonical_name_ar}
-                  </div>
-                  <div className="product-card-price">
-                    {card.lowest_price} ₪
-                  </div>
-                  <span
-                    className={`availability-badge availability-${card.lowest_price_availability}`}
-                  >
-                    {AVAILABILITY_LABEL[card.lowest_price_availability]}
-                  </span>
-                  <div className="product-card-logos">
-                    {card.store_logos.map((logo) => (
-                      <button
-                        key={logo.vendor_id}
-                        className="store-logo-button"
-                        title={logo.display_name}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openOffer(logo.vendor_slug, logo.offer_id);
-                        }}
-                      >
-                        {logo.logo_url ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={logo.logo_url}
-                            alt={logo.display_name}
-                            className="store-logo-img"
-                          />
-                        ) : (
-                          <span className="store-logo-placeholder">
-                            {logo.display_name.slice(0, 1)}
-                          </span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Sprint 8 round 4 review fix (RB-COMP-001, PDR-016):
-                      /compare/:id was built but had no link INTO it
-                      anywhere in the UI - this is that link. stopPropagation
-                      so it never also triggers the card's own
-                      cheapest-offer click. */}
-                  <button
-                    className="button-link"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      router.push(`/compare/${card.canonical_product_id}`);
-                    }}
-                  >
-                    قارني الأسعار
-                  </button>
-                </div>
+              {products.data.items.map((card) => (
+                <ProductCard key={card.canonical_product_id} card={card} />
               ))}
             </div>
 
-            <div
-              style={{
-                display: "flex",
-                gap: 8,
-                justifyContent: "center",
-                marginTop: 24,
-              }}
-            >
-              <button
-                className="button-link"
-                disabled={page <= 1}
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-              >
-                السابق
-              </button>
-              <span className="muted">
-                صفحة {data.page} من{" "}
-                {Math.max(1, Math.ceil(data.total / data.page_size))}
-              </span>
-              <button
-                className="button-link"
-                disabled={page * data.page_size >= data.total}
-                onClick={() => setPage((p) => p + 1)}
-              >
-                التالي
-              </button>
-            </div>
+            {totalPages > 1 && (
+              <div style={{ display: "flex", gap: 8, justifyContent: "center", alignItems: "center", marginTop: 24 }}>
+                <button className="button-link" disabled={page <= 1} onClick={() => go({ page: page - 1 })}>
+                  السابق
+                </button>
+                <span className="muted">
+                  صفحة {products.data.page} من {totalPages}
+                </span>
+                <button className="button-link" disabled={page >= totalPages} onClick={() => go({ page: page + 1 })}>
+                  التالي
+                </button>
+              </div>
+            )}
           </>
         )}
       </div>
     </div>
+  );
+}
+
+export default function DiscoveryPage() {
+  return (
+    <Suspense fallback={<div className="page-shell"><SkeletonGrid count={5} /></div>}>
+      <DiscoveryInner />
+    </Suspense>
   );
 }

@@ -62,8 +62,8 @@ export default function DeliveryWindowsBranchPickerPage() {
         <div className="brand" style={{ margin: 0 }}>
           تقويم مواعيد التوصيل
         </div>
-        <Link href={`/vendor/${params.vendorId}/storefront`} className="button-link">
-          العودة لإعدادات المتجر
+        <Link href={`/vendor/${params.vendorId}`} className="button-link">
+          لوحة المتجر
         </Link>
       </div>
 

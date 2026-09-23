@@ -26,12 +26,16 @@ function urlForDb(dbName: string): string {
 
 function runSeed(databaseUrl: string): { ok: boolean; output: string } {
   try {
-    const out = execFileSync('npx', ['ts-node', 'scripts/seed-demo.ts'], {
-      cwd: API_ROOT,
-      env: { ...process.env, DATABASE_URL: databaseUrl },
-      stdio: 'pipe',
-      timeout: 90_000,
-    });
+    const out = execFileSync(
+      'npx',
+      ['ts-node', '--transpile-only', 'scripts/seed-demo.ts'],
+      {
+        cwd: API_ROOT,
+        env: { ...process.env, DATABASE_URL: databaseUrl },
+        stdio: 'pipe',
+        timeout: 90_000,
+      },
+    );
     return { ok: true, output: out.toString() };
   } catch (err) {
     const e = err as { stdout?: Buffer; stderr?: Buffer };
@@ -99,7 +103,7 @@ describe('Sprint 12 demo seed preflight completeness', () => {
       await admin.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${db}"`);
     }
     await admin.$disconnect();
-  });
+  }, 120_000);
 
   it('rejects when the demo employee is already a BRANCH_EMPLOYEE at another vendor', async () => {
     const prisma = await scenarioDb(SCENARIO_DBS[0]);

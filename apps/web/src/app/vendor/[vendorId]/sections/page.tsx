@@ -194,8 +194,8 @@ export default function StoreSectionsPage() {
         <div className="brand" style={{ margin: 0 }}>
           أقسام المتجر
         </div>
-        <Link href={`/vendor/${params.vendorId}/storefront`} className="button-link">
-          العودة لإعدادات المتجر
+        <Link href={`/vendor/${params.vendorId}`} className="button-link">
+          لوحة المتجر
         </Link>
       </div>
 

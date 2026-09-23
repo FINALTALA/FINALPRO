@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600" role="img" aria-label="رسم توضيحي لقميص أبيض (أصل تجريبي)">
+  <rect width="600" height="600" fill="#efe8dc"/>
+  <ellipse cx="300" cy="548" rx="170" ry="14" fill="#12233f" fill-opacity=".12"/>
+  <path d="M215 110l-105 55 42 92 42-20v233h208V237l42 20 42-92-105-55c-10 26-38 44-85 44s-75-18-85-44z" fill="#fbfaf6" stroke="#12233f" stroke-width="6" stroke-linejoin="round"/>
+  <path d="M215 110c10 26 38 44 85 44s75-18 85-44" fill="none" stroke="#12233f" stroke-width="6"/>
+  <path d="M300 154v336" stroke="#12233f" stroke-opacity=".25" stroke-width="4"/>
+  <g fill="#2a9d8f"><circle cx="300" cy="200" r="6"/><circle cx="300" cy="260" r="6"/><circle cx="300" cy="320" r="6"/><circle cx="300" cy="380" r="6"/></g>
+</svg>

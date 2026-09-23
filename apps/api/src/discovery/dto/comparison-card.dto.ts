@@ -10,6 +10,12 @@ export function comparisonCardDto(card: ComparisonCard) {
     canonical_name_en: card.canonicalNameEn,
     lowest_price: card.lowestPrice.toFixed(2),
     lowest_price_availability: card.lowestPriceAvailability,
+    image_url: card.imageUrl,
+    brand_name: card.brandName,
+    category_name: card.categoryName,
+    store_count: card.storeCount,
+    colors: card.colors,
+    sizes: card.sizes,
     cheapest_offer: {
       vendor_id: card.cheapestOffer.vendorId,
       vendor_slug: card.cheapestOffer.vendorSlug,

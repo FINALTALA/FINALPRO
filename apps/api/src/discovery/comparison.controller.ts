@@ -22,6 +22,10 @@ export class ComparisonController {
   private async requireCanonicalProduct(id: string) {
     const product = await this.prisma.canonicalProduct.findUnique({
       where: { id },
+      include: {
+        brand: { select: { name: true } },
+        category: { select: { nameAr: true } },
+      },
     });
     if (!product) {
       throw new NotFoundException({
@@ -108,6 +112,7 @@ export class ComparisonController {
         currency: 'ILS' as const,
         price: o.price.toFixed(2),
         availability: o.availability,
+        image_url: o.imageUrl,
       })),
     };
   }

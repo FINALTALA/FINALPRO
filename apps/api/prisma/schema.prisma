@@ -58,6 +58,7 @@ model User {
   sentStaffInvites StaffInvite[]    @relation("StaffInviter")
   stockMovements   StockMovement[]
   decidedNameChangeRequests CanonicalNameChangeRequest[]
+  storeFollows     StoreFollow[]
 
   @@map("users")
 }
@@ -317,6 +318,7 @@ model Vendor {
   storeSections          StoreSection[]
   branchOrders           BranchOrder[]
   deliveryWindows        DeliveryWindow[]
+  followers              StoreFollow[]
 
   @@map("vendors")
 }
@@ -1885,4 +1887,23 @@ model CheckoutReservationSlot {
 
   @@index([deliveryWindowId, scheduledDate])
   @@map("checkout_reservation_slots")
+}
+
+/// Sprint 13 (RB-STOREF-003, PDR-002 / approved baseline 3.1): "the stores
+/// a customer follows". One row per (user, store); the unique constraint
+/// makes follow idempotent and race-safe. Availability is never stored
+/// here - Following reads always re-check published + ACTIVE, and a
+/// follow of a store that later becomes unavailable is retained (it
+/// simply stops being listed until the store is available again).
+model StoreFollow {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  vendorId  String
+  vendor    Vendor   @relation(fields: [vendorId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@unique([userId, vendorId])
+  @@index([vendorId])
+  @@map("store_follows")
 }

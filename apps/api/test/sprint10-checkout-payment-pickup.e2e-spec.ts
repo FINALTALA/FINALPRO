@@ -20,7 +20,7 @@ class FakeSmsService {
   }
 }
 
-let phoneSeq = (Date.now() % 1_000_000) + 200_000;
+let phoneSeq = (Date.now() % 1_000_000) + 1_200_000;
 function uniquePhone(): string {
   phoneSeq += 1;
   return `+97056${(phoneSeq % 10_000_000).toString().padStart(7, '0')}`;

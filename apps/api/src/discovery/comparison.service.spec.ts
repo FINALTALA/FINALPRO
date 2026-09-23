@@ -13,6 +13,7 @@ function offer(overrides: Partial<EligibleOffer>): EligibleOffer {
     vendorCreatedAt: new Date('2026-01-01T00:00:00Z'),
     price: 100,
     availability: 'available',
+    imageUrl: null,
     ...overrides,
   };
 }
@@ -150,6 +151,87 @@ describe('ComparisonService', () => {
       const card = service.buildCard(product, offers);
       expect(card?.lowestPrice).toBe(90);
       expect(card?.lowestPriceAvailability).toBe('sold_out');
+    });
+  });
+
+  describe('buildCard (Sprint 13 enrichment)', () => {
+    const product = {
+      id: 'p1',
+      canonicalNameAr: 'قميص',
+      canonicalNameEn: 'Shirt',
+      brand: { name: 'Brand X' },
+      category: { nameAr: 'قمصان' },
+    };
+
+    it('derives store count, colours and sizes from real offer data only', () => {
+      const card = service.buildCard(product, [
+        offer({
+          offerVariantId: 'a',
+          vendorId: 'v1',
+          structuralAttributes: { color: 'أبيض', size: 'M' },
+        }),
+        offer({
+          offerVariantId: 'b',
+          vendorId: 'v1',
+          price: 90,
+          structuralAttributes: { color: 'أبيض', size: 'L' },
+        }),
+        offer({
+          offerVariantId: 'c',
+          vendorId: 'v2',
+          price: 120,
+          structuralAttributes: { color: 'أسود', size: 'M' },
+        }),
+      ]);
+      expect(card?.storeCount).toBe(2);
+      expect(card?.colors.sort()).toEqual(['أبيض', 'أسود']);
+      expect(card?.sizes.sort()).toEqual(['L', 'M']);
+      expect(card?.brandName).toBe('Brand X');
+      expect(card?.categoryName).toBe('قمصان');
+    });
+
+    it('shows no colours/sizes/image when the data has none - never invents them', () => {
+      const card = service.buildCard(
+        { id: 'p2', canonicalNameAr: 'س', canonicalNameEn: 'S' },
+        [offer({ structuralAttributes: {} })],
+      );
+      expect(card?.colors).toEqual([]);
+      expect(card?.sizes).toEqual([]);
+      expect(card?.imageUrl).toBeNull();
+      expect(card?.brandName).toBeNull();
+    });
+
+    it('uses the cheapest offer image, else any store image', () => {
+      const withImage = service.buildCard(product, [
+        offer({
+          offerVariantId: 'a',
+          vendorId: 'v1',
+          price: 50,
+          imageUrl: '/a.png',
+        }),
+        offer({
+          offerVariantId: 'b',
+          vendorId: 'v2',
+          price: 60,
+          imageUrl: '/b.png',
+        }),
+      ]);
+      expect(withImage?.imageUrl).toBe('/a.png');
+      const fallback = service.buildCard(product, [
+        offer({
+          offerVariantId: 'a',
+          vendorId: 'v1',
+          price: 50,
+          imageUrl: null,
+        }),
+        offer({
+          offerVariantId: 'b',
+          vendorId: 'v2',
+          price: 60,
+          imageUrl: '/b.png',
+        }),
+      ]);
+      expect(fallback?.imageUrl).toBe('/b.png');
     });
   });
 });

@@ -9,6 +9,18 @@
 const SESSION_TOKEN_KEY = "finalpro_session_token";
 const ACTIVE_WORKSPACE_KEY = "finalpro_active_workspace";
 
+// Sprint 13: the app shell (header/bottom nav) re-reads the session
+// whenever it changes in this tab, so login/logout/workspace switches
+// update the navigation immediately without a reload.
+export const SESSION_EVENT = "finalpro:session";
+function notifySessionChanged(): void {
+  try {
+    window.dispatchEvent(new Event(SESSION_EVENT));
+  } catch {
+    // Not in a browser (SSR) - nothing to notify.
+  }
+}
+
 export function getSessionToken(): string | null {
   try {
     return localStorage.getItem(SESSION_TOKEN_KEY);
@@ -20,6 +32,7 @@ export function getSessionToken(): string | null {
 export function setSessionToken(token: string): void {
   try {
     localStorage.setItem(SESSION_TOKEN_KEY, token);
+    notifySessionChanged();
   } catch {
     // Private-browsing/blocked storage: the session still works for
     // this page load via in-memory state, just won't survive a reload.
@@ -30,6 +43,7 @@ export function clearSession(): void {
   try {
     localStorage.removeItem(SESSION_TOKEN_KEY);
     localStorage.removeItem(ACTIVE_WORKSPACE_KEY);
+    notifySessionChanged();
   } catch {
     // Nothing to clean up if storage was never reachable.
   }
@@ -51,6 +65,7 @@ export function getActiveWorkspace(): ActiveWorkspaceRef | null {
 export function setActiveWorkspace(ref: ActiveWorkspaceRef): void {
   try {
     localStorage.setItem(ACTIVE_WORKSPACE_KEY, JSON.stringify(ref));
+    notifySessionChanged();
   } catch {
     // Same as setSessionToken - a per-viewer convenience, not load-bearing.
   }
