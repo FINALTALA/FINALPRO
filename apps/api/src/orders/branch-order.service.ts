@@ -25,13 +25,26 @@ export class BranchOrderService {
    * this codebase's established "read fresh under the lock" pattern -
    * two concurrent transition attempts on the same row must never both
    * succeed from a state that only permits one of them to.
+   *
+   * Sprint 11 (RB-FUL-002): `actorId` is now nullable - a system-
+   * triggered transition (the 72h auto-confirm, see
+   * FulfilmentReconciliationService) has no human actor, the same
+   * `actorId: null` convention SubscriptionGateService's own lazy
+   * ACTIVE->EXPIRED transition already established for this codebase.
+   * `extraData` merges additional columns into this SAME atomic
+   * `update()` call (e.g. `deliveredAt` alongside the SENT->DELIVERED
+   * status write) - still the one and only place that ever writes
+   * BranchOrder.status, just now able to carry a companion field
+   * through the same lock/audit machinery instead of needing a second,
+   * separate write outside of it.
    */
   async transition(
     tx: Prisma.TransactionClient,
     branchOrderId: string,
     to: BranchOrderStatus,
-    actorId: string,
+    actorId: string | null,
     correlationId: string,
+    extraData?: Prisma.BranchOrderUpdateInput,
   ) {
     const rows = await tx.$queryRaw<
       {
@@ -64,7 +77,7 @@ export class BranchOrderService {
 
     const updated = await tx.branchOrder.update({
       where: { id: branchOrderId },
-      data: { status: to },
+      data: { ...extraData, status: to },
     });
     await this.auditLog.record(
       {
