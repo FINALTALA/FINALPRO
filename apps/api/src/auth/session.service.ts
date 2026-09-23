@@ -55,6 +55,20 @@ export class SessionService {
     return raw ? (JSON.parse(raw) as SessionData) : null;
   }
 
+  /**
+   * Revokes exactly one session (logout). Other sessions of the same
+   * user, and every other user's sessions, are untouched. Deleting an
+   * already-absent key is a harmless no-op, so this is naturally
+   * idempotent.
+   */
+  async revoke(token: string, userId: string): Promise<void> {
+    await this.redis
+      .multi()
+      .del(SESSION_KEY_PREFIX + token)
+      .srem(USER_SESSIONS_KEY_PREFIX + userId, token)
+      .exec();
+  }
+
   async revokeAllForUser(userId: string): Promise<void> {
     const setKey = USER_SESSIONS_KEY_PREFIX + userId;
     const tokens = await this.redis.smembers(setKey);

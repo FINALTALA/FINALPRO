@@ -70,4 +70,43 @@ describe('HttpExceptionFilter', () => {
       }),
     );
   });
+
+  it('passes a business exception own structured `details` array through (Sprint 14: CHECKOUT_PRICE_CHANGED diff)', () => {
+    const filter = new HttpExceptionFilter();
+    const { host, json } = makeHost('corr-2');
+
+    filter.catch(
+      new BadRequestException({
+        code: 'CHECKOUT_PRICE_CHANGED',
+        message: 'prices changed',
+        details: [{ type: 'price_change', old_price: 1, new_price: 2 }],
+      }),
+      host,
+    );
+
+    expect(json).toHaveBeenCalledWith({
+      error: {
+        code: 'CHECKOUT_PRICE_CHANGED',
+        message: 'prices changed',
+        details: [{ type: 'price_change', old_price: 1, new_price: 2 }],
+        correlation_id: 'corr-2',
+      },
+    });
+  });
+
+  it('a validation error array message still wins over any `details` field', () => {
+    const filter = new HttpExceptionFilter();
+    const { host, json } = makeHost('corr-3');
+
+    filter.catch(
+      new BadRequestException({
+        message: ['a must be a string'],
+        details: [{ ignored: true }],
+      }),
+      host,
+    );
+
+    const body = json.mock.calls[0][0].error;
+    expect(body.details).toEqual(['a must be a string']);
+  });
 });
