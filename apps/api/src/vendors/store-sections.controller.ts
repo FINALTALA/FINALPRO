@@ -1,3 +1,4 @@
+import { BlockWhenSuspended } from '../auth/vendor-suspended.guard';
 import {
   Body,
   Controller,
@@ -72,6 +73,7 @@ export class StoreSectionsController {
     }));
   }
 
+  @BlockWhenSuspended()
   @Post()
   @HttpCode(201)
   @RequireVendorRole('OWNER')
@@ -129,6 +131,7 @@ export class StoreSectionsController {
     return section;
   }
 
+  @BlockWhenSuspended()
   @Put(':sectionId')
   @RequireVendorRole('OWNER')
   async rename(
@@ -155,6 +158,7 @@ export class StoreSectionsController {
     return sectionDto(updated);
   }
 
+  @BlockWhenSuspended()
   @Post('reorder')
   @HttpCode(200)
   @RequireVendorRole('OWNER')
@@ -212,6 +216,7 @@ export class StoreSectionsController {
     });
   }
 
+  @BlockWhenSuspended()
   @Delete(':sectionId')
   @HttpCode(200)
   @RequireVendorRole('OWNER')
@@ -243,6 +248,7 @@ export class StoreSectionsController {
     return { deleted: true };
   }
 
+  @BlockWhenSuspended()
   @Put(':sectionId/offers/:offerId')
   @HttpCode(200)
   @RequireVendorRole('OWNER')
@@ -284,6 +290,7 @@ export class StoreSectionsController {
     return { section_id: sectionId, offer_id: offerId };
   }
 
+  @BlockWhenSuspended()
   @Delete(':sectionId/offers/:offerId')
   @HttpCode(200)
   @RequireVendorRole('OWNER')

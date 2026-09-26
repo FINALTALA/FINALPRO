@@ -1,3 +1,4 @@
+import { BlockWhenSuspended } from '../auth/vendor-suspended.guard';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
   BadRequestException,
@@ -76,6 +77,7 @@ export class OffersImportController {
     private readonly subscriptionGate: SubscriptionGateService,
   ) {}
 
+  @BlockWhenSuspended()
   @Post()
   @HttpCode(201)
   @UseInterceptors(

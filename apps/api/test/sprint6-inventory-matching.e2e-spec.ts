@@ -201,7 +201,7 @@ describe('Sprint 6 - branch inventory, stock movements, media, non-exact match r
         )
         .set('Authorization', `Bearer ${reviewerToken}`)
         .set('Idempotency-Key', unique('decision'))
-        .send({ decision: 'approve' })
+        .send({ decision: 'approve', evidence_revision: 1 })
         .expect(201);
     }
     await request(app.getHttpServer())

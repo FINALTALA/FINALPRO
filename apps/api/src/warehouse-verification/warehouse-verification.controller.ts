@@ -26,6 +26,7 @@ import { RequireVendorRole } from '../auth/vendor-role.decorator';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
+import { assertNoPlatformVendorConflict } from '../platform-admin/vendor-conflict.util';
 import { WarehouseVerificationDecisionDto } from './dto/warehouse-verification-decision.dto';
 import { isExpectedWarehouseEvidencePendingConflict } from './expected-warehouse-evidence-conflict';
 
@@ -349,28 +350,52 @@ export class WarehouseVerificationController {
     PlatformRole.VERIFICATION_REVIEWER,
     PlatformRole.PLATFORM_ADMIN,
   )
-  async getPendingEvidence(@Param('vendorId') vendorId: string) {
-    const vendor = await this.prisma.vendor.findUnique({
-      where: { id: vendorId },
-    });
-    if (!vendor) {
-      throw new NotFoundException({
-        code: 'VENDOR_NOT_FOUND',
-        message: 'Vendor not found',
+  async getPendingEvidence(
+    @Param('vendorId') vendorId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
+  ) {
+    // Sprint 16 (D8): the read and its AuditLog row are one
+    // transaction, and the evidence is only returned once the audit row
+    // is written - if recording the view fails, the request fails and
+    // the warehouse address is never released. The audit row records
+    // THAT it was viewed (actor, evidence id, vendor id), never lat/lng
+    // or the address note.
+    return this.prisma.$transaction(async (tx) => {
+      const vendor = await tx.vendor.findUnique({
+        where: { id: vendorId },
       });
-    }
+      if (!vendor) {
+        throw new NotFoundException({
+          code: 'VENDOR_NOT_FOUND',
+          message: 'Vendor not found',
+        });
+      }
 
-    const evidence = await this.prisma.warehouseVerificationEvidence.findFirst({
-      where: { vendorId, status: 'PENDING' },
-    });
-    if (!evidence) {
-      throw new NotFoundException({
-        code: 'NO_PENDING_WAREHOUSE_EVIDENCE',
-        message:
-          'This vendor has no warehouse verification evidence awaiting review',
+      const evidence = await tx.warehouseVerificationEvidence.findFirst({
+        where: { vendorId, status: 'PENDING' },
       });
-    }
-    return pendingEvidenceToDto(evidence);
+      if (!evidence) {
+        throw new NotFoundException({
+          code: 'NO_PENDING_WAREHOUSE_EVIDENCE',
+          message:
+            'This vendor has no warehouse verification evidence awaiting review',
+        });
+      }
+
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'warehouse_verification_evidence.viewed',
+          entityType: 'WarehouseVerificationEvidence',
+          entityId: evidence.id,
+          afterState: { vendor_id: vendorId },
+        },
+        tx,
+      );
+      return pendingEvidenceToDto(evidence);
+    });
   }
 
   // PDR-035: approve/reject/request_resubmission, bound to one exact
@@ -419,6 +444,11 @@ export class WarehouseVerificationController {
       // - serializes concurrent decisions for this vendor so two
       // reviewers can never both act on the same snapshot.
       await tx.$queryRaw`SELECT id FROM vendors WHERE id = ${vendorId} FOR UPDATE`;
+
+      // Sprint 16 (D4): first check, under the vendor lock - see
+      // assertNoPlatformVendorConflict for why this is race-free
+      // against acceptStaffInvite().
+      await assertNoPlatformVendorConflict(tx, user.id, vendorId);
 
       const freshVendor = await tx.vendor.findUniqueOrThrow({
         where: { id: vendorId },

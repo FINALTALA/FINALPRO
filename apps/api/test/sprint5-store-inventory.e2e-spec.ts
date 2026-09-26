@@ -263,7 +263,7 @@ describe('Sprint 5 - store type/warehouse/pickup points, delivery zones, barcode
       )
       .set('Authorization', `Bearer ${reviewerToken}`)
       .set('Idempotency-Key', unique('decision'))
-      .send({ decision: 'approve' })
+      .send({ decision: 'approve', evidence_revision: 1 })
       .expect(201);
     await request(app.getHttpServer())
       .post(`/api/v1/vendors/${vendorId}/subscription`)

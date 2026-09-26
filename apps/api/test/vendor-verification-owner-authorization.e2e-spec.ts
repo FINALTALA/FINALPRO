@@ -293,7 +293,7 @@ describe('Vendor verification evidence - owner-only authorization fix (e2e)', ()
       )
       .set('Authorization', `Bearer ${reviewer}`)
       .set('Idempotency-Key', unique('decision'))
-      .send({ decision: 'approve' })
+      .send({ decision: 'approve', evidence_revision: 1 })
       .expect(201);
     expect(decisionRes.body.verification_status).toBe('APPROVED');
 
@@ -334,7 +334,7 @@ describe('Vendor verification evidence - owner-only authorization fix (e2e)', ()
       )
       .set('Authorization', `Bearer ${admin}`)
       .set('Idempotency-Key', unique('decision'))
-      .send({ decision: 'approve' })
+      .send({ decision: 'approve', evidence_revision: 1 })
       .expect(201);
     expect(adminDecisionRes.body.verification_status).toBe('APPROVED');
   });

@@ -3,8 +3,13 @@
 // vendor/branch route is still authorized by the backend
 // (VendorMembershipGuard); nothing in this file is a security boundary.
 
+export type PlatformRoleName = "PLATFORM_ADMIN" | "VERIFICATION_REVIEWER";
+
 export type WorkspaceInfo =
   | { type: "customer" }
+  // Sprint 16: platform staff (reviewer / admin). The API only sends this
+  // entry to a user who actually holds a platform role.
+  | { type: "platform"; role: PlatformRoleName }
   | {
       type: "vendor";
       vendor_id: string;
@@ -51,7 +56,7 @@ export interface WorkspaceEntry {
   label: string;
   subtitle: string;
   href: string;
-  kind: "customer" | "owner" | "employee";
+  kind: "customer" | "owner" | "employee" | "platform";
 }
 
 /**
@@ -67,6 +72,16 @@ export function workspaceEntry(w: WorkspaceInfo): WorkspaceEntry {
       subtitle: "تصفّح ومقارنة وشراء",
       href: "/",
       kind: "customer",
+    };
+  }
+  if (w.type === "platform") {
+    return {
+      id: "platform",
+      label: "إدارة المنصة",
+      subtitle:
+        w.role === "PLATFORM_ADMIN" ? "مدير المنصة" : "مراجع التحقق",
+      href: w.role === "PLATFORM_ADMIN" ? "/admin" : "/admin/verification",
+      kind: "platform",
     };
   }
   if (w.role === "OWNER") {
@@ -112,5 +127,37 @@ export function ownerHubTiles(vendorId: string): HubTile[] {
     { href: `${base}/delivery-zones`, title: "مناطق التوصيل", description: "الأسعار والمناطق المفعّلة" },
     { href: `${base}/delivery-windows`, title: "نوافذ التوصيل", description: "أوقات التوصيل وسعتها لكل فرع" },
     { href: `${base}/orders`, title: "الطلبات", description: "طلبات كل الفروع" },
+    { href: `${base}/verification`, title: "حالة التحقق", description: "نتيجة مراجعة المتجر وملاحظات المراجع" },
   ];
+}
+
+/**
+ * Sprint 16: the admin workspace's tiles. A verification reviewer gets
+ * the queue only; a platform admin also gets vendors and rename
+ * requests. Hiding is UX only - every /admin API route is authorized by
+ * PlatformRoleGuard on the server.
+ */
+export function adminTiles(role: PlatformRoleName): HubTile[] {
+  const tiles: HubTile[] = [
+    {
+      href: "/admin/verification",
+      title: "طابور التحقق",
+      description: "أدلة الفروع والمستودعات بانتظار القرار",
+    },
+  ];
+  if (role === "PLATFORM_ADMIN") {
+    tiles.push(
+      {
+        href: "/admin/vendors",
+        title: "المتاجر",
+        description: "قائمة المتاجر وتعليقها وإعادة تفعيلها",
+      },
+      {
+        href: "/admin/name-change-requests",
+        title: "طلبات تغيير الاسم",
+        description: "طلبات تغيير أسماء المنتجات الأساسية",
+      },
+    );
+  }
+  return tiles;
 }

@@ -1,4 +1,5 @@
-import { IsIn, IsOptional, IsString } from 'class-validator';
+import { IsIn, IsString } from 'class-validator';
+import { VerificationDecisionReason } from '../../common/validation/trimmed-text.decorator';
 
 export type WarehouseVerificationDecision =
   'approve' | 'reject' | 'request_resubmission';
@@ -11,6 +12,8 @@ export type WarehouseVerificationDecision =
 // currently pending" implicitly (see the controller: a mismatched or
 // stale evidence_id is rejected with 409 WAREHOUSE_EVIDENCE_STALE
 // rather than silently acting on a different row).
+// Sprint 16: reason is required (trimmed, 10-1000) for reject and
+// request_resubmission, and must be absent for approve.
 export class WarehouseVerificationDecisionDto {
   @IsString()
   evidence_id!: string;
@@ -18,7 +21,6 @@ export class WarehouseVerificationDecisionDto {
   @IsIn(['approve', 'reject', 'request_resubmission'])
   decision!: WarehouseVerificationDecision;
 
-  @IsOptional()
-  @IsString()
+  @VerificationDecisionReason()
   reason?: string;
 }

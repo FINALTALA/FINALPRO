@@ -134,7 +134,9 @@ export default function AccountPage() {
                 ? w.type === "customer"
                 : w.type === "customer"
                   ? active.type === "customer"
-                  : active.type === "vendor" && active.vendor_id === w.vendor_id;
+                  : w.type === "platform"
+                    ? active.type === "platform"
+                    : active.type === "vendor" && active.vendor_id === w.vendor_id;
             return (
               <div key={entry.id} className={`workspace-card${isActive ? " active" : ""}`}>
                 <div>
@@ -149,12 +151,14 @@ export default function AccountPage() {
                       setActiveWorkspace(
                         w.type === "customer"
                           ? { type: "customer" }
-                          : { type: "vendor", vendor_id: w.vendor_id, branch_id: w.branch_id },
+                          : w.type === "platform"
+                            ? { type: "platform" }
+                            : { type: "vendor", vendor_id: w.vendor_id, branch_id: w.branch_id },
                       );
                       router.push(entry.href);
                     }}
                   >
-                    {entry.kind === "customer" ? "التسوّق" : entry.kind === "owner" ? "لوحة المتجر" : "طلبات الفرع"}
+                    {entry.kind === "customer" ? "التسوّق" : entry.kind === "owner" ? "لوحة المتجر" : entry.kind === "platform" ? "فتح الإدارة" : "طلبات الفرع"}
                   </button>
                 </div>
               </div>

@@ -10,6 +10,7 @@ import { SessionAuthGuard } from './session-auth.guard';
 import { SessionService } from './session.service';
 import { SmsService } from './sms.service';
 import { VendorMembershipGuard } from './vendor-membership.guard';
+import { VendorSuspendedGuard } from './vendor-suspended.guard';
 
 @Module({
   imports: [AuditModule, IdempotencyModule],
@@ -22,12 +23,14 @@ import { VendorMembershipGuard } from './vendor-membership.guard';
     SessionAuthGuard,
     PlatformRoleGuard,
     VendorMembershipGuard,
+    VendorSuspendedGuard,
   ],
   exports: [
     SessionService,
     SessionAuthGuard,
     PlatformRoleGuard,
     VendorMembershipGuard,
+    VendorSuspendedGuard,
     OtpService,
     PhoneVerificationService,
   ],
