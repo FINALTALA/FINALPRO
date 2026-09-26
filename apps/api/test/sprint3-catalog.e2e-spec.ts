@@ -132,6 +132,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
       .set('Idempotency-Key', unique('vendor-apply'))
       .send({
         legal_name: unique('Vendor'),
+        store_type: 'PHYSICAL',
         branches: [{ name: 'Main branch', is_physical: true }],
         applicable_categories: ['WOMEN'],
       })
@@ -478,6 +479,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .set('Idempotency-Key', unique('vendor-no-evidence'))
         .send({
           legal_name: unique('NoEvidenceVendor'),
+          store_type: 'PHYSICAL',
           branches: [
             { name: 'Branch A', is_physical: true },
             { name: 'Branch B (no evidence)', is_physical: true },
@@ -654,6 +656,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .set('Idempotency-Key', unique('vendor-reapply'))
         .send({
           legal_name: unique('Vendor'),
+          store_type: 'PHYSICAL',
           branches: [{ name: 'Corrected main branch', is_physical: true }],
           applicable_categories: ['WOMEN'],
         })
@@ -791,6 +794,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .set('Idempotency-Key', unique('vendor-2branch'))
         .send({
           legal_name: unique('TwoBranchVendor'),
+          store_type: 'PHYSICAL',
           branches: [
             { name: 'Branch A', is_physical: true },
             { name: 'Branch B', is_physical: true },

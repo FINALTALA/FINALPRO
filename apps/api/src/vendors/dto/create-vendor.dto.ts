@@ -6,7 +6,10 @@ import {
   IsString,
   ValidateNested,
 } from 'class-validator';
-import { StoreApplicableCategory } from '../../../generated/prisma/client';
+import {
+  StoreApplicableCategory,
+  StoreType,
+} from '../../../generated/prisma/client';
 import { CreateBranchDto } from './create-branch.dto';
 
 // FR-VEND-001 / BL-VEND-001: "application form + >=1 branch required
@@ -22,9 +25,23 @@ import { CreateBranchDto } from './create-branch.dto';
 // UpdateApplicableCategoriesDto already validates for the owner-only
 // later-edit endpoint (StorefrontController), which this does not
 // replace.
+// Sprint 15 review-round finding: store_type used to default silently
+// to PHYSICAL (the schema column's own default) and could only be
+// changed afterward via PUT :vendorId/store-type - a vendor applying
+// with the clear intent to be ONLINE_ONLY was recorded as PHYSICAL
+// until they remembered a separate call, contradicting PDR-010's
+// model at the exact moment it matters most (registration). Required
+// here, no default; VendorsController.apply() validates it against
+// the submitted branches' is_physical values in the same transaction
+// that creates them - see that method's own comment for the three
+// invariants enforced (ONLINE_ONLY: zero physical branches;
+// PHYSICAL/HYBRID: at least one).
 export class CreateVendorDto {
   @IsString()
   legal_name!: string;
+
+  @IsEnum(StoreType)
+  store_type!: StoreType;
 
   @ValidateNested({ each: true })
   @Type(() => CreateBranchDto)

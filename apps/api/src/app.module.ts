@@ -21,6 +21,7 @@ import { RedisModule } from './redis/redis.module';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { VendorVerificationModule } from './vendor-verification/vendor-verification.module';
 import { VendorsModule } from './vendors/vendors.module';
+import { WarehouseVerificationModule } from './warehouse-verification/warehouse-verification.module';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { VendorsModule } from './vendors/vendors.module';
     MatchingModule,
     OffersModule,
     VendorVerificationModule,
+    WarehouseVerificationModule,
     SubscriptionsModule,
     InventoryModule,
     DiscoveryModule,

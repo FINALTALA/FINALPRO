@@ -98,6 +98,7 @@ describe('Sprint 9 - BranchOrder model + delivery-window calendar setup (e2e)', 
       .set('Idempotency-Key', unique('vendor-apply'))
       .send({
         legal_name: unique('Vendor'),
+        store_type: 'PHYSICAL',
         branches: [
           { name: 'Branch A', is_physical: true },
           { name: 'Branch B', is_physical: true },

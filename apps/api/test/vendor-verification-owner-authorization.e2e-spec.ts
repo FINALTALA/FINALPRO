@@ -112,6 +112,7 @@ describe('Vendor verification evidence - owner-only authorization fix (e2e)', ()
       .set('Idempotency-Key', unique('vendor-apply'))
       .send({
         legal_name: unique('Vendor'),
+        store_type: 'PHYSICAL',
         branches: [
           { name: 'Branch A', is_physical: true },
           { name: 'Branch B', is_physical: true },
@@ -306,6 +307,7 @@ describe('Vendor verification evidence - owner-only authorization fix (e2e)', ()
       .set('Idempotency-Key', unique('vendor-apply'))
       .send({
         legal_name: unique('Vendor'),
+        store_type: 'PHYSICAL',
         branches: [{ name: 'Solo branch', is_physical: true }],
         applicable_categories: ['WOMEN'],
       })

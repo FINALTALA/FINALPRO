@@ -105,6 +105,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
       .set('Idempotency-Key', unique('vendor-apply'))
       .send({
         legal_name: unique('Vendor'),
+        store_type: 'PHYSICAL',
         branches: [
           { name: 'Branch A', is_physical: true },
           { name: 'Branch B', is_physical: true },
@@ -997,6 +998,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         .set('Idempotency-Key', unique('vendor-apply'))
         .send({
           legal_name: missingLegalName,
+          store_type: 'PHYSICAL',
           branches: [{ name: 'Main branch', is_physical: true }],
           applicable_categories: [],
         });
@@ -1016,6 +1018,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         .set('Idempotency-Key', unique('vendor-apply'))
         .send({
           legal_name: unique('Vendor'),
+          store_type: 'PHYSICAL',
           branches: [{ name: 'Main branch', is_physical: true }],
         });
       expect(missingFieldRes.status).toBe(400);
@@ -1026,6 +1029,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         .set('Idempotency-Key', unique('vendor-apply'))
         .send({
           legal_name: unique('Vendor'),
+          store_type: 'PHYSICAL',
           branches: [{ name: 'Main branch', is_physical: true }],
           applicable_categories: ['WOMEN', 'WOMEN'],
         });
@@ -1037,6 +1041,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         .set('Idempotency-Key', unique('vendor-apply'))
         .send({
           legal_name: unique('Vendor'),
+          store_type: 'PHYSICAL',
           branches: [{ name: 'Main branch', is_physical: true }],
           applicable_categories: ['NOT_A_REAL_CATEGORY'],
         });
@@ -1048,6 +1053,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         .set('Idempotency-Key', unique('vendor-apply'))
         .send({
           legal_name: unique('Vendor'),
+          store_type: 'PHYSICAL',
           branches: [{ name: 'Main branch', is_physical: true }],
           applicable_categories: ['MEN', 'ACCESSORIES'],
         })

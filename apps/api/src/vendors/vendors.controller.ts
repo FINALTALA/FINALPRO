@@ -104,6 +104,35 @@ function warehouseDto(warehouse: {
   };
 }
 
+// Sprint 15: the exact allow-listed shape for GET :vendorId/staff-invites -
+// built from an explicit Prisma `select` (see listStaffInvites above),
+// so this function's own field list and the query's are the only two
+// places that could ever cause a field to leak, and they must already
+// agree for either to compile. No token, no OTP code, no data about
+// the inviting User beyond what's already implied by the caller being
+// that vendor's owner.
+function staffInviteSummaryDto(invite: {
+  id: string;
+  branchId: string;
+  branch: { name: string };
+  phone: string;
+  status: string;
+  createdAt: Date;
+  expiresAt: Date;
+  acceptedAt: Date | null;
+}) {
+  return {
+    id: invite.id,
+    branch_id: invite.branchId,
+    branch_name: invite.branch.name,
+    phone: invite.phone,
+    status: invite.status,
+    created_at: invite.createdAt.toISOString(),
+    expires_at: invite.expiresAt.toISOString(),
+    accepted_at: invite.acceptedAt?.toISOString() ?? null,
+  };
+}
+
 function pickupPointDto(point: {
   id: string;
   vendorId: string;
@@ -152,6 +181,39 @@ export class VendorsController {
     @Body() dto: CreateVendorDto,
     @Req() req: Request,
   ) {
+    // Sprint 15 review-round finding (PDR-035/PDR-010): store_type used
+    // to have no field on this DTO at all - Vendor.storeType silently
+    // defaulted to PHYSICAL, and a vendor applying with clear
+    // ONLINE_ONLY intent stayed recorded as PHYSICAL until a separate
+    // PUT :vendorId/store-type call. store_type is required on this
+    // DTO now; this checks it against the submitted branches'
+    // is_physical values before anything is written - purely a
+    // function of the request body, no DB read needed, so it can (and
+    // should) fail before the transaction below ever opens rather than
+    // inside it: there is no partial-write window for this check to
+    // protect against in the first place. This is the *only* way a
+    // vendor's storeType is ever set going forward - "create PHYSICAL,
+    // switch to ONLINE_ONLY later" is not a supported onboarding path
+    // (updateStoreType() below enforces the same invariant for that
+    // separate, later-change scenario).
+    const submittedPhysicalCount = dto.branches.filter(
+      (b) => b.is_physical,
+    ).length;
+    if (dto.store_type === 'ONLINE_ONLY' && submittedPhysicalCount > 0) {
+      throw new BadRequestException({
+        code: 'ONLINE_ONLY_CANNOT_HAVE_PHYSICAL_BRANCH',
+        message:
+          'An ONLINE_ONLY store cannot declare a physical branch at application - verify via the warehouse instead (PDR-035)',
+      });
+    }
+    if (dto.store_type !== 'ONLINE_ONLY' && submittedPhysicalCount === 0) {
+      throw new BadRequestException({
+        code: 'PHYSICAL_OR_HYBRID_REQUIRES_PHYSICAL_BRANCH',
+        message:
+          'A PHYSICAL or HYBRID store must declare at least one physical branch at application',
+      });
+    }
+
     return this.prisma.$transaction(async (tx) => {
       // Sprint 7 (RB-STOREF-001): the id is generated up front so the
       // slug can be derived from it deterministically before insert -
@@ -165,6 +227,7 @@ export class VendorsController {
           legalName: dto.legal_name,
           slug: generateVendorSlug(dto.legal_name, vendorId),
           displayName: dto.legal_name,
+          storeType: dto.store_type,
         },
       });
       await tx.vendorUser.create({
@@ -223,6 +286,7 @@ export class VendorsController {
         id: created.id,
         legal_name: created.legalName,
         status: created.status,
+        store_type: created.storeType,
         branches: branches.map((b) => ({
           id: b.id,
           name: b.name,
@@ -481,6 +545,36 @@ export class VendorsController {
     return body;
   }
 
+  // Sprint 15 review-round finding: there was no way for an owner to
+  // see an invite's status after the one-time POST response above -
+  // reloading the page (or any UI beyond a single-session toast) had
+  // no "empty vs. has invites" state to render. Owner-only (staff
+  // management is store configuration, PDR-009); explicit `select`
+  // (not a full relation `include`) so no OtpCode row, and no
+  // sensitive field of the inviting User, can ever leak into this
+  // response by accident - see staffInviteSummaryDto below for the
+  // exact allow-listed shape.
+  @Get(':vendorId/staff-invites')
+  @UseGuards(VendorMembershipGuard)
+  @RequireVendorRole('OWNER')
+  async listStaffInvites(@Param('vendorId') vendorId: string) {
+    const invites = await this.prisma.staffInvite.findMany({
+      where: { vendorId },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        branchId: true,
+        branch: { select: { name: true } },
+        phone: true,
+        status: true,
+        createdAt: true,
+        expiresAt: true,
+        acceptedAt: true,
+      },
+    });
+    return invites.map(staffInviteSummaryDto);
+  }
+
   // Sprint 5 (RB-STORE-001, PDR-010): any member may read - store type
   // is not on PDR-009's employee-forbidden list (unlike writing it,
   // below), and other Sprint 5 endpoints/tests need a simple way to
@@ -524,6 +618,32 @@ export class VendorsController {
       throw new NotFoundException({
         code: 'VENDOR_NOT_FOUND',
         message: 'Vendor not found',
+      });
+    }
+
+    // Sprint 15 review-round finding: the same store_type/physical-branch
+    // invariant apply() enforces at application time must also hold
+    // whenever an existing vendor's type changes later - in *both*
+    // directions, not just the ONLINE_ONLY one this endpoint originally
+    // checked. Read against current branches at the moment of the
+    // switch (there is no "add a branch later" endpoint yet - S18 - so
+    // this is the only point in this codebase where the count can
+    // change today; that future endpoint must repeat this same check).
+    const physicalBranchCount = await this.prisma.storeBranch.count({
+      where: { vendorId, isPhysical: true },
+    });
+    if (dto.store_type === 'ONLINE_ONLY' && physicalBranchCount > 0) {
+      throw new ConflictException({
+        code: 'STORE_TYPE_CONFLICTS_WITH_PHYSICAL_BRANCH',
+        message:
+          'This vendor has a physical branch - it cannot switch to ONLINE_ONLY without resolving it first',
+      });
+    }
+    if (dto.store_type !== 'ONLINE_ONLY' && physicalBranchCount === 0) {
+      throw new ConflictException({
+        code: 'STORE_TYPE_REQUIRES_PHYSICAL_BRANCH',
+        message:
+          'A PHYSICAL or HYBRID store must have at least one physical branch',
       });
     }
 

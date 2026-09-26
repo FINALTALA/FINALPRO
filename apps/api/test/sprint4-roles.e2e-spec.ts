@@ -101,6 +101,7 @@ describe('Sprint 4 - roles, staff invites, workspace switcher (e2e)', () => {
       .set('Idempotency-Key', unique('vendor-apply'))
       .send({
         legal_name: unique('Vendor'),
+        store_type: 'PHYSICAL',
         branches: [{ name: 'Main branch', is_physical: true }],
         applicable_categories: ['WOMEN'],
       })
@@ -345,6 +346,7 @@ describe('Sprint 4 - roles, staff invites, workspace switcher (e2e)', () => {
         .set('Idempotency-Key', unique('vendor-apply'))
         .send({
           legal_name: unique('Vendor'),
+          store_type: 'PHYSICAL',
           branches: [
             { name: 'Branch A', is_physical: true },
             { name: 'Branch B', is_physical: true },
@@ -422,6 +424,7 @@ describe('Sprint 4 - roles, staff invites, workspace switcher (e2e)', () => {
         .set('Idempotency-Key', unique('vendor-apply'))
         .send({
           legal_name: unique('Vendor'),
+          store_type: 'PHYSICAL',
           branches: [
             { name: 'Branch A', is_physical: true },
             { name: 'Branch B', is_physical: true },
@@ -494,6 +497,7 @@ describe('Sprint 4 - roles, staff invites, workspace switcher (e2e)', () => {
         .set('Idempotency-Key', unique('vendor-apply'))
         .send({
           legal_name: unique('Vendor'),
+          store_type: 'PHYSICAL',
           branches: [
             { name: 'Branch A', is_physical: true },
             { name: 'Branch B', is_physical: true },
@@ -796,6 +800,7 @@ describe('Sprint 4 - roles, staff invites, workspace switcher (e2e)', () => {
         .set('Idempotency-Key', unique('vendor-apply'))
         .send({
           legal_name: unique('Vendor'),
+          store_type: 'PHYSICAL',
           branches: [
             { name: 'Branch A', is_physical: true },
             { name: 'Branch B', is_physical: true },
