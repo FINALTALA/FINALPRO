@@ -233,7 +233,8 @@ export class WarehouseVerificationController {
           !warehouseRow ||
           warehouseRow.lat === null ||
           warehouseRow.lng === null ||
-          !warehouseRow.addressNote
+          warehouseRow.addressNote === null ||
+          warehouseRow.addressNote.trim().length === 0
         ) {
           throw new BadRequestException({
             code: 'WAREHOUSE_EVIDENCE_INCOMPLETE',

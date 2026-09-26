@@ -344,6 +344,74 @@ describe('Sprint 15 - vendor onboarding: warehouse verification evidence, staff 
       ).toHaveLength(0);
     });
 
+    it('PUT warehouse rejects a whitespace-only address_note with 400 and leaves the stored Warehouse unchanged', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId } = await createOnlineOnlyVendor(owner);
+      await setWarehouse(owner, vendorId, {
+        lat: 12.0,
+        lng: 13.0,
+        address_note: 'Original note',
+      });
+
+      for (const blank of ['   ', '\t \n', '']) {
+        await request(app.getHttpServer())
+          .put(`/api/v1/vendors/${vendorId}/warehouse`)
+          .set('Authorization', `Bearer ${owner}`)
+          .send({ lat: 50.0, lng: 51.0, address_note: blank })
+          .expect(400);
+      }
+
+      const warehouse = await prisma.warehouse.findUniqueOrThrow({
+        where: { vendorId },
+      });
+      expect(warehouse.lat).toBe(12.0);
+      expect(warehouse.lng).toBe(13.0);
+      expect(warehouse.addressNote).toBe('Original note');
+
+      // A padded but non-blank note is accepted and stored trimmed.
+      await setWarehouse(owner, vendorId, { address_note: '  Padded note  ' });
+      const after = await prisma.warehouse.findUniqueOrThrow({
+        where: { vendorId },
+      });
+      expect(after.addressNote).toBe('Padded note');
+    });
+
+    it('refuses submission when a pre-existing Warehouse row holds a whitespace-only address_note (seeded directly in the DB): WAREHOUSE_EVIDENCE_INCOMPLETE, no evidence, no AuditLog, vendor unchanged', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId } = await createOnlineOnlyVendor(owner);
+      await prisma.warehouse.create({
+        data: { vendorId, lat: 31.9, lng: 35.2, addressNote: '   ' },
+      });
+
+      const res = await submitWarehouseEvidence(owner, vendorId)
+        .send({})
+        .expect(400);
+      expect(res.body.error.code).toBe('WAREHOUSE_EVIDENCE_INCOMPLETE');
+
+      expect(
+        await prisma.warehouseVerificationEvidence.count({
+          where: { vendorId },
+        }),
+      ).toBe(0);
+      const auditRows = await prisma.auditLog.findMany({
+        where: {
+          action: {
+            in: [
+              'warehouse_verification_evidence.submitted',
+              'vendor.under_review',
+            ],
+          },
+        },
+      });
+      expect(
+        auditRows.filter((r) => JSON.stringify(r).includes(vendorId)),
+      ).toHaveLength(0);
+      const vendor = await prisma.vendor.findUniqueOrThrow({
+        where: { id: vendorId },
+      });
+      expect(vendor.status).toBe('APPLIED');
+    });
+
     it('refuses a second submission while one is already PENDING (app-level 409, no partial write)', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId } = await createOnlineOnlyVendor(owner);
