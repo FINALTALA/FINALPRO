@@ -4,7 +4,7 @@
 **Author:** Developer, for product-owner/Codex review.
 **Status:** Read-only audit. No code, no migration, no commit/push is authorised by this record. No Sprint 15+ work is authorised by this record.
 **Source:** `origin/main` @ `f92bf17` (Sprint 14 merged). Local tree matches it exactly.
-**Scope:** the full SRS, Parts 0–9. Every `FR-*` ID in [SRS Part 2](srs/02-functional-requirements.md) (244 rows, including the E.0 September amendment), every `PDR-*` ID in [`approved-product-decisions-2026-09.md`](approved-product-decisions-2026-09.md) (34 rows), every `BR-*` (34) and `NFR-*` (32) in Part 3/4, and every remaining requirement, decision, screen, failure scenario, backlog item and state-machine transition in Parts 0, 1, and 3–9 — covered in the appendix starting at §6, with each ID-range explicitly expanded (no row stands for more than one ID; see §0 for the two narrow, explicitly-justified exceptions — the `O.1`/`O.2` test-level classification and the `BO`/module-matrix/recommendations rollup — neither of which carries an independent DONE/PARTIAL/MISSING status of its own).
+**Scope:** the full SRS, Parts 0–9. Every `FR-*` ID in [SRS Part 2](srs/02-functional-requirements.md) (244 rows, including the E.0 September amendment), every `PDR-*` ID in [`approved-product-decisions-2026-09.md`](approved-product-decisions-2026-09.md) (36 rows, including the 2026-09-26 PDR-035/036 amendment), every `BR-*` (34) and `NFR-*` (32) in Part 3/4, and every remaining requirement, decision, screen, failure scenario, backlog item and state-machine transition in Parts 0, 1, and 3–9 — covered in the appendix starting at §6, with each ID-range explicitly expanded (no row stands for more than one ID; see §0 for the two narrow, explicitly-justified exceptions — the `O.1`/`O.2` test-level classification and the `BO`/module-matrix/recommendations rollup — neither of which carries an independent DONE/PARTIAL/MISSING status of its own).
 **Update rule:** this file is reviewed again after every sprint. Each review edits it in place under a new dated version note, rather than creating a new file, so it stays the one living record.
 
 ## v4 decisions applied, per new product-owner decisions (2026-09-26)
@@ -14,6 +14,14 @@
 3. **OPEN-013 (clothing/accessory category fields) closed for the categories the platform currently supports — PDR-036.** Colour and size are offer-variant options, never one of a category's five structural fields (the enclosing Women/Men/Kids/Accessories segment already carries audience, so it is not repeated as a field). Ten five-field templates are now fixed (dresses, tops, bottoms, outerwear, sets, kids' clothing, shoes, bags, jewellery/watches, other accessories), with a controlled "No brand" value replacing a blank brand. Linked to `FR-CAT-015 (E.0)` inline; its code-level status is unchanged (still not built — S17). S17/S17b's roadmap decision-requirement updated accordingly; any future non-clothing category still needs its own template decision.
 4. **No other status changed.** Every other row's DONE/PARTIAL/MISSING/SUPERSEDED value from v3 is untouched. §2's summary table, §5's roadmap totals, and §16/§17's grand totals are recomputed below to reflect only the reclassifications in points 1–3.
 5. **§0/v2 point 4 below (the original "Sprint 26" note) is now historical** — superseded by point 1 above, kept for the audit trail rather than deleted.
+
+## v4.1 correction, per product-owner review of v4
+
+The v4 pass above referenced PDR-035/PDR-036 inline on `FR-VEND-002`/`FR-VEND-012`/`PDR-010`/`FR-CAT-015` but never gave them their own row — the file still said "every `PDR-*` ID" while covering only PDR-001..034, and every count still assumed 34. Fixed here:
+- `PDR-035` and `PDR-036` are now their own rows in the `### PDR-001..036` table, each 🟡 PARTIAL: the decision is approved and documented in `approved-product-decisions-2026-09.md`, but neither is built — no warehouse-evidence submission/review path exists for PDR-035 (Sprint S15), and no category-template model/validation/UI exists for PDR-036 (Sprint S17).
+- Every heading and scope line that said "PDR-001..034" or "(34 rows)" now says "PDR-001..036" / "(36 rows)".
+- §2, §16, and §17 are recomputed: PARTIAL +2, total rows 659 → **661**.
+- No other status, and no roadmap item beyond S15/S17's own PDR-035/036 row, changed.
 
 ## v3 corrections applied, per product-owner review of v2
 
@@ -43,15 +51,15 @@
 
 ## 2. Summary
 
-**Updated 2026-09-26 (v4)** — 18 FR-* rows moved from MISSING/PARTIAL to DEFERRED per the new §6 addition; see "v4 decisions applied" above.
+**Updated 2026-09-26 (v4)** — 18 FR-* rows moved from MISSING/PARTIAL to DEFERRED per the new §6 addition; see "v4 decisions applied" above. **Updated again 2026-09-26 (v4.1)** — PDR-035 and PDR-036 added as their own rows (both 🟡 PARTIAL: the decision is approved and documented, but the code for either — warehouse-evidence submission/review, and the category templates/model validation/UI — is not built yet).
 
 | | DONE | PARTIAL | MISSING | DEFERRED | SUPERSEDED |
 |---|---|---|---|---|---|
 | FR (244) | 36 | 81 | 86 | 27 | 14 |
-| PDR (34) | 12 | 14 | 8 | 0 | 0 |
-| **Total** | **48** | **95** | **94** | **27** | **14** |
+| PDR (36) | 12 | 16 | 8 | 0 | 0 |
+| **Total** | **48** | **97** | **94** | **27** | **14** |
 
-(v1→v3: unchanged, only sprint reassignment. v4: 17 rows MISSING→DEFERRED and 1 row (`FR-FUL-007`) PARTIAL→DEFERRED, all within the FR module; PDR unchanged. Total row count still 278 = 244+34.)
+(v1→v3: unchanged, only sprint reassignment. v4: 17 rows MISSING→DEFERRED and 1 row (`FR-FUL-007`) PARTIAL→DEFERRED, all within the FR module. v4.1: PDR-035/036 added, both PARTIAL. Total row count now 280 = 244+36.)
 
 ## 3. The ID table
 
@@ -367,7 +375,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-ANALYTICS-005 | تقارير المبيعات/الفوترة/المرتجعات | لا | - | لا | لا | ❌ MISSING | S25 |
 | FR-ANALYTICS-006 | تحليلات قمع السلوك | لا | - | لا | لا | ❌ MISSING | S25 |
 
-### PDR-001..034
+### PDR-001..036
 | ID | Decision | Backend | Authz | UI | Test | Status | Sprint |
 |---|---|---|---|---|---|---|---|
 | PDR-001 | ILS فقط | بيانات ILS | n/a | كل الواجهات | S10,S14 | ✅ DONE | - |
@@ -404,6 +412,8 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | PDR-032 | مراجعات موثّقة للمنتج والمتجر؛ غير قابلة للتعديل؛ الردود مؤجلة | لا | - | لا | لا | ❌ MISSING | S23 |
 | PDR-033 | اشتراك sandbox شهر وتجديد؛ تعطيل عند الانتهاء؛ تذكيرات | VendorSubscription وبوابة الانتهاء؛ لا تذكيرات | OWNER | لا | S3 | 🟡 PARTIAL | S15 |
 | PDR-034 | تعطيل الحساب مع استرجاع 30 يوماً | لا | - | لا | لا | ❌ MISSING | S22 |
+| PDR-035 | **(2026-09-26)** تحقّق ONLINE_ONLY بدبوس عنوان مستودع (lat/lng + ملاحظة) بدل صورة/دبوس فرع؛ PHYSICAL/HYBRID تحتفظ بالشرط الحالي؛ المستودع لا يظهر في أي endpoint عام؛ المراجع وحده يراه داخل مسار التحقق | قرار معتمد وموثَّق (approved-product-decisions-2026-09.md)؛ لا مسار warehouse evidence مبني في الكود بعد — POST verification-evidence الحالي مصمَّم للفرع الفعلي فقط | OWNER + REVIEWER (مخطَّط) | لا | لا | 🟡 PARTIAL | S15 |
+| PDR-036 | **(2026-09-26)** اللون والمقاس خياري variant لا حقلين بنيويين؛ 10 قوالب حقول خمسة لفئات الملابس/الإكسسوارات؛ "بدون علامة تجارية" كقيمة منظمة بدل الفراغ | قرار معتمد وموثَّق (approved-product-decisions-2026-09.md §3.2)؛ لا قوالب الفئات ولا التحقق من صحتها (model validation) ولا واجهة مبنية في الكود بعد — specs_text لا يزال حراً | OWNER | لا | لا | 🟡 PARTIAL | S17 |
 
 ## 4. سطر مستقل لكل قدرة ناقصة (onboarding/verification/admin/catalog/inventory/notifications/account)
 
@@ -522,7 +532,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 - `O` (اختبار) — `O.1` (15 مستوى اختبار) صف تجميعي واحد لكل مستوى مع ملاحظة تغطية عامة، لأنها ليست متطلبات مستقلة بل تصنيف لما هو موجود أصلاً. `O.2` (`TC-*`، 40 معرّفاً): **لم تُفكَّك كصفوف بحث منفصلة** — كل `TC-*` تقريباً هو نفس الفحص المطلوب لصف `FR-*`/`BR-*` مذكور أعلاه بنفس ملفات الاختبار؛ بدلاً من تكرار 40 صفاً مطابقاً، أدرجت جدولاً واحداً يربط كل `TC-*` بالـID الذي يغطيه فعلياً أعلاه وحالته.
 - `P` (DevOps) — 15 صفاً.
 - `Q.1` (RISK) و`Q.2` (ASM) و`Q.3` (DEP) و`Q.4` (OPEN) — **لم تُفكَّك** لأنها سجلات مخاطر/اعتماديات/قرارات مفتوحة، وليست متطلبات قابلة للبناء بذاتها؛ كل عنصر منها مُشار إليه أصلاً داخل الجداول أعلاه حيث يخص متطلباً معيّناً (OPEN-004، OPEN-011..013، إلخ). إن أردتِها كجدول مستقل أضيفها في نسخة لاحقة.
-- `Q.5` (ADR) مغطاة ضمن قسم M أعلاه. `Q.6`/`Q.6a` (BDR): BDR-016 حتى BDR-025 (تعديل أيلول) هي فعلياً نفس PDR-001..034 المُغطاة بالكامل في الجدول الرئيسي أعلاه — **لم تُكرَّر**. BDR-001..015 (القديمة، من Q1-14 الأصلية) — 16 صفاً (البند 015 والبند 016 القديم كلاهما مرقّم "015"/"016" في الـSRS نفسه، ميّزتها).
+- `Q.5` (ADR) مغطاة ضمن قسم M أعلاه. `Q.6`/`Q.6a` (BDR): BDR-016 حتى BDR-025 (تعديل أيلول) هي فعلياً نفس PDR-001..036 المُغطاة بالكامل في الجدول الرئيسي أعلاه (PDR-035/036 أُضيفا 2026-09-26، بعد Q.6a الأصلي في الـSRS، ولا مقابل BDR لهما هناك) — **لم تُكرَّر**. BDR-001..015 (القديمة، من Q1-14 الأصلية) — 16 صفاً (البند 015 والبند 016 القديم كلاهما مرقّم "015"/"016" في الـSRS نفسه، ميّزتها).
 - Part 8 (`BL-*`، ~112 معرّفاً): **لم تُفكَّك فردياً.** `post-sprint3-replan-2026-09.md` نفسه ينص صراحة أن Part 8 "superseded for Sprint 4+ by this document" — وSprint 1-3 من BL-* مغطاة فعلياً عبر تدقيق التوافق `sprint-1-3-compatibility-audit-2026-09.md` وتنعكس في صفوف `FR-*`/`PDR-*` أعلاه. صف واحد يوثّق هذا القرار بدل 112 صفاً مكرراً لنفس المعلومة.
 - Part 9: `AC-01..22` (22 سيناريو) — تغطية كاملة لكنها "خفيفة" (ترث حالة الـID الذي تختبره، لأن AC هي إعادة صياغة Given/When/Then لمتطلب مُصنَّف أعلاه بالفعل، وليست فحصاً جديداً). `BO-1..8` (الأهداف الاستراتيجية) وجدول المصفوفة على مستوى الوحدة (Module-level matrix) وقسم "Final recommendations" الاثني عشر: **لم تُفكَّك** لأنها ملخصات إدارية/استراتيجية تُشتق من نفس صفوف `FR-*`/`PDR-*`/`BDR-*` أعلاه، وليست متطلبات مستقلة قابلة للتصنيف DONE/PARTIAL/MISSING بذاتها.
 
@@ -1076,14 +1086,14 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 
 ---
 
-# §16 — الأعداد النهائية الشاملة (v4، مُعاد اشتقاقها مباشرة من صفوف الملف)
+# §16 — الأعداد النهائية الشاملة (v4.1، مُعاد اشتقاقها مباشرة من صفوف الملف)
 
-**كيف حُسِب هذا الجدول:** نفس منهج v3 (عدّ آلي مباشر لحالة كل صف فعلي، لا تقدير يدوي)، مُعاد تشغيله بعد تطبيق قرارات المالك الثلاثة في 2026-09-26 (§0/v4 أعلاه): 18 صفاً من `FR-*` (17 كانت MISSING وواحد `FR-FUL-007` كان PARTIAL) أصبحت DEFERRED. لا تغيير آخر في أي رقم منذ v3.
+**كيف حُسِب هذا الجدول:** نفس منهج v3 (عدّ آلي مباشر لحالة كل صف فعلي، لا تقدير يدوي). v4 طبّق قرارات المالك الثلاثة (18 صفاً → DEFERRED). v4.1 يضيف صفّي `PDR-035`/`PDR-036` المستقلين (كانا مذكورين نصياً فقط في v4 بلا صف خاص بهما ولا عدّ) — كلاهما PARTIAL.
 
-| المصدر | DONE | PARTIAL | MISSING | DEFERRED | SUPERSEDED | n/a | المجموع | يطابق v3؟ |
+| المصدر | DONE | PARTIAL | MISSING | DEFERRED | SUPERSEDED | n/a | المجموع | يطابق v4؟ |
 |---|---|---|---|---|---|---|---|---|
-| FR، E.0..E.22 (Part 2) | 36 | 81 | 86 | 27 | 14 | 0 | 244 | **لا — 18 عنصراً DEFERRED جديداً (§0/v4)** |
-| PDR-001..034 | 12 | 14 | 8 | 0 | 0 | 0 | 34 | نعم |
+| FR، E.0..E.22 (Part 2) | 36 | 81 | 86 | 27 | 14 | 0 | 244 | نعم |
+| PDR-001..036 | 12 | 16 | 8 | 0 | 0 | 0 | **36** | **لا — PDR-035/036 أُضيفا (§0/v4.1)** |
 | BR-001..034 (§6) | 7 | 13 | 12 | 0 | 2 | 0 | 34 | نعم |
 | NFR-* (§7) | 2 | 10 | 18 | 0 | 0 | 2 | 32 | نعم |
 | G.0 (§8) | 5 | 3 | 0 | 0 | 0 | 0 | 8 | نعم |
@@ -1102,16 +1112,16 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 | Part 8 — 102 صفاً كاملة (§13) | 21 | 40 | 37 | 2 | 2 | 0 | 102 | نعم |
 | AC-01..22 (§14) | 10 | 5 | 7 | 0 | 0 | 0 | 22 | نعم |
 | E.11 — 59 صفاً (§15) | 15 | 1 | 32 | 0 | 11 | 0 | 59 | نعم |
-| **المجموع** | **145** | **203** | **245** | **29** | **34** | **3** | **659** | — |
+| **المجموع** | **145** | **205** | **245** | **29** | **34** | **3** | **661** | — |
 
-**فحص الجمع:** 145+203+245+29+34+3 = **659**، ويطابق تماماً مجموع عمود "المجموع" أعلاه (244+34+34+32+8+10+10+1+8+11+4+32+12+5+0+15+16+102+22+59 = 659). **عدد الصفوف الكلي لم يتغيّر (659 كما في v3) — هذه إعادة توزيع بين الأعمدة فقط (MISSING/PARTIAL → DEFERRED)، وليست إضافة أو حذف صفوف.**
+**فحص الجمع:** 145+205+245+29+34+3 = **661**، ويطابق تماماً مجموع عمود "المجموع" أعلاه (244+36+34+32+8+10+10+1+8+11+4+32+12+5+0+15+16+102+22+59 = 661). **عدد الصفوف ارتفع من 659 إلى 661 (+2، صفّا PDR-035/036 الجديدان)، والـPARTIAL ارتفع بمقدار 2 (203→205)، تماماً كما طلبتِ.**
 
 ## §17 — عدد صفوف/أسطر التتبع الفعلية
 
-**659 صفاً قابلاً للتتبع** — نفس العدد الإجمالي منذ v3؛ لم يتغيّر بتطبيق قرارات 2026-09-26 لأنها إعادة تصنيف حالة (MISSING/PARTIAL → DEFERRED) لا إضافة/حذف صفوف. صفوف §0 (نصية) و§11/O.1 (15 سطراً وصفياً لمستويات الاختبار، بلا ID أو حالة مستقلة) و§14/BO-وما بعدها (ملخصات إستراتيجية، لا حالة مستقلة) **غير محسوبة** في الـ659، وهذا مقصود ومذكور صراحةً حيث ورد.
+**661 صفاً قابلاً للتتبع** (كان 659 في v4؛ +2 من PDR-035/036 المضافين في v4.1). صفوف §0 (نصية) و§11/O.1 (15 سطراً وصفياً لمستويات الاختبار، بلا ID أو حالة مستقلة) و§14/BO-وما بعدها (ملخصات إستراتيجية، لا حالة مستقلة) **غير محسوبة** في الـ661، وهذا مقصود ومذكور صراحةً حيث ورد.
 
-**تأكيد الشمول:** الـ659 تضم: FR(244) + PDR(34) + BR(34) + NFR(32) + G(18) + H(19) + K.1/L(47) + ADR/N/P(32، باستثناء O.1 الوصفي) + BDR(16) + Part 8(102) + AC(22) + E.11(59). كل جزء من الـSRS من Part 0 حتى Part 9 ممثَّل، إما بصف مستقل لكل ID أو بقرار تجميع موثَّق بسببه في §0 (فقط: O.1 كتصنيف، وBO/مصفوفة الوحدات/التوصيات كملخصات مشتقة — لا سجلات RISK/ASM/DEP/OPEN المستقلة، والمذكورة أصلاً كإشارات داخل الصفوف أعلاه).
+**تأكيد الشمول:** الـ661 تضم: FR(244) + PDR(**36**) + BR(34) + NFR(32) + G(18) + H(19) + K.1/L(47) + ADR/N/P(32، باستثناء O.1 الوصفي) + BDR(16) + Part 8(102) + AC(22) + E.11(59). كل جزء من الـSRS من Part 0 حتى Part 9، وكل قرار معتمد بما فيها PDR-035/036، ممثَّل بصف مستقل لكل ID أو بقرار تجميع موثَّق بسببه في §0.
 
-**بعد 2026-09-26:** الـ18 بنداً DEFERRED BY APPROVED DECISION فعلياً (§6 من `approved-product-decisions-2026-09.md`) — لم تعد "قرار-نطاق" معلَّقاً، بل قرار مالك موثَّق. لم أُعِد تصنيف أي بند **آخر** من نفسي؛ كل ما تبقى تحت `قرار-نطاق` (NFR/DevOps/G.3/H.1/L وغيرها من بنود النضج التشغيلي غير المرتبطة بالثمانية عشر) بقي MISSING/PARTIAL كما هو، لأنه ليس من ضمن قرار المالك هذا. OPEN-011 وOPEN-013 أُغلقا بقرارين معتمدين (PDR-035، PDR-036) موثَّقين أعلاه؛ لم يتغيّر أي حالة كود لأي منهما — فقط القرار التوثيقي الذي يزيل حاجز التخطيط عن S15/S17/S17b، دون بدء أيٍّ منها.
+**بعد 2026-09-26:** الـ18 بنداً DEFERRED BY APPROVED DECISION فعلياً (§6 من `approved-product-decisions-2026-09.md`) — لم تعد "قرار-نطاق" معلَّقاً، بل قرار مالك موثَّق. `PDR-035` و`PDR-036` صفّان مستقلّان الآن، كلاهما 🟡 PARTIAL: القرار معتمد وموثَّق، لكن الكود (مسار أدلة المستودع للمراجع؛ قوالب الفئات والتحقق من صحتها والواجهة) لم يُبنَ بعد — S15 وS17 على التوالي. لم أُعِد تصنيف أي بند **آخر** من نفسي؛ كل ما تبقى تحت `قرار-نطاق` (NFR/DevOps/G.3/H.1/L وغيرها من بنود النضج التشغيلي غير المرتبطة بالثمانية عشر) بقي MISSING/PARTIAL كما هو.
 
-سأنتظر مراجعتك. لا Sprint 15، لا كود، لا migration، لا commit.
+سأنتظر مراجعتك. لا Sprint 15، لا كود، لا migration، لا commit، لا merge.
