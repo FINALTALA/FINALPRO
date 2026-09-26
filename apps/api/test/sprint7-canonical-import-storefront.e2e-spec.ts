@@ -100,6 +100,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
       .set('Idempotency-Key', unique('vendor-apply'))
       .send({
         legal_name: unique('Vendor'),
+        store_type: 'PHYSICAL',
         branches: [
           { name: 'Branch A', is_physical: true },
           { name: 'Branch B', is_physical: true },
@@ -1261,6 +1262,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
         .set('Idempotency-Key', unique('vendor-apply'))
         .send({
           legal_name: legalName,
+          store_type: 'PHYSICAL',
           branches: [{ name: 'A', is_physical: true }],
           applicable_categories: ['WOMEN'],
         })

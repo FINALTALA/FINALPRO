@@ -815,6 +815,7 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
         .set('Idempotency-Key', `vendor-apply-${phone}`)
         .send({
           legal_name: 'Test Store Ltd',
+          store_type: 'PHYSICAL',
           branches: [{ name: 'Main branch', is_physical: true }],
           applicable_categories: ['WOMEN'],
         })
@@ -843,6 +844,7 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
         .set('Idempotency-Key', 'vendor-apply-anon')
         .send({
           legal_name: 'Anonymous Ltd',
+          store_type: 'ONLINE_ONLY',
           branches: [{ name: 'Branch', is_physical: false }],
         })
         .expect(401);
@@ -861,6 +863,7 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
         .set('Idempotency-Key', sharedKey)
         .send({
           legal_name: 'Vendor A',
+          store_type: 'PHYSICAL',
           branches: [{ name: 'A Branch', is_physical: true }],
           applicable_categories: ['WOMEN'],
         })
@@ -875,6 +878,7 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
         .set('Idempotency-Key', sharedKey)
         .send({
           legal_name: 'Vendor B',
+          store_type: 'ONLINE_ONLY',
           branches: [{ name: 'B Branch', is_physical: false }],
           applicable_categories: ['WOMEN'],
         })
@@ -908,6 +912,7 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
       const distinctiveLegalName = `CompletionBlipVendor-${phone}`;
       const body = {
         legal_name: distinctiveLegalName,
+        store_type: 'PHYSICAL',
         branches: [{ name: 'Main branch', is_physical: true }],
         applicable_categories: ['WOMEN'],
       };

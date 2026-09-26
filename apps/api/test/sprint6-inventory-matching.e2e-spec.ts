@@ -93,6 +93,7 @@ describe('Sprint 6 - branch inventory, stock movements, media, non-exact match r
       .set('Idempotency-Key', unique('vendor-apply'))
       .send({
         legal_name: unique('Vendor'),
+        store_type: 'PHYSICAL',
         branches: [
           { name: 'Branch A', is_physical: true },
           { name: 'Branch B', is_physical: true },

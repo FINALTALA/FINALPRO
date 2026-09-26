@@ -93,7 +93,31 @@ describe('Sprint 5 - store type/warehouse/pickup points, delivery zones, barcode
       .set('Idempotency-Key', unique('vendor-apply'))
       .send({
         legal_name: unique('Vendor'),
+        store_type: 'PHYSICAL',
         branches: [{ name: 'Main branch', is_physical: true }],
+        applicable_categories: ['WOMEN'],
+      })
+      .expect(201);
+    return { vendorId: res.body.id, branchId: res.body.branches[0].id };
+  }
+
+  /** Sprint 15 (PDR-035/PDR-010): a vendor created directly as
+   * ONLINE_ONLY - zero physical branches, matching the invariant now
+   * enforced at application time. Switching an existing PHYSICAL/HYBRID
+   * vendor (which must always have >=1 physical branch) to ONLINE_ONLY
+   * is no longer a supported later-change path - see
+   * VendorsController.apply()'s own comment. */
+  async function createOnlineOnlyVendor(
+    ownerToken: string,
+  ): Promise<{ vendorId: string; branchId: string }> {
+    const res = await request(app.getHttpServer())
+      .post('/api/v1/vendors')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .set('Idempotency-Key', unique('vendor-apply'))
+      .send({
+        legal_name: unique('Vendor'),
+        store_type: 'ONLINE_ONLY',
+        branches: [{ name: 'Warehouse branch', is_physical: false }],
         applicable_categories: ['WOMEN'],
       })
       .expect(201);
@@ -250,7 +274,7 @@ describe('Sprint 5 - store type/warehouse/pickup points, delivery zones, barcode
   }
 
   describe('RB-STORE-001: store type (physical/online-only/hybrid)', () => {
-    it('defaults every new vendor to PHYSICAL', async () => {
+    it('defaults every new vendor to whatever store_type it applied with (PHYSICAL, here)', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithBranch(owner);
 
@@ -261,21 +285,98 @@ describe('Sprint 5 - store type/warehouse/pickup points, delivery zones, barcode
       expect(res.body.store_type).toBe('PHYSICAL');
     });
 
-    it('lets the owner switch store type to ONLINE_ONLY, persisted', async () => {
+    it('creates a vendor directly as ONLINE_ONLY when applying with zero physical branches (PDR-035/PDR-010 onboarding path)', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
-      const { vendorId } = await createVendorWithBranch(owner);
-
-      await request(app.getHttpServer())
-        .put(`/api/v1/vendors/${vendorId}/store-type`)
-        .set('Authorization', `Bearer ${owner}`)
-        .send({ store_type: 'ONLINE_ONLY' })
-        .expect(200);
+      const { vendorId } = await createOnlineOnlyVendor(owner);
 
       const res = await request(app.getHttpServer())
         .get(`/api/v1/vendors/${vendorId}`)
         .set('Authorization', `Bearer ${owner}`)
         .expect(200);
       expect(res.body.store_type).toBe('ONLINE_ONLY');
+    });
+
+    it('rejects applying ONLINE_ONLY with a physical branch declared', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/vendors')
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('vendor-apply'))
+        .send({
+          legal_name: unique('Vendor'),
+          store_type: 'ONLINE_ONLY',
+          branches: [{ name: 'Branch', is_physical: true }],
+          applicable_categories: ['WOMEN'],
+        })
+        .expect(400);
+      expect(res.body.error.code).toBe(
+        'ONLINE_ONLY_CANNOT_HAVE_PHYSICAL_BRANCH',
+      );
+    });
+
+    it('rejects applying PHYSICAL or HYBRID with zero physical branches', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      for (const storeType of ['PHYSICAL', 'HYBRID']) {
+        const res = await request(app.getHttpServer())
+          .post('/api/v1/vendors')
+          .set('Authorization', `Bearer ${owner}`)
+          .set('Idempotency-Key', unique('vendor-apply'))
+          .send({
+            legal_name: unique('Vendor'),
+            store_type: storeType,
+            branches: [{ name: 'Branch', is_physical: false }],
+            applicable_categories: ['WOMEN'],
+          })
+          .expect(400);
+        expect(res.body.error.code).toBe(
+          'PHYSICAL_OR_HYBRID_REQUIRES_PHYSICAL_BRANCH',
+        );
+      }
+    });
+
+    it('lets the owner switch store type between PHYSICAL and HYBRID - both require an existing physical branch, so the invariant never blocks switching between the two', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId } = await createVendorWithBranch(owner);
+
+      await request(app.getHttpServer())
+        .put(`/api/v1/vendors/${vendorId}/store-type`)
+        .set('Authorization', `Bearer ${owner}`)
+        .send({ store_type: 'HYBRID' })
+        .expect(200);
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/vendors/${vendorId}`)
+        .set('Authorization', `Bearer ${owner}`)
+        .expect(200);
+      expect(res.body.store_type).toBe('HYBRID');
+    });
+
+    it('rejects switching an existing physical-branch vendor to ONLINE_ONLY (PDR-035: not a supported later-change path - only a fresh application can be ONLINE_ONLY)', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId } = await createVendorWithBranch(owner);
+
+      const res = await request(app.getHttpServer())
+        .put(`/api/v1/vendors/${vendorId}/store-type`)
+        .set('Authorization', `Bearer ${owner}`)
+        .send({ store_type: 'ONLINE_ONLY' })
+        .expect(409);
+      expect(res.body.error.code).toBe(
+        'STORE_TYPE_CONFLICTS_WITH_PHYSICAL_BRANCH',
+      );
+    });
+
+    it('rejects switching an ONLINE_ONLY vendor to PHYSICAL or HYBRID without a physical branch', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId } = await createOnlineOnlyVendor(owner);
+
+      for (const storeType of ['PHYSICAL', 'HYBRID']) {
+        const res = await request(app.getHttpServer())
+          .put(`/api/v1/vendors/${vendorId}/store-type`)
+          .set('Authorization', `Bearer ${owner}`)
+          .send({ store_type: storeType })
+          .expect(409);
+        expect(res.body.error.code).toBe('STORE_TYPE_REQUIRES_PHYSICAL_BRANCH');
+      }
     });
 
     it('refuses a BRANCH_EMPLOYEE from changing store type - store configuration is owner-only (PDR-009)', async () => {
@@ -315,14 +416,9 @@ describe('Sprint 5 - store type/warehouse/pickup points, delivery zones, barcode
       expect(res.body.error.code).toBe('STORE_NOT_ONLINE_CAPABLE');
     });
 
-    it('lets the owner set a warehouse once ONLINE_ONLY; the PUT ack stays minimal, but the owner-only GET reads back the real values - and the vendor summary never includes it either way', async () => {
+    it('lets the owner set a warehouse for an ONLINE_ONLY vendor; the PUT ack stays minimal, but the owner-only GET reads back the real values - and the vendor summary never includes it either way', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
-      const { vendorId } = await createVendorWithBranch(owner);
-      await request(app.getHttpServer())
-        .put(`/api/v1/vendors/${vendorId}/store-type`)
-        .set('Authorization', `Bearer ${owner}`)
-        .send({ store_type: 'ONLINE_ONLY' })
-        .expect(200);
+      const { vendorId } = await createOnlineOnlyVendor(owner);
 
       const putRes = await request(app.getHttpServer())
         .put(`/api/v1/vendors/${vendorId}/warehouse`)
@@ -362,12 +458,7 @@ describe('Sprint 5 - store type/warehouse/pickup points, delivery zones, barcode
 
     it('404s the owner-only GET when no warehouse has been configured yet', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
-      const { vendorId } = await createVendorWithBranch(owner);
-      await request(app.getHttpServer())
-        .put(`/api/v1/vendors/${vendorId}/store-type`)
-        .set('Authorization', `Bearer ${owner}`)
-        .send({ store_type: 'ONLINE_ONLY' })
-        .expect(200);
+      const { vendorId } = await createOnlineOnlyVendor(owner);
 
       const res = await request(app.getHttpServer())
         .get(`/api/v1/vendors/${vendorId}/warehouse`)
@@ -406,12 +497,7 @@ describe('Sprint 5 - store type/warehouse/pickup points, delivery zones, barcode
 
     it('refuses a non-member entirely from reading the warehouse (BOLA)', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
-      const { vendorId } = await createVendorWithBranch(owner);
-      await request(app.getHttpServer())
-        .put(`/api/v1/vendors/${vendorId}/store-type`)
-        .set('Authorization', `Bearer ${owner}`)
-        .send({ store_type: 'ONLINE_ONLY' })
-        .expect(200);
+      const { vendorId } = await createOnlineOnlyVendor(owner);
       await request(app.getHttpServer())
         .put(`/api/v1/vendors/${vendorId}/warehouse`)
         .set('Authorization', `Bearer ${owner}`)

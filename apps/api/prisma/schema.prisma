@@ -55,6 +55,10 @@ model User {
   vendorUsers      VendorUser[]
   auditLogs        AuditLog[]
   reviewedBranches StoreBranch[]    @relation("BranchReviewer")
+  /// Sprint 15 (PDR-035): a platform reviewer's decisions on
+  /// WarehouseVerificationEvidence snapshots - the ONLINE_ONLY
+  /// counterpart to reviewedBranches above.
+  warehouseVerificationReviews WarehouseVerificationEvidence[] @relation("WarehouseReviewer")
   sentStaffInvites StaffInvite[]    @relation("StaffInviter")
   stockMovements   StockMovement[]
   decidedNameChangeRequests CanonicalNameChangeRequest[]
@@ -306,6 +310,12 @@ model Vendor {
   offerVariants   OfferVariant[]
   staffInvites    StaffInvite[]
   warehouse       Warehouse?
+  /// Sprint 15 (PDR-035): every submitted verification snapshot for
+  /// this vendor's warehouse, oldest first by submittedAt. See the
+  /// WarehouseVerificationEvidence model for why this is a list of
+  /// immutable snapshots rather than a status field on Warehouse
+  /// itself.
+  warehouseVerificationEvidence WarehouseVerificationEvidence[]
   pickupPoints    PickupPoint[]
   deliveryZones   VendorDeliveryZone[]
   branchStocks    BranchStock[]
@@ -347,7 +357,94 @@ model Warehouse {
   addressNote String?
   createdAt   DateTime @default(now())
 
+  /// Sprint 15 (PDR-035): every verification snapshot ever submitted
+  /// against this warehouse. WarehouseVerificationEvidence's composite
+  /// FK references (vendorId, id) below, not id alone, so a snapshot
+  /// can never be linked to a different vendor's warehouse even by a
+  /// raw write that bypasses application code - see that model's own
+  /// comment.
+  verificationEvidence WarehouseVerificationEvidence[]
+
+  /// Additive alongside the existing single-column vendorId @unique
+  /// above (one warehouse per vendor) - this composite is what
+  /// WarehouseVerificationEvidence's composite FK targets, the same
+  /// tenant-safety pattern StoreBranch already established
+  /// (@@unique([vendorId, id]) there, referenced by VendorUser/
+  /// StaffInvite's own composite FKs).
+  @@unique([vendorId, id])
   @@map("warehouses")
+}
+
+enum WarehouseVerificationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  RESUBMISSION_REQUESTED
+}
+
+/// Sprint 15 (PDR-035, OPEN-011 closed): the ONLINE_ONLY counterpart to
+/// StoreBranch's verificationStatus/reviewedBy/reviewedAt/reviewNote
+/// fields - but deliberately NOT modelled the same way (fields
+/// directly on Warehouse). Warehouse is operational and editable by
+/// its owner at any time via PUT .../warehouse, with no gate on
+/// vendor.status; if verification state lived on Warehouse itself, an
+/// owner editing the address after approval would either silently
+/// invalidate an already-reviewed decision or silently leave a stale
+/// "APPROVED" attached to data nobody actually reviewed. Each
+/// submission instead creates its own immutable snapshot row here
+/// (lat/lng/addressNote copied at submission time, never re-read from
+/// Warehouse afterward) - a reviewer's decision is tied to one exact
+/// snapshot (its own id), and a later Warehouse edit never touches any
+/// snapshot, decided or not. Resubmission after RESUBMISSION_REQUESTED
+/// creates a brand-new row; the superseded row's own status is left
+/// untouched as a permanent historical record - never overwritten in
+/// place, unlike StoreBranch's resubmission (submitEvidence() resets
+/// the same row).
+///
+/// At most one PENDING row may exist per vendor at a time - enforced
+/// both by a SELECT ... FOR UPDATE lock on the vendor row at write
+/// time (for a clean 409 WAREHOUSE_EVIDENCE_ALREADY_PENDING and to
+/// order concurrent submissions) AND, as the actual structural
+/// guarantee, a partial unique index on (vendorId) WHERE status =
+/// 'PENDING' - Prisma's schema DSL cannot express a partial index, so
+/// like StaffInvite's own pending-invite index it is documented here
+/// but only actually created in the migration SQL.
+model WarehouseVerificationEvidence {
+  id          String   @id @default(uuid())
+  vendorId    String
+  vendor      Vendor    @relation(fields: [vendorId], references: [id])
+  warehouseId String
+  /// Composite FK (vendorId, warehouseId) -> warehouses(vendorId, id) -
+  /// not warehouseId alone. A single-column FK only proves the
+  /// referenced warehouse row exists *somewhere*; it does nothing to
+  /// stop a write (buggy application code, or a raw SQL statement)
+  /// from linking vendor A's evidence to vendor B's warehouse. The
+  /// composite FK makes that a foreign-key violation Postgres itself
+  /// rejects, the same tenant-isolation pattern StoreBranch's
+  /// consumers (VendorUser, StaffInvite, BranchOrderItem, ...) already
+  /// use throughout this schema.
+  warehouse   Warehouse @relation(fields: [vendorId, warehouseId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  /// Copied from Warehouse at submission time - the immutable
+  /// snapshot. Required (not nullable): submission is refused
+  /// (WAREHOUSE_EVIDENCE_INCOMPLETE) unless the operational Warehouse
+  /// already has all three set.
+  lat         Float
+  lng         Float
+  addressNote String
+  status      WarehouseVerificationStatus @default(PENDING)
+  submittedAt DateTime  @default(now())
+  /// Set by the reviewer's decision (mirrors StoreBranch.reviewedBy).
+  /// Nullable: never set while still PENDING.
+  reviewedBy  String?
+  reviewer    User?     @relation("WarehouseReviewer", fields: [reviewedBy], references: [id])
+  reviewedAt  DateTime?
+  /// The reviewer's reason on a REJECTED or RESUBMISSION_REQUESTED
+  /// decision - what the vendor needs to know to fix and resubmit
+  /// (a fresh row, never an edit of this one). Not set on APPROVED.
+  reviewNote  String?
+
+  @@index([vendorId, status])
+  @@map("warehouse_verification_evidence")
 }
 
 /// Sprint 5 (RB-STORE-001, PDR-010): "may configure multiple public
