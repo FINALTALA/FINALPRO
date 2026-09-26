@@ -1,11 +1,19 @@
 # FINALPRO — Requirement Traceability, September 2026
 
-**Date:** 2026-09-26 (v3, arithmetic and coverage corrections per product-owner review of v2)
+**Date:** 2026-09-26 (v4, three new product-owner decisions applied — see "v4 decisions applied" below; v3 was the arithmetic/coverage correction pass)
 **Author:** Developer, for product-owner/Codex review.
 **Status:** Read-only audit. No code, no migration, no commit/push is authorised by this record. No Sprint 15+ work is authorised by this record.
 **Source:** `origin/main` @ `f92bf17` (Sprint 14 merged). Local tree matches it exactly.
 **Scope:** the full SRS, Parts 0–9. Every `FR-*` ID in [SRS Part 2](srs/02-functional-requirements.md) (244 rows, including the E.0 September amendment), every `PDR-*` ID in [`approved-product-decisions-2026-09.md`](approved-product-decisions-2026-09.md) (34 rows), every `BR-*` (34) and `NFR-*` (32) in Part 3/4, and every remaining requirement, decision, screen, failure scenario, backlog item and state-machine transition in Parts 0, 1, and 3–9 — covered in the appendix starting at §6, with each ID-range explicitly expanded (no row stands for more than one ID; see §0 for the two narrow, explicitly-justified exceptions — the `O.1`/`O.2` test-level classification and the `BO`/module-matrix/recommendations rollup — neither of which carries an independent DONE/PARTIAL/MISSING status of its own).
 **Update rule:** this file is reviewed again after every sprint. Each review edits it in place under a new dated version note, rather than creating a new file, so it stays the one living record.
+
+## v4 decisions applied, per new product-owner decisions (2026-09-26)
+
+1. **The 18 `قرار-نطاق` items are now DEFERRED BY APPROVED DECISION, not MISSING/PARTIAL.** The product owner added them formally to `approved-product-decisions-2026-09.md` §6 today. All 18 rows (`FR-AUTH-012`, `FR-IMPORT-006/007`, `FR-SEARCH-009/011`, `FR-PRICE-004/008(E.8)/009(E.8)`, `FR-CART-007`, `FR-FUL-007`, `FR-SUP-006`, `FR-VPORTAL-008/010`, `FR-CMS-001..005`) now read ⏸ DEFERRED with sprint `-`, each citing the decision inline. `FR-FUL-007` was previously 🟡 PARTIAL (not ❌ MISSING) among the 18 — it moved to DEFERRED too, per the product owner's instruction to close all 18 uniformly. They are removed entirely from the §5 roadmap (no sprint, not pending — genuinely out of scope now).
+2. **OPEN-011 (online-only verification) closed — PDR-035.** PHYSICAL/HYBRID stores keep the existing branch-photo-and-pin requirement; ONLINE_ONLY stores instead need a warehouse address pin (lat/lng + note) before verification-evidence submission, the warehouse is never exposed on any public/storefront endpoint, and the reviewer sees it only inside the verification path. Linked to `FR-VEND-002`, `FR-VEND-012`, and `PDR-010` inline; none of their code-level statuses changed (still not built — this closes the *decision*, not the implementation). S15's roadmap decision-requirement updated accordingly.
+3. **OPEN-013 (clothing/accessory category fields) closed for the categories the platform currently supports — PDR-036.** Colour and size are offer-variant options, never one of a category's five structural fields (the enclosing Women/Men/Kids/Accessories segment already carries audience, so it is not repeated as a field). Ten five-field templates are now fixed (dresses, tops, bottoms, outerwear, sets, kids' clothing, shoes, bags, jewellery/watches, other accessories), with a controlled "No brand" value replacing a blank brand. Linked to `FR-CAT-015 (E.0)` inline; its code-level status is unchanged (still not built — S17). S17/S17b's roadmap decision-requirement updated accordingly; any future non-clothing category still needs its own template decision.
+4. **No other status changed.** Every other row's DONE/PARTIAL/MISSING/SUPERSEDED value from v3 is untouched. §2's summary table, §5's roadmap totals, and §16/§17's grand totals are recomputed below to reflect only the reclassifications in points 1–3.
+5. **§0/v2 point 4 below (the original "Sprint 26" note) is now historical** — superseded by point 1 above, kept for the audit trail rather than deleted.
 
 ## v3 corrections applied, per product-owner review of v2
 
@@ -35,13 +43,15 @@
 
 ## 2. Summary
 
+**Updated 2026-09-26 (v4)** — 18 FR-* rows moved from MISSING/PARTIAL to DEFERRED per the new §6 addition; see "v4 decisions applied" above.
+
 | | DONE | PARTIAL | MISSING | DEFERRED | SUPERSEDED |
 |---|---|---|---|---|---|
-| FR (244) | 36 | 82 | 103 | 9 | 14 |
+| FR (244) | 36 | 81 | 86 | 27 | 14 |
 | PDR (34) | 12 | 14 | 8 | 0 | 0 |
-| **Total** | **48** | **96** | **111** | **9** | **14** |
+| **Total** | **48** | **95** | **94** | **27** | **14** |
 
-(Unchanged from v1 — this version only reclassifies *which sprint*, or whether a sprint at all, a PARTIAL/MISSING row is assigned to; no status symbol changed.)
+(v1→v3: unchanged, only sprint reassignment. v4: 17 rows MISSING→DEFERRED and 1 row (`FR-FUL-007`) PARTIAL→DEFERRED, all within the FR module; PDR unchanged. Total row count still 278 = 244+34.)
 
 ## 3. The ID table
 
@@ -54,10 +64,10 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 |---|---|---|---|---|---|---|---|
 | FR-AUTH-013 (E.0) | ضيف يتصفح فقط؛ السلة/المتابعة/checkout بحساب؛ المفضلات/المراجعات/التنبيهات بحساب | session guard؛ CartItem على السيرفر | session | /login, /cart | S10,S14,AUTH | 🟡 PARTIAL | S24 |
 | FR-AUTH-014 (E.0) | تعطيل الحساب واسترجاعه 30 يوماً | لا شيء | - | لا | لا | ❌ MISSING | S22 |
-| FR-VEND-012 (E.0) | physical/online-only/hybrid، مستودع مخفي، نقاط استلام | Vendor.storeType، Warehouse، PickupPoint؛ PUT store-type/warehouse، POST/GET pickup-points | OWNER | لا | S5 | 🟡 PARTIAL | S15 |
+| FR-VEND-012 (E.0) | physical/online-only/hybrid، مستودع مخفي، نقاط استلام | Vendor.storeType، Warehouse، PickupPoint؛ PUT store-type/warehouse، POST/GET pickup-points. تحقّق ONLINE_ONLY محدَّد الآن بـPDR-035 (2026-09-26): دبوس عنوان المستودع بدل صورة/دبوس الفرع؛ لم يُبنَ بعد | OWNER | لا | S5 | 🟡 PARTIAL | S15 |
 | FR-VEND-013 (E.0) | مالك/موظف كصلاحيات على نفس الحساب؛ موظف لفرع واحد | VendorUser(role,branchId)؛ staff-invites وaccept API | OWNER يدعو | مبدّل في /account؛ لا صفحة دعوة أو قبول | S4,NAV | 🟡 PARTIAL | S15 |
 | FR-VEND-014 (E.0) | وسيلة تواصل خارجية واحدة على الأقل | بوابة النشر في storefront.controller | OWNER | /vendor/:id/storefront | S7 | ✅ DONE | - |
-| FR-CAT-015 (E.0) | النشر يتطلب عنواناً وصورة وتصنيفاً وسعراً ومخزوناً و5 حقول فئة | VendorOffer/OfferVariant؛ specs_text حر، لا قالب الحقول الخمسة | OWNER | لا | S3,S6,S7 | 🟡 PARTIAL | S17 |
+| FR-CAT-015 (E.0) | النشر يتطلب عنواناً وصورة وتصنيفاً وسعراً ومخزوناً و5 حقول فئة | VendorOffer/OfferVariant؛ specs_text حر، لا قالب الحقول الخمسة. الحقول الخمسة لكل فئة ملابس/إكسسوار محدَّدة الآن بـPDR-036 (2026-09-26، 10 قوالب)؛ اللون والمقاس خيارات variant لا حقلين بنيويين؛ لم تُبنَ في الكود بعد | OWNER | لا | S3,S6,S7 | 🟡 PARTIAL | S17 |
 | FR-CAT-016 (E.0) | أقسام المتجر: All، New arrivals، Discounts، حتى 20 مخصصاً | StoreSection(+Offer)؛ /storefronts/:slug/sections | OWNER؛ قراءة عامة | /vendor/:id/sections، /store/:slug | S7 | ✅ DONE | - |
 | FR-MATCH-011 (E.0) | باركود المتجر فريد؛ ملصق داخلي قابل للطباعة؛ باركود المنصة منفصل | storeInventoryBarcode؛ platformProductBarcode؛ لا توليد ملصق/طباعة | OWNER | لا | S6 | 🟡 PARTIAL | S18 |
 | FR-MATCH-012 (E.0) | خصائص ثم نص ثم صورة؛ المالك يؤكد | MatchReviewCandidate، match-review، match-confirmation؛ لا تشابه صور | OWNER | لا | S6,S7 | 🟡 PARTIAL | S17 |
@@ -98,13 +108,13 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-AUTH-009 | لغة عربية افتراضية وإنجليزية، محفوظة للحساب | عمود User.languagePref فقط | - | لا (عربي فقط) | لا | 🟡 PARTIAL | S22 |
 | FR-AUTH-010 | حذف الحساب | لا (انظر FR-AUTH-014) | - | لا | لا | ❌ MISSING | S22 |
 | FR-AUTH-011 | تقييد محاولات OTP والتسجيل السريع | Throttler على auth؛ too_many_attempts | عام | خطأ في /login و/register | otp.service.spec,AUTH | ✅ DONE | - |
-| FR-AUTH-012 | تسجيل اجتماعي (الـSRS: خارج FYP، وليس في PDR §6) | لا | - | لا | لا | ❌ MISSING | قرار-نطاق |
+| FR-AUTH-012 | تسجيل اجتماعي (الـSRS: خارج FYP، وليس في PDR §6) | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
 
 ### E.2 — المتاجر
 | ID | Requirement | Backend | Authz | UI | Test | Status | Sprint |
 |---|---|---|---|---|---|---|---|
 | FR-VEND-001 | طلب متجر: ملف ومعلومات وفرع واحد على الأقل | POST /vendors | session | لا | S3,S4 | 🟡 PARTIAL | S15 |
-| FR-VEND-002 | دبوس وصورة للفرع الفعلي قبل الموافقة | POST verification-evidence | OWNER | لا | S3,VV | 🟡 PARTIAL | S15 |
+| FR-VEND-002 | دبوس وصورة للفرع الفعلي قبل الموافقة (PHYSICAL/HYBRID فقط، بقرار PDR-035 2026-09-26 — ONLINE_ONLY لا يحتاج صورة/دبوس فرع، انظر PDR-035) | POST verification-evidence | OWNER | لا | S3,VV | 🟡 PARTIAL | S15 |
 | FR-VEND-003 | المراجع يوافق/يرفض/يطلب إعادة تقديم مع تدقيق | POST verification-decision، AuditLog | REVIEWER/ADMIN | لا | VV,S3 | 🟡 PARTIAL | S16 |
 | FR-VEND-004 | تأكيد الاشتراك قبل النشر | POST/GET subscription | OWNER | لا | S3 | 🟡 PARTIAL | S15 |
 | FR-VEND-005 | حالة الاشتراك تتحكم بالظهور (PDR-033: ACTIVE/EXPIRED) | VendorSubscription، subscription-gate | OWNER | لا (بلا تذكيرات) | S3 | 🟡 PARTIAL | S15 |
@@ -155,8 +165,8 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-IMPORT-003 | نجاح جزئي | نتائج لكل صف | OWNER | لا | S7 | 🟡 PARTIAL | S17 |
 | FR-IMPORT-004 | سجل مهام الاستيراد | لا (ImportIdentifierRecord لمنع التكرار) | - | لا | لا | ❌ MISSING | S17 |
 | FR-IMPORT-005 | أخطاء صفوف قابلة للتنفيذ | أسباب لكل صف | OWNER | لا | S7 | 🟡 PARTIAL | S17 |
-| FR-IMPORT-006 | استيراد عبر API/feed بصلاحية | لا | - | لا | لا | ❌ MISSING | قرار-نطاق |
-| FR-IMPORT-007 | feeds مجدولة وPOS/ERP خارج FYP (الـSRS) | لا | - | لا | لا | ❌ MISSING | قرار-نطاق |
+| FR-IMPORT-006 | استيراد عبر API/feed بصلاحية | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
+| FR-IMPORT-007 | feeds مجدولة وPOS/ERP خارج FYP (الـSRS) | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
 | FR-IMPORT-008 (E.5) | لا scraping | لم يُبنَ | n/a | n/a | n/a | ✅ DONE | - |
 | FR-IMPORT-009 | مصدر وحداثة كل عرض تظهر في المقارنة | لا | - | لا | لا | ❌ MISSING | S17 |
 | FR-IMPORT-010 | استيراد الصور بالروابط/أرشيف | PDR §6: استيراد الروابط مؤجل، الرفع اليدوي لاحقاً | - | - | - | ⏸ DEFERRED | - |
@@ -176,9 +186,9 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-SEARCH-006 | نتائج تراعي الموقع | لا | - | لا | لا | ❌ MISSING | S18b |
 | FR-SEARCH-007 | المشاهَد مؤخراً والبحوث المحفوظة | لا | - | لا | لا | ❌ MISSING | S18b |
 | FR-SEARCH-008 | اقتراحات عند عدم وجود نتائج | لا | - | لا | لا | ❌ MISSING | S18b |
-| FR-SEARCH-009 | وسم الإعلانات (Phase 2 بحسب الـSRS) | لا | - | لا | لا | ❌ MISSING | قرار-نطاق |
+| FR-SEARCH-009 | وسم الإعلانات (Phase 2 بحسب الـSRS) | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
 | FR-SEARCH-010 | غير المطابق ضمن النتائج وموسوم | الاكتشاف منتجات أساسية فقط | - | لا | لا | ❌ MISSING | S18b |
-| FR-SEARCH-011 | بحث صوتي (خارج النطاق حسب الـSRS) | لا | - | لا | لا | ❌ MISSING | قرار-نطاق |
+| FR-SEARCH-011 | بحث صوتي (خارج النطاق حسب الـSRS) | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
 | FR-SEARCH-012 | قاموس مرادفات | لا | - | لا | لا | ❌ MISSING | S18b |
 | FR-SEARCH-013 (E.6) | التعرف على العلامة والموديل وترجيحهما | العلامة والموديل ضمن contains بلا ترجيح | عام | البحث | S13 | 🟡 PARTIAL | S18b |
 | FR-SEARCH-014 (E.6) | ترتيب قابل للتفسير | الأحدث أولاً فقط | - | لا | لا | ❌ MISSING | S18b |
@@ -199,12 +209,12 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-PRICE-001 | سعر أساسي وتخفيض وعملة | استُبدل بـFR-PRICE-008/009 (E.0) | - | - | - | ↪ SUPERSEDED | - |
 | FR-PRICE-002 | تاريخ أسعار كامل | لا | - | لا | لا | ❌ MISSING | S17 |
 | FR-PRICE-003 | قواعد تقادم السعر | لا | - | لا | لا | ❌ MISSING | S17 |
-| FR-PRICE-004 | قواعد تراكب الخصومات/الكوبونات (Phase 2 بحسب الـSRS) | لا | - | لا | لا | ❌ MISSING | قرار-نطاق |
+| FR-PRICE-004 | قواعد تراكب الخصومات/الكوبونات (Phase 2 بحسب الـSRS) | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
 | FR-PRICE-005 | المبلغ المستحق: أصناف + توصيل + رسوم + ضريبة | الأصناف والتوصيل؛ لا رسوم ولا ضريبة (OPEN-009) | session | /checkout | S10 | 🟡 PARTIAL | S20b |
 | FR-PRICE-006 | حد أدنى للطلب | لا | - | لا | لا | ❌ MISSING | S20b |
 | FR-PRICE-007 | مقارنة مطبَّعة بـFX | استُبدل بـFR-PRICE-008 (E.0) | - | - | - | ↪ SUPERSEDED | - |
-| FR-PRICE-008 (E.8) | عروض فلاش وحزم وخصم كمية (Phase 2 بحسب الـSRS) | لا | - | لا | لا | ❌ MISSING | قرار-نطاق |
-| FR-PRICE-009 (E.8) | الإعلانات الممولة (Phase 2 بحسب الـSRS) | لا | - | لا | لا | ❌ MISSING | قرار-نطاق |
+| FR-PRICE-008 (E.8) | عروض فلاش وحزم وخصم كمية (Phase 2 بحسب الـSRS) | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
+| FR-PRICE-009 (E.8) | الإعلانات الممولة (Phase 2 بحسب الـSRS) | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
 
 ### E.9 — المخزون
 | ID | Requirement | Backend | Authz | UI | Test | Status | Sprint |
@@ -227,7 +237,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-CART-004 | أهلية عنوان التوصيل بالمنطقة وبديل الاستلام | فحص المنطقة في quote/reserve | session | /checkout | S10,S14 | ✅ DONE | - |
 | FR-CART-005 | توصيل أو استلام لكل بائع | استُبدل بـFR-ORD-009 (E.0) | - | - | - | ↪ SUPERSEDED | - |
 | FR-CART-006 | دبوس المنزل وهاتفان وملاحظات | هاتفان + إحداثيات (**GPS يملأها فقط، لا مزوّد خريطة، قرار معتمد**) + معلم نصي؛ لا ملاحظة توصيل لكل طلب | session | /checkout AddressForm | S14 | 🟡 PARTIAL — بسبب لا ملاحظة لكل طلب، وليس الخريطة | S22 |
-| FR-CART-007 | كوبونات (Phase 2 بحسب الـSRS) | لا | - | لا | لا | ❌ MISSING | قرار-نطاق |
+| FR-CART-007 | كوبونات (Phase 2 بحسب الـSRS) | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
 | FR-CART-008 | checkout idempotent | IdempotencyInterceptor | session | /checkout | S10,S14 | ✅ DONE | - |
 | FR-CART-009 | COD ودفع إلكتروني | paymentMethod لكل فرع | session | /checkout | S10 | ✅ DONE | - |
 | FR-CART-010 | السلات المهجورة بلا أثر | الحجوزات تنتهي والسلة تبقى | session | /cart | S10 | ✅ DONE | - |
@@ -272,7 +282,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-FUL-004 | أهلية منطقة التوصيل | مناطق على مستوى المتجر (PDR-022) + فحص منطقة العنوان | session | /checkout، /vendor/:id/delivery-zones | S9,S10 | ✅ DONE | - |
 | FR-FUL-005 | رسوم التوصيل بحسب المنطقة | VendorDeliveryZone.fee | session | /checkout | S10 | ✅ DONE | - |
 | FR-FUL-006 | معالجة فشل التوصيل | لا | - | لا | لا | ❌ MISSING | S20a |
-| FR-FUL-007 | شحنات مجزأة إن فعّلها المتجر | لا خيار؛ شحنة واحدة فقط | - | لا | لا | 🟡 PARTIAL | قرار-نطاق |
+| FR-FUL-007 | شحنات مجزأة إن فعّلها المتجر | لا خيار؛ شحنة واحدة فقط — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
 | FR-FUL-008 (E.13) | كود استلام يتحقق منه الفرع | BranchOrder.pickupCode، pickup-handover | موظف الفرع | صفحة طلبات الفرع، /orders | S10,S11 | ✅ DONE | - |
 | FR-FUL-009 (E.13) | استلام المرتجعات | لا | - | لا | لا | ❌ MISSING | S21 |
 | FR-FUL-010 | وقت توصيل/جاهزية تقديري | يُعرض الموعد المختار؛ لا حساب ETA | session | /checkout، /orders | S10 | 🟡 PARTIAL | S20a |
@@ -326,7 +336,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-SUP-003 | SLA وتصعيد | PDR §6 | - | - | - | ⏸ DEFERRED | - |
 | FR-SUP-004 | استرداد بصلاحية موظف دعم | PDR §6 | - | - | - | ⏸ DEFERRED | - |
 | FR-SUP-005 | جدول العميل الموحد للوكيل | PDR §6 | - | - | - | ⏸ DEFERRED | - |
-| FR-SUP-006 | قاعدة معرفة/FAQ ثنائية اللغة | لا (لم تُذكر في PDR §6) | - | لا | لا | ❌ MISSING | قرار-نطاق |
+| FR-SUP-006 | قاعدة معرفة/FAQ ثنائية اللغة | لا (لم تُذكر في PDR §6) — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
 | FR-ADMIN-001 | شاشات إدارة لكل كيان | API فقط: تصنيفات، علامات، منتجات أساسية، طلبات تغيير الاسم، قرار التحقق | ADMIN/REVIEWER | لا | S3,S7,VV | 🟡 PARTIAL | S16 |
 | FR-ADMIN-002 | قوائم غير مضمّنة في الكود | المناطق والقطاعات enums ثابتة (OPEN-012) | - | لا | لا | ❌ MISSING | S25 |
 | FR-ADMIN-003 | أدوار وصلاحيات قابلة للضبط | قيمتان ثابتتان لـPlatformRole | - | لا | لا | ❌ MISSING | S25 |
@@ -341,15 +351,15 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-VPORTAL-005 | إدارة الفروع والموظفين | قائمة فروع للقراءة؛ API الدعوة | OWNER | /vendor/:id/branches | S4 | 🟡 PARTIAL | S15 |
 | FR-VPORTAL-006 | حالة وسجل الاشتراك | GET subscription | OWNER | لا | S3 | 🟡 PARTIAL | S15 |
 | FR-VPORTAL-007 (E.20) | تقارير الأداء/SLA والرد على المراجعات (الردود مؤجلة) | لا | - | لا | لا | ❌ MISSING | S25 |
-| FR-VPORTAL-008 | بيانات اعتماد التكامل | لا | - | لا | لا | ❌ MISSING | قرار-نطاق |
+| FR-VPORTAL-008 | بيانات اعتماد التكامل | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
 | FR-VPORTAL-009 | إعدادات المتجر: ساعات وإغلاقات ومناطق وتفضيلات إشعار | مناطق ونوافذ وواجهة المتجر؛ لا ساعات ولا إغلاقات ولا تفضيلات | OWNER | /vendor/:id/delivery-zones، /storefront | S9 | 🟡 PARTIAL | S18 |
-| FR-VPORTAL-010 | شاشة تسويات (Phase 2) | لا | - | لا | لا | ❌ MISSING | قرار-نطاق |
+| FR-VPORTAL-010 | شاشة تسويات (Phase 2) | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
 | FR-VPORTAL-011 | عرض إشعارات البائع | لا | - | لا | لا | ❌ MISSING | S19 |
-| FR-CMS-001 | أقسام الرئيسية والبانرات | لا | - | لا | لا | ❌ MISSING | قرار-نطاق |
-| FR-CMS-002 | حملات وSEO AR/EN | لا | - | لا | لا | ❌ MISSING | قرار-نطاق |
-| FR-CMS-003 | وسم الإعلان | لا | - | لا | لا | ❌ MISSING | قرار-نطاق |
-| FR-CMS-004 | الإحالة/الأفلييت (Phase 2+) | لا | - | لا | لا | ❌ MISSING | قرار-نطاق |
-| FR-CMS-005 | روابط عميقة ويب/موبايل | لا | - | لا | لا | ❌ MISSING | قرار-نطاق |
+| FR-CMS-001 | أقسام الرئيسية والبانرات | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
+| FR-CMS-002 | حملات وSEO AR/EN | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
+| FR-CMS-003 | وسم الإعلان | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
+| FR-CMS-004 | الإحالة/الأفلييت (Phase 2+) | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
+| FR-CMS-005 | روابط عميقة ويب/موبايل | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
 | FR-ANALYTICS-001 | لوحات بحسب الدور | لا | - | لا | لا | ❌ MISSING | S25 |
 | FR-ANALYTICS-002 | جودة الكتالوج والتطابق | لا | - | لا | لا | ❌ MISSING | S25 |
 | FR-ANALYTICS-003 | دقة المخزون وحداثة الأسعار | لا | - | لا | لا | ❌ MISSING | S25 |
@@ -369,7 +379,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | PDR-007 | لا دردشة ولا stories؛ وسيلة تواصل خارجية | لم تُبنَ؛ بوابة التواصل | OWNER | /vendor/:id/storefront | S7 | ✅ DONE | - |
 | PDR-008 | حساب واحد بأدوار متعددة؛ مبدّل؛ موظف لفرع واحد | VendorUser؛ me/workspaces؛ API الدعوة | OWNER | مبدّل /account؛ لا دعوة ولا نقل | S4,NAV | 🟡 PARTIAL | S15 |
 | PDR-009 | فصل صلاحيات المالك والموظف | الـguards تفرضه؛ واجهات المالك ناقصة | OWNER/موظف | المركز، طلبات الفرع | S4,S9 | 🟡 PARTIAL | S18 |
-| PDR-010 | متجر فعلي/إلكتروني/هجين؛ مستودع مخفي؛ نقاط استلام | Vendor.storeType، Warehouse، PickupPoint | OWNER | لا | S5 | 🟡 PARTIAL | S15 |
+| PDR-010 | متجر فعلي/إلكتروني/هجين؛ مستودع مخفي؛ نقاط استلام. تحقّق ONLINE_ONLY مفصَّل الآن بـPDR-035 (2026-09-26): دبوس عنوان المستودع (lat/lng + ملاحظة) قبل إرسال أدلة التحقق؛ المستودع لا يظهر في أي endpoint عام؛ المراجع يراه فقط داخل مسار التحقق | Vendor.storeType، Warehouse، PickupPoint | OWNER | لا | S5 | 🟡 PARTIAL | S15 |
 | PDR-011 | صفحة متجر عامة: رابط واسم وشعار ونبذة وغلاف وتواصل وأقسام ومتابعة | حقول واجهة المتجر وAPI عام | OWNER؛ عام | /store/:slug، /vendor/:id/storefront | S7,S13 | ✅ DONE | - |
 | PDR-012 | أقسام المتجر وسقف 20 | StoreSection | OWNER | /vendor/:id/sections | S7 | ✅ DONE | - |
 | PDR-013 | صفحات الاكتشاف؛ المتجر يختار الأنواع عند التسجيل ويعدّلها | segments؛ applicable categories | OWNER | /discovery؛ التعديل فقط؛ التسجيل API فقط | S13 | 🟡 PARTIAL | S15 |
@@ -405,7 +415,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | G-ON-03 | واجهة الاشتراك وحالته وتجديده | FR-VEND-004/005، FR-VPORTAL-006، PDR-033، FR-PAY-006 | S15 |
 | G-ON-04 | دعوة موظف من الواجهة | FR-VEND-013 (E.0)، FR-VPORTAL-005، PDR-008 | S15 |
 | G-ON-05 | صفحة قبول الدعوة بـOTP | FR-VEND-013 (E.0) | S15 |
-| G-ON-06 | واجهة نوع المتجر والمستودع ونقاط الاستلام | FR-VEND-012 (E.0)، PDR-010 | S15 |
+| G-ON-06 | واجهة نوع المتجر والمستودع ونقاط الاستلام (تحقّق ONLINE_ONLY محدَّد الآن بـPDR-035: دبوس عنوان مستودع، لا صورة/دبوس فرع؛ لم يُبنَ بعد) | FR-VEND-012 (E.0)، PDR-010 | S15 |
 | G-ON-07 | إضافة فرع لاحقاً وساعات وإغلاق مؤقت وأرشفة | FR-VEND-006، FR-VPORTAL-009 | S18 |
 
 ### Verification / Admin
@@ -420,7 +430,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 ### Catalog
 | Gap | القدرة | يغطي | Sprint |
 |---|---|---|---|
-| G-CA-01 | نموذج إنشاء وتعديل العرض بالحقول الخمسة | FR-CAT-015 (E.0)، FR-IMPORT-001، FR-VPORTAL-002 | S17 |
+| G-CA-01 | نموذج إنشاء وتعديل العرض بالحقول الخمسة (10 قوالب ملابس/إكسسوار محدَّدة الآن بـPDR-036؛ لم تُبنَ بعد) | FR-CAT-015 (E.0)، FR-IMPORT-001، FR-VPORTAL-002 | S17 |
 | G-CA-02 | واجهة الاستيراد: قالب وتقرير وسجل وتسوية الأعمدة | FR-IMPORT-002/003/004/005/011/012 | S17 |
 | G-CA-03 | رفع الوسائط وترتيبها وبدائلها النصية | FR-CAT-005 | S17 |
 | G-CA-04 | `PriceHistory` مع كل تغيير سعر | FR-PRICE-002/003، FR-IMPORT-014 | S17 |
@@ -457,16 +467,18 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 
 (بند الخريطة أُزيل من G-AC-04 — لا مزوّد خريطة هو القرار المعتمد، وليس فجوة. انظر §0.1.)
 
-## 5. Roadmap — كل PARTIAL/MISHED في سبرنت واحد فقط (أو معلَّم صراحة كغير مجدول)
+## 5. Roadmap — كل PARTIAL/MISSING في سبرنت واحد فقط (أو معلَّم صراحة كغير مجدول)
 
-المجموع 207 صفاً (96 PARTIAL + 111 MISSING) موزّعة كالتالي بعد التصحيحات.
+**تحديث 2026-09-26:** الـ18 بنداً التي كانت تحت `قرار-نطاق` أصبحت DEFERRED BY APPROVED DECISION رسمياً (§6 من `approved-product-decisions-2026-09.md`، انظر §0/v4 أعلاه) — خرجت نهائياً من عالم "PARTIAL/MISSING القابل للجدولة"، فلم تعد جزءاً من هذا الـroadmap إطلاقاً. كذلك OPEN-011 وOPEN-013 لم يعودا قرارين معلَّقين (PDR-035 وPDR-036، 2026-09-26) — أُزيلا من عمود "قرارات مطلوبة" لـS15/S17/S17b أدناه؛ **هذا لا يعني بدء أي منهما — الأثر توثيقي فقط، لا Sprint 15 حتى تأذني صراحة.**
+
+المجموع بعد هذا التحديث: **189 صفاً** (كان 207 قبل إخراج الـ18 بنداً المؤجَّلة) موزّعة كالتالي.
 
 | Sprint | النطاق | # | يعتمد على | قرارات مطلوبة قبل التنفيذ |
 |---|---|---|---|---|
-| S15 | إعداد المتجر: طلب متجر، أدلة، اشتراك، دعوة وقبول، نوع المتجر ونقاط الاستلام | 13 | لا شيء (الـAPIs موجودة) | OPEN-011 (أدلة المتاجر الإلكترونية) لبند التحقق للإلكتروني فقط؛ لا map provider (مثبَّت §0.1) |
+| S15 | إعداد المتجر: طلب متجر، أدلة، اشتراك، دعوة وقبول، نوع المتجر ونقاط الاستلام | 13 | لا شيء (الـAPIs موجودة) | ~~OPEN-011~~ **محسوم (PDR-035، 2026-09-26)** — تحقّق ONLINE_ONLY بدبوس عنوان مستودع لا صورة/دبوس فرع. لا map provider (مثبَّت §0.1) |
 | S16 | إدارة المنصة: قرار التحقق، تعليق/إعادة تفعيل، تنقل التطابق | 4 | S15 | سياسة التعليق: الأسباب وإشعار المالك (الإشعار نفسه في S19) وأسباب الرفض (OPEN-005) |
-| S17 | كتالوج المالك: نموذج العرض، الاستيراد، الوسائط، `PriceHistory`، الخصم النسبي، التطابق | 25 | S15، S16 (قرارات الاسم) | OPEN-013 (الحقول الخمسة لكل فئة)؛ هل يبقى الخصم النسبي هنا أم يُفصل لأنه يغيّر التسعير في مسار الـcheckout؛ حجم الوسائط والرفع |
-| S17b | كتالوج المنصة: تصنيفات وعلامات ومنتجات أساسية وقوالب وتطابق ودمج/فصل | 13 | S16، S17 | OPEN-013 |
+| S17 | كتالوج المالك: نموذج العرض، الاستيراد، الوسائط، `PriceHistory`، الخصم النسبي، التطابق | 25 | S15، S16 (قرارات الاسم) | ~~OPEN-013~~ **محسوم للملابس/الإكسسوارات (PDR-036، 2026-09-26)** — 10 قوالب حقول خمسة، اللون/المقاس variant لا حقلاً بنيوياً. هل يبقى الخصم النسبي هنا أم يُفصل؛ حجم الوسائط والرفع |
+| S17b | كتالوج المنصة: تصنيفات وعلامات ومنتجات أساسية وقوالب وتطابق ودمج/فصل | 13 | S16، S17 | ~~OPEN-013~~ **محسوم للفئات الحالية (PDR-036)** — أي فئة غير ملابس/إكسسوار مستقبلية تحتاج قرار قالب خاص بها |
 | S18 | عمليات المخزون: صفحة المخزون، البيع بالمسح، الملصق، الفروع/الساعات، نقل الموظف | 16 | S15، S17 | لا شيء جديد؛ تأكيد شكل الباركود المطبوع |
 | S18b | جودة البحث والاكتشاف: تطبيع عربي، اقتراحات، باركود، ترتيب | 19 | S17 (المشاهدات والأسعار) | وزن الترتيب 40/30/30. **"أقرب فرع" ليس ضمن هذا السبرنت** — انظر الصف المنفصل أدناه |
 | S19 | إشعارات: تصميم الـrelay ثم relay وإشعارات داخل التطبيق لأحداث الطلب الأساسية | 10 | لا شيء تقني؛ يفضَّل بعد S17/S18 لأحداثها | OPEN-004 (SMS: يبقى المسجَّل fallback)؛ قائمة أحداث "action-required" |
@@ -478,17 +490,16 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | S24 | المفضلات والتنبيهات ومجموعات المقارنة ومقارنة أعمق | 16 | S17 (تاريخ الأسعار)، S19 | لا شيء جديد |
 | S25 | التحليلات وأدوات الأدمن (سجل التدقيق، الأدوار، التصدير) وتقارير الفوترة والتسوية | 20 | معظم ما سبق | OPEN-012 (مصدر حدود المناطق) |
 | **— (قرار جديد)** | "أقرب فرع" فعلياً (PDR-023، FR-CART-018) | 2 | — | **ليست سبرنتاً مجدولاً.** تحتاج: (أ) قراراً بأن التقريب الحتمي الحالي غير كافٍ، و(ب) مصدر مسافة موثوق (إحداثيات الفرع + إحداثيات العميل + دالة مسافة، أو مزوّد خارجي). بلا هذين لا يوجد عمل قابل للتقدير. |
-| **قرار-نطاق** | متطلبات الـSRS التي تصفها الـSRS نفسها بـPhase 2/خارج FYP، ولا تذكرها `approved-product-decisions-2026-09.md` §6: تسجيل اجتماعي، feeds/API ingestion، بحث صوتي، إعلانات، كوبونات، flash sale، إحالة/أفلييت، CMS، شحنات مجزأة، FAQ، بيانات تكامل، تسويات | 18 | — | **ليست سبرنتاً.** بانتظار قرارك: إما تُبنى ضمن نطاق FYP، أو تُضاف رسمياً لـ§6 كمؤجَّلة. لن أغيّر حالتها من MISSING بنفسي في أي الحالتين قبل قرارك. |
 
-**فحص المجموع:** S15(13)+S16(4)+S17(25)+S17b(13)+S18(16)+S18b(19)+S19(10)+S20a(15)+S20b(6)+S21(12)+S22(8)+S23(10)+S24(16)+S25(20) = **187** سبرنتات مجدولة + **2** غير مجدولة (قرار جديد) + **18** غير مجدولة (قرار-نطاق) = **207**، مطابق للمجموع في §2.
+**الـ18 بنداً سابقاً "قرار-نطاق" لم تعد في هذا الجدول إطلاقاً** — أصبحت DEFERRED BY APPROVED DECISION (§6 من `approved-product-decisions-2026-09.md`، 2026-09-26): FR-AUTH-012، FR-IMPORT-006/007، FR-SEARCH-009/011، FR-PRICE-004/008(E.8)/009(E.8)، FR-CART-007، FR-FUL-007، FR-SUP-006، FR-VPORTAL-008/010، FR-CMS-001..005. لن تُجدوَل في أي سبرنت ما لم يصدر قرار معتمد جديد يعيدها للنطاق.
 
-**قرارات مطلوبة قبل أي سبرنت، بالترتيب:**
-1. OPEN-013 (S17 وS17b) وOPEN-011 (S15).
-2. مصدر مسافة موثوق لـ"أقرب فرع" — بدونه هذا البند يبقى خارج كل الجداول الزمنية إلى أجل غير مسمى، وليس فقط مؤجَّلاً لسبرنت لاحق.
-3. النطاق: هل تُبنى بنود `قرار-نطاق` الثمانية عشر ضمن FYP، أم تُضاف رسمياً إلى `approved-product-decisions-2026-09.md` §6.
-4. قرار D1 للمراجعات (S23).
-5. الخصم النسبي: نفس سبرنت الكتالوج أم منفصل (S17).
-6. تنظيف تصادمات الـID الأحد عشر في الـSRS (توثيقي فقط، بدون كود).
+**فحص المجموع:** S15(13)+S16(4)+S17(25)+S17b(13)+S18(16)+S18b(19)+S19(10)+S20a(15)+S20b(6)+S21(12)+S22(8)+S23(10)+S24(16)+S25(20) = **187** سبرنتات مجدولة + **2** غير مجدولة (قرار جديد) = **189**.
+
+**قرارات مطلوبة قبل أي سبرنت، بالترتيب (بعد إغلاق OPEN-011/013):**
+1. مصدر مسافة موثوق لـ"أقرب فرع" — بدونه هذا البند يبقى خارج كل الجداول الزمنية إلى أجل غير مسمى، وليس فقط مؤجَّلاً لسبرنت لاحق.
+2. قرار D1 للمراجعات (S23).
+3. الخصم النسبي: نفس سبرنت الكتالوج أم منفصل (S17).
+4. تنظيف تصادمات الـID الأحد عشر في الـSRS (توثيقي فقط، بدون كود).
 
 سأنتظر مراجعتك ولن أبدأ Sprint 15 أو أي كود.
 
@@ -1065,42 +1076,42 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 
 ---
 
-# §16 — الأعداد النهائية الشاملة (v3، مُعاد اشتقاقها مباشرة من صفوف الملف)
+# §16 — الأعداد النهائية الشاملة (v4، مُعاد اشتقاقها مباشرة من صفوف الملف)
 
-**كيف حُسِب هذا الجدول:** كل رقم هنا أُعيد فرزه بالعدّ المباشر لحالة كل صف فعلي في الملف (سكربت عدّ آلي على النص، لا تقدير يدوي)، بعد تطبيق كل الإصلاحات في §0/v3 أعلاه (تفكيك RT إلى 9، تفكيك AC-10/11/12/13/15/16 إلى 6، جدول Part 8 الكامل بـ102 صفاً). أي رقم هنا يختلف عن نسخة v2 السابقة مذكور بسببه.
+**كيف حُسِب هذا الجدول:** نفس منهج v3 (عدّ آلي مباشر لحالة كل صف فعلي، لا تقدير يدوي)، مُعاد تشغيله بعد تطبيق قرارات المالك الثلاثة في 2026-09-26 (§0/v4 أعلاه): 18 صفاً من `FR-*` (17 كانت MISSING وواحد `FR-FUL-007` كان PARTIAL) أصبحت DEFERRED. لا تغيير آخر في أي رقم منذ v3.
 
-| المصدر | DONE | PARTIAL | MISSING | DEFERRED | SUPERSEDED | n/a | المجموع | يطابق v2؟ |
+| المصدر | DONE | PARTIAL | MISSING | DEFERRED | SUPERSEDED | n/a | المجموع | يطابق v3؟ |
 |---|---|---|---|---|---|---|---|---|
-| FR، E.0..E.22 (Part 2) | 36 | 82 | 103 | 9 | 14 | 0 | 244 | نعم |
+| FR، E.0..E.22 (Part 2) | 36 | 81 | 86 | 27 | 14 | 0 | 244 | **لا — 18 عنصراً DEFERRED جديداً (§0/v4)** |
 | PDR-001..034 | 12 | 14 | 8 | 0 | 0 | 0 | 34 | نعم |
-| BR-001..034 (§6) | 7 | 13 | 12 | 0 | 2 | 0 | 34 | **لا — كانت 8/17/7 خطأً** |
-| NFR-* (§7) | 2 | 10 | 18 | 0 | 0 | 2 | 32 | **لا — كانت 2/13/15 خطأً** |
+| BR-001..034 (§6) | 7 | 13 | 12 | 0 | 2 | 0 | 34 | نعم |
+| NFR-* (§7) | 2 | 10 | 18 | 0 | 0 | 2 | 32 | نعم |
 | G.0 (§8) | 5 | 3 | 0 | 0 | 0 | 0 | 8 | نعم |
 | G.3 إضافي (§8) | 3 | 0 | 7 | 0 | 0 | 0 | 10 | نعم |
-| H.1 (§9) | 3 | 3 | 4 | 0 | 0 | 0 | 10 | **لا — كانت 4/3/3 خطأً** |
+| H.1 (§9) | 3 | 3 | 4 | 0 | 0 | 0 | 10 | نعم |
 | H.2/H.3 قديم (§9) | 0 | 0 | 0 | 0 | 1 | 0 | 1 | نعم |
 | H.3a (§9) | 3 | 4 | 1 | 0 | 0 | 0 | 8 | نعم |
 | K.1a (§10) | 3 | 8 | 0 | 0 | 0 | 0 | 11 | نعم |
 | K.1 حالات (§10) | 0 | 1 | 3 | 0 | 0 | 0 | 4 | نعم |
-| L-01..32 (§10) | 11 | 5 | 15 | 0 | 1 | 0 | 32 | **لا — كانت 15/6/10 خطأً** |
+| L-01..32 (§10) | 11 | 5 | 15 | 0 | 1 | 0 | 32 | نعم |
 | ADR-001..012 (§11) | 7 | 5 | 0 | 0 | 0 | 0 | 12 | نعم |
-| N.1..5 (§11) | 1 | 2 | 2 | 0 | 0 | 0 | 5 | **لا — كانت 2/2/1 خطأً** |
-| O.1 (§11) | — | — | — | — | — | — | 0 | تصنيف وصفي فقط، بلا صفوف ID مستقلة — لا يدخل أي عمود، ولا في المجموع (كان الخلط في v2 بعدّه "15 n/a"؛ هذا خطأ إضافي مصحَّح هنا) |
+| N.1..5 (§11) | 1 | 2 | 2 | 0 | 0 | 0 | 5 | نعم |
+| O.1 (§11) | — | — | — | — | — | — | 0 | تصنيف وصفي فقط، لا يدخل المجموع |
 | P (§11) | 1 | 2 | 12 | 0 | 0 | 0 | 15 | نعم |
-| BDR القديمة (§12) | 5 | 6 | 1 | 0 | 3 | 1 | **16** | **لا — كانت 6/…/17 خطأً، مصحَّحة بلا حاشية متناقضة** |
-| Part 8 — 102 صفاً كاملة (§13) | 21 | 40 | 37 | 2 | 2 | 0 | **102** | **لا — كانت صفاً تجميعياً واحداً؛ الآن كل معرّف مفكَّك** |
-| AC-01..22، 6 صفوف مفكَّكة (§14) | 10 | 5 | 7 | 0 | 0 | 0 | 22 | **لا — كانت 12/6/4 مع 3 صفوف مدمجة؛ نفس الـ22 ID لكن معدودة بشكل صحيح الآن** |
-| E.11 — 59 صفاً، RT مفكَّكة بالكامل (§15) | 15 | 1 | 32 | 0 | 11 | 0 | 59 | **لا — كانت 14/1/32/…/12 خطأً في DONE وSUPERSEDED** |
-| **المجموع** | **145** | **204** | **262** | **11** | **34** | **3** | **659** | — |
+| BDR القديمة (§12) | 5 | 6 | 1 | 0 | 3 | 1 | 16 | نعم |
+| Part 8 — 102 صفاً كاملة (§13) | 21 | 40 | 37 | 2 | 2 | 0 | 102 | نعم |
+| AC-01..22 (§14) | 10 | 5 | 7 | 0 | 0 | 0 | 22 | نعم |
+| E.11 — 59 صفاً (§15) | 15 | 1 | 32 | 0 | 11 | 0 | 59 | نعم |
+| **المجموع** | **145** | **203** | **245** | **29** | **34** | **3** | **659** | — |
 
-**فحص الجمع:** 145+204+262+11+34+3 = **659**، ويطابق تماماً مجموع عمود "المجموع" أعلاه (244+34+34+32+8+10+10+1+8+11+4+32+12+5+0+15+16+102+22+59 = 659).
+**فحص الجمع:** 145+203+245+29+34+3 = **659**، ويطابق تماماً مجموع عمود "المجموع" أعلاه (244+34+34+32+8+10+10+1+8+11+4+32+12+5+0+15+16+102+22+59 = 659). **عدد الصفوف الكلي لم يتغيّر (659 كما في v3) — هذه إعادة توزيع بين الأعمدة فقط (MISSING/PARTIAL → DEFERRED)، وليست إضافة أو حذف صفوف.**
 
 ## §17 — عدد صفوف/أسطر التتبع الفعلية
 
-**659 صفاً قابلاً للتتبع** (كل صف يحمل معرّفاً DONE/PARTIAL/MISSING/DEFERRED/SUPERSEDED مستقلاً) — هذا الرقم من عدّ آلي مباشر لكل جدول في هذا الملف بعد التصحيحات أعلاه، وليس تقديراً. صفوف §0 (نصية) و§11/O.1 (15 سطراً وصفياً لمستويات الاختبار، بلا ID أو حالة مستقلة) و§14/BO-وما بعدها (ملخصات إستراتيجية، لا حالة مستقلة) **غير محسوبة** في الـ659، وهذا مقصود ومذكور صراحةً حيث ورد.
+**659 صفاً قابلاً للتتبع** — نفس العدد الإجمالي منذ v3؛ لم يتغيّر بتطبيق قرارات 2026-09-26 لأنها إعادة تصنيف حالة (MISSING/PARTIAL → DEFERRED) لا إضافة/حذف صفوف. صفوف §0 (نصية) و§11/O.1 (15 سطراً وصفياً لمستويات الاختبار، بلا ID أو حالة مستقلة) و§14/BO-وما بعدها (ملخصات إستراتيجية، لا حالة مستقلة) **غير محسوبة** في الـ659، وهذا مقصود ومذكور صراحةً حيث ورد.
 
 **تأكيد الشمول:** الـ659 تضم: FR(244) + PDR(34) + BR(34) + NFR(32) + G(18) + H(19) + K.1/L(47) + ADR/N/P(32، باستثناء O.1 الوصفي) + BDR(16) + Part 8(102) + AC(22) + E.11(59). كل جزء من الـSRS من Part 0 حتى Part 9 ممثَّل، إما بصف مستقل لكل ID أو بقرار تجميع موثَّق بسببه في §0 (فقط: O.1 كتصنيف، وBO/مصفوفة الوحدات/التوصيات كملخصات مشتقة — لا سجلات RISK/ASM/DEP/OPEN المستقلة، والمذكورة أصلاً كإشارات داخل الصفوف أعلاه).
 
-**لم أُعِد تصنيف أي بند Phase-2/SRS-only كـ DEFERRED من نفسي.** كل بند من هذا النوع بقي MISSING تحت `قرار-نطاق`، تماماً كما في التقرير الأصلي. لم يتغيّر أي status أو أي سبنت في §5 في هذا التصحيح — هذا تصحيح توثيقي حسابي بحت.
+**بعد 2026-09-26:** الـ18 بنداً DEFERRED BY APPROVED DECISION فعلياً (§6 من `approved-product-decisions-2026-09.md`) — لم تعد "قرار-نطاق" معلَّقاً، بل قرار مالك موثَّق. لم أُعِد تصنيف أي بند **آخر** من نفسي؛ كل ما تبقى تحت `قرار-نطاق` (NFR/DevOps/G.3/H.1/L وغيرها من بنود النضج التشغيلي غير المرتبطة بالثمانية عشر) بقي MISSING/PARTIAL كما هو، لأنه ليس من ضمن قرار المالك هذا. OPEN-011 وOPEN-013 أُغلقا بقرارين معتمدين (PDR-035، PDR-036) موثَّقين أعلاه؛ لم يتغيّر أي حالة كود لأي منهما — فقط القرار التوثيقي الذي يزيل حاجز التخطيط عن S15/S17/S17b، دون بدء أيٍّ منها.
 
 سأنتظر مراجعتك. لا Sprint 15، لا كود، لا migration، لا commit.

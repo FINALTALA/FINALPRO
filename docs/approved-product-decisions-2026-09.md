@@ -1,6 +1,6 @@
 # FINALPRO — Approved Product Decisions, September 2026
 
-**Status:** Approved by the product owner on 2026-09-19.
+**Status:** Approved by the product owner on 2026-09-19; amended 2026-09-26 (PDR-035, PDR-036, and the explicit Phase-2 exclusion list added to §6).
 **Authority:** This document is the change-control baseline for the decisions gathered during the product-discovery sessions in September 2026. Where it conflicts with Parts 0–9 of the current SRS, **this document takes precedence** until the listed SRS sections are revised on this branch and reviewed in a pull request.
 **Implementation status:** Requirements only. No code change or Sprint-3 change is authorised by this record by itself.
 
@@ -48,6 +48,8 @@ It is not a silent scope cut. It expands and sharpens the target product, while 
 | PDR-032 | Only verified delivered/picked-up purchasers can review. Product and store reviews are separate, each 1–5 plus mandatory comment; first name and last initial appear. Reviews are immutable by the customer; reports may hide them after admin review. Seller replies are deferred. | Generic review and vendor-reply behaviour. |
 | PDR-033 | A unified sandbox/trial subscription begins after verification, lasts one month and has mock monthly renewal. No Basic/Pro logic now. On expiry, listings/page are unavailable for new orders but the owner can see the account and work existing pre-expiry orders; renewal restores automatically. Reminders: seven days before and on expiry. | Tiered subscription/payment rules. |
 | PDR-034 | Account deletion is deactivation: active unreceived orders block it; then sessions are revoked, nonessential personal data is hidden, necessary order/audit records remain, and account recovery by OTP is possible for 30 days. | Unqualified hard deletion. |
+| PDR-035 | **(2026-09-26)** A PHYSICAL or HYBRID store keeps the existing requirement: a physical branch cannot leave "pending verification" without a geolocation pin and a storefront photo. An ONLINE_ONLY store needs neither — instead it must submit a warehouse address pin (lat/lng plus an address note) before verification-evidence review. The warehouse address/pin/any warehouse data is never returned by a public or storefront endpoint under any circumstance; only a vendor-verification reviewer sees it, and only inside the verification-decision path. | Closes OPEN-011. Refines PDR-010 and the FR-VEND-002/FR-VEND-012 evidence requirement for the ONLINE_ONLY case specifically. |
+| PDR-036 | **(2026-09-26)** Colour and size are offer-variant options, never one of a category's five required structural matching/search fields (FR-CAT-015) — the enclosing public discovery segment (Women/Men/Kids/Accessories) already carries audience/gender, so it is not repeated as a field either. The five required fields per clothing/accessory category are the ten templates fixed in §3.2. A missing/unbranded item uses the controlled value "No brand" (بدون علامة تجارية), never a blank brand field. | Closes OPEN-013 for the clothing/accessories category set the platform currently supports. A future category outside this set (e.g., electronics, home goods) still needs its own five-field decision — this does not resolve OPEN-013 in general, only for clothing/accessories. |
 
 ## 3. Full approved baseline by product area
 
@@ -66,6 +68,22 @@ It is not a silent scope cut. It expands and sharpens the target product, while 
 - Publishing requires: title, primary image, general platform category, regular ILS price, stock, and five category-specific matching/search fields. `N/A` is allowed where a field does not apply. Condition defaults to New and may be Used, Refurbished, or Open Box; notes are optional.
 - A product supports up to ten images and three videos of up to 60 seconds each. Vendor can choose/reorder/edit/delete/replace the primary image. Every media item is a matching signal. Media/detail edits rerun matching.
 - Category-specific colour and size lists are supplied. A vendor may create a product-only custom value without administrator approval.
+- **(2026-09-26, PDR-036) Colour and size are offer-variant options, not structural fields** — they never occupy one of the five required matching/search fields below, and the public discovery segment (Women/Men/Kids/Accessories) already carries audience, so no field repeats it. The five required fields for each clothing/accessory category are:
+
+  | Category | Five required fields |
+  |---|---|
+  | Dresses (الفساتين) | Brand, material, pattern, length, sleeve length/type |
+  | Tops/shirts (البلوزات/القمصان) | Brand, material, pattern, cut/fit, sleeve length/type |
+  | Bottoms — trousers/jeans/skirts (البناطيل/الجينز/التنانير) | Brand, material, pattern, cut, length or waist |
+  | Coats/jackets (المعاطف/الجاكيتات) | Brand, material, pattern, closure type, length |
+  | Sets/pyjamas (الأطقم/البيجامات) | Brand, material, pattern, piece count, cut |
+  | Kids' clothing (ملابس الأطفال) | Brand, age range, material, pattern, category-specific detail (sleeve/length/cut) |
+  | Shoes (الأحذية) | Brand, upper material, closure type, heel/sole type, size system |
+  | Bags (الحقائب) | Brand, material, bag type, dimensions/capacity, closure type |
+  | Jewellery/watches (المجوهرات/الساعات) | Brand, material, sub-type, stone/finish, dimensions |
+  | Other accessories (الإكسسوارات الأخرى) | Brand, material, sub-type, pattern, fixed dimensions/size |
+
+  A missing brand uses the controlled value **"No brand" (بدون علامة تجارية)**, never a blank field. `N/A` remains allowed on any field genuinely not applicable to a specific product. This closes OPEN-013 for the categories above (PDR-036); any category outside this list still needs its own five-field decision.
 - Vendor price/discount applies across all physical branches, though colour/size variants may have different base prices. Exactly one active percentage discount applies, with vendor-specified start/end and 0 < percentage < 100. It reduces each variant’s own base price.
 - Archiving removes an offer from public display but retains orders/reviews; owner can restore/revalidate/publish it.
 - Unknown brands are allowed as pending review; the product may remain published with its pending state. A rejection results in correction notice rather than silent deletion.
@@ -77,6 +95,7 @@ It is not a silent scope cut. It expands and sharpens the target product, while 
 - A physical store has at least one public branch with address/map/hours. Physical verification needs the evidence already defined in the SRS. One branch rejection rejects the joined application; correctable issues use resubmission. A rejected vendor may submit a corrected new application immediately; retain the old record/audit.
 - A physical branch has delivery, pickup, or both; it can close temporarily (visible but unavailable for new work while existing work finishes) or be permanently archived/reactivated. It may never be hard-deleted.
 - An online-only store’s warehouse is hidden. It verifies through identity/business material where applicable, external contact, and product media; it may have multiple public pickup points with maps, text guidance, hours and slots. Pickup points do not own stock.
+- **(2026-09-26, PDR-035) ONLINE_ONLY verification evidence:** no branch photo or physical-branch geo-pin is required. Instead, before verification-evidence review, the vendor submits a warehouse address pin (lat/lng) plus an address note. The warehouse address, pin, and any other warehouse data are never returned by a public or storefront endpoint under any circumstance. Only a vendor-verification reviewer sees the warehouse evidence, and only inside the verification-decision path — never a public-facing screen. PHYSICAL and HYBRID stores are unaffected: they keep the existing branch-photo-and-pin requirement unchanged.
 - Owner assigns, transfers and disables branch employees. Employee data access ends immediately on disable; audit remains. Employees may perform only their branch operations, including physical-sales stock movement and manual adjustment.
 
 ### 3.4 Cart, checkout, payments, delivery, and orders
@@ -114,9 +133,9 @@ It is not a silent scope cut. It expands and sharpens the target product, while 
 | OPEN-001 | Production payment gateway/provider | FYP uses sandbox only; production integrator remains unknown. |
 | OPEN-004 | Production SMS/OTP provider for Palestinian numbers | Existing logged fallback remains unsuitable for a production claim. |
 | OPEN-009 | Legal, tax, consumer protection, retention and payment parameters | Must be professionally confirmed; amounts/retention cannot be invented. |
-| OPEN-011 | Exact onboarding evidence/verification policy for online-only stores | The operating model is approved, but the minimum legal/business documents need product-owner and professional confirmation. |
+| OPEN-011 | Exact onboarding evidence/verification policy for online-only stores | **✅ Closed 2026-09-26 — PDR-035:** a warehouse address pin + note replaces the branch photo/pin for ONLINE_ONLY stores; the warehouse is never public and is visible only to the verification reviewer inside the verification path. |
 | OPEN-012 | Delivery-zone boundary source/classification and operational service coverage | Three commercial regions are approved; a defensible geographic boundary/source is still needed. |
-| OPEN-013 | Product-category templates: the exact five required matching/search fields per category | The five-required-field rule is approved; category-specific definitions need a controlled taxonomy workshop. |
+| OPEN-013 | Product-category templates: the exact five required matching/search fields per category | **✅ Closed 2026-09-26 for clothing/accessories — PDR-036:** ten category templates fixed in §3.2; colour/size are variant options, not structural fields. Still open for any future category outside that set. |
 
 ## 6. Explicitly deferred or excluded from the FYP baseline
 
@@ -128,6 +147,29 @@ It is not a silent scope cut. It expands and sharpens the target product, while 
 - Internal delivery-driver accounts and in-platform delivery disputes.
 - Image/video URL import; imports cover structured Excel/CSV data and manual media upload later.
 - Formal customer-support/ticket system beyond the existing deferred SRS item.
+
+### Confirmed 2026-09-26: explicit Phase-2/out-of-FYP requirement list
+
+The following SRS Part 2 requirements are Phase-2-only by the SRS's own text. They were previously unaddressed by this record — carried in the engineering traceability audit as a pending scope question — and are now formally added here by product-owner decision, closing that question. None of these is built in the FYP window; each remains fully specified in the SRS and stays available to build post-FYP without a data-model change forced by this exclusion.
+
+- `FR-AUTH-012` — social login.
+- `FR-IMPORT-006` — vendor-authorized API/feed ingestion.
+- `FR-IMPORT-007` — scheduled feeds/webhooks and POS/ERP integration.
+- `FR-SEARCH-009` — sponsored/featured search results.
+- `FR-SEARCH-011` — voice search.
+- `FR-PRICE-004` — platform promotion/coupon stacking rules.
+- `FR-PRICE-008` (Section E.8) — flash sales, bundle pricing, quantity discounts.
+- `FR-PRICE-009` (Section E.8) — sponsored/paid placement.
+- `FR-CART-007` — platform-wide or vendor-specific coupons.
+- `FR-FUL-007` — vendor-enabled split shipment within one BranchOrder.
+- `FR-SUP-006` — bilingual public knowledge base/FAQ.
+- `FR-VPORTAL-008` — vendor integration-credential management.
+- `FR-VPORTAL-010` — vendor settlements screen (commission/payout).
+- `FR-CMS-001` — home-page sections/banners/featured placement.
+- `FR-CMS-002` — campaign/SEO content pages.
+- `FR-CMS-003` — sponsored/paid-placement labelling infrastructure.
+- `FR-CMS-004` — referral/affiliate programs.
+- `FR-CMS-005` — CMS deep links into web/mobile builds.
 
 ## 7. Review and change-control rule
 
