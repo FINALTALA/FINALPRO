@@ -474,6 +474,66 @@ describe('Sprint 15 - vendor onboarding: warehouse verification evidence, staff 
       expect(warehouseNow.lat).toBe(5.0);
       expect(warehouseNow.addressNote).toBe('Moved to a new unit');
     });
+
+    // Review-round fix: submitEvidence() used to read the Warehouse row
+    // outside its transaction and reuse those stale values inside it -
+    // a classic TOCTOU race against a concurrent PUT .../warehouse. The
+    // fix takes the snapshot from a `SELECT ... FOR SHARE`-locked read
+    // done inside the same transaction as the vendor lock, so a
+    // concurrent PUT (a plain upsert on the warehouse row) is forced to
+    // serialize against it: it either fully commits before the locked
+    // read runs (evidence gets the fully-new address) or fully commits
+    // after it releases the lock (evidence gets the fully-old address).
+    // A torn read (some old fields, some new) should be structurally
+    // impossible - this test asserts that outcome directly, using real
+    // concurrent HTTP requests rather than calling services in-process.
+    it('a submission racing a concurrent PUT warehouse update never produces a torn/mixed snapshot, and neither request 500s or deadlocks', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId } = await createOnlineOnlyVendor(owner);
+      await setWarehouse(owner, vendorId, {
+        lat: 10.0,
+        lng: 10.0,
+        address_note: 'OLD address',
+      });
+
+      const [submitRes] = await Promise.all([
+        submitWarehouseEvidence(owner, vendorId).send({}),
+        setWarehouse(owner, vendorId, {
+          lat: 20.0,
+          lng: 20.0,
+          address_note: 'NEW address',
+        }),
+      ]);
+
+      // setWarehouse() already asserts 200 internally, so if the PUT
+      // side had 500'd or deadlocked, Promise.all would have rejected
+      // before reaching this line.
+      expect(submitRes.status).toBe(201);
+
+      const evidence =
+        await prisma.warehouseVerificationEvidence.findUniqueOrThrow({
+          where: { id: submitRes.body.id },
+        });
+
+      const isFullyOld =
+        evidence.lat === 10.0 &&
+        evidence.lng === 10.0 &&
+        evidence.addressNote === 'OLD address';
+      const isFullyNew =
+        evidence.lat === 20.0 &&
+        evidence.lng === 20.0 &&
+        evidence.addressNote === 'NEW address';
+      expect(isFullyOld || isFullyNew).toBe(true);
+
+      // Regardless of which snapshot evidence ended up with, the PUT
+      // itself must always have won on the live, operational warehouse
+      // row - it never gets silently lost or overwritten by the read.
+      const warehouseNow = await prisma.warehouse.findUniqueOrThrow({
+        where: { vendorId },
+      });
+      expect(warehouseNow.lat).toBe(20.0);
+      expect(warehouseNow.addressNote).toBe('NEW address');
+    });
   });
 
   describe('tenant-safety (composite FK) and BOLA/privacy', () => {

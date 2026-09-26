@@ -678,6 +678,19 @@ export class VendorsController {
   // Deliberately requires storeType to already be ONLINE_ONLY/HYBRID: a
   // warehouse is meaningless for a purely physical store, and this
   // keeps the two fields from silently drifting out of sync.
+  //
+  // Sprint 15 note (WarehouseVerificationController.submitEvidence()'s
+  // own comment has the full reasoning): this plain upsert() never
+  // acquires a lock on `vendors` - only on this one `warehouses` row,
+  // via whatever row lock Postgres's own UPDATE/INSERT already takes.
+  // submitEvidence() locks (vendor, then warehouse via `FOR SHARE`) to
+  // take a race-free snapshot; since this method never acquires the
+  // *vendor* lock at all, it can never be the "holds warehouse, wants
+  // vendor" side of a lock-order cycle with that method - no deadlock
+  // is possible between the two by construction. What DOES happen
+  // under a race is exactly the intended behaviour: this UPDATE simply
+  // blocks until submitEvidence()'s transaction ends, then proceeds
+  // normally - see that method's e2e concurrency test.
   @Put(':vendorId/warehouse')
   @UseGuards(VendorMembershipGuard)
   @RequireVendorRole('OWNER')

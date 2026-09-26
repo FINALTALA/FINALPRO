@@ -14,7 +14,7 @@ import {
 import { Request } from 'express';
 import { AuditLogService } from '../audit/audit-log.service';
 import { CurrentUser } from '../auth/current-user.decorator';
-import { PlatformRole, Prisma } from '../../generated/prisma/client';
+import { PlatformRole } from '../../generated/prisma/client';
 import { PlatformRoleGuard } from '../auth/platform-role.guard';
 import { RequirePlatformRole } from '../auth/platform-role.decorator';
 import {
@@ -27,6 +27,7 @@ import { IdempotencyCompletionService } from '../common/idempotency/idempotency-
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
 import { WarehouseVerificationDecisionDto } from './dto/warehouse-verification-decision.dto';
+import { isExpectedWarehouseEvidencePendingConflict } from './expected-warehouse-evidence-conflict';
 
 // Sprint 15 (PDR-035, OPEN-011 closed): the ONLINE_ONLY counterpart to
 // VendorVerificationController's branch-evidence endpoints, but
@@ -149,27 +150,10 @@ export class WarehouseVerificationController {
       });
     }
 
-    const warehouse = await this.prisma.warehouse.findUnique({
-      where: { vendorId },
-    });
-    if (
-      !warehouse ||
-      warehouse.lat === null ||
-      warehouse.lng === null ||
-      !warehouse.addressNote
-    ) {
-      throw new BadRequestException({
-        code: 'WAREHOUSE_EVIDENCE_INCOMPLETE',
-        message:
-          'Set the warehouse lat/lng/address note via PUT .../warehouse before submitting verification evidence',
-      });
-    }
-
-    // Fast, friendly, non-authoritative fail-fast - see the fresh
-    // re-check under the vendor lock inside the transaction below,
-    // which is authoritative, and the partial unique index (migration
-    // SQL) which is the actual structural backstop regardless of
-    // either check here.
+    // Fast, friendly, non-authoritative fail-fast - the fresh re-check
+    // under the vendor lock inside the transaction below is
+    // authoritative, and the partial unique index (migration SQL) is
+    // the actual structural backstop regardless of either check here.
     const existingPending =
       await this.prisma.warehouseVerificationEvidence.findFirst({
         where: { vendorId, status: 'PENDING' },
@@ -200,6 +184,63 @@ export class WarehouseVerificationController {
               'This vendor application has already been decided - evidence cannot be resubmitted to it. Submit a new, corrected application via POST /vendors instead (PDR-010)',
           });
         }
+        // Fresh re-check, under the same vendor lock: storeType could
+        // have changed (PUT :vendorId/store-type) between the
+        // pre-transaction read above and this lock's acquisition.
+        if (freshVendor.storeType !== 'ONLINE_ONLY') {
+          throw new BadRequestException({
+            code: 'STORE_NOT_ONLINE_ONLY',
+            message:
+              'Warehouse verification only applies to an ONLINE_ONLY store - a PHYSICAL/HYBRID store verifies via its physical branch(es) (PDR-035)',
+          });
+        }
+
+        // Review-round fix: the original version read `Warehouse`
+        // *outside* this transaction and used those values here -
+        // a classic TOCTOU race, since PUT .../warehouse's own UPDATE
+        // has no relationship to this transaction at all and could
+        // commit a completely different address in between. `FOR
+        // SHARE` (not a plain SELECT) makes this genuinely race-free:
+        // Postgres blocks any concurrent UPDATE of this exact row
+        // until this transaction commits or rolls back (an UPDATE
+        // needs a lock that conflicts with FOR SHARE), so whatever
+        // this query returns is guaranteed to still be the row's
+        // current state for the rest of this transaction - never a
+        // value that a since-committed PUT has already superseded,
+        // and never a partial/torn read (a single row fetch is one
+        // MVCC-consistent tuple regardless of column count). The
+        // snapshot below is therefore always either the address as it
+        // stood immediately before a concurrent PUT, or (if that PUT
+        // already committed before this SELECT ran) the address after
+        // it - never a mix, and never stale-after-a-newer-commit.
+        // PUT .../warehouse itself never acquires a vendor-row lock
+        // (upsertWarehouse touches only the warehouse table), so it
+        // can never be the "holds warehouse, wants vendor" side of a
+        // lock-order cycle with this method's (vendor, then
+        // warehouse) order - no deadlock is possible by construction,
+        // not just by absence of an observed one; see this file's own
+        // e2e concurrency test for an empirical proof alongside this
+        // reasoning.
+        const [warehouseRow] = await tx.$queryRaw<
+          {
+            id: string;
+            lat: number | null;
+            lng: number | null;
+            addressNote: string | null;
+          }[]
+        >`SELECT id, lat, lng, "addressNote" FROM warehouses WHERE "vendorId" = ${vendorId} FOR SHARE`;
+        if (
+          !warehouseRow ||
+          warehouseRow.lat === null ||
+          warehouseRow.lng === null ||
+          !warehouseRow.addressNote
+        ) {
+          throw new BadRequestException({
+            code: 'WAREHOUSE_EVIDENCE_INCOMPLETE',
+            message:
+              'Set the warehouse lat/lng/address note via PUT .../warehouse before submitting verification evidence',
+          });
+        }
 
         const freshPending = await tx.warehouseVerificationEvidence.findFirst({
           where: { vendorId, status: 'PENDING' },
@@ -212,13 +253,15 @@ export class WarehouseVerificationController {
           });
         }
 
+        // Built from the FOR SHARE-locked read above only - never from
+        // any value read before the transaction started.
         const evidence = await tx.warehouseVerificationEvidence.create({
           data: {
             vendorId,
-            warehouseId: warehouse.id,
-            lat: warehouse.lat!,
-            lng: warehouse.lng!,
-            addressNote: warehouse.addressNote!,
+            warehouseId: warehouseRow.id,
+            lat: warehouseRow.lat,
+            lng: warehouseRow.lng,
+            addressNote: warehouseRow.addressNote,
           },
         });
 
@@ -235,7 +278,7 @@ export class WarehouseVerificationController {
             entityId: evidence.id,
             afterState: {
               vendor_id: vendorId,
-              warehouse_id: warehouse.id,
+              warehouse_id: warehouseRow.id,
               status: 'PENDING',
             },
           },
@@ -272,14 +315,16 @@ export class WarehouseVerificationController {
       });
     } catch (err) {
       // Structural backstop: the partial unique index
-      // (warehouseId_vendor_pending_key) rejects a second PENDING row
-      // even if both application-level checks above raced past each
-      // other - translated to the same 409 code a caller would get
-      // from either of those checks, never a raw 500.
-      if (
-        err instanceof Prisma.PrismaClientKnownRequestError &&
-        err.code === 'P2002'
-      ) {
+      // (warehouse_verification_evidence_vendor_pending_key) rejects a
+      // second PENDING row even if both application-level checks above
+      // raced past each other. Narrowed to *exactly* that constraint
+      // (isExpectedWarehouseEvidencePendingConflict), not every P2002 -
+      // a P2002 on a different constraint (or one whose shape this
+      // guard can't read) is a real, unexpected conflict and must
+      // propagate as a 500 to be investigated, never be silently
+      // relabelled as this specific 409 (same principle as
+      // offers/import/expected-offer-variant-conflict.ts).
+      if (isExpectedWarehouseEvidencePendingConflict(err)) {
         throw new ConflictException({
           code: 'WAREHOUSE_EVIDENCE_ALREADY_PENDING',
           message:
