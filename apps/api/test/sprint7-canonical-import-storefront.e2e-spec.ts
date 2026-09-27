@@ -197,7 +197,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
         )
         .set('Authorization', `Bearer ${reviewerToken}`)
         .set('Idempotency-Key', unique('decision'))
-        .send({ decision: 'approve' })
+        .send({ decision: 'approve', evidence_revision: 1 })
         .expect(201);
     }
     await request(app.getHttpServer())

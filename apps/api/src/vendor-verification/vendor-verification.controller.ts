@@ -3,6 +3,7 @@ import {
   Body,
   ConflictException,
   Controller,
+  Get,
   NotFoundException,
   Param,
   Post,
@@ -25,6 +26,7 @@ import { RequireVendorRole } from '../auth/vendor-role.decorator';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
+import { assertNoPlatformVendorConflict } from '../platform-admin/vendor-conflict.util';
 import { BranchVerificationDecisionDto } from './dto/branch-verification-decision.dto';
 import { SubmitBranchEvidenceDto } from './dto/submit-branch-evidence.dto';
 
@@ -37,6 +39,7 @@ function branchToDto(branch: {
   lng: number | null;
   verificationPhotoUrl: string | null;
   verificationStatus: string;
+  evidenceRevision: number;
   reviewedBy: string | null;
   reviewedAt: Date | null;
   reviewNote: string | null;
@@ -50,6 +53,7 @@ function branchToDto(branch: {
     lng: branch.lng,
     verification_photo_url: branch.verificationPhotoUrl,
     verification_status: branch.verificationStatus,
+    evidence_revision: branch.evidenceRevision,
     reviewed_by: branch.reviewedBy,
     reviewed_at: branch.reviewedAt?.toISOString() ?? null,
     review_note: branch.reviewNote,
@@ -169,6 +173,10 @@ export class VendorVerificationController {
           lng: dto.lng,
           verificationPhotoUrl: dto.verification_photo_url,
           verificationStatus: 'PENDING',
+          // Sprint 16 (D3): every submission is a new revision the
+          // reviewer must name when deciding (see decide()).
+          evidenceRevision: { increment: 1 },
+          evidenceSubmittedAt: new Date(),
           reviewedBy: null,
           reviewedAt: null,
           reviewNote: null,
@@ -223,6 +231,91 @@ export class VendorVerificationController {
     });
 
     return updated;
+  }
+
+  // Sprint 16 (FR-VEND-003): the reviewer's ONLY way to read a branch's
+  // evidence. Returns the CURRENT evidence and only while it is
+  // actually awaiting a decision (vendor UNDER_REVIEW, branch PENDING,
+  // a real submission on record) - never a history. The response
+  // carries the evidence_revision the decision must quote. The read and
+  // its AuditLog row happen in one transaction and the body is only
+  // returned once the audit row is written: if the audit write fails,
+  // the request fails and the evidence is never released. The audit row
+  // records that it was viewed, never the evidence itself.
+  @Get('verification-evidence')
+  @UseGuards(PlatformRoleGuard)
+  @RequirePlatformRole(
+    PlatformRole.VERIFICATION_REVIEWER,
+    PlatformRole.PLATFORM_ADMIN,
+  )
+  async getEvidence(
+    @Param('vendorId') vendorId: string,
+    @Param('branchId') branchId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const branch = await tx.storeBranch.findUnique({
+        where: { id: branchId },
+      });
+      if (!branch || branch.vendorId !== vendorId) {
+        throw new NotFoundException({
+          code: 'BRANCH_NOT_FOUND',
+          message: 'Branch not found for this vendor',
+        });
+      }
+      if (!branch.isPhysical) {
+        throw new BadRequestException({
+          code: 'BRANCH_NOT_PHYSICAL',
+          message:
+            'Verification evidence only applies to branches flagged physical (BR-022)',
+        });
+      }
+      const vendor = await tx.vendor.findUniqueOrThrow({
+        where: { id: vendorId },
+        select: { status: true },
+      });
+      if (
+        vendor.status !== 'UNDER_REVIEW' ||
+        branch.verificationStatus !== 'PENDING' ||
+        branch.evidenceRevision < 1 ||
+        branch.lat === null ||
+        branch.lng === null ||
+        !branch.verificationPhotoUrl ||
+        branch.verificationPhotoUrl.trim().length === 0
+      ) {
+        throw new NotFoundException({
+          code: 'NO_PENDING_BRANCH_EVIDENCE',
+          message: 'This branch has no evidence awaiting review',
+        });
+      }
+
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'branch_verification_evidence.viewed',
+          entityType: 'StoreBranch',
+          entityId: branch.id,
+          afterState: {
+            vendor_id: vendorId,
+            evidence_revision: branch.evidenceRevision,
+          },
+        },
+        tx,
+      );
+
+      return {
+        vendor_id: branch.vendorId,
+        branch_id: branch.id,
+        evidence_revision: branch.evidenceRevision,
+        lat: branch.lat,
+        lng: branch.lng,
+        photo_url: branch.verificationPhotoUrl,
+        status: branch.verificationStatus,
+        submitted_at: branch.evidenceSubmittedAt?.toISOString() ?? null,
+      };
+    });
   }
 
   // BL-VEND-003 (FR-VEND-003): a vendor-verification-reviewer approves,
@@ -292,6 +385,11 @@ export class VendorVerificationController {
       // Different vendors never contend for this lock.
       await tx.$queryRaw`SELECT id FROM vendors WHERE id = ${vendorId} FOR UPDATE`;
 
+      // Sprint 16 (D4): first check, under the vendor lock - see
+      // assertNoPlatformVendorConflict for why this is race-free
+      // against acceptStaffInvite().
+      await assertNoPlatformVendorConflict(tx, user.id, vendorId);
+
       // Every check below reads *fresh*, inside the lock - the
       // vendor's review state and this branch's own evidence/status
       // can both have changed since the pre-transaction reads above
@@ -322,11 +420,20 @@ export class VendorVerificationController {
       // requesting resubmission of *incomplete* evidence is exactly
       // the intended path for evidence that never met this bar -
       // only 'approve' is blocked here.
+      //
+      // The trim check (not just a null/falsy check) is defensive
+      // against a legacy or directly-written row whose photo URL is
+      // whitespace-only - same principle as WarehouseVerificationEvidence's
+      // addressNote check and this migration's own backfill condition
+      // (NULLIF(BTRIM(...), '')). A normal submission through
+      // submitEvidence()/SubmitBranchEvidenceDto is never affected: this
+      // only ever fires for evidence this endpoint itself did not write.
       if (
         dto.decision === 'approve' &&
         (freshBranch.lat === null ||
           freshBranch.lng === null ||
-          !freshBranch.verificationPhotoUrl)
+          !freshBranch.verificationPhotoUrl ||
+          freshBranch.verificationPhotoUrl.trim().length === 0)
       ) {
         throw new BadRequestException({
           code: 'BRANCH_EVIDENCE_INCOMPLETE',
@@ -335,6 +442,19 @@ export class VendorVerificationController {
         });
       }
 
+      // Sprint 16 (D3): checked AFTER the BR-022 completeness check above
+      // so approving a branch that never had evidence still reports
+      // BRANCH_EVIDENCE_INCOMPLETE. The decision is bound to the exact evidence
+      // revision the reviewer read. Checked under the vendor lock -
+      // submitEvidence() bumps the revision under the same lock, so a
+      // resubmission is either fully before this read or fully after.
+      if (dto.evidence_revision !== freshBranch.evidenceRevision) {
+        throw new ConflictException({
+          code: 'BRANCH_EVIDENCE_STALE',
+          message:
+            'The evidence changed after you read it - re-read GET .../verification-evidence and decide on the current revision',
+        });
+      }
       const updated = await tx.storeBranch.update({
         where: { id: branchId },
         data: {

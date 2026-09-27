@@ -1,3 +1,4 @@
+import { BlockWhenSuspended } from '../auth/vendor-suspended.guard';
 import {
   Body,
   ConflictException,
@@ -116,6 +117,7 @@ export class MatchReviewController {
   // calling this endpoint again - see MatchingService.
   // searchNonExactCandidates()'s own comment for why that is safe to
   // repeat freely (never resurrects an already-decided candidate).
+  @BlockWhenSuspended()
   @Post(':vendorId/offers/:offerId/variants/:variantId/match-review/search')
   @HttpCode(200)
   @RequireVendorRole('OWNER')
@@ -158,6 +160,7 @@ export class MatchReviewController {
   // two different variants under the same offer being confirmed to two
   // *different* canonical products concurrently can't both read the
   // offer as unlinked and both "win".
+  @BlockWhenSuspended()
   @Post(
     ':vendorId/offers/:offerId/variants/:variantId/match-review/candidates/:candidateId/decision',
   )
@@ -333,6 +336,7 @@ export class MatchReviewController {
   // The request itself is only ever *decided* by
   // CanonicalProductsController (PLATFORM_ADMIN) - creating one never
   // changes the name.
+  @BlockWhenSuspended()
   @Post(':vendorId/canonical-products/:canonicalProductId/name-change-requests')
   @HttpCode(201)
   @UseInterceptors(IdempotencyInterceptor)

@@ -262,7 +262,11 @@ describe('Sprint 15 - vendor onboarding: warehouse verification evidence, staff 
         .post(`/api/v1/vendors/${vendorId}/warehouse/verification-decision`)
         .set('Authorization', `Bearer ${reviewer}`)
         .set('Idempotency-Key', unique('wh-decision'))
-        .send({ evidence_id: first.body.id, decision: 'request_resubmission' })
+        .send({
+          evidence_id: first.body.id,
+          decision: 'request_resubmission',
+          reason: 'Please re-enter the warehouse address note',
+        })
         .expect(201);
 
       const stillUnderReview = await prisma.vendor.findUniqueOrThrow({

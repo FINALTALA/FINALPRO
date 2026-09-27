@@ -1,3 +1,4 @@
+import { BlockWhenSuspended } from '../auth/vendor-suspended.guard';
 import {
   Body,
   ConflictException,
@@ -182,6 +183,7 @@ export class InventoryController {
   // this codebase's other concurrency-sensitive endpoints (e.g. staff
   // invites), because the check and the write are the exact same
   // statement.
+  @BlockWhenSuspended()
   @Post(':vendorId/branches/:branchId/stock/:offerVariantId/movements')
   @HttpCode(201)
   @UseInterceptors(IdempotencyInterceptor)

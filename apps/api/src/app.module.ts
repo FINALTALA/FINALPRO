@@ -16,6 +16,7 @@ import { MatchingModule } from './matching/matching.module';
 import { OffersModule } from './offers/offers.module';
 import { OrdersModule } from './orders/orders.module';
 import { OutboxModule } from './outbox/outbox.module';
+import { PlatformAdminModule } from './platform-admin/platform-admin.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
@@ -43,6 +44,7 @@ import { WarehouseVerificationModule } from './warehouse-verification/warehouse-
     OffersModule,
     VendorVerificationModule,
     WarehouseVerificationModule,
+    PlatformAdminModule,
     SubscriptionsModule,
     InventoryModule,
     DiscoveryModule,

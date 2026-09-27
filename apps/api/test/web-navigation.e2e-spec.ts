@@ -2,6 +2,7 @@ import { existsSync } from 'fs';
 import * as path from 'path';
 import {
   WorkspaceInfo,
+  adminTiles,
   desktopLinks,
   isActivePath,
   mobileTabs,
@@ -137,6 +138,7 @@ describe('Sprint 13 - web navigation model', () => {
         `/vendor/${VENDOR}/delivery-zones`,
         `/vendor/${VENDOR}/delivery-windows`,
         `/vendor/${VENDOR}/orders`,
+        `/vendor/${VENDOR}/verification`,
       ]);
     });
 
@@ -150,6 +152,52 @@ describe('Sprint 13 - web navigation model', () => {
       ];
       for (const href of hrefs) {
         expect(existsSync(pageFileFor(href, ids))).toBe(true);
+      }
+    });
+  });
+
+  describe('Sprint 16 - platform (admin / reviewer) workspace', () => {
+    const reviewer: WorkspaceInfo = {
+      type: 'platform',
+      role: 'VERIFICATION_REVIEWER',
+    };
+    const admin: WorkspaceInfo = { type: 'platform', role: 'PLATFORM_ADMIN' };
+
+    it('a reviewer lands on the verification queue and an admin on the admin hub', () => {
+      expect(workspaceEntry(reviewer)).toMatchObject({
+        kind: 'platform',
+        href: '/admin/verification',
+      });
+      expect(workspaceEntry(admin)).toMatchObject({
+        kind: 'platform',
+        href: '/admin',
+      });
+    });
+
+    it('a reviewer sees only the queue; an admin also sees vendors and rename requests', () => {
+      expect(adminTiles('VERIFICATION_REVIEWER').map((t) => t.href)).toEqual([
+        '/admin/verification',
+      ]);
+      expect(adminTiles('PLATFORM_ADMIN').map((t) => t.href)).toEqual([
+        '/admin/verification',
+        '/admin/vendors',
+        '/admin/name-change-requests',
+      ]);
+    });
+
+    it('every admin tile, the hub and the detail pages are real pages, and no admin tile points at an owner page', () => {
+      const ids = { vendorId: VENDOR };
+      const hrefs = [
+        '/admin',
+        ...adminTiles('PLATFORM_ADMIN').map((t) => t.href),
+        `/admin/verification/${VENDOR}`,
+        `/admin/vendors/${VENDOR}`,
+      ];
+      for (const href of hrefs) {
+        expect(existsSync(pageFileFor(href, ids))).toBe(true);
+      }
+      for (const t of adminTiles('PLATFORM_ADMIN')) {
+        expect(t.href.startsWith('/vendor/')).toBe(false);
       }
     });
   });

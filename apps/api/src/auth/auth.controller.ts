@@ -700,6 +700,26 @@ export class AuthController {
           userSessionVersion = created.sessionVersion;
         }
 
+        // Sprint 16 (D4): serializes this membership grant against every
+        // platform moderation action on the same vendor (verification
+        // decisions, suspend, reactivate). Each of those takes this same
+        // `vendors ... FOR UPDATE` lock and then checks VendorUser inside
+        // its own transaction (assertNoPlatformVendorConflict) - so a
+        // reviewer/admin who is accepting an invite here either becomes
+        // a member BEFORE the action's check runs (the action is then
+        // refused 403 PLATFORM_VENDOR_CONFLICT_OF_INTEREST) or AFTER the
+        // action already committed. Taken as late as possible, after the
+        // bcrypt hash above, so the vendor lock is held only for the
+        // insert.
+        // Lock order: phone advisory lock (above) -> vendor row. No other
+        // code path takes the vendor lock and then the phone lock
+        // (moderation and checkout never touch the phone lock), so no
+        // cycle is possible.
+        // apply() is the only other VendorUser creator; it inserts the
+        // OWNER row in the same transaction that creates a brand-new
+        // vendor, which no moderation action can target before commit.
+        await tx.$queryRaw`SELECT id FROM vendors WHERE id = ${invite.vendorId} FOR UPDATE`;
+
         const vendorUser = await tx.vendorUser.create({
           data: {
             userId,

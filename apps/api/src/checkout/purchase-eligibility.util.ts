@@ -7,6 +7,10 @@ export interface EligibilityItem {
   offerVariantId: string;
 }
 
+function sortedVendorIds(items: EligibilityItem[]): string[] {
+  return [...new Set(items.map((i) => i.vendorId))].sort();
+}
+
 async function loadEligibilityContext(
   tx: Prisma.TransactionClient,
   items: EligibilityItem[],
@@ -21,7 +25,7 @@ async function loadEligibilityContext(
   // every caller of assertItemsPurchasable/assertItemsPurchasableReadOnly
   // at once (reserve, confirm, cart add-to-cart, quote) without each
   // needing its own ordering logic.
-  const vendorIds = [...new Set(items.map((i) => i.vendorId))].sort();
+  const vendorIds = sortedVendorIds(items);
   const variantIds = [...new Set(items.map((i) => i.offerVariantId))];
   const [vendors, variants] = await Promise.all([
     tx.vendor.findMany({ where: { id: { in: vendorIds } } }),
@@ -93,10 +97,16 @@ export async function assertItemsPurchasable(
   correlationId: string,
   items: EligibilityItem[],
 ): Promise<void> {
-  const { vendorIds, vendorById, variantById } = await loadEligibilityContext(
-    tx,
-    items,
-  );
+  // Sprint 16 (L-23): the vendor rows are locked FIRST (refreshStatus
+  // takes `vendors ... FOR UPDATE`, in the same sorted order as always)
+  // and only THEN read. Loading them before the lock would let a
+  // vendor.status read taken before a concurrent suspension committed be
+  // used after this transaction finally acquired the lock - i.e. an
+  // order created for a store that was already SUSPENDED. With the read
+  // after the lock, status/storefrontPublished can no longer change
+  // underneath this check (suspend, unpublish and subscription changes
+  // all take the same lock).
+  const vendorIds = sortedVendorIds(items);
   const subscriptionStatusByVendor = new Map<string, string>();
   for (const vendorId of vendorIds) {
     const status = await subscriptionGate.refreshStatus(
@@ -106,6 +116,7 @@ export async function assertItemsPurchasable(
     );
     subscriptionStatusByVendor.set(vendorId, status);
   }
+  const { vendorById, variantById } = await loadEligibilityContext(tx, items);
   assertEligible(items, vendorById, variantById, subscriptionStatusByVendor);
 }
 

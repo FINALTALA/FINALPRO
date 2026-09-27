@@ -7,6 +7,18 @@
 **Scope:** the full SRS, Parts 0–9. Every `FR-*` ID in [SRS Part 2](srs/02-functional-requirements.md) (244 rows, including the E.0 September amendment), every `PDR-*` ID in [`approved-product-decisions-2026-09.md`](approved-product-decisions-2026-09.md) (36 rows, including the 2026-09-26 PDR-035/036 amendment), every `BR-*` (34) and `NFR-*` (32) in Part 3/4, and every remaining requirement, decision, screen, failure scenario, backlog item and state-machine transition in Parts 0, 1, and 3–9 — covered in the appendix starting at §6, with each ID-range explicitly expanded (no row stands for more than one ID; see §0 for the two narrow, explicitly-justified exceptions — the `O.1`/`O.2` test-level classification and the `BO`/module-matrix/recommendations rollup — neither of which carries an independent DONE/PARTIAL/MISSING status of its own).
 **Update rule:** this file is reviewed again after every sprint. Each review edits it in place under a new dated version note, rather than creating a new file, so it stays the one living record.
 
+## v5 — Sprint 16 (platform moderation) applied, 2026-09-26
+
+Sprint 16 (branch `feat/sprint-16-platform-admin`) implemented the plan the product owner approved (decisions D1–D9). Status changes, each verified against code and tests:
+
+- `FR-VEND-003` 🟡→✅ and `FR-VEND-009` ❌→✅: reviewer queue, audited single-item evidence reads (branch + warehouse), decisions bound to `evidence_revision` / `evidence_id` with a mandatory 10–1000 char reason for reject/request_resubmission (none on approve), conflict-of-interest refusal (`PLATFORM_VENDOR_CONFLICT_OF_INTEREST`, serialized against `acceptStaffInvite` on the vendor row lock), and admin suspend/reactivate (`VendorSuspension`, reason code + reason, AuditLog, Outbox event without the free-text reason), plus the `/admin/*` and owner `verification-status` screens.
+- `L-23` ❌→✅ (suspended store: new orders and catalog edits blocked, in-flight orders keep moving; explicit deny/allow classification of every `vendors/:vendorId/*` route, enforced by a test that fails on an unclassified route), `BR-026` 🟡→✅, `BDR-016 (قديم)` 🟡→✅, `BL-VEND-003` 🟡→✅, `BL-VEND-006` ❌→✅, `BL-ADMIN-001` ❌→✅.
+- `SRS-K1-STATES-03` ❌→🟡 (the admin screens have loading/empty/error/forbidden/success states; the audit viewer and role management remain S25).
+- **Stay 🟡 PARTIAL, re-homed:** `FR-VEND-008` (SUSPENDED built; `CANCELLED` is not — see §15b, needs a product decision) and `FR-ADMIN-001` (only the vendors/verification/rename-request slice; other entities → S25). `G-AD-03` is only partly covered: the rename-request screen exists, **platform match correction is not built** (no approved policy). `SRS-K1A-11` stays 🟡.
+- **`BR-017` stays ❌ MISSING and is NOT scheduled** (not DEFERRED — no approved decision defers it): its triggers (past-due grace, return-rate spikes, an unresubmitted rejection window) depend on features and a scheduled-job worker that do not exist. Only its last sentence (suspension is an explicit admin action with a captured reason) is satisfied.
+- **Two new rows, both ❌ MISSING, not built** (§15b): `PDR-§3.5-APPEAL` (store appeal — `approved-product-decisions-2026-09.md` §3.5 names it but no row existed) and `FR-VEND-008-CANCELLED`.
+- Totals: 661 → **663** rows (+2 in §15b); DONE 145 → 153, PARTIAL 205 → 202, MISSING 245 → 242 (−5 moved, +2 added). §2, §5 (S16 4 → 0, S25 20 → 21, one new unscheduled row), §16 and §17 are updated accordingly. S15 rows were not touched by this pass.
+
 ## v4 decisions applied, per new product-owner decisions (2026-09-26)
 
 1. **The 18 `قرار-نطاق` items are now DEFERRED BY APPROVED DECISION, not MISSING/PARTIAL.** The product owner added them formally to `approved-product-decisions-2026-09.md` §6 today. All 18 rows (`FR-AUTH-012`, `FR-IMPORT-006/007`, `FR-SEARCH-009/011`, `FR-PRICE-004/008(E.8)/009(E.8)`, `FR-CART-007`, `FR-FUL-007`, `FR-SUP-006`, `FR-VPORTAL-008/010`, `FR-CMS-001..005`) now read ⏸ DEFERRED with sprint `-`, each citing the decision inline. `FR-FUL-007` was previously 🟡 PARTIAL (not ❌ MISSING) among the 18 — it moved to DEFERRED too, per the product owner's instruction to close all 18 uniformly. They are removed entirely from the §5 roadmap (no sprint, not pending — genuinely out of scope now).
@@ -55,9 +67,9 @@ The v4 pass above referenced PDR-035/PDR-036 inline on `FR-VEND-002`/`FR-VEND-01
 
 | | DONE | PARTIAL | MISSING | DEFERRED | SUPERSEDED |
 |---|---|---|---|---|---|
-| FR (244) | 36 | 81 | 86 | 27 | 14 |
+| FR (244) | 38 | 80 | 85 | 27 | 14 |
 | PDR (36) | 12 | 16 | 8 | 0 | 0 |
-| **Total** | **48** | **97** | **94** | **27** | **14** |
+| **Total** | **50** | **96** | **93** | **27** | **14** |
 
 (v1→v3: unchanged, only sprint reassignment. v4: 17 rows MISSING→DEFERRED and 1 row (`FR-FUL-007`) PARTIAL→DEFERRED, all within the FR module. v4.1: PDR-035/036 added, both PARTIAL. Total row count now 280 = 244+36.)
 
@@ -123,13 +135,13 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 |---|---|---|---|---|---|---|---|
 | FR-VEND-001 | طلب متجر: ملف ومعلومات وفرع واحد على الأقل | POST /vendors | session | لا | S3,S4 | 🟡 PARTIAL | S15 |
 | FR-VEND-002 | دبوس وصورة للفرع الفعلي قبل الموافقة (PHYSICAL/HYBRID فقط، بقرار PDR-035 2026-09-26 — ONLINE_ONLY لا يحتاج صورة/دبوس فرع، انظر PDR-035) | POST verification-evidence | OWNER | لا | S3,VV | 🟡 PARTIAL | S15 |
-| FR-VEND-003 | المراجع يوافق/يرفض/يطلب إعادة تقديم مع تدقيق | POST verification-decision، AuditLog | REVIEWER/ADMIN | لا | VV,S3 | 🟡 PARTIAL | S16 |
+| FR-VEND-003 | المراجع يوافق/يرفض/يطلب إعادة تقديم مع تدقيق | GET /admin/verification-queue؛ GET evidence مدقَّق للفرع والمستودع (فشل التدقيق = لا يُكشف الدليل)؛ POST verification-decision مربوط بـevidence_revision/evidence_id، سبب إلزامي لـreject/request_resubmission، منع تعارض المصالح، AuditLog | REVIEWER/ADMIN | /admin/verification، /admin/verification/:vendorId، /vendor/:vendorId/verification (المالك) | VV,S3,S16 | ✅ DONE | - |
 | FR-VEND-004 | تأكيد الاشتراك قبل النشر | POST/GET subscription | OWNER | لا | S3 | 🟡 PARTIAL | S15 |
 | FR-VEND-005 | حالة الاشتراك تتحكم بالظهور (PDR-033: ACTIVE/EXPIRED) | VendorSubscription، subscription-gate | OWNER | لا (بلا تذكيرات) | S3 | 🟡 PARTIAL | S15 |
 | FR-VEND-006 | فروع متعددة بساعات وإغلاقات ومناطق | فروع تُنشأ داخل الطلب فقط؛ مناطق ونوافذ توصيل موجودة؛ لا ساعات ولا إغلاق ولا إضافة فرع | OWNER | /vendor/:id/branches (قراءة)، /delivery-zones، /delivery-windows | S9 | 🟡 PARTIAL | S18 |
 | FR-VEND-007 | أدوار موظفين مقسمة | استُبدل بـFR-VEND-013 (E.0) | - | - | - | ↪ SUPERSEDED | - |
-| FR-VEND-008 | دورة حالة المتجر مع Suspended/Cancelled | APPLIED>UNDER_REVIEW>APPROVED/REJECTED>ACTIVE>EXPIRED؛ لا تعليق/إلغاء | - | لا | S3,VV | 🟡 PARTIAL | S16 |
-| FR-VEND-009 | تعليق/إعادة تفعيل بسبب وتدقيق | لا (قيمة enum فقط) | PLATFORM_ADMIN | لا | لا | ❌ MISSING | S16 |
+| FR-VEND-008 | دورة حالة المتجر مع Suspended/Cancelled | APPLIED>UNDER_REVIEW>APPROVED/REJECTED>ACTIVE⇄SUSPENDED مبنية ومختبرة (S16)؛ CANCELLED (المالك يغلق الحساب) غير مبنية — انظر FR-VEND-008-CANCELLED في §15b | ADMIN | /admin/vendors | S3,VV,S16 | 🟡 PARTIAL | — (قرار جديد) |
+| FR-VEND-009 | تعليق/إعادة تفعيل بسبب وتدقيق | POST /admin/vendors/:vendorId/suspend و/reactivate (VendorSuspension، reason_code + reason 10–1000، AuditLog، Outbox بلا نص السبب، منع تعارض المصالح)؛ GET /admin/vendors وتفاصيل التاريخ | PLATFORM_ADMIN | /admin/vendors، /admin/vendors/:vendorId | S16 | ✅ DONE | - |
 | FR-VEND-010 | معلومات الدفع/التسوية | لا | - | لا | لا | ❌ MISSING | S25 |
 | FR-VEND-011 | مؤشرات أداء المتجر | لا | - | لا | لا | ❌ MISSING | S25 |
 
@@ -345,7 +357,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-SUP-004 | استرداد بصلاحية موظف دعم | PDR §6 | - | - | - | ⏸ DEFERRED | - |
 | FR-SUP-005 | جدول العميل الموحد للوكيل | PDR §6 | - | - | - | ⏸ DEFERRED | - |
 | FR-SUP-006 | قاعدة معرفة/FAQ ثنائية اللغة | لا (لم تُذكر في PDR §6) — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
-| FR-ADMIN-001 | شاشات إدارة لكل كيان | API فقط: تصنيفات، علامات، منتجات أساسية، طلبات تغيير الاسم، قرار التحقق | ADMIN/REVIEWER | لا | S3,S7,VV | 🟡 PARTIAL | S16 |
+| FR-ADMIN-001 | شاشات إدارة لكل كيان | شاشات S16: طابور التحقق، المتاجر (تعليق/إعادة تفعيل)، طلبات تغيير الاسم؛ باقي الكيانات (تصنيفات، علامات، منتجات أساسية، طلبات، دفعات…) API فقط أو غير مبنية؛ تصحيح تطابق المنصة غير مبني (لا سياسة معتمدة) | ADMIN/REVIEWER | /admin/* (الشريحة المذكورة فقط) | S3,S7,VV,S16 | 🟡 PARTIAL | S25 |
 | FR-ADMIN-002 | قوائم غير مضمّنة في الكود | المناطق والقطاعات enums ثابتة (OPEN-012) | - | لا | لا | ❌ MISSING | S25 |
 | FR-ADMIN-003 | أدوار وصلاحيات قابلة للضبط | قيمتان ثابتتان لـPlatformRole | - | لا | لا | ❌ MISSING | S25 |
 | FR-ADMIN-004 | feature flags | لا | - | لا | لا | ❌ MISSING | S25 |
@@ -412,7 +424,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | PDR-032 | مراجعات موثّقة للمنتج والمتجر؛ غير قابلة للتعديل؛ الردود مؤجلة | لا | - | لا | لا | ❌ MISSING | S23 |
 | PDR-033 | اشتراك sandbox شهر وتجديد؛ تعطيل عند الانتهاء؛ تذكيرات | VendorSubscription وبوابة الانتهاء؛ لا تذكيرات | OWNER | لا | S3 | 🟡 PARTIAL | S15 |
 | PDR-034 | تعطيل الحساب مع استرجاع 30 يوماً | لا | - | لا | لا | ❌ MISSING | S22 |
-| PDR-035 | **(2026-09-26)** تحقّق ONLINE_ONLY بدبوس عنوان مستودع (lat/lng + ملاحظة) بدل صورة/دبوس فرع؛ PHYSICAL/HYBRID تحتفظ بالشرط الحالي؛ المستودع لا يظهر في أي endpoint عام؛ المراجع وحده يراه داخل مسار التحقق | قرار معتمد وموثَّق (approved-product-decisions-2026-09.md)؛ لا مسار warehouse evidence مبني في الكود بعد — POST verification-evidence الحالي مصمَّم للفرع الفعلي فقط | OWNER + REVIEWER (مخطَّط) | لا | لا | 🟡 PARTIAL | S15 |
+| PDR-035 | **(2026-09-26)** تحقّق ONLINE_ONLY بدبوس عنوان مستودع (lat/lng + ملاحظة) بدل صورة/دبوس فرع؛ PHYSICAL/HYBRID تحتفظ بالشرط الحالي؛ المستودع لا يظهر في أي endpoint عام؛ المراجع وحده يراه داخل مسار التحقق | قرار معتمد وموثَّق؛ مسار أدلة المستودع مبني (S15: لقطة غير قابلة للتغيير، submit/GET/decision)، وقراءة المراجع له مدقَّقة ومحصورة بالمراجع/الأدمن (S16: لا تظهر للعامة ولا للمالك ولا للموظف عبر مسار المراجع، ولا في الطابور أو AuditLog)؛ الناقص: واجهة المالك لتقديم الدليل (S15/UI) | OWNER + REVIEWER | /admin/verification/:vendorId (المراجع)؛ واجهة المالك لم تُبنَ | S15,S16 | 🟡 PARTIAL | S15 |
 | PDR-036 | **(2026-09-26)** اللون والمقاس خياري variant لا حقلين بنيويين؛ 10 قوالب حقول خمسة لفئات الملابس/الإكسسوارات؛ "بدون علامة تجارية" كقيمة منظمة بدل الفراغ | قرار معتمد وموثَّق (approved-product-decisions-2026-09.md §3.2)؛ لا قوالب الفئات ولا التحقق من صحتها (model validation) ولا واجهة مبنية في الكود بعد — specs_text لا يزال حراً | OWNER | لا | لا | 🟡 PARTIAL | S17 |
 
 ## 4. سطر مستقل لكل قدرة ناقصة (onboarding/verification/admin/catalog/inventory/notifications/account)
@@ -431,9 +443,9 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 ### Verification / Admin
 | Gap | القدرة | يغطي | Sprint |
 |---|---|---|---|
-| G-AD-01 | طابور المراجع وقرار التحقق من الواجهة | FR-VEND-003 | S16 |
-| G-AD-02 | تعليق وإعادة تفعيل المتجر بسبب وتدقيق | FR-VEND-008/009 | S16 |
-| G-AD-03 | تنقّل طابور التطابق وتصحيح الأدمن | FR-ADMIN-001 | S16 |
+| G-AD-01 | طابور المراجع وقرار التحقق من الواجهة | FR-VEND-003 | ✅ S16 (مبني) |
+| G-AD-02 | تعليق وإعادة تفعيل المتجر بسبب وتدقيق | FR-VEND-008/009 | ✅ S16 (مبني؛ CANCELLED خارجه) |
+| G-AD-03 | تنقّل طابور التطابق وتصحيح الأدمن | FR-ADMIN-001 | 🟡 S16 جزئي: شاشة طلبات تغيير الاسم فقط؛ تصحيح تطابق المنصة غير مبني (لا سياسة معتمدة) → S25 |
 | G-AD-04 | عارض سجل التدقيق وتصديره | FR-ADMIN-005 | S25 |
 | G-AD-05 | إدارة الأدوار وقوائم الإعدادات (يعتمد على OPEN-012) | FR-ADMIN-002/003 | S25 |
 
@@ -486,7 +498,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | Sprint | النطاق | # | يعتمد على | قرارات مطلوبة قبل التنفيذ |
 |---|---|---|---|---|
 | S15 | إعداد المتجر: طلب متجر، أدلة، اشتراك، دعوة وقبول، نوع المتجر ونقاط الاستلام | 13 | لا شيء (الـAPIs موجودة) | ~~OPEN-011~~ **محسوم (PDR-035، 2026-09-26)** — تحقّق ONLINE_ONLY بدبوس عنوان مستودع لا صورة/دبوس فرع. لا map provider (مثبَّت §0.1) |
-| S16 | إدارة المنصة: قرار التحقق، تعليق/إعادة تفعيل، تنقل التطابق | 4 | S15 | سياسة التعليق: الأسباب وإشعار المالك (الإشعار نفسه في S19) وأسباب الرفض (OPEN-005) |
+| S16 | إدارة المنصة: قرار التحقق، تعليق/إعادة تفعيل، تنقل التطابق | **0 — منفَّذ** (كانت 4: FR-VEND-003/009 → DONE؛ FR-VEND-008 → قرار جديد؛ FR-ADMIN-001 → S25) | S15 | قُرّرت: أسباب التعليق (POLICY_VIOLATION/NON_PAYMENT/OTHER + نص إلزامي)، إشعار المالك = حدث Outbox الآن والتسليم في S19، وأسباب الرفض (OPEN-005 مغلقة) |
 | S17 | كتالوج المالك: نموذج العرض، الاستيراد، الوسائط، `PriceHistory`، الخصم النسبي، التطابق | 25 | S15، S16 (قرارات الاسم) | ~~OPEN-013~~ **محسوم للملابس/الإكسسوارات (PDR-036، 2026-09-26)** — 10 قوالب حقول خمسة، اللون/المقاس variant لا حقلاً بنيوياً. هل يبقى الخصم النسبي هنا أم يُفصل؛ حجم الوسائط والرفع |
 | S17b | كتالوج المنصة: تصنيفات وعلامات ومنتجات أساسية وقوالب وتطابق ودمج/فصل | 13 | S16، S17 | ~~OPEN-013~~ **محسوم للفئات الحالية (PDR-036)** — أي فئة غير ملابس/إكسسوار مستقبلية تحتاج قرار قالب خاص بها |
 | S18 | عمليات المخزون: صفحة المخزون، البيع بالمسح، الملصق، الفروع/الساعات، نقل الموظف | 16 | S15، S17 | لا شيء جديد؛ تأكيد شكل الباركود المطبوع |
@@ -498,12 +510,13 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | S22 | الحساب: تغيير الهاتف، التعطيل، اللغة، إدارة العناوين (افتراضي/تعديل/حذف/تغيير قبل التحضير) | 8 | لا شيء | قواعد الاحتفاظ بالبيانات (OPEN-009). **لا قرار خريطة مطلوب — محسوم بلا مزوّد خارجي (§0.1)** |
 | S23 | المراجعات وشارة التحقق | 10 | S20a (الطلبات المكتملة) | قرار D1 (مؤجَّل من قِبلك رغم أن PDR-032 معتمد) |
 | S24 | المفضلات والتنبيهات ومجموعات المقارنة ومقارنة أعمق | 16 | S17 (تاريخ الأسعار)، S19 | لا شيء جديد |
-| S25 | التحليلات وأدوات الأدمن (سجل التدقيق، الأدوار، التصدير) وتقارير الفوترة والتسوية | 20 | معظم ما سبق | OPEN-012 (مصدر حدود المناطق) |
+| S25 | التحليلات وأدوات الأدمن (سجل التدقيق، الأدوار، التصدير) وتقارير الفوترة والتسوية | 21 (+1: FR-ADMIN-001 المتبقي) | معظم ما سبق | OPEN-012 (مصدر حدود المناطق) |
+| **— (قرار جديد)** | إغلاق المتجر CANCELLED (FR-VEND-008 المتبقي) وطلب استئناف التعليق (PDR §3.5) | 3 | — | **ليست سبرنتاً مجدولاً.** كلاهما بلا سياسة معتمدة (من يُغلق، أثر الإغلاق على الطلبات والبيانات، مدة الاستئناف، المرفقات) — انظر §15b. |
 | **— (قرار جديد)** | "أقرب فرع" فعلياً (PDR-023، FR-CART-018) | 2 | — | **ليست سبرنتاً مجدولاً.** تحتاج: (أ) قراراً بأن التقريب الحتمي الحالي غير كافٍ، و(ب) مصدر مسافة موثوق (إحداثيات الفرع + إحداثيات العميل + دالة مسافة، أو مزوّد خارجي). بلا هذين لا يوجد عمل قابل للتقدير. |
 
 **الـ18 بنداً سابقاً "قرار-نطاق" لم تعد في هذا الجدول إطلاقاً** — أصبحت DEFERRED BY APPROVED DECISION (§6 من `approved-product-decisions-2026-09.md`، 2026-09-26): FR-AUTH-012، FR-IMPORT-006/007، FR-SEARCH-009/011، FR-PRICE-004/008(E.8)/009(E.8)، FR-CART-007، FR-FUL-007، FR-SUP-006، FR-VPORTAL-008/010، FR-CMS-001..005. لن تُجدوَل في أي سبرنت ما لم يصدر قرار معتمد جديد يعيدها للنطاق.
 
-**فحص المجموع:** S15(13)+S16(4)+S17(25)+S17b(13)+S18(16)+S18b(19)+S19(10)+S20a(15)+S20b(6)+S21(12)+S22(8)+S23(10)+S24(16)+S25(20) = **187** سبرنتات مجدولة + **2** غير مجدولة (قرار جديد) = **189**.
+**فحص المجموع:** S15(13)+S16(0)+S17(25)+S17b(13)+S18(16)+S18b(19)+S19(10)+S20a(15)+S20b(6)+S21(12)+S22(8)+S23(10)+S24(16)+S25(21) = **184** سبرنتات مجدولة + **5** غير مجدولة (قرار جديد: "أقرب فرع" 2 + CANCELLED والاستئناف 3) = **189** (بعد S16: −2 صار DONE، +2 صفّان جديدان في §15b؛ عدّاد S15/S17 يحمل الفرق التاريخي نفسه عن العدّ الآلي كما كان قبل S16).
 
 **قرارات مطلوبة قبل أي سبرنت، بالترتيب (بعد إغلاق OPEN-011/013):**
 1. مصدر مسافة موثوق لـ"أقرب فرع" — بدونه هذا البند يبقى خارج كل الجداول الزمنية إلى أجل غير مسمى، وليس فقط مؤجَّلاً لسبرنت لاحق.
@@ -558,7 +571,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | BR-014 | الاشتراك يتحكم بالظهور لا بالعمولة؛ Past Due يدخل فترة سماح قبل Suspended | ACTIVE/EXPIRED فقط (PDR-033 بسّطت الحالات)؛ لا فترة سماح منفصلة | OWNER | لا | S3 | 🟡 PARTIAL | S15 |
 | BR-015 | فوترة اشتراك البائع وفوترة طلب العميل على دورتين مستقلتين | VendorSubscription وPaymentTransaction نموذجان منفصلان تماماً بالبناء | OWNER/session | - | S3,S10 | ✅ DONE | - |
 | BR-016 | مراجعة فقط بعد اكتمال طلب/صنف موثّق ("شراء موثّق") | لا مراجعات مبنية إطلاقاً | - | لا | لا | ❌ MISSING | S23 |
-| BR-017 | البائع يُعلَّم تلقائياً للمراجعة الإدارية عند past-due أو نمط إرجاع شاذ أو رفض أدلة بلا إعادة تقديم؛ التعليق فعل إداري صريح دائماً | لا آلية تعليم تلقائي؛ لا تعليق مبني | PLATFORM_ADMIN | لا | لا | ❌ MISSING | S16 |
+| BR-017 | البائع يُعلَّم تلقائياً للمراجعة الإدارية عند past-due أو نمط إرجاع شاذ أو رفض أدلة بلا إعادة تقديم؛ التعليق فعل إداري صريح دائماً | لا آلية تعليم تلقائي (محفّزاتها تعتمد على فترة سماح ومرتجعات وعامل مجدول غير موجودة)؛ الجملة الأخيرة متحققة: التعليق فعل أدمن صريح بسبب مسجَّل (S16) | PLATFORM_ADMIN | لا | S16 | ❌ MISSING | — (غير مجدول؛ ليس DEFERRED) |
 | BR-018 | حذف الحساب يحترم فترة احتفاظ بالطلبات/الدفع/التدقيق حتى بعد الحذف | لا | - | لا | لا | ❌ MISSING | S22 |
 | BR-019 | أي تجاوز صلاحية إداري ("break-glass") يسجَّل بسبب ويُدقَّق دائماً | لا مسار تجاوز عام مبني بهذا المعنى؛ الأدوار الحالية مضبوطة بصلاحيات عادية لا تجاوز خاص | - | لا | لا | ❌ MISSING | S25 |
 | BR-020 | تأكيد الطلب يتطلب دبوس منزل وهاتفين، ويطلق 3 إشعارات مستقلة التتبع | الهاتفان والإحداثيات DONE (بلا خريطة، قرار معتمد)؛ الإشعارات الثلاثة المتتبَّعة غير موجودة (outbox فقط) | session | /checkout | S14 | 🟡 PARTIAL | S19 |
@@ -567,7 +580,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | BR-023 | هاتف+كلمة مرور أساسي؛ OTP يوثّق التسجيل ويبوّب استعادة كلمة المرور وتغيير الهاتف | التسجيل والاستعادة DONE؛ تغيير الهاتف بـOTP غير موجود | عام/session | /register,/reset-password | AUTH | 🟡 PARTIAL | S22 |
 | BR-024 | الضيف يتصفح ويبني سلة بلا حساب؛ الدخول يدمج سلة الضيف | استُبدل: السلة تتطلب تسجيل دخول من الأصل الآن (PDR-002/FR-AUTH-013)، فلا سلة ضيف لتُدمج | - | - | - | ↪ SUPERSEDED | - |
 | BR-025 | أهلية إرجاع الصنف تعتمد فقط على `Fulfillment` الخاص به، لا الأصناف الشقيقة أو الطلب الفرعي كاملاً | لا كيان Fulfillment منفصل، ولا إرجاع مبني إطلاقاً | - | لا | لا | ❌ MISSING | S21 |
-| BR-026 (F + F.1) | رفض تحقق فرع واحد يرفض الطلب كاملاً؛ إعادة التقديم مسار منفصل عن الرفض؛ يمكن تقديم طلب مصحَّح فوراً بعد الرفض مع بقاء السجل القديم | منطق UNDER_REVIEW→REJECTED الشامل مبني ومختبر في vendor-verification.controller.ts | REVIEWER/ADMIN | لا | VV | 🟡 PARTIAL | S16 |
+| BR-026 (F + F.1) | رفض تحقق فرع واحد يرفض الطلب كاملاً؛ إعادة التقديم مسار منفصل عن الرفض؛ يمكن تقديم طلب مصحَّح فوراً بعد الرفض مع بقاء السجل القديم | منطق UNDER_REVIEW→REJECTED الشامل مبني ومختبر؛ سبب الرفض يراه المالك (verification-status)؛ الطلب المصحَّح = POST /vendors جديد بسجل قديم محفوظ (واجهة تقديم الطلب نفسها تحت FR-VEND-001/S15) | REVIEWER/ADMIN | /admin/verification، /vendor/:vendorId/verification | VV,S16 | ✅ DONE | - |
 | BR-027 | كل المبالغ ILS؛ لا FX ولا تسوية متعددة العملات؛ يُلغي BR-021 ويُغلق OPEN-002/007 | بيانات ILS فقط في كل مكان | n/a | كل واجهات السعر | S10,S14 | ✅ DONE | - |
 | BR-028 | checkout واحد ينتج CustomerOrder أب وBranchOrder واحد أو أكثر، كل BranchOrder بطريقة تنفيذ/رسم/دفع/موعد/دورة حياة خاصة به | BranchOrder | session | /orders | S9,S10 | ✅ DONE | - |
 | BR-029 | العميل يختار سطور السلة صراحة؛ النظام يقترح فقط فروعاً تحوي كل المتغيرات المختارة، ويقترح الأقرب لكن العميل يختار فرعاً أبعد مؤهلاً | الاختيار الصريح ومجموعة الفروع المؤهلة DONE؛ "الأقرب" بديل حتمي موثّق لا مسافة حقيقية | session | /checkout | S10,S14 | 🟡 PARTIAL | — (قرار جديد) |
@@ -708,7 +721,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 |---|---|---|---|---|
 | SRS-K1-STATES-01 | العميل (ويب) | حالات فارغة/تحميل/خطأ أساسية موجودة في بعض الصفحات (سلة، طلبات)؛ لا نمط موحّد مؤكَّد لكل شاشة | 🟡 PARTIAL | S25 |
 | SRS-K1-STATES-02 | مساحة المالك/الموظف | معظم الشاشات API-only فلا حالات UI أصلاً | ❌ MISSING | S15-S18 |
-| SRS-K1-STATES-03 | الإدارة | لا واجهة إطلاقاً | ❌ MISSING | S16/S25 |
+| SRS-K1-STATES-03 | الإدارة | شاشات S16 لها loading/empty/error/forbidden/success؛ عارض التدقيق وإدارة الأدوار لاحقاً | 🟡 PARTIAL | S25 |
 | SRS-K1-STATES-04 | الدعم | لا واجهة إطلاقاً (FR-SUP مؤجّل بحسب الـSRS، ليس PDR) | ❌ MISSING | قرار-نطاق |
 
 ### L-01..L-32 — سيناريوهات الفشل (معرّفات أصلية من الـSRS)
@@ -737,7 +750,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | L-20 | توصيل مجزأ | لا شحنات متعددة لكل BranchOrder | ❌ MISSING | S26/قرار-نطاق |
 | L-21 | عنوان توصيل غير صالح | تحقق العنوان موجود (S14)؛ لا خريطة (قرار معتمد) | ✅ DONE (ضمن القرار المعتمد) | - |
 | L-22 | العميل خارج منطقة خدمة البائع | يتحول لاستلام فقط تلقائياً برسالة واضحة | ✅ DONE | - |
-| L-23 | بائع مُعلَّق بطلبات نشطة | لا تعليق بائع مبني أصلاً | ❌ MISSING | S16 |
+| L-23 | بائع مُعلَّق بطلبات نشطة | التعليق يُخفي المتجر ويمنع الطلبات الجديدة (بما فيها confirm لحجز قائم) وتعديل الكتالوج؛ الطلبات الجارية تستمر؛ تصنيف صريح لكل مسار vendors/:vendorId/* ويفشل اختبار على أي مسار غير مصنَّف | ✅ DONE | - |
 | L-24 | دمج منتج بعد وجود طلبات تاريخية | لا دمج/فصل منتجات مبني | ❌ MISSING | S17b |
 | L-25 | فشل استيراد جزئي | نجاح جزئي مع تقرير أخطاء لكل صف موجود | ✅ DONE | - |
 | L-26 | نقص محتوى بلغة واحدة | لا fallback مؤشَّر بصرياً؛ الحقول ثنائية اللغة موجودة لكن العرض عربي فقط حالياً | 🟡 PARTIAL | S22 |
@@ -841,7 +854,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | BDR-013 | لا checkout كضيف | DONE (يتطلب حساباً) | ✅ DONE |
 | BDR-014 | فريق شخصين، 3 أشهر | حقيقة تنظيمية، لا تُقاس بالكود | n/a |
 | BDR-015 | اعتماد نطاق FYP Delivery Increment | معتمد (تاريخياً)؛ استُبدل عملياً بخطة post-sprint3-replan للسبرنتات 4+ | ↪ SUPERSEDED (بخطة أحدث معتمدة) |
-| BDR-016 (قديم) | رفض فرع واحد يرفض كل الطلب | نفس BR-026 أعلاه | 🟡 PARTIAL (انظر BR-026) |
+| BDR-016 (قديم) | رفض فرع واحد يرفض كل الطلب | نفس BR-026 أعلاه | ✅ DONE (انظر BR-026) |
 
 ## §13 — Part 8: البقلغ (Backlog) — mapping صريح لكل معرّف
 
@@ -873,11 +886,11 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 | BL-MATCH-005 | Must | FR-MATCH-007 | 🟡 PARTIAL | اختبارات منع تلقائي — انظر N.1..5 |
 | BL-VEND-001 | Must | FR-VEND-001 | 🟡 PARTIAL | - |
 | BL-VEND-002 | Must | FR-VEND-002 | 🟡 PARTIAL | - |
-| BL-VEND-003 | Must | FR-VEND-003 | 🟡 PARTIAL | - |
+| BL-VEND-003 | Must | FR-VEND-003 | ✅ DONE | - |
 | BL-VEND-004 | Must | FR-VEND-004 | 🟡 PARTIAL | - |
 | BL-VEND-005 | Should | FR-VEND-013 (E.0) | 🟡 PARTIAL | أدوار فرعية متعددة — استُبدل بنموذج OWNER/BRANCH_EMPLOYEE الأبسط |
 | BL-VEND-005b | Must | FR-VEND-013 (E.0) | 🟡 PARTIAL | حساب مالك واحد بلا أدوار فرعية — هذا فعلاً المبني |
-| BL-VEND-006 | Should | FR-VEND-009 | ❌ MISSING | - |
+| BL-VEND-006 | Should | FR-VEND-009 | ✅ DONE | اختبارات التعليق واختبار تصنيف المسارات (S16) |
 | BL-IMPORT-001 | Must | FR-IMPORT-001 | 🟡 PARTIAL | PriceHistory جزء من acceptance — غير موجود |
 | BL-IMPORT-002 | Must | FR-IMPORT-002 | 🟡 PARTIAL | PriceHistory جزء من acceptance — غير موجود |
 | BL-IMPORT-002b | Should | FR-IMPORT-011 | ❌ MISSING | - |
@@ -929,7 +942,7 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 | BL-NOTIF-002b | Should | FR-NOTIF-003 | ❌ MISSING | - |
 | BL-NOTIF-003 | Should | FR-FAV-001 | 🟡 PARTIAL | - |
 | BL-NOTIF-004 | Could | FR-FAV-003 | ❌ MISSING | - |
-| BL-ADMIN-001 | Must | FR-VEND-009 | ❌ MISSING | لا شاشة موافقة/تعليق أصلاً — فجوة حقيقية مقابل الالتزام الأصلي |
+| BL-ADMIN-001 | Must | FR-VEND-009 | ✅ DONE | قائمة المتاجر وتعليق/إعادة تفعيل وطابور الموافقة مبنية (S16) |
 | BL-ADMIN-001b | Should | FR-ADMIN-001 | 🟡 PARTIAL | - |
 | BL-ADMIN-002 | Must | FR-ADMIN-001 | 🟡 PARTIAL | - |
 | BL-ADMIN-003 | Should | FR-ADMIN-005 | ❌ MISSING | - |
@@ -1086,15 +1099,28 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 
 ---
 
+## §15b — صفوف أُضيفت في Sprint 16 (بلا تنفيذ)
+
+صفّان جديدان، كلاهما ❌ MISSING وغير مبنيَّين ولا مجدولان في أي Sprint (يحتاجان قراراً منتجياً أولاً — انظر صف "قرار جديد" في §5):
+
+| ID | Requirement | Backend | Authz | UI | Test | Status | Sprint |
+|---|---|---|---|---|---|---|---|
+| PDR-§3.5-APPEAL | المالك يقدّم استئناف تعليق (نص + مرفقات) والأدمن يقرّر فيه (`approved-product-decisions-2026-09.md` §3.5: "decide store appeal (text + attachments)")؛ لم يكن له أي صف في هذا الملف | لا | OWNER + PLATFORM_ADMIN | لا | لا | ❌ MISSING | — (قرار جديد) |
+| FR-VEND-008-CANCELLED | `Active→Cancelled` و`Suspended→Cancelled` (المالك يغلق حسابه) من مخطط حالات FR-VEND-008؛ لا endpoint ولا سياسة (أثر الإغلاق على الطلبات والبيانات) | لا | OWNER | لا | لا | ❌ MISSING | — (قرار جديد) |
+
+**عدّاد §15b:** 2 صفاً.
+
+---
+
 # §16 — الأعداد النهائية الشاملة (v4.1، مُعاد اشتقاقها مباشرة من صفوف الملف)
 
 **كيف حُسِب هذا الجدول:** نفس منهج v3 (عدّ آلي مباشر لحالة كل صف فعلي، لا تقدير يدوي). v4 طبّق قرارات المالك الثلاثة (18 صفاً → DEFERRED). v4.1 يضيف صفّي `PDR-035`/`PDR-036` المستقلين (كانا مذكورين نصياً فقط في v4 بلا صف خاص بهما ولا عدّ) — كلاهما PARTIAL.
 
 | المصدر | DONE | PARTIAL | MISSING | DEFERRED | SUPERSEDED | n/a | المجموع | يطابق v4؟ |
 |---|---|---|---|---|---|---|---|---|
-| FR، E.0..E.22 (Part 2) | 36 | 81 | 86 | 27 | 14 | 0 | 244 | نعم |
+| FR، E.0..E.22 (Part 2) | 38 | 80 | 85 | 27 | 14 | 0 | 244 | لا — S16: VEND-003/009 → DONE |
 | PDR-001..036 | 12 | 16 | 8 | 0 | 0 | 0 | **36** | **لا — PDR-035/036 أُضيفا (§0/v4.1)** |
-| BR-001..034 (§6) | 7 | 13 | 12 | 0 | 2 | 0 | 34 | نعم |
+| BR-001..034 (§6) | 8 | 12 | 12 | 0 | 2 | 0 | 34 | لا — S16: BR-026 → DONE |
 | NFR-* (§7) | 2 | 10 | 18 | 0 | 0 | 2 | 32 | نعم |
 | G.0 (§8) | 5 | 3 | 0 | 0 | 0 | 0 | 8 | نعم |
 | G.3 إضافي (§8) | 3 | 0 | 7 | 0 | 0 | 0 | 10 | نعم |
@@ -1102,25 +1128,26 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 | H.2/H.3 قديم (§9) | 0 | 0 | 0 | 0 | 1 | 0 | 1 | نعم |
 | H.3a (§9) | 3 | 4 | 1 | 0 | 0 | 0 | 8 | نعم |
 | K.1a (§10) | 3 | 8 | 0 | 0 | 0 | 0 | 11 | نعم |
-| K.1 حالات (§10) | 0 | 1 | 3 | 0 | 0 | 0 | 4 | نعم |
-| L-01..32 (§10) | 11 | 5 | 15 | 0 | 1 | 0 | 32 | نعم |
+| K.1 حالات (§10) | 0 | 2 | 2 | 0 | 0 | 0 | 4 | لا — S16: STATES-03 → PARTIAL |
+| L-01..32 (§10) | 12 | 5 | 14 | 0 | 1 | 0 | 32 | لا — S16: L-23 → DONE |
 | ADR-001..012 (§11) | 7 | 5 | 0 | 0 | 0 | 0 | 12 | نعم |
 | N.1..5 (§11) | 1 | 2 | 2 | 0 | 0 | 0 | 5 | نعم |
 | O.1 (§11) | — | — | — | — | — | — | 0 | تصنيف وصفي فقط، لا يدخل المجموع |
 | P (§11) | 1 | 2 | 12 | 0 | 0 | 0 | 15 | نعم |
-| BDR القديمة (§12) | 5 | 6 | 1 | 0 | 3 | 1 | 16 | نعم |
-| Part 8 — 102 صفاً كاملة (§13) | 21 | 40 | 37 | 2 | 2 | 0 | 102 | نعم |
+| BDR القديمة (§12) | 6 | 5 | 1 | 0 | 3 | 1 | 16 | لا — S16: BDR-016 → DONE |
+| Part 8 — 102 صفاً كاملة (§13) | 24 | 39 | 35 | 2 | 2 | 0 | 102 | لا — S16: BL-VEND-003/006، BL-ADMIN-001 → DONE |
 | AC-01..22 (§14) | 10 | 5 | 7 | 0 | 0 | 0 | 22 | نعم |
 | E.11 — 59 صفاً (§15) | 15 | 1 | 32 | 0 | 11 | 0 | 59 | نعم |
-| **المجموع** | **145** | **205** | **245** | **29** | **34** | **3** | **661** | — |
+| §15b — مضافة في S16 | 0 | 0 | 2 | 0 | 0 | 0 | **2** | **جديد** |
+| **المجموع** | **153** | **202** | **242** | **29** | **34** | **3** | **663** | — |
 
-**فحص الجمع:** 145+205+245+29+34+3 = **661**، ويطابق تماماً مجموع عمود "المجموع" أعلاه (244+36+34+32+8+10+10+1+8+11+4+32+12+5+0+15+16+102+22+59 = 661). **عدد الصفوف ارتفع من 659 إلى 661 (+2، صفّا PDR-035/036 الجديدان)، والـPARTIAL ارتفع بمقدار 2 (203→205)، تماماً كما طلبتِ.**
+**فحص الجمع (v5):** 153+202+242+29+34+3 = **663**، ويطابق مجموع عمود "المجموع" (244+36+34+32+8+10+10+1+8+11+4+32+12+5+0+15+16+102+22+59+2 = 663). الفرق عن v4.1: DONE +8، PARTIAL −3، MISSING −5 (نقل 8 صفوف: FR-VEND-003 وBR-026 وBDR-016 وBL-VEND-003 من PARTIAL، وFR-VEND-009 وL-23 وBL-VEND-006 وBL-ADMIN-001 من MISSING إلى DONE، وSRS-K1-STATES-03 من MISSING إلى PARTIAL) ثم +2 MISSING للصفّين الجديدين في §15b. (فحص v4.1 السابق: 145+205+245+29+34+3 = 661.) **عدد الصفوف ارتفع من 659 إلى 661 (+2، صفّا PDR-035/036 الجديدان)، والـPARTIAL ارتفع بمقدار 2 (203→205)، تماماً كما طلبتِ.**
 
 ## §17 — عدد صفوف/أسطر التتبع الفعلية
 
-**661 صفاً قابلاً للتتبع** (كان 659 في v4؛ +2 من PDR-035/036 المضافين في v4.1). صفوف §0 (نصية) و§11/O.1 (15 سطراً وصفياً لمستويات الاختبار، بلا ID أو حالة مستقلة) و§14/BO-وما بعدها (ملخصات إستراتيجية، لا حالة مستقلة) **غير محسوبة** في الـ661، وهذا مقصود ومذكور صراحةً حيث ورد.
+**663 صفاً قابلاً للتتبع** (كان 661 في v4.1؛ +2 في §15b من Sprint 16. وكان 659 في v4؛ +2 من PDR-035/036 المضافين في v4.1). صفوف §0 (نصية) و§11/O.1 (15 سطراً وصفياً لمستويات الاختبار، بلا ID أو حالة مستقلة) و§14/BO-وما بعدها (ملخصات إستراتيجية، لا حالة مستقلة) **غير محسوبة** في الـ661، وهذا مقصود ومذكور صراحةً حيث ورد.
 
-**تأكيد الشمول:** الـ661 تضم: FR(244) + PDR(**36**) + BR(34) + NFR(32) + G(18) + H(19) + K.1/L(47) + ADR/N/P(32، باستثناء O.1 الوصفي) + BDR(16) + Part 8(102) + AC(22) + E.11(59). كل جزء من الـSRS من Part 0 حتى Part 9، وكل قرار معتمد بما فيها PDR-035/036، ممثَّل بصف مستقل لكل ID أو بقرار تجميع موثَّق بسببه في §0.
+**تأكيد الشمول:** الـ661 تضم: FR(244) + PDR(**36**) + BR(34) + NFR(32) + G(18) + H(19) + K.1/L(47) + ADR/N/P(32، باستثناء O.1 الوصفي) + BDR(16) + Part 8(102) + AC(22) + E.11(59) + §15b(2). كل جزء من الـSRS من Part 0 حتى Part 9، وكل قرار معتمد بما فيها PDR-035/036، ممثَّل بصف مستقل لكل ID أو بقرار تجميع موثَّق بسببه في §0.
 
 **بعد 2026-09-26:** الـ18 بنداً DEFERRED BY APPROVED DECISION فعلياً (§6 من `approved-product-decisions-2026-09.md`) — لم تعد "قرار-نطاق" معلَّقاً، بل قرار مالك موثَّق. `PDR-035` و`PDR-036` صفّان مستقلّان الآن، كلاهما 🟡 PARTIAL: القرار معتمد وموثَّق، لكن الكود (مسار أدلة المستودع للمراجع؛ قوالب الفئات والتحقق من صحتها والواجهة) لم يُبنَ بعد — S15 وS17 على التوالي. لم أُعِد تصنيف أي بند **آخر** من نفسي؛ كل ما تبقى تحت `قرار-نطاق` (NFR/DevOps/G.3/H.1/L وغيرها من بنود النضج التشغيلي غير المرتبطة بالثمانية عشر) بقي MISSING/PARTIAL كما هو.
 

@@ -167,7 +167,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
       )
       .set('Authorization', `Bearer ${reviewerToken}`)
       .set('Idempotency-Key', unique('decision'))
-      .send({ decision: 'approve' })
+      .send({ decision: 'approve', evidence_revision: 1 })
       .expect(201);
     await request(app.getHttpServer())
       .post(`/api/v1/vendors/${vendorId}/subscription`)
@@ -457,7 +457,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         )
         .set('Authorization', `Bearer ${reviewer}`)
         .set('Idempotency-Key', unique('decision'))
-        .send({ decision: 'approve' })
+        .send({ decision: 'approve', evidence_revision: 1 })
         .expect(201);
 
       expect(decision.body.verification_status).toBe('APPROVED');
@@ -512,7 +512,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         )
         .set('Authorization', `Bearer ${reviewer}`)
         .set('Idempotency-Key', unique('decision-no-evidence'))
-        .send({ decision: 'approve' })
+        .send({ decision: 'approve', evidence_revision: 1 })
         .expect(400);
       expect(rejected.body.error.code).toBe('BRANCH_EVIDENCE_INCOMPLETE');
 
@@ -550,7 +550,11 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         )
         .set('Authorization', `Bearer ${reviewer}`)
         .set('Idempotency-Key', unique('decision'))
-        .send({ decision: 'reject', reason: 'Photo does not match the pin' })
+        .send({
+          decision: 'reject',
+          evidence_revision: 1,
+          reason: 'Photo does not match the pin',
+        })
         .expect(201);
       expect(decision.body.verification_status).toBe('REJECTED');
       expect(decision.body.vendor_approved).toBe(false);
@@ -567,7 +571,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         )
         .set('Authorization', `Bearer ${reviewer}`)
         .set('Idempotency-Key', unique('decision-again'))
-        .send({ decision: 'approve' })
+        .send({ decision: 'approve', evidence_revision: 1 })
         .expect(409);
     });
 
@@ -594,7 +598,11 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         )
         .set('Authorization', `Bearer ${reviewer}`)
         .set('Idempotency-Key', unique('decision'))
-        .send({ decision: 'reject', reason: 'Fraudulent evidence' })
+        .send({
+          decision: 'reject',
+          evidence_revision: 1,
+          reason: 'Fraudulent evidence',
+        })
         .expect(201);
 
       const resubmit = await request(app.getHttpServer())
@@ -644,7 +652,11 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         )
         .set('Authorization', `Bearer ${reviewer}`)
         .set('Idempotency-Key', unique('decision'))
-        .send({ decision: 'reject', reason: 'Photo does not match the pin' })
+        .send({
+          decision: 'reject',
+          evidence_revision: 1,
+          reason: 'Photo does not match the pin',
+        })
         .expect(201);
 
       // The reapplication path is not a resubmission endpoint - it's the
@@ -731,7 +743,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         )
         .set('Authorization', `Bearer ${notReviewer}`)
         .set('Idempotency-Key', unique('decision-forbidden'))
-        .send({ decision: 'approve' })
+        .send({ decision: 'approve', evidence_revision: 1 })
         .expect(403);
     });
 
@@ -761,6 +773,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .set('Idempotency-Key', unique('decision'))
         .send({
           decision: 'request_resubmission',
+          evidence_revision: 1,
           reason: 'Photo is too blurry',
         })
         .expect(201);
@@ -827,14 +840,14 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
           )
           .set('Authorization', `Bearer ${reviewer}`)
           .set('Idempotency-Key', unique('decision-a'))
-          .send({ decision: 'approve' }),
+          .send({ decision: 'approve', evidence_revision: 1 }),
         request(app.getHttpServer())
           .post(
             `/api/v1/vendors/${vendorId}/branches/${branchB.id}/verification-decision`,
           )
           .set('Authorization', `Bearer ${reviewer}`)
           .set('Idempotency-Key', unique('decision-b'))
-          .send({ decision: 'approve' }),
+          .send({ decision: 'approve', evidence_revision: 1 }),
       ]);
 
       expect(resA.status).toBe(201);
@@ -914,7 +927,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         )
         .set('Authorization', `Bearer ${reviewer}`)
         .set('Idempotency-Key', unique('decision'))
-        .send({ decision: 'approve' })
+        .send({ decision: 'approve', evidence_revision: 1 })
         .expect(201);
 
       const [resA, resB] = await Promise.all([

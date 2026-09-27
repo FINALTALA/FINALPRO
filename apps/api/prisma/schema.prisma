@@ -59,6 +59,8 @@ model User {
   /// WarehouseVerificationEvidence snapshots - the ONLINE_ONLY
   /// counterpart to reviewedBranches above.
   warehouseVerificationReviews WarehouseVerificationEvidence[] @relation("WarehouseReviewer")
+  vendorSuspensionsMade        VendorSuspension[] @relation("SuspensionActor")
+  vendorReactivationsMade      VendorSuspension[] @relation("ReactivationActor")
   sentStaffInvites StaffInvite[]    @relation("StaffInviter")
   stockMovements   StockMovement[]
   decidedNameChangeRequests CanonicalNameChangeRequest[]
@@ -316,6 +318,8 @@ model Vendor {
   /// immutable snapshots rather than a status field on Warehouse
   /// itself.
   warehouseVerificationEvidence WarehouseVerificationEvidence[]
+  /// Sprint 16 (FR-VEND-009): suspension history, at most one open row.
+  suspensions     VendorSuspension[]
   pickupPoints    PickupPoint[]
   deliveryZones   VendorDeliveryZone[]
   branchStocks    BranchStock[]
@@ -444,7 +448,43 @@ model WarehouseVerificationEvidence {
   reviewNote  String?
 
   @@index([vendorId, status])
+  @@index([status, submittedAt])
   @@map("warehouse_verification_evidence")
+}
+
+/// Sprint 16 (FR-VEND-009): why a vendor was suspended, by whom, and
+/// (once reactivated) why/by whom it was restored. One row per
+/// suspension episode; the vendor's live state is still Vendor.status.
+enum SuspensionReasonCode {
+  POLICY_VIOLATION
+  NON_PAYMENT
+  OTHER
+}
+
+/// A vendor has at most one OPEN suspension (reactivatedAt IS NULL) -
+/// enforced by the partial unique index
+/// vendor_suspensions_vendor_open_key and a CHECK that the three
+/// reactivation columns are all null or all set. Both are
+/// migration-SQL only: Prisma's schema DSL cannot express a partial
+/// index or CHECK (same precedent as StaffInvite and
+/// WarehouseVerificationEvidence). No composite FK: nothing here is a
+/// child of a second tenant-scoped row.
+model VendorSuspension {
+  id                 String               @id @default(uuid())
+  vendorId           String
+  vendor             Vendor               @relation(fields: [vendorId], references: [id])
+  reasonCode         SuspensionReasonCode
+  reason             String
+  suspendedBy        String
+  suspender          User                 @relation("SuspensionActor", fields: [suspendedBy], references: [id])
+  suspendedAt        DateTime             @default(now())
+  reactivatedBy      String?
+  reactivator        User?                @relation("ReactivationActor", fields: [reactivatedBy], references: [id], onDelete: Restrict)
+  reactivatedAt      DateTime?
+  reactivationReason String?
+
+  @@index([vendorId, suspendedAt])
+  @@map("vendor_suspensions")
 }
 
 /// Sprint 5 (RB-STORE-001, PDR-010): "may configure multiple public
@@ -581,6 +621,24 @@ model StoreBranch {
   /// decision (FR-VEND-003) - what the vendor needs to know to fix and
   /// resubmit. Not set on APPROVED.
   reviewNote           String?
+  /// Sprint 16 (D3): bumped by 1 on every evidence submission
+  /// (VendorVerificationController.submitEvidence, under the vendor
+  /// lock). 0 = no evidence has ever been submitted for this branch.
+  /// The reviewer's decision must name the revision it read
+  /// (evidence_revision), so a resubmission between the read and the
+  /// decision is a 409 BRANCH_EVIDENCE_STALE instead of a decision on
+  /// evidence the reviewer never saw. Deliberately a counter on the
+  /// existing mutable row, not a snapshot table (unlike
+  /// WarehouseVerificationEvidence) - no evidence history is kept.
+  ///
+  /// Legacy backfill (migration 20260929100000): a physical branch that
+  /// already had lat + lng + verificationPhotoUrl gets revision 1 and
+  /// evidenceSubmittedAt = the latest AuditLog 'store_branch.evidence_submitted'
+  /// occurredAt for that branch, else createdAt. The createdAt fallback
+  /// is a documented lower-bound approximation (seeded/direct-written
+  /// evidence has no audit row), not the true submission time.
+  evidenceRevision     Int                      @default(0)
+  evidenceSubmittedAt  DateTime?
   createdAt            DateTime                 @default(now())
 
   vendorUsers    VendorUser[]
@@ -597,6 +655,7 @@ model StoreBranch {
   /// itself unique on the exact column pair it's referenced by.
   @@unique([vendorId, id])
   @@index([vendorId])
+  @@index([verificationStatus, evidenceSubmittedAt])
   @@map("store_branches")
 }
 

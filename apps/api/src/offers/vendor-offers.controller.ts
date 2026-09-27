@@ -1,3 +1,4 @@
+import { BlockWhenSuspended } from '../auth/vendor-suspended.guard';
 import {
   Body,
   ConflictException,
@@ -156,6 +157,7 @@ export class VendorOffersController {
     return offers.map((o) => this.offerToDto(o));
   }
 
+  @BlockWhenSuspended()
   @Post()
   @HttpCode(201)
   @UseInterceptors(IdempotencyInterceptor)
@@ -233,6 +235,7 @@ export class VendorOffersController {
   // permanently unreachable through real usage, not just under-tested.
   // Owner-only, same as every other catalog/pricing action on this
   // controller (PDR-009).
+  @BlockWhenSuspended()
   @Patch(':offerId/status')
   @RequireVendorRole('OWNER')
   async updateStatus(
@@ -276,6 +279,7 @@ export class VendorOffersController {
   // parent VendorOffer or risks the "offer disagrees with its own
   // variant's link" invariant - that write only ever happens in
   // confirmMatch() below, which is where the lock now lives.
+  @BlockWhenSuspended()
   @Post(':offerId/variants')
   @HttpCode(201)
   @UseInterceptors(IdempotencyInterceptor)
@@ -430,6 +434,7 @@ export class VendorOffersController {
   // in the docs/product-decisions-2026-09 branch's backlog, not this
   // SRS/PR - it is NOT built here; do not treat confirmed matches as
   // having a synchronized display name.
+  @BlockWhenSuspended()
   @Post(':offerId/variants/:variantId/match-confirmation')
   @HttpCode(200)
   @UseInterceptors(IdempotencyInterceptor)
@@ -650,6 +655,7 @@ export class VendorOffersController {
   // the partial unique index (offer_variant_media_primary_per_variant_key)
   // is what this would otherwise conflict against if done as a plain
   // insert.
+  @BlockWhenSuspended()
   @Post(':offerId/variants/:variantId/media')
   @HttpCode(201)
   @UseInterceptors(IdempotencyInterceptor)
@@ -748,6 +754,7 @@ export class VendorOffersController {
     return media.map((m) => this.mediaToDto(m));
   }
 
+  @BlockWhenSuspended()
   @Delete(':offerId/variants/:variantId/media/:mediaId')
   @HttpCode(204)
   @RequireVendorRole('OWNER')

@@ -24,10 +24,20 @@ export class MeController {
       where: { userId: user.id },
       include: { vendor: true, branch: true },
     });
+    // Sprint 16: platform staff get one extra, read-only entry so the web
+    // app can show the admin workspace. Self-scoped like the rest of this
+    // endpoint; a user with no platform role gets no such entry.
+    const self = await this.prisma.user.findUnique({
+      where: { id: user.id },
+      select: { platformRole: true },
+    });
 
     return {
       workspaces: [
         { type: 'customer' as const },
+        ...(self?.platformRole
+          ? [{ type: 'platform' as const, role: self.platformRole }]
+          : []),
         ...memberships.map((m) => ({
           type: 'vendor' as const,
           vendor_id: m.vendorId,

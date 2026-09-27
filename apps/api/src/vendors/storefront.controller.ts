@@ -1,3 +1,4 @@
+import { BlockWhenSuspended } from '../auth/vendor-suspended.guard';
 import {
   Body,
   Controller,
@@ -92,6 +93,7 @@ export class StorefrontController {
     return ownerStorefrontDto(vendor);
   }
 
+  @BlockWhenSuspended()
   @Put(':vendorId/storefront')
   @RequireVendorRole('OWNER')
   async updateSettings(
@@ -138,6 +140,7 @@ export class StorefrontController {
   // a backstop for any vendor row that predates that fix (this
   // migration never touches historical data), not as the primary
   // enforcement point anymore.
+  @BlockWhenSuspended()
   @Post(':vendorId/storefront/publish')
   @HttpCode(200)
   @RequireVendorRole('OWNER')
@@ -178,6 +181,7 @@ export class StorefrontController {
     return ownerStorefrontDto(updated);
   }
 
+  @BlockWhenSuspended()
   @Post(':vendorId/storefront/unpublish')
   @HttpCode(200)
   @RequireVendorRole('OWNER')
@@ -217,6 +221,7 @@ export class StorefrontController {
     return { categories: rows.map((r) => r.category) };
   }
 
+  @BlockWhenSuspended()
   @Put(':vendorId/applicable-categories')
   @RequireVendorRole('OWNER')
   async updateApplicableCategories(

@@ -1,0 +1,100 @@
+/**
+ * Sprint 16 (L-23, FR-VEND-009): the COMPLETE classification of every
+ * route under `vendors/:vendorId/*` for a SUSPENDED vendor. Enforced by
+ * test/sprint16-vendor-route-classification.e2e-spec.ts, which reads the
+ * routes actually registered in the Nest app and fails when:
+ *  - a route exists that is in neither list (a new route must be given
+ *    an explicit decision here), or
+ *  - a DENY route lacks @BlockWhenSuspended(), or an ALLOW route has it.
+ *
+ * Key format: `<HTTP METHOD> <controller path>/<handler path>`, without
+ * the global `/api/v1` prefix.
+ *
+ * DENY = catalog / offers / media / import / inventory movements /
+ * storefront / sections: "catalog editing, new-offer creation, and
+ * storefront visibility are blocked" (L-23).
+ * ALLOW = everything a suspended store still needs: in-flight order
+ * fulfilment, every read, subscription renewal, store configuration,
+ * staff, delivery setup, and verification.
+ */
+export const SUSPENDED_DENY_ROUTES: readonly string[] = [
+  'POST vendors/:vendorId/offers',
+  'PATCH vendors/:vendorId/offers/:offerId/status',
+  'POST vendors/:vendorId/offers/:offerId/variants',
+  'POST vendors/:vendorId/offers/:offerId/variants/:variantId/match-confirmation',
+  'POST vendors/:vendorId/offers/:offerId/variants/:variantId/media',
+  'DELETE vendors/:vendorId/offers/:offerId/variants/:variantId/media/:mediaId',
+  'POST vendors/:vendorId/offers/import',
+  'POST vendors/:vendorId/offers/:offerId/variants/:variantId/match-review/search',
+  'POST vendors/:vendorId/offers/:offerId/variants/:variantId/match-review/candidates/:candidateId/decision',
+  'POST vendors/:vendorId/canonical-products/:canonicalProductId/name-change-requests',
+  'POST vendors/:vendorId/branches/:branchId/stock/:offerVariantId/movements',
+  'PUT vendors/:vendorId/storefront',
+  'POST vendors/:vendorId/storefront/publish',
+  'POST vendors/:vendorId/storefront/unpublish',
+  'PUT vendors/:vendorId/applicable-categories',
+  'POST vendors/:vendorId/sections',
+  'PUT vendors/:vendorId/sections/:sectionId',
+  'DELETE vendors/:vendorId/sections/:sectionId',
+  'POST vendors/:vendorId/sections/reorder',
+  'PUT vendors/:vendorId/sections/:sectionId/offers/:offerId',
+  'DELETE vendors/:vendorId/sections/:sectionId/offers/:offerId',
+];
+
+export const SUSPENDED_ALLOW_ROUTES: readonly string[] = [
+  // In-flight order fulfilment (L-23: "No visible disruption to an
+  // in-flight order").
+  'GET vendors/:vendorId/orders',
+  'GET vendors/:vendorId/branches/:branchId/orders',
+  'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/start-preparation',
+  'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/mark-sent',
+  'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/mark-delivered',
+  'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/pickup-handover',
+  'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/rerequest-confirmation',
+  // Reads.
+  'GET vendors/:vendorId',
+  'GET vendors/:vendorId/branches',
+  'GET vendors/:vendorId/branches/:branchId',
+  'GET vendors/:vendorId/staff-invites',
+  'GET vendors/:vendorId/warehouse',
+  'GET vendors/:vendorId/pickup-points',
+  'GET vendors/:vendorId/pickup-points/:pickupPointId',
+  'GET vendors/:vendorId/delivery-zones',
+  'GET vendors/:vendorId/branches/:branchId/delivery-windows',
+  'GET vendors/:vendorId/branches/:branchId/stock',
+  'GET vendors/:vendorId/branches/:branchId/stock/:offerVariantId',
+  'GET vendors/:vendorId/branches/:branchId/stock/:offerVariantId/movements',
+  'GET vendors/:vendorId/offers',
+  'GET vendors/:vendorId/offers/:offerId/variants',
+  'GET vendors/:vendorId/offers/:offerId/variants/:variantId/media',
+  'GET vendors/:vendorId/offers/:offerId/variants/:variantId/match-review/candidates',
+  'GET vendors/:vendorId/match-review/queue',
+  'GET vendors/:vendorId/sections',
+  'GET vendors/:vendorId/storefront',
+  'GET vendors/:vendorId/applicable-categories',
+  'GET vendors/:vendorId/subscription',
+  'GET vendors/:vendorId/verification-status',
+  // Subscription: renewal never changes vendor.status; activation is
+  // refused separately because it requires status APPROVED.
+  'POST vendors/:vendorId/subscription',
+  'POST vendors/:vendorId/subscription/renew',
+  // Store configuration, staff and delivery setup (not catalog).
+  'PUT vendors/:vendorId/store-type',
+  'PUT vendors/:vendorId/warehouse',
+  'PUT vendors/:vendorId/delivery-zones/:region',
+  'POST vendors/:vendorId/pickup-points',
+  'POST vendors/:vendorId/branches/:branchId/staff-invites',
+  'POST vendors/:vendorId/branches/:branchId/delivery-windows',
+  'PUT vendors/:vendorId/branches/:branchId/delivery-windows/:windowId',
+  'DELETE vendors/:vendorId/branches/:branchId/delivery-windows/:windowId',
+  'POST vendors/:vendorId/branches/:branchId/delivery-windows/:windowId/exceptions',
+  'DELETE vendors/:vendorId/branches/:branchId/delivery-windows/:windowId/exceptions/:exceptionId',
+  // Verification (already refused by their own status rules while
+  // SUSPENDED) and reviewer-only reads/decisions.
+  'POST vendors/:vendorId/branches/:branchId/verification-evidence',
+  'POST vendors/:vendorId/branches/:branchId/verification-decision',
+  'GET vendors/:vendorId/branches/:branchId/verification-evidence',
+  'POST vendors/:vendorId/warehouse/verification-evidence',
+  'POST vendors/:vendorId/warehouse/verification-decision',
+  'GET vendors/:vendorId/warehouse/verification-evidence',
+];

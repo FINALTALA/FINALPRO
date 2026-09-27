@@ -84,7 +84,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
     setActiveWorkspace(
       w.type === "customer"
         ? { type: "customer" }
-        : { type: "vendor", vendor_id: w.vendor_id, branch_id: w.branch_id },
+        : w.type === "platform"
+          ? { type: "platform" }
+          : { type: "vendor", vendor_id: w.vendor_id, branch_id: w.branch_id },
     );
     setMenuOpen(false);
     router.push(entry.href);
@@ -100,6 +102,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
     if (!workspaces || !active) return i === 0 && !active;
     const w = workspaces[i];
     if (w.type === "customer") return active.type === "customer";
+    if (w.type === "platform") return active.type === "platform";
     return active.type === "vendor" && active.vendor_id === w.vendor_id;
   };
 

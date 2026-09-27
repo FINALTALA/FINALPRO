@@ -51,6 +51,7 @@ export function clearSession(): void {
 
 export type ActiveWorkspaceRef =
   | { type: "customer" }
+  | { type: "platform" }
   | { type: "vendor"; vendor_id: string; branch_id: string | null };
 
 export function getActiveWorkspace(): ActiveWorkspaceRef | null {
