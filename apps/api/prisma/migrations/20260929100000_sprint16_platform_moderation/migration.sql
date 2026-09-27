@@ -9,7 +9,7 @@ ALTER TABLE "store_branches" ADD COLUMN "evidenceRevision" INTEGER NOT NULL DEFA
 ALTER TABLE "store_branches" ADD COLUMN "evidenceSubmittedAt" TIMESTAMP(3);
 
 -- Backfill (D3). A physical branch that already carries a COMPLETE
--- evidence set (lat + lng + verificationPhotoUrl), whatever its
+-- evidence set (lat + lng + a REAL verificationPhotoUrl), whatever its
 -- current verification status, gets revision 1. evidenceSubmittedAt is
 -- the latest 'store_branch.evidence_submitted' AuditLog occurredAt for
 -- that branch; where no such audit row exists (seeded or directly
@@ -18,6 +18,16 @@ ALTER TABLE "store_branches" ADD COLUMN "evidenceSubmittedAt" TIMESTAMP(3);
 -- submission time. A branch with no evidence, or only partial evidence
 -- (e.g. lat without a photo), or a non-physical branch, keeps
 -- revision 0 / NULL and therefore never appears in the reviewer queue.
+--
+-- "REAL" excludes a photo URL that is NULL or whitespace-only:
+-- NULLIF(BTRIM(...), '') IS NOT NULL is NULL for both '' and '   '
+-- (BTRIM collapses it to '', NULLIF then turns that into NULL), so a
+-- legacy or directly-written row with a blank-but-non-null photo URL is
+-- correctly treated as incomplete evidence, same as if the column were
+-- NULL outright. Application code applies the identical trim check at
+-- read/decide time (see submitEvidence's completeness check and
+-- decide()'s BR-022 check in vendor-verification.controller.ts) as a
+-- second, defensive line for any row this backfill did not cover.
 UPDATE "store_branches" AS b
 SET "evidenceRevision" = 1,
     "evidenceSubmittedAt" = COALESCE(
@@ -30,7 +40,7 @@ SET "evidenceRevision" = 1,
 WHERE b."isPhysical" = TRUE
   AND b."lat" IS NOT NULL
   AND b."lng" IS NOT NULL
-  AND b."verificationPhotoUrl" IS NOT NULL;
+  AND NULLIF(BTRIM(b."verificationPhotoUrl"), '') IS NOT NULL;
 
 -- CreateIndex
 CREATE INDEX "store_branches_verificationStatus_evidenceSubmittedAt_idx" ON "store_branches"("verificationStatus", "evidenceSubmittedAt");

@@ -133,6 +133,15 @@ describe('Sprint 16 - migration backfill of legacy branch evidence (e2e)', () =>
       photo: 'https://x/g.jpg',
       createdAt: created,
     });
+    // (h) lat/lng present but the photo URL is whitespace-only - a
+    // legacy/direct-DB row this backfill must NOT treat as complete
+    // evidence, even though the column is non-null.
+    const h = await branch(vendorId, 'h', {
+      lat: 1,
+      lng: 2,
+      photo: '   ',
+      createdAt: created,
+    });
 
     for (const [when, extra] of [
       ['2026-03-01T10:00:00.000Z', 'first'],
@@ -169,7 +178,7 @@ describe('Sprint 16 - migration backfill of legacy branch evidence (e2e)', () =>
     expect(byId[a]).toMatchObject({ rev: 1, at: '2026-03-05T12:30:00.000Z' });
     expect(byId[b]).toMatchObject({ rev: 1, at: created });
     expect(byId[c]).toMatchObject({ rev: 1, at: created });
-    for (const id of [d, e, f, g]) {
+    for (const id of [d, e, f, g, h]) {
       expect(byId[id]).toMatchObject({ rev: 0, at: null });
     }
   });

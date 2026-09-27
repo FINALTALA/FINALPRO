@@ -281,7 +281,8 @@ export class VendorVerificationController {
         branch.evidenceRevision < 1 ||
         branch.lat === null ||
         branch.lng === null ||
-        !branch.verificationPhotoUrl
+        !branch.verificationPhotoUrl ||
+        branch.verificationPhotoUrl.trim().length === 0
       ) {
         throw new NotFoundException({
           code: 'NO_PENDING_BRANCH_EVIDENCE',
@@ -419,11 +420,20 @@ export class VendorVerificationController {
       // requesting resubmission of *incomplete* evidence is exactly
       // the intended path for evidence that never met this bar -
       // only 'approve' is blocked here.
+      //
+      // The trim check (not just a null/falsy check) is defensive
+      // against a legacy or directly-written row whose photo URL is
+      // whitespace-only - same principle as WarehouseVerificationEvidence's
+      // addressNote check and this migration's own backfill condition
+      // (NULLIF(BTRIM(...), '')). A normal submission through
+      // submitEvidence()/SubmitBranchEvidenceDto is never affected: this
+      // only ever fires for evidence this endpoint itself did not write.
       if (
         dto.decision === 'approve' &&
         (freshBranch.lat === null ||
           freshBranch.lng === null ||
-          !freshBranch.verificationPhotoUrl)
+          !freshBranch.verificationPhotoUrl ||
+          freshBranch.verificationPhotoUrl.trim().length === 0)
       ) {
         throw new BadRequestException({
           code: 'BRANCH_EVIDENCE_INCOMPLETE',

@@ -338,6 +338,58 @@ describe('Sprint 16 - platform verification: queue, evidence reads, decisions (e
       ).toBe(0);
     });
 
+    it('treats a legacy row with a whitespace-only photo URL as incomplete: GET evidence is 404 NO_PENDING_BRANCH_EVIDENCE, approve is 400 BRANCH_EVIDENCE_INCOMPLETE, and neither writes a decision or an AuditLog row', async () => {
+      const { reviewer, vendorId, branchIds } = await setup();
+      // Simulate a legacy/direct-DB row: complete-looking except the
+      // photo URL is whitespace-only, written outside submitEvidence()
+      // (which always trims/validates via SubmitBranchEvidenceDto).
+      await ctx.prisma.storeBranch.update({
+        where: { id: branchIds[1] },
+        data: {
+          lat: 33.0,
+          lng: 36.0,
+          verificationPhotoUrl: '   ',
+          verificationStatus: 'PENDING',
+          evidenceRevision: 1,
+          evidenceSubmittedAt: new Date(),
+        },
+      });
+
+      const read = await f
+        .getBranchEvidence(reviewer.token, vendorId, branchIds[1])
+        .expect(404);
+      expect(read.body.error.code).toBe('NO_PENDING_BRANCH_EVIDENCE');
+      expect(
+        await ctx.prisma.auditLog.count({
+          where: {
+            action: 'branch_verification_evidence.viewed',
+            entityId: branchIds[1],
+          },
+        }),
+      ).toBe(0);
+
+      const approve = await f
+        .decideBranch(reviewer.token, vendorId, branchIds[1], {
+          decision: 'approve',
+          evidence_revision: 1,
+        })
+        .expect(400);
+      expect(approve.body.error.code).toBe('BRANCH_EVIDENCE_INCOMPLETE');
+      const branch = await ctx.prisma.storeBranch.findUniqueOrThrow({
+        where: { id: branchIds[1] },
+      });
+      expect(branch.verificationStatus).toBe('PENDING');
+      expect(branch.reviewedBy).toBeNull();
+      expect(
+        await ctx.prisma.auditLog.count({
+          where: {
+            action: 'store_branch.verification_decided',
+            entityId: branchIds[1],
+          },
+        }),
+      ).toBe(0);
+    });
+
     it('is path-safe: a branch of another vendor under this vendor id is 404, a non-physical branch is 400', async () => {
       const { reviewer, vendorId } = await setup();
       const otherOwner = await f.signup(f.uniquePhone(), 'a-strong-password');
