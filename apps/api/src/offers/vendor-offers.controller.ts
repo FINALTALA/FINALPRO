@@ -1,5 +1,6 @@
 import { BlockWhenSuspended } from '../auth/vendor-suspended.guard';
 import {
+  BadRequestException,
   Body,
   ConflictException,
   Controller,
@@ -11,6 +12,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Req,
   UseGuards,
   UseInterceptors,
@@ -19,7 +21,10 @@ import { randomUUID } from 'crypto';
 import { Request } from 'express';
 import { AuditLogService } from '../audit/audit-log.service';
 import { CurrentUser } from '../auth/current-user.decorator';
-import { Prisma } from '../../generated/prisma/client';
+import {
+  ClothingCategoryTemplate,
+  Prisma,
+} from '../../generated/prisma/client';
 import {
   AuthenticatedUser,
   SessionAuthGuard,
@@ -29,15 +34,30 @@ import { RequireVendorRole } from '../auth/vendor-role.decorator';
 import { generateStoreInventoryBarcode } from '../common/barcode.util';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
+import {
+  liveReservedQuantityByKey,
+  totalAvailableStockLive,
+} from '../common/availability.util';
 import { CanonicalNamingService } from '../matching/canonical-naming.service';
 import { MatchingService } from '../matching/matching.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SubscriptionGateService } from '../subscriptions/subscription-gate.service';
+import {
+  describeTemplateProblems,
+  validateTemplateAttributes,
+} from './catalog/clothing-category-templates';
 import { ConfirmMatchDto } from './dto/confirm-match.dto';
 import { CreateOfferVariantDto } from './dto/create-offer-variant.dto';
 import { CreateOfferVariantMediaDto } from './dto/create-offer-variant-media.dto';
 import { CreateVendorOfferDto } from './dto/create-vendor-offer.dto';
+import { ReorderOfferVariantMediaDto } from './dto/reorder-offer-variant-media.dto';
+import { UpdateOfferVariantDto } from './dto/update-offer-variant.dto';
+import { UpdateOfferVariantMediaDto } from './dto/update-offer-variant-media.dto';
+import { UpdateVendorOfferDto } from './dto/update-vendor-offer.dto';
 import { UpdateVendorOfferStatusDto } from './dto/update-vendor-offer-status.dto';
+import { computeEffectivePrice } from './pricing/effective-price.util';
+
+const MEDIA_LIMITS: Record<'IMAGE' | 'VIDEO', number> = { IMAGE: 10, VIDEO: 3 };
 
 // FR-MATCH-001/BL-VEND-004/BR-014: a vendor's offers, nested under
 // their vendor record. Catalog/pricing is owner-only, full stop
@@ -68,6 +88,13 @@ import { UpdateVendorOfferStatusDto } from './dto/update-vendor-offer-status.dto
 // per-method convention VendorsController's own owner-only routes
 // already use, kept here rather than changing the shared guard's
 // reflection behavior for every one of its other call sites.
+//
+// Sprint 17 adds: owner catalog editing (PATCH offer/variant, not just
+// create+status), PDR-036 category templates + governed brand,
+// scheduled relative discounts + PriceHistory (see
+// offers/pricing/effective-price.util.ts for the read-only price
+// computation every consumer shares), archive/restore, media type +
+// limits + ordering, and the publish gate on transition to ACTIVE.
 @Controller('vendors/:vendorId/offers')
 @UseGuards(SessionAuthGuard, VendorMembershipGuard)
 export class VendorOffersController {
@@ -87,6 +114,10 @@ export class VendorOffersController {
     titleAr: string;
     titleEn: string;
     status: string;
+    brandId: string | null;
+    categoryTemplate: string | null;
+    templateAttributes: Prisma.JsonValue | null;
+    archivedAt: Date | null;
   }) {
     return {
       id: offer.id,
@@ -95,6 +126,10 @@ export class VendorOffersController {
       title_ar: offer.titleAr,
       title_en: offer.titleEn,
       status: offer.status,
+      brand_id: offer.brandId,
+      category_template: offer.categoryTemplate,
+      template_attributes: offer.templateAttributes,
+      archived_at: offer.archivedAt?.toISOString() ?? null,
     };
   }
 
@@ -108,6 +143,11 @@ export class VendorOffersController {
     condition: string;
     basePrice: Prisma.Decimal;
     salePrice: Prisma.Decimal | null;
+    discountPercent: Prisma.Decimal | null;
+    discountStartAt: Date | null;
+    discountEndAt: Date | null;
+    colour: string | null;
+    size: string | null;
     specsTextAr: string | null;
     specsTextEn: string | null;
     identifierType: string | null;
@@ -135,6 +175,22 @@ export class VendorOffersController {
       currency: 'ILS' as const,
       base_price: variant.basePrice.toString(),
       sale_price: variant.salePrice?.toString() ?? null,
+      discount_percent: variant.discountPercent?.toString() ?? null,
+      discount_start_at: variant.discountStartAt?.toISOString() ?? null,
+      discount_end_at: variant.discountEndAt?.toISOString() ?? null,
+      // Sprint 17 (blocker 1): the live computed price - what a
+      // customer would actually pay right now - alongside the raw
+      // config above, so the owner sees both what they configured and
+      // what it currently resolves to.
+      effective_price: computeEffectivePrice({
+        basePrice: variant.basePrice.toString(),
+        salePrice: variant.salePrice?.toString() ?? null,
+        discountPercent: variant.discountPercent?.toString() ?? null,
+        discountStartAt: variant.discountStartAt,
+        discountEndAt: variant.discountEndAt,
+      }),
+      colour: variant.colour,
+      size: variant.size,
       specs_text_ar: variant.specsTextAr,
       specs_text_en: variant.specsTextEn,
       identifier_type: variant.identifierType,
@@ -147,6 +203,103 @@ export class VendorOffersController {
     };
   }
 
+  private mediaToDto(media: {
+    id: string;
+    offerVariantId: string;
+    url: string;
+    kind: string;
+    mediaType: string;
+    altTextAr: string | null;
+    altTextEn: string | null;
+    sortOrder: number;
+    createdAt: Date;
+  }) {
+    return {
+      id: media.id,
+      offer_variant_id: media.offerVariantId,
+      url: media.url,
+      kind: media.kind,
+      media_type: media.mediaType,
+      alt_text_ar: media.altTextAr,
+      alt_text_en: media.altTextEn,
+      sort_order: media.sortOrder,
+      created_at: media.createdAt.toISOString(),
+    };
+  }
+
+  // ------------------------------------------------------------------
+  // Sprint 17 (D1/D3): shared helpers for brand + category-template
+  // validation, reused by create(), updateOffer() and the publish gate.
+  // ------------------------------------------------------------------
+
+  /** Throws 400 BRAND_NOT_FOUND if brandId is set but no such row exists. */
+  private async assertBrandExists(
+    client: Prisma.TransactionClient | PrismaService,
+    brandId: string,
+  ): Promise<void> {
+    const brand = await client.brand.findUnique({ where: { id: brandId } });
+    if (!brand) {
+      throw new BadRequestException({
+        code: 'BRAND_NOT_FOUND',
+        message: 'brand_id does not reference an existing brand',
+      });
+    }
+  }
+
+  private assertTemplatePairValid(
+    template: ClothingCategoryTemplate | null | undefined,
+    attributes: unknown,
+  ): void {
+    if (!template) return;
+    const problems = validateTemplateAttributes(template, attributes);
+    if (problems.length > 0) {
+      throw new BadRequestException({
+        code: 'INVALID_TEMPLATE_ATTRIBUTES',
+        message: describeTemplateProblems(problems),
+      });
+    }
+  }
+
+  /**
+   * Sprint 17 (identity lock, item 1 of the final review round): once
+   * an offer is CONFIRMED-matched (canonicalProductId set - sticky,
+   * never cleared by any code path in this system), its brand/
+   * category_template/template_attributes must never change without an
+   * explicit unmatch step that does not exist yet. Called under the
+   * offer's own row lock.
+   */
+  private assertOfferIdentityUnlocked(
+    offer: { canonicalProductId: string | null },
+    touchesIdentity: boolean,
+  ): void {
+    if (offer.canonicalProductId && touchesIdentity) {
+      throw new ConflictException({
+        code: 'CONFIRMED_MATCH_IDENTITY_LOCKED',
+        message:
+          'This offer is matched to a canonical product - brand, category_template and template_attributes cannot be changed until an unmatch path exists',
+      });
+    }
+  }
+
+  /**
+   * Sprint 17 (identity lock): once a VARIANT's own match is CONFIRMED,
+   * its identifier_type/identifier_value cannot change either.
+   */
+  private assertVariantIdentityUnlocked(
+    variant: { matchProposalStatus: string },
+    touchesIdentifier: boolean,
+  ): void {
+    if (variant.matchProposalStatus === 'CONFIRMED' && touchesIdentifier) {
+      throw new ConflictException({
+        code: 'CONFIRMED_MATCH_IDENTITY_LOCKED',
+        message:
+          'This variant is matched to a canonical product - identifier_type/identifier_value cannot be changed until an unmatch path exists',
+      });
+    }
+  }
+
+  // ------------------------------------------------------------------
+
   @Get()
   @RequireVendorRole('OWNER')
   async list(@Param('vendorId') vendorId: string) {
@@ -155,6 +308,24 @@ export class VendorOffersController {
       orderBy: { createdAt: 'asc' },
     });
     return offers.map((o) => this.offerToDto(o));
+  }
+
+  @Get(':offerId')
+  @RequireVendorRole('OWNER')
+  async get(
+    @Param('vendorId') vendorId: string,
+    @Param('offerId') offerId: string,
+  ) {
+    const offer = await this.prisma.vendorOffer.findUnique({
+      where: { id: offerId },
+    });
+    if (!offer || offer.vendorId !== vendorId) {
+      throw new NotFoundException({
+        code: 'VENDOR_OFFER_NOT_FOUND',
+        message: 'Offer not found',
+      });
+    }
+    return this.offerToDto(offer);
   }
 
   @BlockWhenSuspended()
@@ -197,9 +368,32 @@ export class VendorOffersController {
       });
     }
 
+    // Sprint 17 (D1/D2/D3, blocker 2): structural fields are optional
+    // at creation (the publish gate enforces them, not this endpoint) -
+    // but whatever IS supplied must already be internally consistent.
+    if (dto.brand_id) {
+      await this.assertBrandExists(this.prisma, dto.brand_id);
+    }
+    this.assertTemplatePairValid(
+      dto.category_template,
+      dto.template_attributes,
+    );
+
     return this.prisma.$transaction(async (tx) => {
       const offer = await tx.vendorOffer.create({
-        data: { vendorId, titleAr: dto.title_ar, titleEn: dto.title_en },
+        data: {
+          vendorId,
+          titleAr: dto.title_ar,
+          titleEn: dto.title_en,
+          brandId: dto.brand_id ?? null,
+          categoryTemplate: dto.category_template ?? null,
+          // Prisma.DbNull (real SQL NULL), not Prisma.JsonNull (the
+          // JSON literal `null` value) - the CHECK constraint tests
+          // SQL NULL, and a stored JSON `null` would violate it.
+          templateAttributes: dto.category_template
+            ? (dto.template_attributes as Prisma.InputJsonValue)
+            : Prisma.DbNull,
+        },
       });
 
       await this.auditLog.record(
@@ -225,16 +419,248 @@ export class VendorOffersController {
     });
   }
 
+  // Sprint 17 (blocker 2): the owner's real "edit" path - title,
+  // brand, category_template/template_attributes. Refused with 409
+  // CONFIRMED_MATCH_IDENTITY_LOCKED if the offer is already matched and
+  // the request touches brand/category_template/template_attributes
+  // (see assertOfferIdentityUnlocked). On an UNMATCHED offer, changing
+  // title/brand/category/template_attributes automatically re-runs
+  // MatchingService.searchNonExactCandidates() for every one of this
+  // offer's still-unmatched variants, inside this SAME transaction
+  // (item 1 of the final review round) - offerText there is built from
+  // title/specs/brand/template_attributes/colour/size (see
+  // matching.service.ts's own comment), so this is a real re-score, not
+  // a no-op. Never touches media (no signal there to re-score against -
+  // see matching.service.ts).
+  @BlockWhenSuspended()
+  @Put(':offerId')
+  @RequireVendorRole('OWNER')
+  async updateOffer(
+    @Param('vendorId') vendorId: string,
+    @Param('offerId') offerId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: UpdateVendorOfferDto,
+    @Req() req: Request,
+  ) {
+    const touchesIdentity =
+      dto.brand_id !== undefined ||
+      dto.category_template !== undefined ||
+      dto.template_attributes !== undefined;
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM vendor_offers WHERE id = ${offerId} FOR UPDATE`;
+      const offer = await tx.vendorOffer.findUnique({ where: { id: offerId } });
+      if (!offer || offer.vendorId !== vendorId) {
+        throw new NotFoundException({
+          code: 'VENDOR_OFFER_NOT_FOUND',
+          message: 'Offer not found',
+        });
+      }
+      this.assertOfferIdentityUnlocked(offer, touchesIdentity);
+
+      const nextTemplate =
+        dto.category_template !== undefined
+          ? dto.category_template
+          : (offer.categoryTemplate as ClothingCategoryTemplate | null);
+      const nextAttributes =
+        dto.template_attributes !== undefined
+          ? dto.template_attributes
+          : offer.templateAttributes;
+      if (nextTemplate) {
+        this.assertTemplatePairValid(nextTemplate, nextAttributes);
+      } else if (nextAttributes !== null && nextAttributes !== undefined) {
+        throw new BadRequestException({
+          code: 'INVALID_TEMPLATE_ATTRIBUTES',
+          message:
+            'template_attributes must not be set without category_template',
+        });
+      }
+      if (dto.brand_id) {
+        await this.assertBrandExists(tx, dto.brand_id);
+      }
+
+      const data: Prisma.VendorOfferUpdateInput = {};
+      if (dto.title_ar !== undefined) data.titleAr = dto.title_ar;
+      if (dto.title_en !== undefined) data.titleEn = dto.title_en;
+      if (dto.brand_id !== undefined) {
+        data.brand = dto.brand_id
+          ? { connect: { id: dto.brand_id } }
+          : { disconnect: true };
+      }
+      if (dto.category_template !== undefined) {
+        data.categoryTemplate = dto.category_template;
+      }
+      if (
+        dto.template_attributes !== undefined ||
+        dto.category_template !== undefined
+      ) {
+        // Prisma.DbNull, not Prisma.JsonNull - see create()'s own comment.
+        data.templateAttributes = nextTemplate
+          ? (nextAttributes as Prisma.InputJsonValue)
+          : Prisma.DbNull;
+      }
+
+      const updated = await tx.vendorOffer.update({
+        where: { id: offerId },
+        data,
+      });
+
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'vendor_offer.updated',
+          entityType: 'VendorOffer',
+          entityId: offerId,
+          beforeState: this.offerToDto(offer),
+          afterState: this.offerToDto(updated),
+        },
+        tx,
+      );
+
+      // Sprint 17 (item 1): re-run non-exact matching for every
+      // still-unmatched variant, in-transaction, only when a field the
+      // scoring function actually reads changed.
+      const detailChanged =
+        dto.title_ar !== undefined ||
+        dto.title_en !== undefined ||
+        dto.brand_id !== undefined ||
+        dto.category_template !== undefined ||
+        dto.template_attributes !== undefined;
+      if (detailChanged) {
+        const unmatchedVariants = await tx.offerVariant.findMany({
+          where: {
+            vendorOfferId: offerId,
+            matchProposalStatus: { in: ['NONE', 'REJECTED'] },
+          },
+          select: { id: true },
+        });
+        for (const v of unmatchedVariants) {
+          await this.matching.searchNonExactCandidates(vendorId, v.id, tx);
+        }
+      }
+
+      return this.offerToDto(updated);
+    });
+  }
+
+  // Sprint 17 (D5, G-CA-06): archive - a deliberate retirement,
+  // distinct from a quick INACTIVE toggle (see OfferStatus.ARCHIVED's
+  // own schema comment). Only from ACTIVE or INACTIVE, never from
+  // DRAFT (nothing to retire) or already ARCHIVED.
+  @BlockWhenSuspended()
+  @Post(':offerId/archive')
+  @HttpCode(200)
+  @RequireVendorRole('OWNER')
+  async archive(
+    @Param('vendorId') vendorId: string,
+    @Param('offerId') offerId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM vendor_offers WHERE id = ${offerId} FOR UPDATE`;
+      const offer = await tx.vendorOffer.findUnique({ where: { id: offerId } });
+      if (!offer || offer.vendorId !== vendorId) {
+        throw new NotFoundException({
+          code: 'VENDOR_OFFER_NOT_FOUND',
+          message: 'Offer not found',
+        });
+      }
+      if (offer.status !== 'ACTIVE' && offer.status !== 'INACTIVE') {
+        throw new ConflictException({
+          code: 'OFFER_NOT_ARCHIVABLE',
+          message: 'Only an ACTIVE or INACTIVE offer can be archived',
+        });
+      }
+      const updated = await tx.vendorOffer.update({
+        where: { id: offerId },
+        data: { status: 'ARCHIVED', archivedAt: new Date() },
+      });
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'vendor_offer.archived',
+          entityType: 'VendorOffer',
+          entityId: offerId,
+          beforeState: { status: offer.status },
+          afterState: { status: 'ARCHIVED' },
+        },
+        tx,
+      );
+      return this.offerToDto(updated);
+    });
+  }
+
+  // Sprint 17 (D5): restore ALWAYS returns to DRAFT, never straight to
+  // ACTIVE - the publish gate must be re-evaluated (stock/media may
+  // have changed while archived) before it can sell again.
+  @BlockWhenSuspended()
+  @Post(':offerId/restore')
+  @HttpCode(200)
+  @RequireVendorRole('OWNER')
+  async restore(
+    @Param('vendorId') vendorId: string,
+    @Param('offerId') offerId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM vendor_offers WHERE id = ${offerId} FOR UPDATE`;
+      const offer = await tx.vendorOffer.findUnique({ where: { id: offerId } });
+      if (!offer || offer.vendorId !== vendorId) {
+        throw new NotFoundException({
+          code: 'VENDOR_OFFER_NOT_FOUND',
+          message: 'Offer not found',
+        });
+      }
+      if (offer.status !== 'ARCHIVED') {
+        throw new ConflictException({
+          code: 'OFFER_NOT_ARCHIVED',
+          message: 'Only an ARCHIVED offer can be restored',
+        });
+      }
+      const updated = await tx.vendorOffer.update({
+        where: { id: offerId },
+        data: { status: 'DRAFT', archivedAt: null },
+      });
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'vendor_offer.restored',
+          entityType: 'VendorOffer',
+          entityId: offerId,
+          beforeState: { status: 'ARCHIVED' },
+          afterState: { status: 'DRAFT' },
+        },
+        tx,
+      );
+      return this.offerToDto(updated);
+    });
+  }
+
   // Sprint 8 (RB-STOREF-002/RB-COMP-001): the missing piece that lets an
-  // offer ever actually reach OfferStatus.ACTIVE at all - nothing in
-  // Sprints 1-7 ever transitioned an offer away from its DRAFT default
-  // (confirmed by searching this whole codebase before writing this
-  // sprint's public-facing filters), so without this endpoint every
-  // public surface gating on `status === 'ACTIVE'` (store sections,
-  // discovery, comparison - all "لا تعرض عروضاً غير نشطة") would be
-  // permanently unreachable through real usage, not just under-tested.
-  // Owner-only, same as every other catalog/pricing action on this
-  // controller (PDR-009).
+  // offer ever actually reach OfferStatus.ACTIVE at all.
+  //
+  // Sprint 17 (blocker 2, item 4 of the final review round): a
+  // transition INTO 'ACTIVE' now runs the publish gate - title, a
+  // valid category_template+template_attributes pair (only when a
+  // template is set - D2), brand_id set, a PRIMARY IMAGE on at least
+  // one variant, and LIVE available stock (quantity - live reservation,
+  // never the raw reservedQuantity counter - see
+  // common/availability.util.ts) on at least one variant/branch. All
+  // five are evaluated together, inside ONE transaction that locks the
+  // offer row FIRST and then every relevant branch_stock row (FOR
+  // SHARE, sorted by stockLockKey - the exact canonical order
+  // checkout.service.ts's own reserve()/confirm()/cancel() already use,
+  // so a concurrent reservation against the same stock can never
+  // deadlock against a concurrent publish attempt - see this method's
+  // own reasoning below for why no cycle is possible). The gate never
+  // retroactively touches an offer that was already ACTIVE before this
+  // sprint, and never blocks saving a DRAFT with partial data - only
+  // an actual transition attempt into ACTIVE is checked.
   @BlockWhenSuspended()
   @Patch(':offerId/status')
   @RequireVendorRole('OWNER')
@@ -245,29 +671,138 @@ export class VendorOffersController {
     @Body() dto: UpdateVendorOfferStatusDto,
     @Req() req: Request,
   ) {
-    const offer = await this.prisma.vendorOffer.findUnique({
-      where: { id: offerId },
-    });
-    if (!offer || offer.vendorId !== vendorId) {
-      throw new NotFoundException({
-        code: 'VENDOR_OFFER_NOT_FOUND',
-        message: 'Offer not found',
+    if (dto.status === 'ARCHIVED') {
+      throw new BadRequestException({
+        code: 'USE_ARCHIVE_ENDPOINT',
+        message: 'Use POST .../offers/:offerId/archive to archive an offer',
       });
     }
-    const updated = await this.prisma.vendorOffer.update({
-      where: { id: offerId },
-      data: { status: dto.status },
+
+    return this.prisma.$transaction(async (tx) => {
+      // Locks the offer row first - vendor_offers never intersects
+      // checkout.service.ts's own lock set (it locks `vendors`, never
+      // `vendor_offers`), so a publish transaction and a checkout
+      // transaction can never form a lock-order cycle against each
+      // other, by construction, not by convention.
+      await tx.$queryRaw`SELECT id FROM vendor_offers WHERE id = ${offerId} FOR UPDATE`;
+      const offer = await tx.vendorOffer.findUnique({ where: { id: offerId } });
+      if (!offer || offer.vendorId !== vendorId) {
+        throw new NotFoundException({
+          code: 'VENDOR_OFFER_NOT_FOUND',
+          message: 'Offer not found',
+        });
+      }
+      if (offer.status === 'ARCHIVED') {
+        throw new ConflictException({
+          code: 'OFFER_ARCHIVED',
+          message: 'Restore this offer before changing its status',
+        });
+      }
+
+      if (dto.status === 'ACTIVE') {
+        await this.assertPublishGate(tx, vendorId, offer);
+      }
+
+      const updated = await tx.vendorOffer.update({
+        where: { id: offerId },
+        data: { status: dto.status },
+      });
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'vendor_offer.status_updated',
+          entityType: 'VendorOffer',
+          entityId: offerId,
+          beforeState: { status: offer.status },
+          afterState: { status: updated.status },
+        },
+        tx,
+      );
+      return this.offerToDto(updated);
     });
-    await this.auditLog.record({
-      actorId: user.id,
-      correlationId: req.correlationId,
-      action: 'vendor_offer.status_updated',
-      entityType: 'VendorOffer',
-      entityId: offerId,
-      beforeState: { status: offer.status },
-      afterState: { status: updated.status },
+  }
+
+  private async assertPublishGate(
+    tx: Prisma.TransactionClient,
+    vendorId: string,
+    offer: {
+      id: string;
+      titleAr: string;
+      titleEn: string;
+      brandId: string | null;
+      categoryTemplate: string | null;
+      templateAttributes: Prisma.JsonValue | null;
+    },
+  ): Promise<void> {
+    const missing: string[] = [];
+
+    if (!offer.titleAr || !offer.titleEn) missing.push('title');
+    if (!offer.brandId) missing.push('brand');
+    if (offer.categoryTemplate) {
+      const problems = validateTemplateAttributes(
+        offer.categoryTemplate as ClothingCategoryTemplate,
+        offer.templateAttributes,
+      );
+      if (problems.length > 0) missing.push('template_attributes');
+    }
+
+    const variants = await tx.offerVariant.findMany({
+      where: { vendorOfferId: offer.id },
+      select: { id: true, basePrice: true },
     });
-    return this.offerToDto(updated);
+    if (variants.length === 0) {
+      missing.push('primary_image', 'available_stock');
+    } else {
+      const variantIds = variants.map((v) => v.id);
+
+      const primaryImage = await tx.offerVariantMedia.findFirst({
+        where: {
+          offerVariantId: { in: variantIds },
+          kind: 'PRIMARY',
+          mediaType: 'IMAGE',
+        },
+      });
+      if (!primaryImage) missing.push('primary_image');
+
+      // Sprint 17 (item 4 of the final review round): lock every
+      // relevant branch_stock row FOR SHARE, sorted by the canonical
+      // stockLockKey, BEFORE reading live availability - this is what
+      // makes the read race-free against a concurrent reserve()/POS
+      // movement (which takes FOR UPDATE on the same row): whichever
+      // side gets there first is fully committed before the other
+      // proceeds. A plain read (no lock) would let a concurrent
+      // reserve() consume the last unit between this read and the
+      // status UPDATE below.
+      const stocks = await tx.branchStock.findMany({
+        where: { vendorId, offerVariantId: { in: variantIds } },
+        select: { branchId: true, offerVariantId: true, quantity: true },
+      });
+      const sortedStocks = [...stocks].sort((a, b) => {
+        const ka = `${vendorId}:${a.branchId}:${a.offerVariantId}`;
+        const kb = `${vendorId}:${b.branchId}:${b.offerVariantId}`;
+        return ka < kb ? -1 : ka > kb ? 1 : 0;
+      });
+      for (const s of sortedStocks) {
+        await tx.$queryRaw`SELECT id FROM branch_stock WHERE "vendorId" = ${vendorId} AND "branchId" = ${s.branchId} AND "offerVariantId" = ${s.offerVariantId} FOR SHARE`;
+      }
+      const liveReserved = await liveReservedQuantityByKey(tx, sortedStocks);
+      const available = totalAvailableStockLive(sortedStocks, liveReserved);
+      if (available <= 0) missing.push('available_stock');
+    }
+
+    if (missing.length > 0) {
+      // HttpExceptionFilter only ever forwards code/message/details to
+      // the client (never an arbitrary custom property) - the same
+      // `details` convention CHECKOUT_PRICE_CHANGED already uses is
+      // what carries this structured list, not a one-off `missing` key
+      // that the filter would silently drop.
+      throw new BadRequestException({
+        code: 'OFFER_NOT_PUBLISHABLE',
+        message: `This offer cannot be published yet: ${missing.join(', ')}`,
+        details: missing,
+      });
+    }
   }
 
   // Sprint 3 remediation (FR-MATCH-012, Sec 3.2, S3-B03 - not PDR-012,
@@ -301,6 +836,17 @@ export class VendorOffersController {
       });
     }
 
+    // Sprint 17 (blocker 1): mutual exclusivity checked before any
+    // write, same rule as updateVariant().
+    if (dto.sale_price !== undefined && dto.discount_percent !== undefined) {
+      throw new BadRequestException({
+        code: 'PRICE_MODE_CONFLICT',
+        message:
+          'sale_price and discount_percent cannot both be set - choose one',
+      });
+    }
+    const priceFields = this.resolveDiscountFields(dto);
+
     let proposed: { canonicalVariantId: string | null } = {
       canonicalVariantId: null,
     };
@@ -333,13 +879,38 @@ export class VendorOffersController {
             sellerSku: dto.seller_sku,
             condition: dto.condition,
             basePrice: dto.base_price,
-            salePrice: dto.sale_price,
+            salePrice: priceFields.salePrice,
+            discountPercent: priceFields.discountPercent,
+            discountStartAt: priceFields.discountStartAt,
+            discountEndAt: priceFields.discountEndAt,
+            colour: dto.colour,
+            size: dto.size,
             specsTextAr: dto.specs_text_ar,
             specsTextEn: dto.specs_text_en,
             identifierType: dto.identifier_type,
             identifierValue: dto.identifier_value,
             storeInventoryBarcode:
               dto.store_inventory_barcode ?? generateStoreInventoryBarcode(id),
+          },
+        });
+
+        // Sprint 17 (blocker 1): the very first PriceHistory row - not
+        // only PATCH writes one. One captured `now` for both changedAt
+        // and the effective-price snapshot.
+        const now = new Date();
+        await tx.priceHistory.create({
+          data: {
+            vendorId,
+            offerVariantId: created.id,
+            basePrice: created.basePrice,
+            salePrice: created.salePrice,
+            discountPercent: created.discountPercent,
+            discountStartAt: created.discountStartAt,
+            discountEndAt: created.discountEndAt,
+            effectivePriceAtChange: computeEffectivePrice(created, now),
+            reason: 'MANUAL_EDIT',
+            changedBy: user.id,
+            changedAt: now,
           },
         });
 
@@ -404,6 +975,360 @@ export class VendorOffersController {
     }
 
     return variant;
+  }
+
+  /**
+   * Sprint 17 (blocker 1): resolves the create/update DTO's price
+   * fields into the exact columns to write - discount_percent/start/end
+   * given together become the scheduled discount and clear salePrice;
+   * sale_price given becomes the manual override; range/window checks
+   * that mirror the DB CHECK constraints exactly, plus the
+   * rounding-to-zero guard the CHECK constraints cannot express.
+   */
+  private resolveDiscountFields(dto: {
+    sale_price?: number | null;
+    discount_percent?: number | null;
+    discount_start_at?: string | null;
+    discount_end_at?: string | null;
+    base_price?: number;
+  }): {
+    salePrice: number | null;
+    discountPercent: number | null;
+    discountStartAt: Date | null;
+    discountEndAt: Date | null;
+  } {
+    const hasDiscount =
+      dto.discount_percent !== undefined ||
+      dto.discount_start_at !== undefined ||
+      dto.discount_end_at !== undefined;
+    if (hasDiscount) {
+      const pct = dto.discount_percent;
+      const start = dto.discount_start_at;
+      const end = dto.discount_end_at;
+      if (pct == null || !start || !end) {
+        throw new BadRequestException({
+          code: 'INCOMPLETE_DISCOUNT_WINDOW',
+          message:
+            'discount_percent, discount_start_at and discount_end_at must all be provided together',
+        });
+      }
+      if (!(pct > 0 && pct < 100)) {
+        throw new BadRequestException({
+          code: 'DISCOUNT_PERCENT_OUT_OF_RANGE',
+          message: 'discount_percent must be greater than 0 and less than 100',
+        });
+      }
+      const startDate = new Date(start);
+      const endDate = new Date(end);
+      if (!(startDate < endDate)) {
+        throw new BadRequestException({
+          code: 'INVALID_DISCOUNT_WINDOW',
+          message: 'discount_start_at must be before discount_end_at',
+        });
+      }
+      if (dto.base_price !== undefined) {
+        const resultCents = Math.round(dto.base_price * (1 - pct / 100) * 100);
+        if (resultCents <= 0) {
+          throw new BadRequestException({
+            code: 'DISCOUNT_RESULTS_IN_ZERO_PRICE',
+            message: 'This discount would round the price to zero or less',
+          });
+        }
+      }
+      return {
+        salePrice: null,
+        discountPercent: pct,
+        discountStartAt: startDate,
+        discountEndAt: endDate,
+      };
+    }
+    if (dto.sale_price !== undefined) {
+      // Sprint 17 review fix: this branch is only ever reached from
+      // createVariant() (updateVariant() validates sale_price itself,
+      // separately, since it must compare against a possibly-unchanged
+      // EXISTING basePrice) - without this check, an invalid sale_price
+      // at creation skipped all application-level validation and fell
+      // through to the raw DB CHECK constraint, crashing with an
+      // unhandled 500 instead of a clean 400.
+      if (
+        dto.base_price !== undefined &&
+        !(dto.sale_price > 0 && dto.sale_price < dto.base_price)
+      ) {
+        throw new BadRequestException({
+          code: 'INVALID_SALE_PRICE',
+          message: 'sale_price must be positive and less than base_price',
+        });
+      }
+      return {
+        salePrice: dto.sale_price,
+        discountPercent: null,
+        discountStartAt: null,
+        discountEndAt: null,
+      };
+    }
+    return {
+      salePrice: null,
+      discountPercent: null,
+      discountStartAt: null,
+      discountEndAt: null,
+    };
+  }
+
+  // Sprint 17 (blocker 2, item 1 of the final review round): the
+  // owner's real "edit a variant" path. Locks the variant row first
+  // (same row PriceHistory is written under). Refuses
+  // identifier_type/identifier_value on a CONFIRMED variant (409
+  // CONFIRMED_MATCH_IDENTITY_LOCKED). Writes a PriceHistory row only
+  // when the resolved price configuration actually differs from what
+  // is already stored (never on a no-op PATCH), using ONE captured
+  // `now` for both changedAt and effectivePriceAtChange. Re-runs
+  // MatchingService in-transaction: findExactMatch() when the
+  // identifier changed on an unmatched variant (mirrors createVariant());
+  // searchNonExactCandidates() when specs/colour/size changed on an
+  // unmatched variant.
+  @BlockWhenSuspended()
+  @Put(':offerId/variants/:variantId')
+  @RequireVendorRole('OWNER')
+  async updateVariant(
+    @Param('vendorId') vendorId: string,
+    @Param('offerId') offerId: string,
+    @Param('variantId') variantId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: UpdateOfferVariantDto,
+    @Req() req: Request,
+  ) {
+    if (
+      dto.sale_price !== undefined &&
+      dto.sale_price !== null &&
+      (dto.discount_percent !== undefined ||
+        dto.discount_start_at !== undefined ||
+        dto.discount_end_at !== undefined) &&
+      (dto.discount_percent !== null ||
+        dto.discount_start_at !== null ||
+        dto.discount_end_at !== null)
+    ) {
+      throw new BadRequestException({
+        code: 'PRICE_MODE_CONFLICT',
+        message:
+          'sale_price and discount_percent cannot both be set - choose one',
+      });
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM offer_variants WHERE id = ${variantId} FOR UPDATE`;
+      const variant = await tx.offerVariant.findUnique({
+        where: { id: variantId },
+      });
+      if (
+        !variant ||
+        variant.vendorId !== vendorId ||
+        variant.vendorOfferId !== offerId
+      ) {
+        throw new NotFoundException({
+          code: 'OFFER_VARIANT_NOT_FOUND',
+          message: 'Offer variant not found for this offer',
+        });
+      }
+      const touchesIdentifier =
+        dto.identifier_type !== undefined || dto.identifier_value !== undefined;
+      this.assertVariantIdentityUnlocked(variant, touchesIdentifier);
+
+      const nextBasePrice = dto.base_price ?? Number(variant.basePrice);
+      let nextSalePrice: number | null = variant.salePrice
+        ? Number(variant.salePrice)
+        : null;
+      let nextDiscountPercent: number | null = variant.discountPercent
+        ? Number(variant.discountPercent)
+        : null;
+      let nextDiscountStartAt: Date | null = variant.discountStartAt;
+      let nextDiscountEndAt: Date | null = variant.discountEndAt;
+
+      const discountFieldsTouched =
+        dto.discount_percent !== undefined ||
+        dto.discount_start_at !== undefined ||
+        dto.discount_end_at !== undefined;
+      if (dto.sale_price !== undefined) {
+        // Setting sale_price (including explicit null) clears any
+        // scheduled discount - mutual exclusivity (blocker 1).
+        nextSalePrice = dto.sale_price;
+        nextDiscountPercent = null;
+        nextDiscountStartAt = null;
+        nextDiscountEndAt = null;
+      } else if (discountFieldsTouched) {
+        const resolved = this.resolveDiscountFields({
+          discount_percent: dto.discount_percent,
+          discount_start_at: dto.discount_start_at,
+          discount_end_at: dto.discount_end_at,
+          base_price: nextBasePrice,
+        });
+        // A null in any one discount field means "clear the discount".
+        if (
+          dto.discount_percent === null ||
+          dto.discount_start_at === null ||
+          dto.discount_end_at === null
+        ) {
+          nextDiscountPercent = null;
+          nextDiscountStartAt = null;
+          nextDiscountEndAt = null;
+        } else {
+          nextDiscountPercent = resolved.discountPercent;
+          nextDiscountStartAt = resolved.discountStartAt;
+          nextDiscountEndAt = resolved.discountEndAt;
+        }
+        nextSalePrice = null;
+      } else if (dto.base_price !== undefined && nextDiscountPercent !== null) {
+        // base_price alone changed while a scheduled discount is still
+        // active - re-check the rounding-to-zero guard against the NEW
+        // base price.
+        const resultCents = Math.round(
+          nextBasePrice * (1 - nextDiscountPercent / 100) * 100,
+        );
+        if (resultCents <= 0) {
+          throw new BadRequestException({
+            code: 'DISCOUNT_RESULTS_IN_ZERO_PRICE',
+            message:
+              'This base_price would make the existing discount round the price to zero or less',
+          });
+        }
+      }
+      if (
+        nextSalePrice !== null &&
+        !(nextSalePrice > 0 && nextSalePrice < nextBasePrice)
+      ) {
+        throw new BadRequestException({
+          code: 'INVALID_SALE_PRICE',
+          message: 'sale_price must be positive and less than base_price',
+        });
+      }
+
+      const data: Prisma.OfferVariantUpdateInput = {};
+      if (dto.condition !== undefined) data.condition = dto.condition;
+      if (dto.base_price !== undefined) data.basePrice = dto.base_price;
+      data.salePrice = nextSalePrice;
+      data.discountPercent = nextDiscountPercent;
+      data.discountStartAt = nextDiscountStartAt;
+      data.discountEndAt = nextDiscountEndAt;
+      if (dto.colour !== undefined) data.colour = dto.colour;
+      if (dto.size !== undefined) data.size = dto.size;
+      if (dto.specs_text_ar !== undefined) data.specsTextAr = dto.specs_text_ar;
+      if (dto.specs_text_en !== undefined) data.specsTextEn = dto.specs_text_en;
+      if (dto.identifier_type !== undefined)
+        data.identifierType = dto.identifier_type;
+      if (dto.identifier_value !== undefined)
+        data.identifierValue = dto.identifier_value;
+
+      const updated = await tx.offerVariant.update({
+        where: { id: variantId },
+        data,
+      });
+
+      const priceChanged =
+        Number(variant.basePrice) !== Number(updated.basePrice) ||
+        (variant.salePrice ? Number(variant.salePrice) : null) !==
+          nextSalePrice ||
+        (variant.discountPercent ? Number(variant.discountPercent) : null) !==
+          nextDiscountPercent ||
+        (variant.discountStartAt?.getTime() ?? null) !==
+          (nextDiscountStartAt?.getTime() ?? null) ||
+        (variant.discountEndAt?.getTime() ?? null) !==
+          (nextDiscountEndAt?.getTime() ?? null);
+      if (priceChanged) {
+        const now = new Date();
+        await tx.priceHistory.create({
+          data: {
+            vendorId,
+            offerVariantId: variantId,
+            basePrice: updated.basePrice,
+            salePrice: updated.salePrice,
+            discountPercent: updated.discountPercent,
+            discountStartAt: updated.discountStartAt,
+            discountEndAt: updated.discountEndAt,
+            effectivePriceAtChange: computeEffectivePrice(updated, now),
+            reason: 'MANUAL_EDIT',
+            changedBy: user.id,
+            changedAt: now,
+          },
+        });
+      }
+
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'offer_variant.updated',
+          entityType: 'OfferVariant',
+          entityId: variantId,
+          beforeState: this.variantToDto(variant),
+          afterState: this.variantToDto(updated),
+        },
+        tx,
+      );
+
+      // Sprint 17 (item 1): identifier re-proposal on an unmatched
+      // variant - same function createVariant() uses.
+      if (touchesIdentifier && updated.matchProposalStatus !== 'CONFIRMED') {
+        if (updated.identifierType && updated.identifierValue) {
+          const match = await this.matching.findExactMatch(
+            updated.identifierType,
+            updated.identifierValue,
+            tx,
+          );
+          await tx.offerVariant.update({
+            where: { id: variantId },
+            data: {
+              proposedCanonicalVariantId: match.canonicalVariantId,
+              matchProposalStatus: match.canonicalVariantId
+                ? 'PENDING'
+                : 'NONE',
+            },
+          });
+        }
+      }
+      // Sprint 17 (item 1): non-exact rerun on this one variant, only
+      // for fields the scoring function reads (specs/colour/size) -
+      // never on media (see matching.service.ts's own comment).
+      const detailChanged =
+        dto.specs_text_ar !== undefined ||
+        dto.specs_text_en !== undefined ||
+        dto.colour !== undefined ||
+        dto.size !== undefined;
+      if (detailChanged && updated.matchProposalStatus !== 'CONFIRMED') {
+        await this.matching.searchNonExactCandidates(vendorId, variantId, tx);
+      }
+
+      const finalVariant = await tx.offerVariant.findUniqueOrThrow({
+        where: { id: variantId },
+      });
+      return this.variantToDto(finalVariant);
+    });
+  }
+
+  // Sprint 17 (FR-PRICE-002): read-only price history for one variant.
+  @Get(':offerId/variants/:variantId/price-history')
+  @RequireVendorRole('OWNER')
+  async priceHistory(
+    @Param('vendorId') vendorId: string,
+    @Param('offerId') offerId: string,
+    @Param('variantId') variantId: string,
+  ) {
+    await this.requireVariant(vendorId, offerId, variantId);
+    const rows = await this.prisma.priceHistory.findMany({
+      where: { vendorId, offerVariantId: variantId },
+      orderBy: { changedAt: 'desc' },
+    });
+    return rows.map((r) => ({
+      id: r.id,
+      base_price: r.basePrice.toString(),
+      sale_price: r.salePrice?.toString() ?? null,
+      discount_percent: r.discountPercent?.toString() ?? null,
+      discount_start_at: r.discountStartAt?.toISOString() ?? null,
+      discount_end_at: r.discountEndAt?.toISOString() ?? null,
+      effective_price_at_change: r.effectivePriceAtChange.toString(),
+      currency: r.currency,
+      reason: r.reason,
+      changed_by: r.changedBy,
+      changed_at: r.changedAt.toISOString(),
+    }));
   }
 
   // Sprint 3 remediation (FR-MATCH-012, Sec 3.2, S3-B03 - not PDR-012,
@@ -611,22 +1536,6 @@ export class VendorOffersController {
     return variants.map((v) => this.variantToDto(v));
   }
 
-  private mediaToDto(media: {
-    id: string;
-    offerVariantId: string;
-    url: string;
-    kind: string;
-    createdAt: Date;
-  }) {
-    return {
-      id: media.id,
-      offer_variant_id: media.offerVariantId,
-      url: media.url,
-      kind: media.kind,
-      created_at: media.createdAt.toISOString(),
-    };
-  }
-
   private async requireVariant(
     vendorId: string,
     offerId: string,
@@ -645,6 +1554,7 @@ export class VendorOffersController {
         message: 'Offer variant not found for this offer',
       });
     }
+    return variant;
   }
 
   // Sprint 6 (RB-MATCH-001): "صلاحيات الوسائط Owner-only" (media
@@ -655,6 +1565,13 @@ export class VendorOffersController {
   // the partial unique index (offer_variant_media_primary_per_variant_key)
   // is what this would otherwise conflict against if done as a plain
   // insert.
+  //
+  // Sprint 17 (D9, item 5 of the final review round): media_type is now
+  // mandatory; PRIMARY may only be IMAGE (checked here AND by the DB
+  // CHECK). The per-variant row lock is now taken for EVERY insert, not
+  // only PRIMARY ones - the 10-image/3-video count-then-insert check
+  // below is itself a check-then-act race without it. sortOrder is
+  // assigned deterministically under the same lock.
   @BlockWhenSuspended()
   @Post(':offerId/variants/:variantId/media')
   @HttpCode(201)
@@ -670,32 +1587,51 @@ export class VendorOffersController {
   ) {
     await this.requireVariant(vendorId, offerId, variantId);
     const kind = dto.kind ?? 'ADDITIONAL';
+    if (kind === 'PRIMARY' && dto.media_type === 'VIDEO') {
+      throw new BadRequestException({
+        code: 'PRIMARY_MUST_BE_IMAGE',
+        message: 'A PRIMARY media item must be an IMAGE, never a VIDEO',
+      });
+    }
 
     let body;
     try {
       body = await this.prisma.$transaction(async (tx) => {
+        // Sprint 17: locked for every insert now (not just PRIMARY) -
+        // see this method's own comment.
+        await tx.$queryRaw`SELECT id FROM offer_variants WHERE id = ${variantId} FOR UPDATE`;
+
+        const existing = await tx.offerVariantMedia.findMany({
+          where: { offerVariantId: variantId, mediaType: dto.media_type },
+          select: { id: true },
+        });
+        if (existing.length >= MEDIA_LIMITS[dto.media_type]) {
+          throw new ConflictException({
+            code: 'MEDIA_LIMIT_REACHED',
+            message: `This variant already has the maximum of ${MEDIA_LIMITS[dto.media_type]} ${dto.media_type.toLowerCase()} items`,
+          });
+        }
+
         if (kind === 'PRIMARY') {
-          // Review-round finding: two concurrent PRIMARY requests for
-          // the same variant could both pass deleteMany() (each seeing
-          // the same pre-race state, or no existing row at all) and
-          // then race each other's create() against the partial unique
-          // index (offer_variant_media_primary_per_variant_key) - the
-          // index correctly stops a second PRIMARY row from ever
-          // existing, but the *loser* of that race got there via a
-          // raw P2002/500, not the atomic replace this endpoint's own
-          // contract promises. Locking the OfferVariant row itself
-          // first (a fixed, per-variant key - ADDITIONAL inserts never
-          // take this lock and stay fully concurrent) serializes the
-          // two delete-then-insert sequences, so the second transaction
-          // always sees the first's already-committed delete before it
-          // deletes/inserts anything itself.
-          await tx.$queryRaw`SELECT id FROM offer_variants WHERE id = ${variantId} FOR UPDATE`;
           await tx.offerVariantMedia.deleteMany({
             where: { offerVariantId: variantId, kind: 'PRIMARY' },
           });
         }
+        const maxSort = await tx.offerVariantMedia.aggregate({
+          where: { offerVariantId: variantId },
+          _max: { sortOrder: true },
+        });
         const media = await tx.offerVariantMedia.create({
-          data: { vendorId, offerVariantId: variantId, url: dto.url, kind },
+          data: {
+            vendorId,
+            offerVariantId: variantId,
+            url: dto.url,
+            kind,
+            mediaType: dto.media_type,
+            altTextAr: dto.alt_text_ar,
+            altTextEn: dto.alt_text_en,
+            sortOrder: (maxSort._max.sortOrder ?? -1) + 1,
+          },
         });
 
         await this.auditLog.record(
@@ -720,6 +1656,7 @@ export class VendorOffersController {
         return responseBody;
       });
     } catch (err) {
+      if (err instanceof ConflictException) throw err;
       // Defensive only - the FOR UPDATE lock above already makes this
       // unreachable for PRIMARY under normal operation; kept in case a
       // future caller ever creates ADDITIONAL/PRIMARY rows through a
@@ -749,9 +1686,118 @@ export class VendorOffersController {
     await this.requireVariant(vendorId, offerId, variantId);
     const media = await this.prisma.offerVariantMedia.findMany({
       where: { offerVariantId: variantId },
-      orderBy: { createdAt: 'asc' },
+      orderBy: { sortOrder: 'asc' },
     });
     return media.map((m) => this.mediaToDto(m));
+  }
+
+  // Sprint 17 (FR-CAT-005): alt text only.
+  @BlockWhenSuspended()
+  @Patch(':offerId/variants/:variantId/media/:mediaId')
+  @RequireVendorRole('OWNER')
+  async updateVariantMedia(
+    @Param('vendorId') vendorId: string,
+    @Param('offerId') offerId: string,
+    @Param('variantId') variantId: string,
+    @Param('mediaId') mediaId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: UpdateOfferVariantMediaDto,
+    @Req() req: Request,
+  ) {
+    await this.requireVariant(vendorId, offerId, variantId);
+    const media = await this.prisma.offerVariantMedia.findUnique({
+      where: { id: mediaId },
+    });
+    if (!media || media.offerVariantId !== variantId) {
+      throw new NotFoundException({
+        code: 'OFFER_VARIANT_MEDIA_NOT_FOUND',
+        message: 'Media not found for this offer variant',
+      });
+    }
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.offerVariantMedia.update({
+        where: { id: mediaId },
+        data: {
+          altTextAr:
+            dto.alt_text_ar !== undefined ? dto.alt_text_ar : undefined,
+          altTextEn:
+            dto.alt_text_en !== undefined ? dto.alt_text_en : undefined,
+        },
+      });
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'offer_variant_media.updated',
+          entityType: 'OfferVariantMedia',
+          entityId: mediaId,
+          beforeState: this.mediaToDto(media),
+          afterState: this.mediaToDto(result),
+        },
+        tx,
+      );
+      return result;
+    });
+    return this.mediaToDto(updated);
+  }
+
+  // Sprint 17 (D9): reorder - same pattern as
+  // StoreSectionsController.reorder() (BOLA-safe: the provided id set
+  // must be EXACTLY this variant's own media ids, no more, no fewer).
+  @BlockWhenSuspended()
+  @Put(':offerId/variants/:variantId/media/reorder')
+  @RequireVendorRole('OWNER')
+  async reorderVariantMedia(
+    @Param('vendorId') vendorId: string,
+    @Param('offerId') offerId: string,
+    @Param('variantId') variantId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: ReorderOfferVariantMediaDto,
+    @Req() req: Request,
+  ) {
+    await this.requireVariant(vendorId, offerId, variantId);
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM offer_variants WHERE id = ${variantId} FOR UPDATE`;
+      const existing = await tx.offerVariantMedia.findMany({
+        where: { offerVariantId: variantId },
+      });
+      const existingIds = new Set(existing.map((m) => m.id));
+      const providedIds = dto.media_ids;
+      const providedSet = new Set(providedIds);
+      if (
+        providedSet.size !== providedIds.length ||
+        providedSet.size !== existingIds.size ||
+        ![...providedSet].every((id) => existingIds.has(id))
+      ) {
+        throw new ForbiddenException({
+          code: 'MEDIA_REORDER_MISMATCH',
+          message:
+            "media_ids must contain exactly this variant's own media ids, each exactly once",
+        });
+      }
+      for (let i = 0; i < providedIds.length; i += 1) {
+        await tx.offerVariantMedia.update({
+          where: { id: providedIds[i] },
+          data: { sortOrder: i },
+        });
+      }
+      const reordered = await tx.offerVariantMedia.findMany({
+        where: { offerVariantId: variantId },
+        orderBy: { sortOrder: 'asc' },
+      });
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'offer_variant_media.reordered',
+          entityType: 'OfferVariant',
+          entityId: variantId,
+          afterState: { media_ids: providedIds },
+        },
+        tx,
+      );
+      return reordered.map((m) => this.mediaToDto(m));
+    });
   }
 
   @BlockWhenSuspended()

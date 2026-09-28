@@ -797,7 +797,11 @@ describe('Sprint 6 - branch inventory, stock movements, media, non-exact match r
         )
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('media'))
-        .send({ url: 'https://example.com/hero.jpg', kind: 'PRIMARY' })
+        .send({
+          url: 'https://example.com/hero.jpg',
+          kind: 'PRIMARY',
+          media_type: 'IMAGE',
+        })
         .expect(201);
       expect(primary.body.kind).toBe('PRIMARY');
 
@@ -807,7 +811,7 @@ describe('Sprint 6 - branch inventory, stock movements, media, non-exact match r
         )
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('media'))
-        .send({ url: 'https://example.com/side.jpg' })
+        .send({ url: 'https://example.com/side.jpg', media_type: 'IMAGE' })
         .expect(201);
 
       const list = await request(app.getHttpServer())
@@ -839,7 +843,11 @@ describe('Sprint 6 - branch inventory, stock movements, media, non-exact match r
         )
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('media'))
-        .send({ url: 'https://example.com/old.jpg', kind: 'PRIMARY' })
+        .send({
+          url: 'https://example.com/old.jpg',
+          kind: 'PRIMARY',
+          media_type: 'IMAGE',
+        })
         .expect(201);
 
       const second = await request(app.getHttpServer())
@@ -848,7 +856,11 @@ describe('Sprint 6 - branch inventory, stock movements, media, non-exact match r
         )
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('media'))
-        .send({ url: 'https://example.com/new.jpg', kind: 'PRIMARY' })
+        .send({
+          url: 'https://example.com/new.jpg',
+          kind: 'PRIMARY',
+          media_type: 'IMAGE',
+        })
         .expect(201);
 
       const list = await request(app.getHttpServer())
@@ -883,14 +895,22 @@ describe('Sprint 6 - branch inventory, stock movements, media, non-exact match r
           )
           .set('Authorization', `Bearer ${owner}`)
           .set('Idempotency-Key', unique('media-race-a'))
-          .send({ url: 'https://example.com/race-a.jpg', kind: 'PRIMARY' }),
+          .send({
+            url: 'https://example.com/race-a.jpg',
+            kind: 'PRIMARY',
+            media_type: 'IMAGE',
+          }),
         request(app.getHttpServer())
           .post(
             `/api/v1/vendors/${vendorId}/offers/${offerId}/variants/${variantId}/media`,
           )
           .set('Authorization', `Bearer ${owner}`)
           .set('Idempotency-Key', unique('media-race-b'))
-          .send({ url: 'https://example.com/race-b.jpg', kind: 'PRIMARY' }),
+          .send({
+            url: 'https://example.com/race-b.jpg',
+            kind: 'PRIMARY',
+            media_type: 'IMAGE',
+          }),
       ]);
 
       // Both requests are legitimate "set the primary image" calls -
@@ -932,7 +952,7 @@ describe('Sprint 6 - branch inventory, stock movements, media, non-exact match r
         )
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('media'))
-        .send({ url: 'https://example.com/x.jpg' })
+        .send({ url: 'https://example.com/x.jpg', media_type: 'IMAGE' })
         .expect(201);
 
       await request(app.getHttpServer())
@@ -966,7 +986,7 @@ describe('Sprint 6 - branch inventory, stock movements, media, non-exact match r
         )
         .set('Authorization', `Bearer ${employeeToken}`)
         .set('Idempotency-Key', unique('media'))
-        .send({ url: 'https://example.com/x.jpg' })
+        .send({ url: 'https://example.com/x.jpg', media_type: 'IMAGE' })
         .expect(403);
       expect(addRes.body.error.code).toBe('VENDOR_ROLE_FORBIDDEN');
 

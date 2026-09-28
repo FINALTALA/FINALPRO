@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { AuditLogService } from '../audit/audit-log.service';
-import { liveReservedQuantityByKey } from '../common/availability.util';
+import { liveReservedQuantityByKey, stockLockKey } from '../common/availability.util';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import {
   BranchOrderPaymentMethod,
@@ -34,15 +34,18 @@ import {
 } from './sandbox-payment.service';
 import { QuoteCheckoutDto } from './dto/quote-checkout.dto';
 import { ReserveCheckoutDto } from './dto/reserve-checkout.dto';
+import { PriceConfig, computeEffectivePrice } from '../offers/pricing/effective-price.util';
 
 const RESERVATION_TTL_MS = 10 * 60 * 1000;
 const PICKUP_CODE_MAX_ATTEMPTS = 10;
 
-function effectivePrice(variant: {
-  basePrice: unknown;
-  salePrice: unknown;
-}): number {
-  return Number(variant.salePrice ?? variant.basePrice);
+// Sprint 17 (blocker 1): delegates to the single shared
+// computeEffectivePrice() - every call site below is unchanged, only
+// this function's own body moved to the shared utility so cart,
+// comparison and the public storefront can never compute a different
+// number for the "same" variant.
+function effectivePrice(variant: PriceConfig): number {
+  return computeEffectivePrice(variant);
 }
 
 function utcDateOnly(d: Date): Date {
@@ -93,13 +96,6 @@ function isUniqueViolation(err: unknown): boolean {
  * makes that order consistent across every caller, regardless of what
  * order the customer's own request happened to list groups/items in.
  */
-function stockLockKey(
-  vendorId: string,
-  branchId: string,
-  offerVariantId: string,
-): string {
-  return `${vendorId}:${branchId}:${offerVariantId}`;
-}
 function windowLockKey(
   vendorId: string,
   branchId: string,
@@ -157,6 +153,9 @@ export class CheckoutService {
           select: {
             basePrice: true,
             salePrice: true,
+            discountPercent: true,
+            discountStartAt: true,
+            discountEndAt: true,
             vendorOffer: { select: { titleAr: true, titleEn: true } },
           },
         },
@@ -403,7 +402,15 @@ export class CheckoutService {
       const cartItems = await tx.cartItem.findMany({
         where: { id: { in: allCartItemIds }, customerId },
         include: {
-          offerVariant: { select: { basePrice: true, salePrice: true } },
+          offerVariant: {
+            select: {
+              basePrice: true,
+              salePrice: true,
+              discountPercent: true,
+              discountStartAt: true,
+              discountEndAt: true,
+            },
+          },
         },
       });
       if (cartItems.length !== allCartItemIds.length) {

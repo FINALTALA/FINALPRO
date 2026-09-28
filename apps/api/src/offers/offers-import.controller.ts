@@ -4,10 +4,12 @@ import {
   BadRequestException,
   Controller,
   ForbiddenException,
+  Get,
   HttpCode,
   NotFoundException,
   Param,
   Post,
+  Query,
   Req,
   UploadedFile,
   UseGuards,
@@ -17,6 +19,7 @@ import { Request } from 'express';
 import { randomUUID } from 'crypto';
 import { AuditLogService } from '../audit/audit-log.service';
 import { CurrentUser } from '../auth/current-user.decorator';
+import { Prisma } from '../../generated/prisma/client';
 import {
   AuthenticatedUser,
   SessionAuthGuard,
@@ -25,11 +28,17 @@ import { VendorMembershipGuard } from '../auth/vendor-membership.guard';
 import { RequireVendorRole } from '../auth/vendor-role.decorator';
 import { generateStoreInventoryBarcode } from '../common/barcode.util';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
+import { isNoBrandAlias, NO_BRAND_SENTINEL_ID } from '../common/no-brand-sentinel';
 import { MatchingService } from '../matching/matching.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SubscriptionGateService } from '../subscriptions/subscription-gate.service';
+import { computeEffectivePrice } from './pricing/effective-price.util';
 import { ImportReport } from './dto/import-report.dto';
 import { isExpectedOfferVariantConflict } from './import/expected-offer-variant-conflict';
+import {
+  IMPORT_TEMPLATE_HEADERS,
+  buildFailedRowsCsv,
+} from './import/failed-rows-csv';
 import {
   collectGroupEvidence,
   conflictingField,
@@ -37,7 +46,7 @@ import {
   ImportGroup,
 } from './import/group-import-rows';
 import { parseImportFile } from './import/parse-import-file';
-import { validateImportRow } from './import/validate-import-row';
+import { validateImportRow, ValidatedImportRow } from './import/validate-import-row';
 
 const MAX_IMPORT_ROWS = 2000;
 // Review-round fix (Blocker 2): without an explicit multer `limits`,
@@ -51,16 +60,31 @@ const MAX_IMPORT_ROWS = 2000;
 // under this) while bounding worst-case memory use per request.
 const MAX_IMPORT_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 
+interface FailedRow {
+  rowNumber: number;
+  raw: Record<string, string>;
+  reason: string;
+}
+
 // Sprint 7 (RB-MATCH-004): batch CSV/XLSX import - owner-only (catalog
 // creation, PDR-009), reusing the exact same VendorOffer/OfferVariant
 // creation rules and subscription gate the single-row JSON endpoints
 // already enforce (VendorOffersController.create()/createVariant()) -
 // this is the same business action, just batch-driven. No image/video
 // import (RB-MATCH-004's own scope line - media stays manual-only via
-// the Sprint 6 endpoints); no ImportJob persistence - this project has
-// no background-worker infrastructure, so the whole file is validated
-// and written synchronously within the request, and the response IS
-// the report (nothing to poll for later).
+// the Sprint 6 endpoints); no per-row job persistence (D6) - this
+// project has no background-worker infrastructure, so the whole file is
+// validated and written synchronously within the request, and the
+// response IS the report.
+//
+// Sprint 17 (D6, blocker 3) adds ImportBatch - a durable SUMMARY only
+// (counts + status, never per-row detail - see ImportBatch's own schema
+// comment for its full lifecycle) - and PDR-036's category_template/
+// template_attributes_json/brand_name columns. Both CSV and XLSX are
+// mentioned below because parseImportFile() genuinely supports both
+// today (confirmed in that file) - the failed-rows re-download,
+// however, is CSV only, a deliberate simplification (not an XLSX
+// writer), stated here rather than silently assumed.
 // @RequireVendorRole is applied on the @Post() method below, not here -
 // VendorMembershipGuard reads it via Reflector.get(KEY,
 // context.getHandler()), which never sees a class-level decorator (the
@@ -77,6 +101,45 @@ export class OffersImportController {
     private readonly subscriptionGate: SubscriptionGateService,
   ) {}
 
+  // Sprint 17: a static, versionless template - the exact header row
+  // OFFERS_TEMPLATE_HEADERS names, nothing dynamic (no per-vendor
+  // column mapping - FR-IMPORT-011 stays unbuilt, see this sprint's own
+  // plan/traceability notes).
+  @Get('template')
+  @RequireVendorRole('OWNER')
+  async downloadTemplate() {
+    return { csv: IMPORT_TEMPLATE_HEADERS.join(',') + '\n' };
+  }
+
+  // Sprint 17 (D6, FR-IMPORT-004 partial): batch history - counts and
+  // status only, newest first.
+  @Get('batches')
+  @RequireVendorRole('OWNER')
+  async listBatches(
+    @Param('vendorId') vendorId: string,
+    @Query('limit') limitRaw?: string,
+  ) {
+    const limit = Math.min(Math.max(Number(limitRaw) || 20, 1), 50);
+    const batches = await this.prisma.importBatch.findMany({
+      where: { vendorId },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+    return batches.map((b) => ({
+      id: b.id,
+      file_name: b.fileName,
+      status: b.status,
+      total_rows: b.totalRows,
+      imported_count: b.importedCount,
+      skipped_count: b.skippedCount,
+      invalid_count: b.invalidCount,
+      conflict_count: b.conflictCount,
+      created_by: b.createdBy,
+      created_at: b.createdAt.toISOString(),
+      completed_at: b.completedAt?.toISOString() ?? null,
+    }));
+  }
+
   @BlockWhenSuspended()
   @Post()
   @HttpCode(201)
@@ -92,7 +155,7 @@ export class OffersImportController {
     @CurrentUser() user: AuthenticatedUser,
     @UploadedFile() file: Express.Multer.File | undefined,
     @Req() req: Request,
-  ): Promise<ImportReport> {
+  ): Promise<ImportReport & { batch_id: string; failed_rows_csv: string | null }> {
     if (!file) {
       throw new BadRequestException({
         code: 'FILE_REQUIRED',
@@ -123,6 +186,9 @@ export class OffersImportController {
       });
     }
 
+    // Sprint 17 (blocker 3): purely structural parsing, BEFORE any
+    // ImportBatch row is created - a file that never even parses is not
+    // a real import attempt yet, so it gets no history row at all.
     let parsedRows: Record<string, string>[];
     try {
       parsedRows = await parseImportFile(file.buffer, file.originalname);
@@ -139,55 +205,176 @@ export class OffersImportController {
       });
     }
 
-    const report: ImportReport = {
-      total_rows: parsedRows.length,
-      imported: [],
-      skipped_already_imported: [],
-      invalid_rows: [],
-      conflicts: [],
-    };
-
-    const validRows = [];
-    for (let i = 0; i < parsedRows.length; i += 1) {
-      const rowNumber = i + 2; // header is row 1
-      const result = validateImportRow(parsedRows[i], rowNumber);
-      if ('errors' in result) {
-        report.invalid_rows.push(
-          ...result.errors.map((e) => ({
-            row_number: e.rowNumber,
-            reason: e.reason,
-          })),
-        );
-      } else {
-        validRows.push(result.row);
-      }
-    }
-
-    const { groups, conflicts } = groupImportRows(validRows);
-    report.conflicts.push(
-      ...conflicts.map((c) => ({ row_number: c.rowNumber, reason: c.reason })),
-    );
-
-    for (const group of groups) {
-      await this.importGroup(vendorId, group, user, req, report);
-    }
-
-    await this.auditLog.record({
-      actorId: user.id,
-      correlationId: req.correlationId,
-      action: 'vendor_offers.imported',
-      entityType: 'Vendor',
-      entityId: vendorId,
-      afterState: {
-        total_rows: report.total_rows,
-        imported_count: report.imported.length,
-        skipped_count: report.skipped_already_imported.length,
-        invalid_count: report.invalid_rows.length,
-        conflict_count: report.conflicts.length,
+    // Sprint 17 (D6, blocker 3): the batch row now exists, durably,
+    // BEFORE any group is processed - a crash from here on is at least
+    // visible as a real (if possibly stuck) PROCESSING row, never
+    // silently absent. See this class's own header comment for the
+    // full lifecycle and its known, disclosed limitation.
+    const batch = await this.prisma.importBatch.create({
+      data: {
+        vendorId,
+        fileName: file.originalname,
+        totalRows: parsedRows.length,
+        createdBy: user.id,
       },
     });
 
-    return report;
+    try {
+      const report: ImportReport = {
+        total_rows: parsedRows.length,
+        imported: [],
+        skipped_already_imported: [],
+        invalid_rows: [],
+        conflicts: [],
+      };
+      const failedRows: FailedRow[] = [];
+
+      const validRows: ValidatedImportRow[] = [];
+      for (let i = 0; i < parsedRows.length; i += 1) {
+        const rowNumber = i + 2; // header is row 1
+        const result = validateImportRow(parsedRows[i], rowNumber);
+        if ('errors' in result) {
+          for (const e of result.errors) {
+            report.invalid_rows.push({ row_number: e.rowNumber, reason: e.reason });
+            failedRows.push({ rowNumber: e.rowNumber, raw: parsedRows[i], reason: e.reason });
+          }
+        } else {
+          validRows.push(result.row);
+        }
+      }
+
+      // Sprint 17 (blocker 3): resolve brand_name -> brandId in ONE
+      // batched query (never per-row) - the sentinel aliases are
+      // checked first (no DB round-trip needed for those), then every
+      // remaining distinct name is looked up against Brand.normalizedName
+      // at once. A name that resolves to neither is NEVER used to
+      // create a new Brand row here - the row is moved to invalid_rows
+      // with a clear reason instead (D3: "no random Brand creation").
+      // The ORIGINAL brandName text is left untouched on every row -
+      // groupImportRows()/conflictingField() (PDR-019's own, unrelated
+      // free-text consistency check) and rowToRaw() (the failed-rows
+      // CSV) both still need the real name, never an internal id.
+      // Resolved ids are tracked separately, keyed by row number.
+      const brandIdByName = new Map<string, string>();
+      const distinctNames = [
+        ...new Set(
+          validRows
+            .map((r) => r.brandName)
+            .filter((n): n is string => n !== null && !isNoBrandAlias(n)),
+        ),
+      ];
+      if (distinctNames.length > 0) {
+        const normalize = (s: string) => s.trim().toLowerCase();
+        const found = await this.prisma.brand.findMany({
+          where: { normalizedName: { in: distinctNames.map(normalize) } },
+        });
+        const byNormalized = new Map(found.map((b) => [b.normalizedName, b.id]));
+        for (const name of distinctNames) {
+          const id = byNormalized.get(normalize(name));
+          if (id) brandIdByName.set(name, id);
+        }
+      }
+      const resolvedBrandIdByRowNumber = new Map<number, string>();
+      const rowsAfterBrandResolution: ValidatedImportRow[] = [];
+      for (const row of validRows) {
+        if (row.brandName === null) {
+          rowsAfterBrandResolution.push(row);
+          continue;
+        }
+        const resolvedBrandId = isNoBrandAlias(row.brandName)
+          ? NO_BRAND_SENTINEL_ID
+          : brandIdByName.get(row.brandName);
+        if (!resolvedBrandId) {
+          const reason = `brand_name "${row.brandName}" does not match any known brand - leave blank, use "بدون علامة تجارية", or ask a platform admin to add it via POST /brands`;
+          report.invalid_rows.push({ row_number: row.rowNumber, reason });
+          failedRows.push({
+            rowNumber: row.rowNumber,
+            raw: rowToRaw(row),
+            reason,
+          });
+          continue;
+        }
+        resolvedBrandIdByRowNumber.set(row.rowNumber, resolvedBrandId);
+        rowsAfterBrandResolution.push(row);
+      }
+
+      const { groups, conflicts } = groupImportRows(rowsAfterBrandResolution);
+      for (const c of conflicts) {
+        report.conflicts.push({ row_number: c.rowNumber, reason: c.reason });
+        const row = rowsAfterBrandResolution.find((r) => r.rowNumber === c.rowNumber);
+        if (row) failedRows.push({ rowNumber: c.rowNumber, raw: rowToRaw(row), reason: c.reason });
+      }
+
+      for (const group of groups) {
+        await this.importGroup(
+          vendorId,
+          group,
+          user,
+          req,
+          report,
+          failedRows,
+          resolvedBrandIdByRowNumber,
+        );
+      }
+
+      await this.auditLog.record({
+        actorId: user.id,
+        correlationId: req.correlationId,
+        action: 'vendor_offers.imported',
+        entityType: 'Vendor',
+        entityId: vendorId,
+        afterState: {
+          batch_id: batch.id,
+          total_rows: report.total_rows,
+          imported_count: report.imported.length,
+          skipped_count: report.skipped_already_imported.length,
+          invalid_count: report.invalid_rows.length,
+          conflict_count: report.conflicts.length,
+        },
+      });
+
+      const hasErrors = report.invalid_rows.length > 0 || report.conflicts.length > 0;
+      await this.prisma.importBatch.update({
+        where: { id: batch.id },
+        data: {
+          status: hasErrors ? 'COMPLETED_WITH_ERRORS' : 'COMPLETED',
+          importedCount: report.imported.length,
+          skippedCount: report.skipped_already_imported.length,
+          invalidCount: report.invalid_rows.length,
+          conflictCount: report.conflicts.length,
+          completedAt: new Date(),
+        },
+      });
+
+      failedRows.sort((a, b) => a.rowNumber - b.rowNumber);
+      return {
+        ...report,
+        batch_id: batch.id,
+        failed_rows_csv: failedRows.length > 0 ? buildFailedRowsCsv(failedRows) : null,
+      };
+    } catch (err) {
+      // Sprint 17 (blocker 3, item 3 of the final review round): ANY
+      // exception after the PROCESSING row was created - parsing was
+      // already fine by construction here, so this covers a group
+      // processing failure or the finalization step itself - marks the
+      // batch FAILED on a best-effort basis (its own try/catch: if even
+      // THIS write cannot reach the database, nothing more can be done)
+      // and always re-throws the original error. Groups that already
+      // committed independently before the exception stay committed -
+      // partial-success is unchanged; FAILED just makes the overall
+      // attempt's own outcome honest instead of silently absent.
+      try {
+        await this.prisma.importBatch.update({
+          where: { id: batch.id },
+          data: { status: 'FAILED', completedAt: new Date() },
+        });
+      } catch {
+        // The database connection itself is unavailable - nothing more
+        // can be done; the row is left at PROCESSING, a disclosed,
+        // known limitation (see this class's own header comment).
+      }
+      throw err;
+    }
   }
 
   private async importGroup(
@@ -196,6 +383,8 @@ export class OffersImportController {
     user: AuthenticatedUser,
     req: Request,
     report: ImportReport,
+    failedRows: FailedRow[],
+    resolvedBrandIdByRowNumber: Map<number, string>,
   ): Promise<void> {
     const rows = group.rows;
     const existingVariants = await this.prisma.offerVariant.findMany({
@@ -312,10 +501,9 @@ export class OffersImportController {
               // prevent it) - cannot prove which one this import
               // belongs to. Do not guess.
               for (const row of rowsToCreate) {
-                report.conflicts.push({
-                  row_number: row.rowNumber,
-                  reason: `Multiple existing offers already use identifier_type/identifier_value "${group.identifierType}/${group.identifierValue}" for this vendor - cannot determine which to attach to, requires manual review (PDR-019)`,
-                });
+                const reason = `Multiple existing offers already use identifier_type/identifier_value "${group.identifierType}/${group.identifierValue}" for this vendor - cannot determine which to attach to, requires manual review (PDR-019)`;
+                report.conflicts.push({ row_number: row.rowNumber, reason });
+                failedRows.push({ rowNumber: row.rowNumber, raw: rowToRaw(row), reason });
               }
               return;
             }
@@ -335,10 +523,9 @@ export class OffersImportController {
               // not guess, report for manual review instead (never
               // auto-merge on unproven brand/type/mpn).
               for (const row of rowsToCreate) {
-                report.conflicts.push({
-                  row_number: row.rowNumber,
-                  reason: `Conflicts with a previously imported offer sharing identifier_type/identifier_value "${group.identifierType}/${group.identifierValue}" - differing ${conflictField} requires manual review (PDR-019)`,
-                });
+                const reason = `Conflicts with a previously imported offer sharing identifier_type/identifier_value "${group.identifierType}/${group.identifierValue}" - differing ${conflictField} requires manual review (PDR-019)`;
+                report.conflicts.push({ row_number: row.rowNumber, reason });
+                failedRows.push({ rowNumber: row.rowNumber, raw: rowToRaw(row), reason });
               }
               return;
             }
@@ -347,11 +534,18 @@ export class OffersImportController {
         }
 
         if (!offerId) {
+          // Sprint 17 (D1): the resolved brandId (or the sentinel) -
+          // never a free-text name reaching the database here.
           const offer = await tx.vendorOffer.create({
             data: {
               vendorId,
               titleAr: firstRow.titleAr,
               titleEn: firstRow.titleEn,
+              brandId: resolvedBrandIdByRowNumber.get(firstRow.rowNumber) ?? null,
+              categoryTemplate: firstRow.categoryTemplate,
+              templateAttributes:
+                (firstRow.templateAttributes as Prisma.InputJsonValue | undefined) ??
+                undefined,
             },
           });
           offerId = offer.id;
@@ -449,6 +643,22 @@ export class OffersImportController {
             },
           });
 
+          // Sprint 17 (blocker 1): the import-created baseline
+          // PriceHistory row - reason=IMPORT, one captured `now`.
+          const now = new Date();
+          await tx.priceHistory.create({
+            data: {
+              vendorId,
+              offerVariantId: variant.id,
+              basePrice: variant.basePrice,
+              salePrice: variant.salePrice,
+              effectivePriceAtChange: computeEffectivePrice(variant, now),
+              reason: 'IMPORT',
+              changedBy: user.id,
+              changedAt: now,
+            },
+          });
+
           await this.auditLog.record(
             {
               actorId: user.id,
@@ -488,12 +698,37 @@ export class OffersImportController {
         throw err;
       }
       for (const row of rowsToCreate) {
-        report.invalid_rows.push({
-          row_number: row.rowNumber,
-          reason:
-            'Could not import this row - it may have just been imported concurrently (seller_sku conflict)',
-        });
+        const reason =
+          'Could not import this row - it may have just been imported concurrently (seller_sku conflict)';
+        report.invalid_rows.push({ row_number: row.rowNumber, reason });
+        failedRows.push({ rowNumber: row.rowNumber, raw: rowToRaw(row), reason });
       }
     }
   }
+}
+
+/** Reconstructs a raw, re-uploadable row record from an already-
+ * validated row (used for conflict/brand-resolution failures, which
+ * never had their original raw text retained past validation). */
+function rowToRaw(row: ValidatedImportRow): Record<string, string> {
+  return {
+    title_ar: row.titleAr,
+    title_en: row.titleEn,
+    seller_sku: row.sellerSku,
+    base_price: String(row.basePrice),
+    sale_price: row.salePrice !== null ? String(row.salePrice) : '',
+    condition: row.condition,
+    specs_text_ar: row.specsTextAr ?? '',
+    specs_text_en: row.specsTextEn ?? '',
+    identifier_type: row.identifierType ?? '',
+    identifier_value: row.identifierValue ?? '',
+    store_inventory_barcode: row.storeInventoryBarcode ?? '',
+    brand_name: row.brandName ?? '',
+    product_type: row.productType ?? '',
+    mpn: row.mpn ?? '',
+    category_template: row.categoryTemplate ?? '',
+    template_attributes_json: row.templateAttributes
+      ? JSON.stringify(row.templateAttributes)
+      : '',
+  };
 }

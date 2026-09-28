@@ -29,15 +29,14 @@ import { assertItemsPurchasable } from '../checkout/purchase-eligibility.util';
 import { SubscriptionGateService } from '../subscriptions/subscription-gate.service';
 import { AddCartItemDto } from './dto/add-cart-item.dto';
 import { UpdateCartItemDto } from './dto/update-cart-item.dto';
+import { PriceConfig, computeEffectivePrice } from '../offers/pricing/effective-price.util';
 
 function cartItemDto(item: {
   id: string;
   vendorId: string;
   offerVariantId: string;
   quantity: number;
-  offerVariant: {
-    basePrice: unknown;
-    salePrice: unknown;
+  offerVariant: PriceConfig & {
     sellerSku: string;
     vendorOffer: { titleAr: string; titleEn: string };
   };
@@ -49,12 +48,9 @@ function cartItemDto(item: {
     quantity: item.quantity,
     title_ar: item.offerVariant.vendorOffer.titleAr,
     title_en: item.offerVariant.vendorOffer.titleEn,
-    // Same "salePrice wins if present, else basePrice" rule as
-    // discovery/comparison (comparison.service.ts) - the one source of
-    // truth for "current price" this codebase already established.
-    unit_price: Number(
-      item.offerVariant.salePrice ?? item.offerVariant.basePrice,
-    ),
+    // Sprint 17 (blocker 1): the one shared, read-only price
+    // computation - see offers/pricing/effective-price.util.ts.
+    unit_price: computeEffectivePrice(item.offerVariant),
   };
 }
 
@@ -85,6 +81,9 @@ export class CartController {
         select: {
           basePrice: true,
           salePrice: true,
+          discountPercent: true,
+          discountStartAt: true,
+          discountEndAt: true,
           sellerSku: true,
           vendorOffer: { select: { titleAr: true, titleEn: true } },
         },
@@ -111,6 +110,9 @@ export class CartController {
           select: {
             basePrice: true,
             salePrice: true,
+            discountPercent: true,
+            discountStartAt: true,
+            discountEndAt: true,
             sellerSku: true,
             vendorOffer: {
               select: { titleAr: true, titleEn: true, status: true },

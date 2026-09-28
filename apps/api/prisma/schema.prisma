@@ -51,20 +51,22 @@ model User {
   platformRole    PlatformRole?
   createdAt       DateTime      @default(now())
 
-  customerProfile  CustomerProfile?
-  vendorUsers      VendorUser[]
-  auditLogs        AuditLog[]
-  reviewedBranches StoreBranch[]    @relation("BranchReviewer")
+  customerProfile              CustomerProfile?
+  vendorUsers                  VendorUser[]
+  auditLogs                    AuditLog[]
+  reviewedBranches             StoreBranch[]                   @relation("BranchReviewer")
   /// Sprint 15 (PDR-035): a platform reviewer's decisions on
   /// WarehouseVerificationEvidence snapshots - the ONLINE_ONLY
   /// counterpart to reviewedBranches above.
   warehouseVerificationReviews WarehouseVerificationEvidence[] @relation("WarehouseReviewer")
-  vendorSuspensionsMade        VendorSuspension[] @relation("SuspensionActor")
-  vendorReactivationsMade      VendorSuspension[] @relation("ReactivationActor")
-  sentStaffInvites StaffInvite[]    @relation("StaffInviter")
-  stockMovements   StockMovement[]
-  decidedNameChangeRequests CanonicalNameChangeRequest[]
-  storeFollows     StoreFollow[]
+  vendorSuspensionsMade        VendorSuspension[]              @relation("SuspensionActor")
+  vendorReactivationsMade      VendorSuspension[]              @relation("ReactivationActor")
+  sentStaffInvites             StaffInvite[]                   @relation("StaffInviter")
+  stockMovements               StockMovement[]
+  decidedNameChangeRequests    CanonicalNameChangeRequest[]
+  storeFollows                 StoreFollow[]
+  priceChangesMade             PriceHistory[]
+  importBatchesCreated         ImportBatch[]
 
   @@map("users")
 }
@@ -80,9 +82,9 @@ model CustomerProfile {
   user        User    @relation(fields: [userId], references: [id])
   displayName String?
 
-  addresses Address[]
-  orders    CustomerOrder[]
-  cartItems CartItem[]
+  addresses            Address[]
+  orders               CustomerOrder[]
+  cartItems            CartItem[]
   checkoutReservations CheckoutReservation[]
 
   @@map("customer_profiles")
@@ -94,9 +96,9 @@ model CustomerProfile {
 /// saved-addresses management screen (list/edit/delete) is BL-AUTH-004b,
 /// a Should/stretch item deferred past the FYP Must scope.
 model Address {
-  id           String          @id @default(uuid())
+  id           String              @id @default(uuid())
   customerId   String
-  customer     CustomerProfile @relation(fields: [customerId], references: [id])
+  customer     CustomerProfile     @relation(fields: [customerId], references: [id])
   label        String?
   lat          Float
   lng          Float
@@ -115,7 +117,7 @@ model Address {
   /// source/classification undecided - building a geo-boundary engine
   /// ahead of that decision would be guessing at an unapproved design.
   zone         DeliveryZoneRegion?
-  createdAt    DateTime        @default(now())
+  createdAt    DateTime            @default(now())
 
   checkoutReservationSlots CheckoutReservationSlot[]
   branchOrders             BranchOrder[]
@@ -283,30 +285,30 @@ enum StoreType {
 }
 
 model Vendor {
-  id                 String             @id @default(uuid())
-  legalName          String
-  status             VendorStatus       @default(APPLIED)
-  subscriptionStatus SubscriptionStatus @default(NONE)
+  id                  String             @id @default(uuid())
+  legalName           String
+  status              VendorStatus       @default(APPLIED)
+  subscriptionStatus  SubscriptionStatus @default(NONE)
   /// Sprint 5 (RB-STORE-001, PDR-010). See StoreType's own doc comment.
-  storeType          StoreType          @default(PHYSICAL)
+  storeType           StoreType          @default(PHYSICAL)
   /// Sprint 7 (RB-STOREF-001, PDR-011): the public storefront's stable
   /// URL segment - generated once at vendor creation (VendorsController.apply()),
   /// never editable afterward, deliberately separate from displayName
   /// below (which the owner can change freely without ever breaking a
   /// shared/bookmarked link). Globally unique across every vendor.
-  slug String @unique
+  slug                String             @unique
   /// Owner-editable public-facing name, distinct from legalName (the
   /// registration/legal identity captured at application time,
   /// unrelated to this sprint). Defaults to legalName at creation and
   /// diverges only once the owner explicitly changes it.
-  displayName          String?
-  logoUrl              String?
-  bio                  String?
-  coverImageUrl        String?
-  coverColor           String?
-  instagramUrl         String?
-  facebookUrl          String?
-  whatsappUrl          String?
+  displayName         String?
+  logoUrl             String?
+  bio                 String?
+  coverImageUrl       String?
+  coverColor          String?
+  instagramUrl        String?
+  facebookUrl         String?
+  whatsappUrl         String?
   /// PDR-007: "Each store must publish at least one external contact
   /// route." Enforced only at the moment of publishing (StorefrontController.publish()
   /// checked in VendorsController), not continuously - an owner can
@@ -316,16 +318,16 @@ model Vendor {
   /// StorefrontController) - the name/identity stay visible either way
   /// ("المحل غير متاح حالياً" is a status shown alongside identity, never
   /// a 404).
-  storefrontPublished  Boolean            @default(false)
-  createdAt          DateTime           @default(now())
+  storefrontPublished Boolean            @default(false)
+  createdAt           DateTime           @default(now())
 
-  vendorUsers     VendorUser[]
-  storeBranches   StoreBranch[]
-  subscriptions   VendorSubscription[]
-  canonicalOffers VendorOffer[]
-  offerVariants   OfferVariant[]
-  staffInvites    StaffInvite[]
-  warehouse       Warehouse?
+  vendorUsers                   VendorUser[]
+  storeBranches                 StoreBranch[]
+  subscriptions                 VendorSubscription[]
+  canonicalOffers               VendorOffer[]
+  offerVariants                 OfferVariant[]
+  staffInvites                  StaffInvite[]
+  warehouse                     Warehouse?
   /// Sprint 15 (PDR-035): every submitted verification snapshot for
   /// this vendor's warehouse, oldest first by submittedAt. See the
   /// WarehouseVerificationEvidence model for why this is a list of
@@ -333,20 +335,21 @@ model Vendor {
   /// itself.
   warehouseVerificationEvidence WarehouseVerificationEvidence[]
   /// Sprint 16 (FR-VEND-009): suspension history, at most one open row.
-  suspensions     VendorSuspension[]
-  pickupPoints    PickupPoint[]
-  deliveryZones   VendorDeliveryZone[]
-  branchStocks    BranchStock[]
-  stockMovements  StockMovement[]
-  offerVariantMedia      OfferVariantMedia[]
-  matchReviewCandidates  MatchReviewCandidate[]
-  nameChangeRequests     CanonicalNameChangeRequest[]
-  importIdentifierRecords ImportIdentifierRecord[]
-  applicableCategories   VendorApplicableCategory[]
-  storeSections          StoreSection[]
-  branchOrders           BranchOrder[]
-  deliveryWindows        DeliveryWindow[]
-  followers              StoreFollow[]
+  suspensions                   VendorSuspension[]
+  pickupPoints                  PickupPoint[]
+  deliveryZones                 VendorDeliveryZone[]
+  branchStocks                  BranchStock[]
+  stockMovements                StockMovement[]
+  offerVariantMedia             OfferVariantMedia[]
+  matchReviewCandidates         MatchReviewCandidate[]
+  nameChangeRequests            CanonicalNameChangeRequest[]
+  importIdentifierRecords       ImportIdentifierRecord[]
+  applicableCategories          VendorApplicableCategory[]
+  storeSections                 StoreSection[]
+  branchOrders                  BranchOrder[]
+  deliveryWindows               DeliveryWindow[]
+  followers                     StoreFollow[]
+  importBatches                 ImportBatch[]
 
   @@map("vendors")
 }
@@ -428,9 +431,9 @@ enum WarehouseVerificationStatus {
 /// like StaffInvite's own pending-invite index it is documented here
 /// but only actually created in the migration SQL.
 model WarehouseVerificationEvidence {
-  id          String   @id @default(uuid())
+  id          String                      @id @default(uuid())
   vendorId    String
-  vendor      Vendor    @relation(fields: [vendorId], references: [id])
+  vendor      Vendor                      @relation(fields: [vendorId], references: [id])
   warehouseId String
   /// Composite FK (vendorId, warehouseId) -> warehouses(vendorId, id) -
   /// not warehouseId alone. A single-column FK only proves the
@@ -441,7 +444,7 @@ model WarehouseVerificationEvidence {
   /// rejects, the same tenant-isolation pattern StoreBranch's
   /// consumers (VendorUser, StaffInvite, BranchOrderItem, ...) already
   /// use throughout this schema.
-  warehouse   Warehouse @relation(fields: [vendorId, warehouseId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  warehouse   Warehouse                   @relation(fields: [vendorId, warehouseId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
   /// Copied from Warehouse at submission time - the immutable
   /// snapshot. Required (not nullable): submission is refused
   /// (WAREHOUSE_EVIDENCE_INCOMPLETE) unless the operational Warehouse
@@ -450,11 +453,11 @@ model WarehouseVerificationEvidence {
   lng         Float
   addressNote String
   status      WarehouseVerificationStatus @default(PENDING)
-  submittedAt DateTime  @default(now())
+  submittedAt DateTime                    @default(now())
   /// Set by the reviewer's decision (mirrors StoreBranch.reviewedBy).
   /// Nullable: never set while still PENDING.
   reviewedBy  String?
-  reviewer    User?     @relation("WarehouseReviewer", fields: [reviewedBy], references: [id])
+  reviewer    User?                       @relation("WarehouseReviewer", fields: [reviewedBy], references: [id])
   reviewedAt  DateTime?
   /// The reviewer's reason on a REJECTED or RESUBMISSION_REQUESTED
   /// decision - what the vendor needs to know to fix and resubmit
@@ -655,12 +658,12 @@ model StoreBranch {
   evidenceSubmittedAt  DateTime?
   createdAt            DateTime                 @default(now())
 
-  vendorUsers    VendorUser[]
-  staffInvites   StaffInvite[]
-  branchStocks   BranchStock[]
-  stockMovements StockMovement[]
-  branchOrders   BranchOrder[]
-  deliveryWindows DeliveryWindow[]
+  vendorUsers              VendorUser[]
+  staffInvites             StaffInvite[]
+  branchStocks             BranchStock[]
+  stockMovements           StockMovement[]
+  branchOrders             BranchOrder[]
+  deliveryWindows          DeliveryWindow[]
   checkoutReservationItems CheckoutReservationItem[]
 
   /// Backs the composite FKs on VendorUser/StaffInvite (vendorId,
@@ -866,12 +869,23 @@ model Category {
 /// guard; it is not the fuzzy-similarity check FR-CAT-002 ultimately
 /// wants.
 model Brand {
-  id             String   @id @default(uuid())
-  name           String
-  normalizedName String   @unique
-  createdAt      DateTime @default(now())
+  id                String   @id @default(uuid())
+  name              String
+  normalizedName    String   @unique
+  /// Sprint 17 (PDR-036, D3): exactly one Brand row is the platform's
+  /// fixed "No brand / بدون علامة تجارية" sentinel - the only allowed
+  /// way to mark a VendorOffer as deliberately brandless (never a blank
+  /// brand field). A partial unique index (migration SQL - not
+  /// representable in Prisma's schema DSL, same established pattern as
+  /// StaffInvite/WarehouseVerificationEvidence's own pending-row
+  /// indexes) enforces at most one such row structurally. Seeded once,
+  /// at a fixed, documented id - see that migration's own comment for
+  /// why it is not simply `normalizedName`-matched at runtime.
+  isNoBrandSentinel Boolean  @default(false)
+  createdAt         DateTime @default(now())
 
   canonicalProducts CanonicalProduct[]
+  vendorOffers      VendorOffer[]
 
   @@map("brands")
 }
@@ -901,13 +915,13 @@ enum CanonicalProductStatus {
 /// review (FR-CAT-009), not a DB constraint, since model names alone
 /// aren't always unique across categories.
 model CanonicalProduct {
-  id         String                 @id @default(uuid())
-  brandId    String
-  brand      Brand                  @relation(fields: [brandId], references: [id])
-  categoryId String
-  category   Category               @relation(fields: [categoryId], references: [id])
-  modelName  String
-  status     CanonicalProductStatus @default(DRAFT)
+  id              String                 @id @default(uuid())
+  brandId         String
+  brand           Brand                  @relation(fields: [brandId], references: [id])
+  categoryId      String
+  category        Category               @relation(fields: [categoryId], references: [id])
+  modelName       String
+  status          CanonicalProductStatus @default(DRAFT)
   /// Sprint 7 (RB-MATCH-003, approved-product-decisions-2026-09.md
   /// Sec 3.2): "The first confirmed matched offer supplies a
   /// provisional canonical name." Deliberately separate from
@@ -925,11 +939,11 @@ model CanonicalProduct {
   /// silently by a later confirmation.
   canonicalNameAr String?
   canonicalNameEn String?
-  createdAt  DateTime               @default(now())
+  createdAt       DateTime               @default(now())
 
-  variants            CanonicalProductVariant[]
-  vendorOffers        VendorOffer[]
-  nameChangeRequests  CanonicalNameChangeRequest[]
+  variants           CanonicalProductVariant[]
+  vendorOffers       VendorOffer[]
+  nameChangeRequests CanonicalNameChangeRequest[]
 
   @@index([brandId])
   @@index([categoryId])
@@ -953,19 +967,19 @@ enum NameChangeRequestStatus {
 /// names remain for the same matched product" invariant the initial
 /// adoption enforces.
 model CanonicalNameChangeRequest {
-  id                 String                   @id @default(uuid())
+  id                 String                  @id @default(uuid())
   canonicalProductId String
-  canonicalProduct   CanonicalProduct         @relation(fields: [canonicalProductId], references: [id])
+  canonicalProduct   CanonicalProduct        @relation(fields: [canonicalProductId], references: [id])
   vendorId           String
-  vendor             Vendor                   @relation(fields: [vendorId], references: [id])
+  vendor             Vendor                  @relation(fields: [vendorId], references: [id])
   requestedNameAr    String
   requestedNameEn    String
   reason             String?
-  status             NameChangeRequestStatus  @default(PENDING)
+  status             NameChangeRequestStatus @default(PENDING)
   decidedById        String?
-  decidedBy          User?                    @relation(fields: [decidedById], references: [id])
+  decidedBy          User?                   @relation(fields: [decidedById], references: [id])
   decidedAt          DateTime?
-  createdAt          DateTime                 @default(now())
+  createdAt          DateTime                @default(now())
 
   @@index([canonicalProductId, status])
   @@map("canonical_name_change_requests")
@@ -1009,8 +1023,8 @@ model CanonicalProductVariant {
   platformProductBarcode String           @unique
   createdAt              DateTime         @default(now())
 
-  confirmedOfferVariants OfferVariant[] @relation("ConfirmedMatch")
-  proposedOfferVariants  OfferVariant[] @relation("ProposedMatch")
+  confirmedOfferVariants OfferVariant[]         @relation("ConfirmedMatch")
+  proposedOfferVariants  OfferVariant[]         @relation("ProposedMatch")
   matchReviewCandidates  MatchReviewCandidate[]
 
   @@unique([canonicalProductId, mpn])
@@ -1030,25 +1044,76 @@ enum OfferStatus {
   DRAFT
   ACTIVE
   INACTIVE
+  /// Sprint 17 (D5, PDR §3.2 "archiving... owner can restore/
+  /// revalidate/publish it"): deliberately distinct from INACTIVE
+  /// (a quick, reversible pause) - archiving is the owner's own
+  /// explicit retirement of a listing. restore() always returns the
+  /// offer to DRAFT (never straight back to ACTIVE), forcing the
+  /// publish gate to be re-evaluated before it can sell again. Safe to
+  /// add: no code anywhere branches on `status !== 'DRAFT'`/inverse
+  /// checks against this enum (confirmed by search before adding it) -
+  /// every existing gate checks `=== 'ACTIVE'` explicitly.
+  ARCHIVED
+}
+
+/// Sprint 17 (PDR-036): the ten fixed clothing/accessory category
+/// templates from approved-product-decisions-2026-09.md Sec 3.2. This
+/// enum IS the "general platform category" FR-CAT-015 requires, scoped
+/// to exactly these ten categories (D1) - it is not, and does not
+/// attempt to be, the general admin-managed Category tree (FR-CAT-001,
+/// S17b). null on VendorOffer.categoryTemplate means "outside these
+/// ten" - such an offer keeps using the free-text specsText fallback
+/// (BL-CAT-004b) and PDR-036's structured five-field requirement
+/// simply does not apply to it (D2) - it stays 🟡 PARTIAL against
+/// FR-CAT-015 by design, not a bug. The four non-brand field keys per
+/// template live in code (offers/catalog/clothing-category-templates.ts),
+/// not here - see that file for why a DB-driven template system
+/// (AttributeDefinition/AttributeOption, FR-CAT-003) is deliberately
+/// not built this sprint.
+enum ClothingCategoryTemplate {
+  DRESSES
+  TOPS_SHIRTS
+  BOTTOMS
+  COATS_JACKETS
+  SETS_PYJAMAS
+  KIDS_CLOTHING
+  SHOES
+  BAGS
+  JEWELLERY_WATCHES
+  OTHER_ACCESSORIES
 }
 
 model VendorOffer {
-  id                 String            @id @default(uuid())
+  id                 String                    @id @default(uuid())
   vendorId           String
-  vendor             Vendor            @relation(fields: [vendorId], references: [id])
+  vendor             Vendor                    @relation(fields: [vendorId], references: [id])
   canonicalProductId String?
-  canonicalProduct   CanonicalProduct? @relation(fields: [canonicalProductId], references: [id])
+  canonicalProduct   CanonicalProduct?         @relation(fields: [canonicalProductId], references: [id])
   titleAr            String
   titleEn            String
-  status             OfferStatus       @default(DRAFT)
-  createdAt          DateTime          @default(now())
+  status             OfferStatus               @default(DRAFT)
+  /// Sprint 17 (PDR-036, D1): the product's own governed brand - never
+  /// blank at publish time (the publish gate enforces this; nothing
+  /// enforces it at DRAFT). Either a real admin-governed Brand row or
+  /// the fixed "No brand" sentinel (Brand.isNoBrandSentinel) - never a
+  /// free-text brand name.
+  brandId            String?
+  brand              Brand?                    @relation(fields: [brandId], references: [id])
+  categoryTemplate   ClothingCategoryTemplate?
+  /// Only meaningful (and only ever set) when categoryTemplate is not
+  /// null - exactly the four non-brand field keys that template's own
+  /// fixed definition names (see clothing-category-templates.ts),
+  /// each value a non-blank trimmed string or the literal "N/A".
+  templateAttributes Json?
+  /// Sprint 17 (D5, G-CA-06). Set only by archive(); cleared by
+  /// restore() (which also resets status to DRAFT).
+  archivedAt         DateTime?
+  createdAt          DateTime                  @default(now())
 
-  variants OfferVariant[]
+  variants                OfferVariant[]
   importIdentifierRecords ImportIdentifierRecord[]
-  sectionMemberships StoreSectionOffer[]
+  sectionMemberships      StoreSectionOffer[]
 
-  @@index([vendorId])
-  @@index([canonicalProductId])
   /// Review-round fix (Sprint 7 round 3, Blocker 2): lets
   /// ImportIdentifierRecord.vendorOffer below be a composite FK on
   /// (vendorId, id) instead of id alone - id alone is already globally
@@ -1057,6 +1122,9 @@ model VendorOffer {
   /// record pointing at vendor B's offer) rejected by Postgres itself
   /// rather than merely by application code.
   @@unique([vendorId, id])
+  @@index([vendorId])
+  @@index([canonicalProductId])
+  @@index([brandId])
   @@map("vendor_offers")
 }
 
@@ -1099,6 +1167,50 @@ model ImportIdentifierRecord {
 
   @@unique([vendorId, identifierType, identifierValue], map: "import_identifier_records_vendor_identifier_key")
   @@map("import_identifier_records")
+}
+
+/// Sprint 17 (D6, FR-IMPORT-004 partial): a durable SUMMARY of one
+/// import attempt - counts and status only, never per-row detail (no
+/// `ImportRow` entity - that is explicitly out of scope, see this
+/// sprint's own plan). `status` reflects a lifecycle the controller
+/// manages explicitly (see OffersImportController.import()'s own
+/// comment for the exact ordering): created PROCESSING before any
+/// group is processed (as soon as the file's structure is known - a
+/// file that never even parses successfully never gets a row at all),
+/// then updated to its terminal status once every group has been
+/// attempted. A crash between those two points (not a catchable
+/// exception - see the controller) leaves a row stuck at PROCESSING
+/// forever, with no background sweeper to fix it (this codebase has no
+/// scheduled-job infrastructure) - a disclosed, narrow limitation, not
+/// a silent one. The counts, once set, are copied verbatim from the
+/// exact `ImportReport` object returned to the caller - never
+/// recomputed separately, so they can never drift from what the owner
+/// actually saw.
+enum ImportBatchStatus {
+  PROCESSING
+  COMPLETED
+  COMPLETED_WITH_ERRORS
+  FAILED
+}
+
+model ImportBatch {
+  id            String            @id @default(uuid())
+  vendorId      String
+  vendor        Vendor            @relation(fields: [vendorId], references: [id])
+  fileName      String
+  status        ImportBatchStatus @default(PROCESSING)
+  totalRows     Int
+  importedCount Int?
+  skippedCount  Int?
+  invalidCount  Int?
+  conflictCount Int?
+  createdBy     String
+  createdByUser User              @relation(fields: [createdBy], references: [id])
+  createdAt     DateTime          @default(now())
+  completedAt   DateTime?
+
+  @@index([vendorId, createdAt])
+  @@map("import_batches")
 }
 
 enum OfferCondition {
@@ -1178,8 +1290,30 @@ model OfferVariant {
   matchProposalStatus        MatchProposalStatus      @default(NONE)
   sellerSku                  String
   condition                  OfferCondition           @default(NEW)
+  /// Sprint 17 (PDR-036): a vendor-entered, free-text option value -
+  /// deliberately NOT one of the five governed structural template
+  /// fields (VendorOffer.templateAttributes) and not a managed
+  /// value-list (that governance is FR-CAT-003/S17b scope). "may
+  /// create a product-only custom value without administrator
+  /// approval" (Sec 3.2) is exactly what free text already gives.
+  colour                     String?
+  size                       String?
   basePrice                  Decimal                  @db.Decimal(10, 2)
+  /// Sprint 17 (blocker 1): the MANUAL sale-price override for legacy/
+  /// simple pricing. Mutually exclusive with the scheduled relative
+  /// discount fields below - a partial unique-shape CHECK (migration
+  /// SQL) enforces this structurally, never just in application code.
+  /// Never read directly by any consumer any more - see
+  /// offers/pricing/effective-price.util.ts, the single place that
+  /// decides what "the" price is.
   salePrice                  Decimal?                 @db.Decimal(10, 2)
+  /// Scheduled relative discount (FR-PRICE-009 E.0): active exactly
+  /// when discountStartAt <= now < discountEndAt (start inclusive, end
+  /// exclusive - see effective-price.util.ts). All three are NULL
+  /// together or set together (CHECK, migration SQL).
+  discountPercent            Decimal?                 @db.Decimal(5, 2)
+  discountStartAt            DateTime?
+  discountEndAt              DateTime?
   specsTextAr                String?
   specsTextEn                String?
   identifierType             OfferIdentifierType?
@@ -1201,13 +1335,14 @@ model OfferVariant {
   storeInventoryBarcode      String
   createdAt                  DateTime                 @default(now())
 
-  branchStocks           BranchStock[]
-  stockMovements         StockMovement[]
-  media                  OfferVariantMedia[]
-  matchReviewCandidates  MatchReviewCandidate[]
-  branchOrderItems       BranchOrderItem[]
-  cartItems              CartItem[]
+  branchStocks             BranchStock[]
+  stockMovements           StockMovement[]
+  media                    OfferVariantMedia[]
+  matchReviewCandidates    MatchReviewCandidate[]
+  branchOrderItems         BranchOrderItem[]
+  cartItems                CartItem[]
   checkoutReservationItems CheckoutReservationItem[]
+  priceHistory             PriceHistory[]
 
   @@unique([vendorId, sellerSku])
   @@unique([vendorId, storeInventoryBarcode])
@@ -1222,6 +1357,58 @@ model OfferVariant {
   @@index([canonicalVariantId])
   @@index([proposedCanonicalVariantId])
   @@map("offer_variants")
+}
+
+/// Sprint 17 (FR-PRICE-002, blocker 1): a durable, append-only snapshot
+/// of the variant's FULL price configuration at the moment of every
+/// real change - never updated or deleted. Written in the SAME
+/// transaction and under the SAME row lock as the change itself (see
+/// the controller), using one `now` timestamp captured once for both
+/// `changedAt` and `effectivePriceAtChange`'s computation - never two
+/// separate clock reads that could disagree by a moment.
+///
+/// `effectivePriceAtChange` is a snapshot of what
+/// offers/pricing/effective-price.util.ts computed AT THAT INSTANT -
+/// it is never recomputed later. A row's own "effective at the time"
+/// never silently changes just because a scheduled discount's window
+/// later starts or ends; only the LIVE current price (computed fresh,
+/// on every read, from OfferVariant's own live columns) does that -
+/// see that same utility's own comment for why no GET path ever
+/// writes here.
+enum PriceChangeReason {
+  MANUAL_EDIT
+  IMPORT
+  /// The one-time honest backfill for every OfferVariant that already
+  /// existed before this migration - see this sprint's migration SQL.
+  /// Never attributed to a real owner (changedBy is NULL here).
+  MIGRATED_BASELINE
+}
+
+model PriceHistory {
+  id                     String            @id @default(uuid())
+  vendorId               String
+  offerVariantId         String
+  offerVariant           OfferVariant      @relation(fields: [vendorId, offerVariantId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  basePrice              Decimal           @db.Decimal(10, 2)
+  salePrice              Decimal?          @db.Decimal(10, 2)
+  discountPercent        Decimal?          @db.Decimal(5, 2)
+  discountStartAt        DateTime?
+  discountEndAt          DateTime?
+  effectivePriceAtChange Decimal           @db.Decimal(10, 2)
+  /// Structurally constrained to 'ILS' (CHECK, migration SQL) - not
+  /// just a default a future write could silently override. Recorded
+  /// literally because FR-PRICE-002 names currency as part of the
+  /// history record, even though this platform has exactly one
+  /// (PDR-001).
+  currency               String            @default("ILS")
+  reason                 PriceChangeReason
+  /// NULL only for reason = MIGRATED_BASELINE (system/no real actor).
+  changedBy              String?
+  changedByUser          User?             @relation(fields: [changedBy], references: [id])
+  changedAt              DateTime          @default(now())
+
+  @@index([vendorId, offerVariantId, changedAt])
+  @@map("price_history")
 }
 
 /// Part 3, G.2 (FR-VEND-004, BR-SUBSCRIPTION). Sprint 3 remediation
@@ -1271,20 +1458,20 @@ model VendorSubscription {
 /// endpoint, since an explicit COUNT_CORRECTION movement from zero
 /// already covers that case without a second write path.
 model BranchStock {
-  id             String       @id @default(uuid())
-  vendorId       String
-  vendor         Vendor       @relation(fields: [vendorId], references: [id])
-  branchId       String
+  id               String       @id @default(uuid())
+  vendorId         String
+  vendor           Vendor       @relation(fields: [vendorId], references: [id])
+  branchId         String
   /// Composite FK (vendorId, branchId) -> StoreBranch(vendorId, id) -
   /// same cross-vendor-integrity reasoning as VendorUser/StaffInvite's
   /// own composite FKs to StoreBranch (Sprint 4): a plain branchId ->
   /// StoreBranch.id FK would only prove the branch exists somewhere,
   /// not that it belongs to this same vendorId.
-  branch         StoreBranch  @relation(fields: [vendorId, branchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
-  offerVariantId String
+  branch           StoreBranch  @relation(fields: [vendorId, branchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  offerVariantId   String
   /// Composite FK (vendorId, offerVariantId) -> OfferVariant(vendorId,
   /// id) - same reasoning, against OfferVariant's own @@unique([vendorId, id]).
-  offerVariant   OfferVariant @relation(fields: [vendorId, offerVariantId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  offerVariant     OfferVariant @relation(fields: [vendorId, offerVariantId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
   /// Never written directly - see this model's own comment. A DB-level
   /// CHECK (quantity >= 0), hand-written in this model's migration (not
   /// representable in Prisma's schema DSL, same already-established
@@ -1293,7 +1480,7 @@ model BranchStock {
   /// atomic conditional UPDATE in InventoryController's movement
   /// endpoint (RB-INV-005), which never even attempts a write that
   /// would violate it.
-  quantity       Int          @default(0)
+  quantity         Int          @default(0)
   /// Sprint 10 (RB-ORD-002, additive): units currently held by a live
   /// (unexpired, unconsumed) CheckoutReservationItem - NOT yet actually
   /// sold, but not free for a NEW reservation either. `quantity -
@@ -1313,9 +1500,9 @@ model BranchStock {
   /// 0` conditional-UPDATE shape (true for both a decrement, where this
   /// is the actual reservation-respecting guard, and an increase, where
   /// it is always trivially satisfied - restocking is never blocked).
-  reservedQuantity Int        @default(0)
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  reservedQuantity Int          @default(0)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
 
   @@unique([branchId, offerVariantId])
   @@index([vendorId])
@@ -1367,18 +1554,27 @@ model StockMovement {
   @@map("stock_movements")
 }
 
-/// Sprint 6 (RB-MATCH-001, PDR-011's later storefront use, current
-/// scope basic-media-only): a primary image plus additional images per
-/// offer variant. No video kind, no 10-image/3-video cap, no reorder
-/// endpoint (RB-MATCH-001b, Should, not built this sprint) - `kind`
-/// alone (PRIMARY vs ADDITIONAL) is enough to distinguish the hero
-/// image; additional images are otherwise just ordered by createdAt.
-/// No upload pipeline exists in this codebase - `url` is a plain,
-/// already-hosted URL the vendor supplies (the same minimal pattern
-/// StoreBranch.verificationPhotoUrl already uses).
+/// Sprint 6 (RB-MATCH-001, PDR-011's later storefront use); Sprint 17
+/// (D9) adds MediaType and enforces it. `kind` alone (PRIMARY vs
+/// ADDITIONAL) is enough to distinguish the hero image; additional
+/// media is otherwise ordered by `sortOrder`. No upload pipeline exists
+/// in this codebase - `url` is a plain, already-hosted URL the vendor
+/// supplies (the same minimal pattern StoreBranch.verificationPhotoUrl
+/// already uses); a video's 60-second-max duration cannot be verified
+/// from an external URL with no media-inspection capability, so it is
+/// never checked - stays a documented gap, not a silent false claim.
 enum MediaKind {
   PRIMARY
   ADDITIONAL
+}
+
+/// Sprint 17 (D9): the vendor chooses explicitly - there is no way to
+/// infer image vs video from a bare URL. PRIMARY may only ever be
+/// IMAGE (CHECK, migration SQL, plus the same rule enforced in the
+/// controller before it ever reaches the database).
+enum MediaType {
+  IMAGE
+  VIDEO
 }
 
 model OfferVariantMedia {
@@ -1389,15 +1585,28 @@ model OfferVariantMedia {
   offerVariant   OfferVariant @relation(fields: [vendorId, offerVariantId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
   url            String
   kind           MediaKind    @default(ADDITIONAL)
+  /// Sprint 17 (D9): every pre-existing row is backfilled IMAGE - a
+  /// certainty, not an approximation, since no video kind existed
+  /// before this migration (there was structurally no way to store
+  /// one), unlike other Sprint-16-style honest-approximation backfills.
+  mediaType      MediaType    @default(IMAGE)
+  altTextAr      String?
+  altTextEn      String?
+  /// Sprint 17: assigned deterministically at insert time under the
+  /// same per-variant row lock PRIMARY-replacement already uses (now
+  /// taken for every insert, not just PRIMARY - see the controller's
+  /// own comment) - `(current max sortOrder for this variant, or -1) +
+  /// 1`, the same pattern StoreSection.sortOrder already established.
+  sortOrder      Int          @default(0)
   createdAt      DateTime     @default(now())
 
-  /// At most one PRIMARY image per variant. A partial unique index -
-  /// not representable in Prisma's schema DSL, hand-written in this
-  /// model's migration (same already-established pattern as
-  /// StaffInvite's pending-invite index) - additional images are
-  /// unrestricted in count this sprint (RB-MATCH-001b's 10-image cap is
-  /// Should, deferred).
-  @@index([offerVariantId])
+  /// At most one PRIMARY image per variant (partial unique index,
+  /// migration SQL - same established pattern as StaffInvite's own
+  /// pending-invite index). The 10-image/3-video cap per variant is
+  /// enforced in application code (a per-mediaType COUNT under the
+  /// per-variant lock, not a DB constraint - Postgres has no direct
+  /// "count of sibling rows" CHECK).
+  @@index([offerVariantId, sortOrder])
   @@map("offer_variant_media")
 }
 
@@ -1481,11 +1690,11 @@ enum StoreApplicableCategory {
 /// otherwise stay published with none, since publish()'s own check
 /// only ever runs at the moment of publishing, not continuously.
 model VendorApplicableCategory {
-  id        String                   @id @default(uuid())
+  id        String                  @id @default(uuid())
   vendorId  String
-  vendor    Vendor                   @relation(fields: [vendorId], references: [id])
+  vendor    Vendor                  @relation(fields: [vendorId], references: [id])
   category  StoreApplicableCategory
-  createdAt DateTime                 @default(now())
+  createdAt DateTime                @default(now())
 
   @@unique([vendorId, category])
   @@map("vendor_applicable_categories")
@@ -1512,12 +1721,12 @@ model StoreSection {
 
   offers StoreSectionOffer[]
 
-  @@index([vendorId, sortOrder])
   /// Backs StoreSectionOffer's own composite FK (vendorId, sectionId) ->
   /// (vendorId, id) - same tenant-safety reasoning as every other
   /// composite FK in this schema (e.g. OfferVariant's own
   /// @@unique([vendorId, id])).
   @@unique([vendorId, id])
+  @@index([vendorId, sortOrder])
   @@map("store_sections")
 }
 
@@ -1564,12 +1773,12 @@ model StoreSectionOffer {
 /// no payment reference, nothing checkout (Sprint 10) would compute -
 /// just the grouping parent shape RB-ORD-001 asks for.
 model CustomerOrder {
-  id         String   @id @default(uuid())
+  id         String          @id @default(uuid())
   customerId String
   customer   CustomerProfile @relation(fields: [customerId], references: [id])
-  createdAt  DateTime @default(now())
+  createdAt  DateTime        @default(now())
 
-  branchOrders BranchOrder[]
+  branchOrders        BranchOrder[]
   paymentTransactions PaymentTransaction[]
 
   @@index([customerId])
@@ -1645,13 +1854,13 @@ enum BranchOrderStatus {
 /// write can never attach vendor A's branch order to vendor B's offer
 /// variant, or vice versa.
 model BranchOrder {
-  id              String                    @id @default(uuid())
-  customerOrderId String
-  customerOrder   CustomerOrder             @relation(fields: [customerOrderId], references: [id])
-  vendorId        String
-  vendor          Vendor                    @relation(fields: [vendorId], references: [id])
-  branchId        String
-  branch          StoreBranch               @relation(fields: [vendorId, branchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  id                    String                   @id @default(uuid())
+  customerOrderId       String
+  customerOrder         CustomerOrder            @relation(fields: [customerOrderId], references: [id])
+  vendorId              String
+  vendor                Vendor                   @relation(fields: [vendorId], references: [id])
+  branchId              String
+  branch                StoreBranch              @relation(fields: [vendorId, branchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
   /// Nullable, set to null on every row until Sprint 10's checkout
   /// actually reserves a slot (RB-ORD-002, "reserves a slot on
   /// RB-FUL-001's calendar") - this sprint adds only the column and its
@@ -1661,8 +1870,8 @@ model BranchOrder {
   /// The composite FK targets DeliveryWindow's own (vendorId, branchId,
   /// id) - not just (vendorId, id) - so a raw SQL write can never point
   /// a branch-A order at a branch-B window even within the same vendor.
-  deliveryWindowId String?
-  deliveryWindow  DeliveryWindow?           @relation(fields: [vendorId, branchId, deliveryWindowId], references: [vendorId, branchId, id], onDelete: Restrict, onUpdate: Cascade)
+  deliveryWindowId      String?
+  deliveryWindow        DeliveryWindow?          @relation(fields: [vendorId, branchId, deliveryWindowId], references: [vendorId, branchId, id], onDelete: Restrict, onUpdate: Cascade)
   /// Sprint 10 (RB-ORD-002, PDR-024, additive): the ONE specific
   /// calendar date, within deliveryWindowId's own recurring weekly
   /// template, that this order actually occupies - deliberately
@@ -1672,7 +1881,7 @@ model BranchOrder {
   /// window-in-general (see CheckoutReservationSlot's own comment for
   /// the matching reservation-time counterpart). Null for PICKUP orders
   /// and for any DELIVERY order not yet slotted.
-  scheduledDate   DateTime?                 @db.Date
+  scheduledDate         DateTime?                @db.Date
   /// Sprint 10 (RB-ORD-004): the six-digit pay-at-pickup verification
   /// code, generated (with a bounded retry-on-collision loop) at
   /// checkout confirm for PICKUP orders only (null for DELIVERY).
@@ -1687,7 +1896,7 @@ model BranchOrder {
   /// (same already-established pattern as e.g. StaffInvite's own
   /// partial unique index). A terminal order's code is free to be
   /// reused by a later active one.
-  pickupCode      String?
+  pickupCode            String?
   /// Sprint 10 (RB-ORD-003, PDR-005): set only for an ONLINE-paid
   /// BranchOrder, pointing at the ONE sandbox transaction that covers
   /// every ONLINE BranchOrder in the same checkout. A plain (not
@@ -1695,28 +1904,28 @@ model BranchOrder {
   /// CustomerOrder, not to any single vendor, so there is no tenant-
   /// safety dimension to enforce here the way there is for
   /// vendor-owned rows elsewhere in this schema. Null for COD.
-  paymentTransactionId String?
-  paymentTransaction PaymentTransaction?    @relation(fields: [paymentTransactionId], references: [id])
+  paymentTransactionId  String?
+  paymentTransaction    PaymentTransaction?      @relation(fields: [paymentTransactionId], references: [id])
   /// Sprint 10 (RB-ORD-002): the delivery address, set only for
   /// DELIVERY orders (null for PICKUP). Plain FK - Address is
   /// customer-scoped, not vendor-scoped, so there is no tenant
   /// dimension to compose against, the same reasoning as
   /// paymentTransactionId above.
-  addressId       String?
-  address         Address?                  @relation(fields: [addressId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  fulfilmentMethod FulfilmentMethod
-  paymentMethod   BranchOrderPaymentMethod
-  status          BranchOrderStatus         @default(PLACED)
+  addressId             String?
+  address               Address?                 @relation(fields: [addressId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  fulfilmentMethod      FulfilmentMethod
+  paymentMethod         BranchOrderPaymentMethod
+  status                BranchOrderStatus        @default(PLACED)
   /// Sum of this BranchOrder's own items only (PDR-001: ILS-only, no
   /// FX). Computed by Sprint 10's checkout, not anything in this
   /// sprint.
-  subtotal        Decimal                   @db.Decimal(10, 2)
+  subtotal              Decimal                  @db.Decimal(10, 2)
   /// Null for PICKUP (PDR-022: delivery fees are store-wide by region -
   /// computed by checkout, not stored as a flat default here).
-  deliveryFee     Decimal?                  @db.Decimal(10, 2)
-  total           Decimal                   @db.Decimal(10, 2)
-  createdAt       DateTime                  @default(now())
-  updatedAt       DateTime                  @updatedAt
+  deliveryFee           Decimal?                 @db.Decimal(10, 2)
+  total                 Decimal                  @db.Decimal(10, 2)
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
   /// Sprint 11 (RB-FUL-002, PDR-026, additive): set the moment the
   /// DELIVERY status transition SENT -> DELIVERED succeeds (written in
   /// the same transaction as that transition, via
@@ -1726,7 +1935,7 @@ model BranchOrder {
   /// FulfilmentReconciliationService). Null for PICKUP orders (pickup
   /// handover confirms itself - see BranchOrderStatus's own PICKED_UP
   /// comment) and for any DELIVERY order not yet Delivered.
-  deliveredAt     DateTime?
+  deliveredAt           DateTime?
   /// Sprint 11 (RB-FUL-002/003, additive): idempotency guard for the
   /// one-time 48-hour post-Delivered reminder - set exactly once, under
   /// the same row lock the reconciliation sweep already takes, so two
@@ -1743,7 +1952,7 @@ model BranchOrder {
   /// The customer's own free-text reason for the report above -
   /// required by PDR-026 ("a 'not received' report requires a
   /// reason"). Null exactly when notReceivedReportedAt is null.
-  notReceivedReason String?
+  notReceivedReason     String?
 
   items BranchOrderItem[]
 
@@ -1760,17 +1969,17 @@ model BranchOrder {
 }
 
 model BranchOrderItem {
-  id             String      @id @default(uuid())
+  id             String       @id @default(uuid())
   vendorId       String
   branchOrderId  String
-  branchOrder    BranchOrder @relation(fields: [vendorId, branchOrderId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  branchOrder    BranchOrder  @relation(fields: [vendorId, branchOrderId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
   offerVariantId String
   offerVariant   OfferVariant @relation(fields: [vendorId, offerVariantId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
   quantity       Int
   /// Snapshot of OfferVariant.basePrice/salePrice at order time - never
   /// re-read live, so a later price change never rewrites history.
-  unitPrice      Decimal     @db.Decimal(10, 2)
-  createdAt      DateTime    @default(now())
+  unitPrice      Decimal      @db.Decimal(10, 2)
+  createdAt      DateTime     @default(now())
 
   @@index([branchOrderId])
   @@map("branch_order_items")
@@ -1797,19 +2006,19 @@ model BranchOrderItem {
 /// constraint below) is exact integer-range math, never string/
 /// timezone-parsing-dependent.
 model DeliveryWindow {
-  id          String   @id @default(uuid())
+  id          String      @id @default(uuid())
   vendorId    String
-  vendor      Vendor   @relation(fields: [vendorId], references: [id])
+  vendor      Vendor      @relation(fields: [vendorId], references: [id])
   branchId    String
   branch      StoreBranch @relation(fields: [vendorId, branchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
   dayOfWeek   Int
   startMinute Int
   endMinute   Int
   capacity    Int
-  createdAt   DateTime @default(now())
+  createdAt   DateTime    @default(now())
 
-  exceptions DeliveryWindowException[]
-  branchOrders BranchOrder[]
+  exceptions               DeliveryWindowException[]
+  branchOrders             BranchOrder[]
   checkoutReservationSlots CheckoutReservationSlot[]
 
   /// Backs DeliveryWindowException's own composite FK (vendorId,
@@ -1841,14 +2050,14 @@ model DeliveryWindow {
 /// meaningfully at once, validated in the controller (a closed
 /// exception's capacityOverride is always null).
 model DeliveryWindowException {
-  id               String   @id @default(uuid())
+  id               String         @id @default(uuid())
   vendorId         String
   windowId         String
   window           DeliveryWindow @relation(fields: [vendorId, windowId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
-  exceptionDate    DateTime @db.Date
-  isClosed         Boolean  @default(false)
+  exceptionDate    DateTime       @db.Date
+  isClosed         Boolean        @default(false)
   capacityOverride Int?
-  createdAt        DateTime @default(now())
+  createdAt        DateTime       @default(now())
 
   /// At most one exception per (window, date) - editing an existing
   /// exception is PUT-by-id, not a second POST for the same date.
@@ -1894,7 +2103,7 @@ model DeliveryWindowException {
 /// in customers only, enforced at the controller (SessionAuthGuard),
 /// not modeled here.
 model CartItem {
-  id             String       @id @default(uuid())
+  id             String          @id @default(uuid())
   customerId     String
   customer       CustomerProfile @relation(fields: [customerId], references: [id])
   vendorId       String
@@ -1902,10 +2111,10 @@ model CartItem {
   /// Composite FK (vendorId, offerVariantId) -> OfferVariant(vendorId,
   /// id) - same tenant-safety pattern this schema already uses
   /// everywhere a row references a vendor-owned OfferVariant.
-  offerVariant   OfferVariant @relation(fields: [vendorId, offerVariantId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  offerVariant   OfferVariant    @relation(fields: [vendorId, offerVariantId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
   quantity       Int
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
   checkoutReservationItems CheckoutReservationItem[]
 
@@ -1933,13 +2142,13 @@ enum PaymentTransactionStatus {
 /// codebase (RB-ORD-003: "no gateway حقيقي ولا أسرار دفع ولا تكامل
 /// خارجي").
 model PaymentTransaction {
-  id               String                    @id @default(uuid())
+  id               String                   @id @default(uuid())
   customerOrderId  String
-  customerOrder    CustomerOrder             @relation(fields: [customerOrderId], references: [id])
-  amount           Decimal                   @db.Decimal(10, 2)
+  customerOrder    CustomerOrder            @relation(fields: [customerOrderId], references: [id])
+  amount           Decimal                  @db.Decimal(10, 2)
   status           PaymentTransactionStatus
   sandboxReference String
-  createdAt        DateTime                  @default(now())
+  createdAt        DateTime                 @default(now())
 
   branchOrders BranchOrder[]
 
@@ -1965,11 +2174,11 @@ model PaymentTransaction {
 /// POST /checkout/reservations/:id/cancel (idempotent - releasing an
 /// already-gone reservation is a no-op success, not an error).
 model CheckoutReservation {
-  id         String   @id @default(uuid())
+  id         String          @id @default(uuid())
   customerId String
   customer   CustomerProfile @relation(fields: [customerId], references: [id])
   expiresAt  DateTime
-  createdAt  DateTime @default(now())
+  createdAt  DateTime        @default(now())
 
   items CheckoutReservationItem[]
   slots CheckoutReservationSlot[]
@@ -1997,19 +2206,19 @@ model CheckoutReservation {
 /// each BranchOrder-to-be directly from the items it already has to
 /// read, without a third table whose only job would be mapping.
 model CheckoutReservationItem {
-  id             String   @id @default(uuid())
-  reservationId  String
-  reservation    CheckoutReservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
-  vendorId       String
-  branchId       String
-  branch         StoreBranch  @relation(fields: [vendorId, branchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
-  offerVariantId String
-  offerVariant   OfferVariant @relation(fields: [vendorId, offerVariantId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
-  quantity       Int
-  unitPriceAtReserve Decimal  @db.Decimal(10, 2)
-  fulfilmentMethod FulfilmentMethod
-  paymentMethod  BranchOrderPaymentMethod
-  createdAt      DateTime @default(now())
+  id                 String                   @id @default(uuid())
+  reservationId      String
+  reservation        CheckoutReservation      @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  vendorId           String
+  branchId           String
+  branch             StoreBranch              @relation(fields: [vendorId, branchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  offerVariantId     String
+  offerVariant       OfferVariant             @relation(fields: [vendorId, offerVariantId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  quantity           Int
+  unitPriceAtReserve Decimal                  @db.Decimal(10, 2)
+  fulfilmentMethod   FulfilmentMethod
+  paymentMethod      BranchOrderPaymentMethod
+  createdAt          DateTime                 @default(now())
   /// Codex review round 1 on commit d0ea80d: confirm() previously
   /// removed a purchased cart LINE by matching (customerId, vendorId,
   /// offerVariantId), which deletes the whole line even if the
@@ -2022,8 +2231,8 @@ model CheckoutReservationItem {
   /// it's gone by confirm time, there's nothing left to reconcile, and
   /// that must never block or fail the checkout itself (the stock hold
   /// is authoritative, not the cart).
-  cartItemId     String?
-  cartItem       CartItem? @relation(fields: [cartItemId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  cartItemId         String?
+  cartItem           CartItem?                @relation(fields: [cartItemId], references: [id], onDelete: SetNull, onUpdate: Cascade)
 
   @@index([vendorId, branchId, offerVariantId])
   @@map("checkout_reservation_items")
@@ -2040,20 +2249,20 @@ model CheckoutReservationItem {
 /// unitPriceAtReserve - re-validated at confirm, never silently
 /// re-priced if the vendor changes their zone fee mid-checkout.
 model CheckoutReservationSlot {
-  id               String   @id @default(uuid())
-  reservationId    String
-  reservation      CheckoutReservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
-  vendorId         String
-  branchId         String
-  deliveryWindowId String
-  deliveryWindow   DeliveryWindow @relation(fields: [vendorId, branchId, deliveryWindowId], references: [vendorId, branchId, id], onDelete: Restrict, onUpdate: Cascade)
-  scheduledDate    DateTime @db.Date
-  deliveryFeeAtReserve Decimal @db.Decimal(10, 2)
+  id                   String              @id @default(uuid())
+  reservationId        String
+  reservation          CheckoutReservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  vendorId             String
+  branchId             String
+  deliveryWindowId     String
+  deliveryWindow       DeliveryWindow      @relation(fields: [vendorId, branchId, deliveryWindowId], references: [vendorId, branchId, id], onDelete: Restrict, onUpdate: Cascade)
+  scheduledDate        DateTime            @db.Date
+  deliveryFeeAtReserve Decimal             @db.Decimal(10, 2)
   /// The address this slot's eventual BranchOrder will deliver to -
   /// also how confirm() re-derives the zone to re-validate
   /// deliveryFeeAtReserve against the vendor's CURRENT fee.
-  addressId        String
-  address          Address  @relation(fields: [addressId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  addressId            String
+  address              Address             @relation(fields: [addressId], references: [id], onDelete: Restrict, onUpdate: Cascade)
 
   @@index([deliveryWindowId, scheduledDate])
   @@map("checkout_reservation_slots")

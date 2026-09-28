@@ -5,6 +5,7 @@ import { AppModule } from './../src/app.module';
 import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
 import { PrismaService } from './../src/prisma/prisma.service';
+import { NO_BRAND_SENTINEL_ID } from './../src/common/no-brand-sentinel';
 
 class FakeSmsService {
   sent: { phone: string; code: string; expiresAt: Date }[] = [];
@@ -303,7 +304,16 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
       .post(`/api/v1/vendors/${vendorId}/offers`)
       .set('Authorization', `Bearer ${ownerToken}`)
       .set('Idempotency-Key', unique('offer'))
-      .send({ title_ar: unique('عنوان'), title_en: unique('Title') })
+      .send({
+        title_ar: unique('عنوان'),
+        title_en: unique('Title'),
+        // Sprint 17's publish gate refuses ACTIVE without a brand set -
+        // the "No brand" sentinel is what a real owner would use for a
+        // product they don't want to attach a governed Brand to, and
+        // these comparison/discovery fixtures have no need for a real
+        // Brand row.
+        brand_id: NO_BRAND_SENTINEL_ID,
+      })
       .expect(201);
     const variantRes = await request(app.getHttpServer())
       .post(`/api/v1/vendors/${vendorId}/offers/${offerRes.body.id}/variants`)
@@ -325,12 +335,40 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
       .set('Idempotency-Key', unique('confirm'))
       .send({ decision: 'confirm' })
       .expect(200);
+    // Sprint 17's publish gate also refuses ACTIVE without a PRIMARY
+    // IMAGE on some variant.
     await request(app.getHttpServer())
-      .patch(`/api/v1/vendors/${vendorId}/offers/${offerRes.body.id}/status`)
+      .post(
+        `/api/v1/vendors/${vendorId}/offers/${offerRes.body.id}/variants/${variantRes.body.id}/media`,
+      )
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .set('Idempotency-Key', unique('media'))
+      .send({
+        url: 'https://example.com/hero.jpg',
+        kind: 'PRIMARY',
+        media_type: 'IMAGE',
+      })
+      .expect(201);
+    // Deliberately NOT activated here - the gate also requires live
+    // available stock, which callers add afterwards (some need it in a
+    // specific branch, some deliberately want a still-zero-stock
+    // offer). Call activateOffer() once stock is in place.
+    return { offerId: offerRes.body.id, variantId: variantRes.body.id };
+  }
+
+  /** Sprint 17: separated from createConfirmedOffer() because the
+   * publish gate now requires live available stock at the moment of
+   * activation - callers must add stock first. */
+  async function activateOffer(
+    ownerToken: string,
+    vendorId: string,
+    offerId: string,
+  ): Promise<void> {
+    await request(app.getHttpServer())
+      .patch(`/api/v1/vendors/${vendorId}/offers/${offerId}/status`)
       .set('Authorization', `Bearer ${ownerToken}`)
       .send({ status: 'ACTIVE' })
       .expect(200);
-    return { offerId: offerRes.body.id, variantId: variantRes.body.id };
   }
 
   async function addStock(
@@ -416,6 +454,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
       basePrice,
     );
     await addStock(owner, vendorId, branchAId, variantId, 10);
+    await activateOffer(owner, vendorId, offerId);
     const slug = await publishStorefront(owner, vendorId);
     return {
       admin,
@@ -732,15 +771,44 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         .post(`/api/v1/vendors/${vendorId}/offers`)
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('offer'))
-        .send({ title_ar: 'مخفض', title_en: 'Discounted' })
+        .send({
+          title_ar: 'مخفض',
+          title_en: 'Discounted',
+          brand_id: NO_BRAND_SENTINEL_ID,
+        })
         .expect(201);
-      await request(app.getHttpServer())
+      const discountedVariant = await request(app.getHttpServer())
         .post(
           `/api/v1/vendors/${vendorId}/offers/${discountedOffer.body.id}/variants`,
         )
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('variant'))
         .send({ seller_sku: unique('sku'), base_price: 50, sale_price: 30 })
+        .expect(201);
+      // Sprint 17's publish gate: a PRIMARY image and live stock.
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/offers/${discountedOffer.body.id}/variants/${discountedVariant.body.id}/media`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('media'))
+        .send({
+          url: 'https://example.com/hero.jpg',
+          kind: 'PRIMARY',
+          media_type: 'IMAGE',
+        })
+        .expect(201);
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/branches/${branchAId}/stock/${discountedVariant.body.id}/movements`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('movement'))
+        .send({
+          reason: 'COUNT_CORRECTION',
+          quantity_delta: 5,
+          reason_note: 'test',
+        })
         .expect(201);
       await request(app.getHttpServer())
         .patch(
@@ -773,7 +841,6 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
       expect(res.body.custom).toHaveLength(1);
       expect(res.body.custom[0].name).toBe('مميز');
       expect(res.body.custom[0].offers).toHaveLength(1);
-      void branchAId;
     });
 
     it('an unavailable store reports empty sections, never a stale catalog', async () => {
@@ -830,21 +897,50 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
       );
 
       const owner = await signup(uniquePhone(), 'a-strong-password');
-      const { vendorId } = await createVendorWithTwoBranches(owner);
+      const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
       await activateVendorSubscription(owner, vendorId);
       const unmatchedOffer = await request(app.getHttpServer())
         .post(`/api/v1/vendors/${vendorId}/offers`)
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('offer'))
-        .send({ title_ar: 'غير مطابق', title_en: 'Unmatched' })
+        .send({
+          title_ar: 'غير مطابق',
+          title_en: 'Unmatched',
+          brand_id: NO_BRAND_SENTINEL_ID,
+        })
         .expect(201);
-      await request(app.getHttpServer())
+      const unmatchedVariant = await request(app.getHttpServer())
         .post(
           `/api/v1/vendors/${vendorId}/offers/${unmatchedOffer.body.id}/variants`,
         )
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('variant'))
         .send({ seller_sku: unique('sku'), base_price: 50 })
+        .expect(201);
+      // Sprint 17's publish gate: a PRIMARY image and live stock.
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/offers/${unmatchedOffer.body.id}/variants/${unmatchedVariant.body.id}/media`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('media'))
+        .send({
+          url: 'https://example.com/hero.jpg',
+          kind: 'PRIMARY',
+          media_type: 'IMAGE',
+        })
+        .expect(201);
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/branches/${branchAId}/stock/${unmatchedVariant.body.id}/movements`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('movement'))
+        .send({
+          reason: 'COUNT_CORRECTION',
+          quantity_delta: 5,
+          reason_note: 'test',
+        })
         .expect(201);
       await request(app.getHttpServer())
         .patch(
@@ -1096,16 +1192,54 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
 
   describe('Offer status endpoint (prerequisite plumbing)', () => {
     it('owner can move an offer to ACTIVE and back; a BRANCH_EMPLOYEE cannot', async () => {
-      const { vendorId, employeeToken, owner } =
+      const { vendorId, branchAId, employeeToken, owner } =
         await setupVendorWithTwoBranchesAndEmployee();
       await activateVendorSubscription(owner, vendorId);
       const offerRes = await request(app.getHttpServer())
         .post(`/api/v1/vendors/${vendorId}/offers`)
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('offer'))
-        .send({ title_ar: 'منتج', title_en: 'Product' })
+        .send({
+          title_ar: 'منتج',
+          title_en: 'Product',
+          brand_id: NO_BRAND_SENTINEL_ID,
+        })
         .expect(201);
       expect(offerRes.body.status).toBe('DRAFT');
+
+      // Sprint 17's publish gate (this test is plumbing/RBAC-focused,
+      // not the gate's own test - satisfy it minimally: a variant with
+      // a PRIMARY image and live stock).
+      const variantRes = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/offers/${offerRes.body.id}/variants`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('variant'))
+        .send({ seller_sku: unique('sku'), base_price: 20 })
+        .expect(201);
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/offers/${offerRes.body.id}/variants/${variantRes.body.id}/media`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('media'))
+        .send({
+          url: 'https://example.com/hero.jpg',
+          kind: 'PRIMARY',
+          media_type: 'IMAGE',
+        })
+        .expect(201);
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/branches/${branchAId}/stock/${variantRes.body.id}/movements`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('movement'))
+        .send({
+          reason: 'COUNT_CORRECTION',
+          quantity_delta: 5,
+          reason_note: 'test',
+        })
+        .expect(201);
 
       const forbidden = await request(app.getHttpServer())
         .patch(`/api/v1/vendors/${vendorId}/offers/${offerRes.body.id}/status`)
@@ -1177,7 +1311,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
           await createVendorWithTwoBranches(owner);
         await activateVendorSubscription(owner, vendorId);
         const gtin = unique('gtin').slice(0, 20);
-        const { variantId } = await createConfirmedOffer(
+        const { offerId, variantId } = await createConfirmedOffer(
           owner,
           vendorId,
           canonicalVariantId,
@@ -1185,6 +1319,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
           price,
         );
         await addStock(owner, vendorId, branchAId, variantId, 10);
+        await activateOffer(owner, vendorId, offerId);
         const slug = await publishStorefront(owner, vendorId);
         slugs.push(slug);
       }
@@ -1211,17 +1346,37 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
       const { canonicalProductId, variantId: canonicalVariantId } =
         await createCanonicalVariant(admin, unique('Brand'), unique('Model'));
 
-      // Cheaper but sold out.
+      // Cheaper but sold out. Sprint 17's publish gate requires live
+      // stock AT activation, so this stocks one unit, activates, then
+      // immediately depletes it back to zero - the offer is genuinely
+      // sold out by the time the comparison card reads it, exactly as
+      // this test needs, without violating the gate.
       const soldOutOwner = await signup(uniquePhone(), 'a-strong-password');
-      const { vendorId: soldOutVendorId } =
+      const { vendorId: soldOutVendorId, branchAId: soldOutBranchId } =
         await createVendorWithTwoBranches(soldOutOwner);
       await activateVendorSubscription(soldOutOwner, soldOutVendorId);
-      await createConfirmedOffer(
+      const { offerId: soldOutOfferId, variantId: soldOutVariantId } =
+        await createConfirmedOffer(
+          soldOutOwner,
+          soldOutVendorId,
+          canonicalVariantId,
+          unique('gtin').slice(0, 20),
+          50,
+        );
+      await addStock(
         soldOutOwner,
         soldOutVendorId,
-        canonicalVariantId,
-        unique('gtin').slice(0, 20),
-        50,
+        soldOutBranchId,
+        soldOutVariantId,
+        1,
+      );
+      await activateOffer(soldOutOwner, soldOutVendorId, soldOutOfferId);
+      await addStock(
+        soldOutOwner,
+        soldOutVendorId,
+        soldOutBranchId,
+        soldOutVariantId,
+        -1,
       );
       await publishStorefront(soldOutOwner, soldOutVendorId);
 
@@ -1230,7 +1385,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
       const { vendorId: availableVendorId, branchAId } =
         await createVendorWithTwoBranches(availableOwner);
       await activateVendorSubscription(availableOwner, availableVendorId);
-      const { variantId } = await createConfirmedOffer(
+      const { offerId, variantId } = await createConfirmedOffer(
         availableOwner,
         availableVendorId,
         canonicalVariantId,
@@ -1244,6 +1399,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         variantId,
         10,
       );
+      await activateOffer(availableOwner, availableVendorId, offerId);
       const availableSlug = await publishStorefront(
         availableOwner,
         availableVendorId,
@@ -1389,7 +1545,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         const { vendorId, branchAId } =
           await createVendorWithTwoBranches(owner);
         await activateVendorSubscription(owner, vendorId);
-        const { variantId } = await createConfirmedOffer(
+        const { offerId, variantId } = await createConfirmedOffer(
           owner,
           vendorId,
           canonicalVariantId,
@@ -1397,6 +1553,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
           price,
         );
         await addStock(owner, vendorId, branchAId, variantId, 10);
+        await activateOffer(owner, vendorId, offerId);
         await publishStorefront(owner, vendorId);
       }
 
@@ -1430,27 +1587,30 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
       const { vendorId: redVendorId, branchAId: redBranchId } =
         await createVendorWithTwoBranches(redOwner);
       await activateVendorSubscription(redOwner, redVendorId);
-      const { variantId: redOfferVariantId } = await createConfirmedOffer(
-        redOwner,
-        redVendorId,
-        redVariantId,
-        unique('gtin').slice(0, 20),
-        100,
-      );
+      const { offerId: redOfferId, variantId: redOfferVariantId } =
+        await createConfirmedOffer(
+          redOwner,
+          redVendorId,
+          redVariantId,
+          unique('gtin').slice(0, 20),
+          100,
+        );
       await addStock(redOwner, redVendorId, redBranchId, redOfferVariantId, 10);
+      await activateOffer(redOwner, redVendorId, redOfferId);
       await publishStorefront(redOwner, redVendorId);
 
       const blueOwner = sharedOwner;
       const { vendorId: blueVendorId, branchAId: blueBranchId } =
         await createVendorWithTwoBranches(blueOwner);
       await activateVendorSubscription(blueOwner, blueVendorId);
-      const { variantId: blueOfferVariantId } = await createConfirmedOffer(
-        blueOwner,
-        blueVendorId,
-        blueVariantId,
-        unique('gtin').slice(0, 20),
-        120,
-      );
+      const { offerId: blueOfferId, variantId: blueOfferVariantId } =
+        await createConfirmedOffer(
+          blueOwner,
+          blueVendorId,
+          blueVariantId,
+          unique('gtin').slice(0, 20),
+          120,
+        );
       await addStock(
         blueOwner,
         blueVendorId,
@@ -1458,6 +1618,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         blueOfferVariantId,
         10,
       );
+      await activateOffer(blueOwner, blueVendorId, blueOfferId);
       await publishStorefront(blueOwner, blueVendorId);
 
       const unfiltered = await request(app.getHttpServer())
@@ -1493,7 +1654,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         const { vendorId, branchAId } =
           await createVendorWithTwoBranches(owner);
         await activateVendorSubscription(owner, vendorId);
-        const { variantId } = await createConfirmedOffer(
+        const { offerId, variantId } = await createConfirmedOffer(
           owner,
           vendorId,
           canonicalVariantId,
@@ -1502,6 +1663,15 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         );
         if (b.qty > 0) {
           await addStock(owner, vendorId, branchAId, variantId, b.qty);
+          await activateOffer(owner, vendorId, offerId);
+        } else {
+          // Sprint 17's publish gate requires live stock AT
+          // activation - stock one unit, activate, then deplete back
+          // to zero so this bucket is genuinely sold_out by the time
+          // the comparison endpoint reads it.
+          await addStock(owner, vendorId, branchAId, variantId, 1);
+          await activateOffer(owner, vendorId, offerId);
+          await addStock(owner, vendorId, branchAId, variantId, -1);
         }
         await publishStorefront(owner, vendorId);
       }

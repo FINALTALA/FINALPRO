@@ -39,6 +39,13 @@ export const SUSPENDED_DENY_ROUTES: readonly string[] = [
   'POST vendors/:vendorId/sections/reorder',
   'PUT vendors/:vendorId/sections/:sectionId/offers/:offerId',
   'DELETE vendors/:vendorId/sections/:sectionId/offers/:offerId',
+  // Sprint 17: owner catalog editing.
+  'PUT vendors/:vendorId/offers/:offerId',
+  'POST vendors/:vendorId/offers/:offerId/archive',
+  'POST vendors/:vendorId/offers/:offerId/restore',
+  'PUT vendors/:vendorId/offers/:offerId/variants/:variantId',
+  'PATCH vendors/:vendorId/offers/:offerId/variants/:variantId/media/:mediaId',
+  'PUT vendors/:vendorId/offers/:offerId/variants/:variantId/media/reorder',
 ];
 
 export const SUSPENDED_ALLOW_ROUTES: readonly string[] = [
@@ -65,6 +72,10 @@ export const SUSPENDED_ALLOW_ROUTES: readonly string[] = [
   'GET vendors/:vendorId/branches/:branchId/stock/:offerVariantId',
   'GET vendors/:vendorId/branches/:branchId/stock/:offerVariantId/movements',
   'GET vendors/:vendorId/offers',
+  'GET vendors/:vendorId/offers/:offerId',
+  'GET vendors/:vendorId/offers/:offerId/variants/:variantId/price-history',
+  'GET vendors/:vendorId/offers/import/template',
+  'GET vendors/:vendorId/offers/import/batches',
   'GET vendors/:vendorId/offers/:offerId/variants',
   'GET vendors/:vendorId/offers/:offerId/variants/:variantId/media',
   'GET vendors/:vendorId/offers/:offerId/variants/:variantId/match-review/candidates',

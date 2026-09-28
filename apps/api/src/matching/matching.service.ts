@@ -173,13 +173,37 @@ export class MatchingService {
 
     const variant = await client.offerVariant.findUniqueOrThrow({
       where: { id: offerVariantId },
-      include: { vendorOffer: true },
+      include: { vendorOffer: { include: { brand: true } } },
     });
+    // Sprint 17 (item 1 of the final review round): brand name,
+    // colour/size, and the four PDR-036 template attribute VALUES now
+    // feed the text signal - editing them and re-running search is
+    // otherwise a complete no-op, since nothing else in this offer's
+    // data would have changed. The "No brand" sentinel is deliberately
+    // excluded (it carries no matching signal); "N/A" template values
+    // are excluded the same way. Still no image/media signal of any
+    // kind - see this method's own doc comment.
+    const brandText =
+      variant.vendorOffer.brand && !variant.vendorOffer.brand.isNoBrandSentinel
+        ? variant.vendorOffer.brand.name
+        : '';
+    const templateValues =
+      variant.vendorOffer.templateAttributes &&
+      typeof variant.vendorOffer.templateAttributes === 'object' &&
+      !Array.isArray(variant.vendorOffer.templateAttributes)
+        ? Object.values(
+            variant.vendorOffer.templateAttributes as Record<string, string>,
+          ).filter((v) => v !== 'N/A')
+        : [];
     const offerText = [
       variant.vendorOffer.titleAr,
       variant.vendorOffer.titleEn,
       variant.specsTextAr ?? '',
       variant.specsTextEn ?? '',
+      brandText,
+      variant.colour ?? '',
+      variant.size ?? '',
+      ...templateValues,
     ].join(' ');
 
     const canonicalVariants = await client.canonicalProductVariant.findMany({
