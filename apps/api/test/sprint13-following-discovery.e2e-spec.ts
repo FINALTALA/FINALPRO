@@ -1,3 +1,4 @@
+import { randomInt } from 'crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
@@ -24,7 +25,7 @@ class FakeSmsService {
 // PS mobile numbers validate only under 056/059 (see the same note in
 // the Sprint 8 spec); a distinct numeric offset keeps every test's
 // phone unique without using the invalid 057/058 prefixes.
-let phoneSeq = (Date.now() % 1_000_000) + 1_700_000;
+let phoneSeq = randomInt(0, 900_000) + 1_700_000;
 function uniquePhone(): string {
   phoneSeq += 1;
   return `+97056${(phoneSeq % 10_000_000).toString().padStart(7, '0')}`;

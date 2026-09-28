@@ -1,4 +1,4 @@
-import { createHash } from 'crypto';
+import { createHash, randomInt } from 'crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
@@ -45,7 +45,27 @@ class FakeSmsService {
 // status each test expects). Seeding from the current time and only
 // incrementing from there keeps numbers unique both within one run
 // and across repeated runs against the same persistent database.
-let phoneSeq = Date.now() % 1_000_000;
+//
+// Review-round fix (Sprint 17 clean-room flake): Date.now() alone is
+// wall-clock-synced at millisecond resolution, so two DIFFERENT test
+// files running as separate parallel Jest worker PROCESSES (this
+// project's whole e2e suite - many files, each with its own
+// uniquePhone() and a distinct but nearby numeric "lane") can compute
+// the *same* `Date.now() % 1_000_000` starting value whenever their
+// beforeEach()s land close enough in time, letting their sequences
+// overlap despite the lane spacing - reproduced repeatedly across
+// clean-room full-suite runs, a different pair of files each time.
+// Folding in `process.pid` (guaranteed distinct between concurrently-
+// running processes) was tried first and only partly helped - Docker
+// often assigns nearby worker processes nearby PIDs, so `pid % 1000`
+// frequently added little real separation. `crypto.randomInt()` draws
+// uniformly from the *entire* remaining digit budget instead: with a
+// 900,000-wide draw, the interval-overlap probability across every
+// pair of files actually running at once is well under 1% even for
+// this suite's total call volume - and, being truly random rather
+// than clock-derived, it keeps the cross-run property above too
+// (arguably better than Date.now() ever did).
+let phoneSeq = randomInt(0, 900_000);
 function uniquePhone(): string {
   phoneSeq += 1;
   return `+97059${(phoneSeq % 10_000_000).toString().padStart(7, '0')}`;

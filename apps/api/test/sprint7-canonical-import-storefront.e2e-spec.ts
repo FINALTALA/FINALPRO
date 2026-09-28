@@ -6,7 +6,7 @@ import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
 import { PrismaService } from './../src/prisma/prisma.service';
 import { generateVendorSlug } from './../src/common/slug.util';
-import { randomUUID } from 'crypto';
+import { randomInt, randomUUID } from 'crypto';
 
 class FakeSmsService {
   sent: { phone: string; code: string; expiresAt: Date }[] = [];
@@ -22,7 +22,7 @@ class FakeSmsService {
   }
 }
 
-let phoneSeq = (Date.now() % 1_000_000) + 1_100_000;
+let phoneSeq = randomInt(0, 900_000) + 1_100_000;
 function uniquePhone(): string {
   phoneSeq += 1;
   return `+97056${(phoneSeq % 10_000_000).toString().padStart(7, '0')}`;

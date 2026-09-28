@@ -1,7 +1,7 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
-import { randomUUID } from 'crypto';
+import { randomInt, randomUUID } from 'crypto';
 import { AppModule } from './../src/app.module';
 import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
@@ -28,7 +28,7 @@ class FakeSmsService {
 // spec files - see the PS-phone-prefix convention this codebase
 // follows) with its own numeric offset, so this file's phones never
 // collide with another spec running in the same worker.
-let phoneSeq = (Date.now() % 1_000_000) + 500_000;
+let phoneSeq = randomInt(0, 900_000) + 500_000;
 function uniquePhone(): string {
   phoneSeq += 1;
   return `+97059${(phoneSeq % 10_000_000).toString().padStart(7, '0')}`;

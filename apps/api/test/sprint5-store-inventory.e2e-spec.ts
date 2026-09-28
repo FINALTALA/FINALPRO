@@ -1,3 +1,4 @@
+import { randomInt } from 'crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
@@ -27,7 +28,7 @@ class FakeSmsService {
 // (the only PS mobile prefixes class-validator's IsPhoneNumber accepts
 // under libphonenumber-js/max - see sprint4-roles.e2e-spec.ts's own
 // comment) - a distinct numeric offset avoids collisions between files.
-let phoneSeq = (Date.now() % 1_000_000) + 400_000;
+let phoneSeq = randomInt(0, 900_000) + 400_000;
 function uniquePhone(): string {
   phoneSeq += 1;
   return `+97056${(phoneSeq % 10_000_000).toString().padStart(7, '0')}`;

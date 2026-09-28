@@ -1,3 +1,4 @@
+import { randomInt } from 'crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { ThrottlerStorage } from '@nestjs/throttler';
@@ -66,24 +67,40 @@ export async function bootApp(ctx: Sprint16Ctx): Promise<void> {
 
 export type PlatformRoleName = 'PLATFORM_ADMIN' | 'VERIFICATION_REVIEWER';
 
+// Review-round fix (Sprint 17 clean-room flake): drawn ONCE, at module
+// scope, when this helper module is first `require`d by a given spec
+// file's own Jest module registry (Jest isolates each spec FILE's
+// module instances, so this is still a fresh, independent draw per
+// spec file, exactly like every other e2e spec's own top-level
+// `phoneSeq`). It used to be a *local* variable inside createFixtures()
+// itself, re-drawn on every single call - and createFixtures() runs
+// fresh in every beforeEach (a new app per TEST) - so these 3 spec
+// files were making dramatically more random draws than every other
+// file (one per TEST, not one per FILE), which was the dominant
+// remaining contributor to this suite's phone-collision flake even
+// after every other file got the same wide-range crypto.randomInt()
+// fix. See auth.e2e-spec.ts's own uniquePhone() comment for the full
+// history/reasoning.
+let phoneSeq = randomInt(0, 900_000);
+
 /**
  * Shared helpers for the Sprint 16 e2e specs. `ctx` is mutated by each
  * spec's beforeEach (a new app per test), so every helper reads
  * `ctx.app` lazily.
  *
  * Phones use the +97056 prefix (project convention - never +97057/58),
- * each spec file with its own `phoneBase` so parallel workers sharing
- * one database never collide.
+ * each spec file with its own `phoneBase` folded in per-call below -
+ * purely a readability grouping now (which file's phone is this), not
+ * the collision-avoidance mechanism (the module-scope draw above is).
  */
 export function createFixtures(ctx: Sprint16Ctx, phoneBase: number) {
-  let phoneSeq = (Date.now() % 1_000_000) + phoneBase;
   let counter = 0;
 
   const http = () => ctx.app.getHttpServer();
 
   function uniquePhone(): string {
     phoneSeq += 1;
-    return `+97056${(phoneSeq % 10_000_000).toString().padStart(7, '0')}`;
+    return `+97056${((phoneSeq + phoneBase) % 10_000_000).toString().padStart(7, '0')}`;
   }
 
   function unique(label: string): string {

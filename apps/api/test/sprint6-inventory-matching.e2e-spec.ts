@@ -1,3 +1,4 @@
+import { randomInt } from 'crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
@@ -27,7 +28,7 @@ class FakeSmsService {
 // only PS mobile prefixes class-validator's IsPhoneNumber accepts under
 // libphonenumber-js/max) - a distinct numeric offset avoids collisions
 // between files.
-let phoneSeq = (Date.now() % 1_000_000) + 100_000;
+let phoneSeq = randomInt(0, 900_000) + 100_000;
 function uniquePhone(): string {
   phoneSeq += 1;
   return `+97056${(phoneSeq % 10_000_000).toString().padStart(7, '0')}`;
@@ -1098,14 +1099,33 @@ describe('Sprint 6 - branch inventory, stock movements, media, non-exact match r
 
     it('approving a candidate links the offer variant to the canonical product and auto-rejects other pending candidates for the same variant', async () => {
       const admin = await signupWithPlatformRole('PLATFORM_ADMIN');
+      // Review-round fix (clean-room flake, unrelated to Sprint 17's own
+      // changes): a plain 'Apple'/'iPhone 15' model name scores well
+      // against ANY realistic-sounding offer another test file's own
+      // canonical products create concurrently in this suite's shared
+      // e2e database - under a full parallel run, MAX_CANDIDATES (10)
+      // could fill with unrelated higher/equal-scoring candidates
+      // before this test's own two. A unique() token folded into both
+      // the model name and the offer's own title/specs keeps their
+      // score high enough (near-exact text match) to rank regardless
+      // of what else exists in the database at the time.
+      const modelToken = unique('ModelReview6Test');
       const { canonicalProductId, variantId: canonicalVariantId } =
-        await createCanonicalVariant(admin, 'Apple', 'iPhone 15', {
-          color: 'Blue',
-        });
+        await createCanonicalVariant(
+          admin,
+          'Apple',
+          `iPhone 15 ${modelToken}`,
+          {
+            color: 'Blue',
+          },
+        );
       const { variantId: otherCanonicalVariantId } =
-        await createCanonicalVariant(admin, 'Apple', 'iPhone 15 Blue Variant', {
-          color: 'Blue',
-        });
+        await createCanonicalVariant(
+          admin,
+          'Apple',
+          `iPhone 15 ${modelToken} Blue Variant`,
+          { color: 'Blue' },
+        );
 
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
@@ -1114,12 +1134,15 @@ describe('Sprint 6 - branch inventory, stock movements, media, non-exact match r
         vendorId,
         branchAId,
         {
-          specs_text_en: 'Blue color, sealed box',
+          specs_text_en: `Blue color, sealed box, ${modelToken}`,
         },
       );
       await prisma.vendorOffer.update({
         where: { id: offerId },
-        data: { titleEn: 'Apple iPhone 15 Blue', titleAr: 'ابل ايفون' },
+        data: {
+          titleEn: `Apple iPhone 15 ${modelToken} Blue`,
+          titleAr: 'ابل ايفون',
+        },
       });
 
       const searchRes = await request(app.getHttpServer())

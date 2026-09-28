@@ -1,3 +1,4 @@
+import { randomInt } from 'crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
@@ -28,7 +29,7 @@ class FakeSmsService {
 // e2e-spec.ts's own uniquePhone() comment - the exact same mistake,
 // independently repeated here and now fixed the same way: reuse "56"
 // with a distinct numeric offset, not a distinct prefix).
-let phoneSeq = (Date.now() % 1_000_000) + 900_000;
+let phoneSeq = randomInt(0, 900_000) + 900_000;
 function uniquePhone(): string {
   phoneSeq += 1;
   return `+97056${(phoneSeq % 10_000_000).toString().padStart(7, '0')}`;
