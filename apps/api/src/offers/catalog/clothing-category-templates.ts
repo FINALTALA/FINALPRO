@@ -46,7 +46,11 @@ export function validateTemplateAttributes(
   template: ClothingCategoryTemplate,
   attributes: unknown,
 ): TemplateValidationProblem[] {
-  if (typeof attributes !== 'object' || attributes === null || Array.isArray(attributes)) {
+  if (
+    typeof attributes !== 'object' ||
+    attributes === null ||
+    Array.isArray(attributes)
+  ) {
     return [{ type: 'NOT_AN_OBJECT' }];
   }
   const requiredKeys = CLOTHING_CATEGORY_TEMPLATE_FIELDS[template];
@@ -59,7 +63,10 @@ export function validateTemplateAttributes(
       continue;
     }
     const value = record[key];
-    if (typeof value !== 'string' || (value.trim().length === 0 && value !== 'N/A')) {
+    if (
+      typeof value !== 'string' ||
+      (value.trim().length === 0 && value !== 'N/A')
+    ) {
       problems.push({ type: 'BLANK_VALUE', key });
     }
   }
@@ -71,7 +78,9 @@ export function validateTemplateAttributes(
   return problems;
 }
 
-export function describeTemplateProblems(problems: TemplateValidationProblem[]): string {
+export function describeTemplateProblems(
+  problems: TemplateValidationProblem[],
+): string {
   return problems
     .map((p) => {
       switch (p.type) {

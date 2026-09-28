@@ -28,7 +28,10 @@ import { VendorMembershipGuard } from '../auth/vendor-membership.guard';
 import { RequireVendorRole } from '../auth/vendor-role.decorator';
 import { generateStoreInventoryBarcode } from '../common/barcode.util';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
-import { isNoBrandAlias, NO_BRAND_SENTINEL_ID } from '../common/no-brand-sentinel';
+import {
+  isNoBrandAlias,
+  NO_BRAND_SENTINEL_ID,
+} from '../common/no-brand-sentinel';
 import { MatchingService } from '../matching/matching.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SubscriptionGateService } from '../subscriptions/subscription-gate.service';
@@ -46,7 +49,10 @@ import {
   ImportGroup,
 } from './import/group-import-rows';
 import { parseImportFile } from './import/parse-import-file';
-import { validateImportRow, ValidatedImportRow } from './import/validate-import-row';
+import {
+  validateImportRow,
+  ValidatedImportRow,
+} from './import/validate-import-row';
 
 const MAX_IMPORT_ROWS = 2000;
 // Review-round fix (Blocker 2): without an explicit multer `limits`,
@@ -155,7 +161,9 @@ export class OffersImportController {
     @CurrentUser() user: AuthenticatedUser,
     @UploadedFile() file: Express.Multer.File | undefined,
     @Req() req: Request,
-  ): Promise<ImportReport & { batch_id: string; failed_rows_csv: string | null }> {
+  ): Promise<
+    ImportReport & { batch_id: string; failed_rows_csv: string | null }
+  > {
     if (!file) {
       throw new BadRequestException({
         code: 'FILE_REQUIRED',
@@ -235,8 +243,15 @@ export class OffersImportController {
         const result = validateImportRow(parsedRows[i], rowNumber);
         if ('errors' in result) {
           for (const e of result.errors) {
-            report.invalid_rows.push({ row_number: e.rowNumber, reason: e.reason });
-            failedRows.push({ rowNumber: e.rowNumber, raw: parsedRows[i], reason: e.reason });
+            report.invalid_rows.push({
+              row_number: e.rowNumber,
+              reason: e.reason,
+            });
+            failedRows.push({
+              rowNumber: e.rowNumber,
+              raw: parsedRows[i],
+              reason: e.reason,
+            });
           }
         } else {
           validRows.push(result.row);
@@ -268,7 +283,9 @@ export class OffersImportController {
         const found = await this.prisma.brand.findMany({
           where: { normalizedName: { in: distinctNames.map(normalize) } },
         });
-        const byNormalized = new Map(found.map((b) => [b.normalizedName, b.id]));
+        const byNormalized = new Map(
+          found.map((b) => [b.normalizedName, b.id]),
+        );
         for (const name of distinctNames) {
           const id = byNormalized.get(normalize(name));
           if (id) brandIdByName.set(name, id);
@@ -301,8 +318,15 @@ export class OffersImportController {
       const { groups, conflicts } = groupImportRows(rowsAfterBrandResolution);
       for (const c of conflicts) {
         report.conflicts.push({ row_number: c.rowNumber, reason: c.reason });
-        const row = rowsAfterBrandResolution.find((r) => r.rowNumber === c.rowNumber);
-        if (row) failedRows.push({ rowNumber: c.rowNumber, raw: rowToRaw(row), reason: c.reason });
+        const row = rowsAfterBrandResolution.find(
+          (r) => r.rowNumber === c.rowNumber,
+        );
+        if (row)
+          failedRows.push({
+            rowNumber: c.rowNumber,
+            raw: rowToRaw(row),
+            reason: c.reason,
+          });
       }
 
       for (const group of groups) {
@@ -333,7 +357,8 @@ export class OffersImportController {
         },
       });
 
-      const hasErrors = report.invalid_rows.length > 0 || report.conflicts.length > 0;
+      const hasErrors =
+        report.invalid_rows.length > 0 || report.conflicts.length > 0;
       await this.prisma.importBatch.update({
         where: { id: batch.id },
         data: {
@@ -350,7 +375,8 @@ export class OffersImportController {
       return {
         ...report,
         batch_id: batch.id,
-        failed_rows_csv: failedRows.length > 0 ? buildFailedRowsCsv(failedRows) : null,
+        failed_rows_csv:
+          failedRows.length > 0 ? buildFailedRowsCsv(failedRows) : null,
       };
     } catch (err) {
       // Sprint 17 (blocker 3, item 3 of the final review round): ANY
@@ -503,7 +529,11 @@ export class OffersImportController {
               for (const row of rowsToCreate) {
                 const reason = `Multiple existing offers already use identifier_type/identifier_value "${group.identifierType}/${group.identifierValue}" for this vendor - cannot determine which to attach to, requires manual review (PDR-019)`;
                 report.conflicts.push({ row_number: row.rowNumber, reason });
-                failedRows.push({ rowNumber: row.rowNumber, raw: rowToRaw(row), reason });
+                failedRows.push({
+                  rowNumber: row.rowNumber,
+                  raw: rowToRaw(row),
+                  reason,
+                });
               }
               return;
             }
@@ -525,7 +555,11 @@ export class OffersImportController {
               for (const row of rowsToCreate) {
                 const reason = `Conflicts with a previously imported offer sharing identifier_type/identifier_value "${group.identifierType}/${group.identifierValue}" - differing ${conflictField} requires manual review (PDR-019)`;
                 report.conflicts.push({ row_number: row.rowNumber, reason });
-                failedRows.push({ rowNumber: row.rowNumber, raw: rowToRaw(row), reason });
+                failedRows.push({
+                  rowNumber: row.rowNumber,
+                  raw: rowToRaw(row),
+                  reason,
+                });
               }
               return;
             }
@@ -541,11 +575,12 @@ export class OffersImportController {
               vendorId,
               titleAr: firstRow.titleAr,
               titleEn: firstRow.titleEn,
-              brandId: resolvedBrandIdByRowNumber.get(firstRow.rowNumber) ?? null,
+              brandId:
+                resolvedBrandIdByRowNumber.get(firstRow.rowNumber) ?? null,
               categoryTemplate: firstRow.categoryTemplate,
               templateAttributes:
-                (firstRow.templateAttributes as Prisma.InputJsonValue | undefined) ??
-                undefined,
+                (firstRow.templateAttributes as
+                  Prisma.InputJsonValue | undefined) ?? undefined,
             },
           });
           offerId = offer.id;
@@ -701,7 +736,11 @@ export class OffersImportController {
         const reason =
           'Could not import this row - it may have just been imported concurrently (seller_sku conflict)';
         report.invalid_rows.push({ row_number: row.rowNumber, reason });
-        failedRows.push({ rowNumber: row.rowNumber, raw: rowToRaw(row), reason });
+        failedRows.push({
+          rowNumber: row.rowNumber,
+          raw: rowToRaw(row),
+          reason,
+        });
       }
     }
   }

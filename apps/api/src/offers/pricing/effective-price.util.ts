@@ -45,7 +45,10 @@ export function roundIls(value: number): number {
 }
 
 export function isScheduledDiscountActive(
-  cfg: Pick<PriceConfig, 'discountPercent' | 'discountStartAt' | 'discountEndAt'>,
+  cfg: Pick<
+    PriceConfig,
+    'discountPercent' | 'discountStartAt' | 'discountEndAt'
+  >,
   now: Date,
 ): boolean {
   return (
@@ -57,7 +60,10 @@ export function isScheduledDiscountActive(
   );
 }
 
-export function computeEffectivePrice(cfg: PriceConfig, now: Date = new Date()): number {
+export function computeEffectivePrice(
+  cfg: PriceConfig,
+  now: Date = new Date(),
+): number {
   const base = Number(cfg.basePrice);
   if (isScheduledDiscountActive(cfg, now)) {
     const pct = Number(cfg.discountPercent);

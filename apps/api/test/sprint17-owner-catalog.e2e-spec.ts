@@ -924,7 +924,14 @@ describe('Sprint 17 - owner catalog (pricing, PDR-036 templates, brand, media, i
     it('re-runs searchNonExactCandidates when title/brand/template details change on an UNMATCHED offer, actually changing candidates', async () => {
       const { owner, vendorId } = await setupOwnerVendor();
       const offerId = await createOffer(owner, vendorId);
-      const variant = await createVariant(owner, vendorId, offerId);
+      // A distinctive colour, matched via structuralAttributeOverlap
+      // below - the score's structural-overlap half (worth up to 0.5)
+      // is what reliably clears CANDIDATE_SCORE_THRESHOLD here, since
+      // the text-similarity half alone (Jaccard over token SETS) is
+      // diluted by unique()'s own timestamp/counter tokens in the
+      // brand name and can otherwise land just under threshold.
+      const colour = 'PurpleRerunTestColour';
+      const variant = await createVariant(owner, vendorId, offerId, { colour });
 
       const before = await prisma.matchReviewCandidate.count({
         where: { offerVariantId: variant.id },
@@ -943,7 +950,7 @@ describe('Sprint 17 - owner catalog (pricing, PDR-036 templates, brand, media, i
         data: { nameAr: unique('فئة'), nameEn: unique('Category') },
       });
       const modelName = 'VerySpecificModelNameForRerunTest';
-      await request(app.getHttpServer())
+      const productRes = await request(app.getHttpServer())
         .post('/api/v1/canonical-products')
         .set('Authorization', `Bearer ${admin}`)
         .set('Idempotency-Key', unique('cp'))
@@ -953,6 +960,16 @@ describe('Sprint 17 - owner catalog (pricing, PDR-036 templates, brand, media, i
           model_name: modelName,
           status: 'PUBLISHED',
         })
+        .expect(201);
+      // searchNonExactCandidates() scores CanonicalProductVariant rows,
+      // not the parent CanonicalProduct - without this, the product
+      // above has zero variants and can never produce a candidate,
+      // regardless of how well its text scores.
+      const canonicalVariantRes = await request(app.getHttpServer())
+        .post(`/api/v1/canonical-products/${productRes.body.id}/variants`)
+        .set('Authorization', `Bearer ${admin}`)
+        .set('Idempotency-Key', unique('cpv'))
+        .send({ structural_attributes: { colour } })
         .expect(201);
 
       await request(app.getHttpServer())
@@ -965,6 +982,19 @@ describe('Sprint 17 - owner catalog (pricing, PDR-036 templates, brand, media, i
         where: { offerVariantId: variant.id },
       });
       expect(after).toBeGreaterThan(before);
+      // Scoped, race-safe check (never diluted by MAX_CANDIDATES ranking
+      // against other canonical products a concurrently-running test
+      // file may have created in this shared e2e database): a candidate
+      // row for THIS specific canonical variant exists.
+      const specificCandidate = await prisma.matchReviewCandidate.findUnique({
+        where: {
+          offerVariantId_canonicalVariantId: {
+            offerVariantId: variant.id,
+            canonicalVariantId: canonicalVariantRes.body.id,
+          },
+        },
+      });
+      expect(specificCandidate).not.toBeNull();
     });
 
     it('does NOT re-run matching for a media-only change (no signal there)', async () => {
@@ -1619,12 +1649,12 @@ describe('Sprint 17 - owner catalog (pricing, PDR-036 templates, brand, media, i
           normalizedName: realBrandName.trim().toLowerCase(),
         },
       });
-      const brandsBefore = await prisma.brand.count();
+      const unresolvableBrandName = unique('ThisBrandDoesNotExistAnywhere');
       const csv = [
         'title_ar,title_en,seller_sku,base_price,brand_name',
         `ت1,T1,${unique('sku')},20,${realBrand.name}`,
         `ت2,T2,${unique('sku')},20,بدون علامة تجارية`,
-        `ت3,T3,${unique('sku')},20,ThisBrandDoesNotExistAnywhere`,
+        `ت3,T3,${unique('sku')},20,${unresolvableBrandName}`,
       ].join('\n');
       const res = await request(app.getHttpServer())
         .post(`/api/v1/vendors/${vendorId}/offers/import`)
@@ -1635,9 +1665,7 @@ describe('Sprint 17 - owner catalog (pricing, PDR-036 templates, brand, media, i
 
       expect(res.body.imported).toHaveLength(2);
       expect(res.body.invalid_rows).toHaveLength(1);
-      expect(res.body.invalid_rows[0].reason).toContain(
-        'ThisBrandDoesNotExistAnywhere',
-      );
+      expect(res.body.invalid_rows[0].reason).toContain(unresolvableBrandName);
 
       const offers = await prisma.vendorOffer.findMany({
         where: { vendorId },
@@ -1648,9 +1676,14 @@ describe('Sprint 17 - owner catalog (pricing, PDR-036 templates, brand, media, i
       expect(realBrandOffer?.brandId).toBe(realBrand.id);
       expect(sentinelOffer?.brandId).toBe(NO_BRAND_SENTINEL_ID);
 
-      // No new Brand row was ever created for the unresolvable name.
-      const brandsAfter = await prisma.brand.count();
-      expect(brandsAfter).toBe(brandsBefore);
+      // No new Brand row was ever created for the unresolvable name -
+      // scoped to this exact (uniquified) name rather than a global
+      // count, which a concurrently-running test file in this shared
+      // e2e database could otherwise change between the two reads.
+      const createdForUnresolvable = await prisma.brand.findUnique({
+        where: { normalizedName: unresolvableBrandName.trim().toLowerCase() },
+      });
+      expect(createdForUnresolvable).toBeNull();
     });
 
     it('an exception mid-processing (after a group already committed) marks the batch FAILED, never stuck PROCESSING, and does not roll back the already-committed group', async () => {

@@ -24,8 +24,9 @@ export function IsValidTemplateAttributes(options?: ValidationOptions) {
       options,
       validator: {
         validate(value: unknown, args: ValidationArguments) {
-          const template = (args.object as { category_template?: ClothingCategoryTemplate })
-            .category_template;
+          const template = (
+            args.object as { category_template?: ClothingCategoryTemplate }
+          ).category_template;
           if (!template) {
             return value === undefined || value === null;
           }
@@ -33,8 +34,9 @@ export function IsValidTemplateAttributes(options?: ValidationOptions) {
           return validateTemplateAttributes(template, value).length === 0;
         },
         defaultMessage(args: ValidationArguments) {
-          const template = (args.object as { category_template?: ClothingCategoryTemplate })
-            .category_template;
+          const template = (
+            args.object as { category_template?: ClothingCategoryTemplate }
+          ).category_template;
           const value = (args.object as Record<string, unknown>)[args.property];
           if (!template) {
             return 'template_attributes must not be sent without category_template';

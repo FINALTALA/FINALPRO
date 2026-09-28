@@ -35,7 +35,11 @@ function csvEscape(value: string): string {
 }
 
 export function buildFailedRowsCsv(
-  failedRows: { rowNumber: number; raw: Record<string, string>; reason: string }[],
+  failedRows: {
+    rowNumber: number;
+    raw: Record<string, string>;
+    reason: string;
+  }[],
 ): string {
   const headers = [...IMPORT_TEMPLATE_HEADERS, 'error_reason'];
   const lines = [headers.join(',')];

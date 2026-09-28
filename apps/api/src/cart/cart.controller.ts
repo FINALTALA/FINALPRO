@@ -29,7 +29,10 @@ import { assertItemsPurchasable } from '../checkout/purchase-eligibility.util';
 import { SubscriptionGateService } from '../subscriptions/subscription-gate.service';
 import { AddCartItemDto } from './dto/add-cart-item.dto';
 import { UpdateCartItemDto } from './dto/update-cart-item.dto';
-import { PriceConfig, computeEffectivePrice } from '../offers/pricing/effective-price.util';
+import {
+  PriceConfig,
+  computeEffectivePrice,
+} from '../offers/pricing/effective-price.util';
 
 function cartItemDto(item: {
   id: string;

@@ -4,7 +4,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { AuditLogService } from '../audit/audit-log.service';
-import { liveReservedQuantityByKey, stockLockKey } from '../common/availability.util';
+import {
+  liveReservedQuantityByKey,
+  stockLockKey,
+} from '../common/availability.util';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import {
   BranchOrderPaymentMethod,
@@ -34,7 +37,10 @@ import {
 } from './sandbox-payment.service';
 import { QuoteCheckoutDto } from './dto/quote-checkout.dto';
 import { ReserveCheckoutDto } from './dto/reserve-checkout.dto';
-import { PriceConfig, computeEffectivePrice } from '../offers/pricing/effective-price.util';
+import {
+  PriceConfig,
+  computeEffectivePrice,
+} from '../offers/pricing/effective-price.util';
 
 const RESERVATION_TTL_MS = 10 * 60 * 1000;
 const PICKUP_CODE_MAX_ATTEMPTS = 10;
