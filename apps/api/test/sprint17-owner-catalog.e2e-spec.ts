@@ -522,6 +522,33 @@ describe('Sprint 17 - owner catalog (pricing, PDR-036 templates, brand, media, i
   });
 
   describe('Pricing (blocker 1): effective price, mutual exclusivity, PriceHistory', () => {
+    it('review-round fix: rounds with exact decimal arithmetic, never native floating point - base_price=2.30, discount_percent=5.00 => effective_price=2.19 (not 2.18)', async () => {
+      // 2.30 * 0.95 = 2.185 exactly - round-half-up to 2dp is 2.19.
+      // Native `Math.round(2.30 * (1 - 5/100) * 100) / 100` computes
+      // this as 2.18 (base-2 floating point cannot represent 2.30 or
+      // 0.95 exactly, so the product lands at 2.1849999999999996,
+      // which rounds DOWN) - the exact bug decimal.js exists to close.
+      const { owner, vendorId } = await setupOwnerVendor();
+      const offerId = await createOffer(owner, vendorId);
+      const start = new Date(Date.now() - 60_000).toISOString();
+      const end = new Date(Date.now() + 3_600_000).toISOString();
+      const variant = await createVariant(owner, vendorId, offerId, {
+        base_price: 2.3,
+        discount_percent: 5,
+        discount_start_at: start,
+        discount_end_at: end,
+      });
+      expect(variant.effective_price).toBe(2.19);
+
+      const history = await request(app.getHttpServer())
+        .get(
+          `/api/v1/vendors/${vendorId}/offers/${offerId}/variants/${variant.id}/price-history`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .expect(200);
+      expect(Number(history.body[0].effective_price_at_change)).toBe(2.19);
+    });
+
     it('an ACTIVE scheduled discount is reflected in effective_price, computed at READ time with zero writes', async () => {
       const { owner, vendorId } = await setupOwnerVendor();
       const offerId = await createOffer(owner, vendorId);
@@ -1028,6 +1055,98 @@ describe('Sprint 17 - owner catalog (pricing, PDR-036 templates, brand, media, i
 
       const after = await prisma.matchReviewCandidate.count();
       expect(after).toBe(before);
+    });
+  });
+
+  describe('PUT variant identifier pair (review-round fix, item 3)', () => {
+    it('refuses identifier_type without identifier_value (and vice versa), unless both are cleared together', async () => {
+      const { owner, vendorId } = await setupOwnerVendor();
+      const offerId = await createOffer(owner, vendorId);
+      const variant = await createVariant(owner, vendorId, offerId);
+
+      const typeOnly = await request(app.getHttpServer())
+        .put(
+          `/api/v1/vendors/${vendorId}/offers/${offerId}/variants/${variant.id}`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .send({ identifier_type: 'GTIN' });
+      expect(typeOnly.status).toBe(400);
+      expect(typeOnly.body.error.code).toBe('INCOMPLETE_IDENTIFIER_PAIR');
+
+      const valueOnly = await request(app.getHttpServer())
+        .put(
+          `/api/v1/vendors/${vendorId}/offers/${offerId}/variants/${variant.id}`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .send({ identifier_value: unique('gtin').slice(0, 20) });
+      expect(valueOnly.status).toBe(400);
+      expect(valueOnly.body.error.code).toBe('INCOMPLETE_IDENTIFIER_PAIR');
+    });
+
+    it('a PENDING proposal disappears (proposedCanonicalVariantId null, status NONE) once the identifier pair is cleared, in the same transaction', async () => {
+      const { owner, vendorId } = await setupOwnerVendor();
+      const { canonicalVariantId } = await createCanonicalVariant();
+      const identifierValue = unique('gtin').slice(0, 20);
+      await prisma.canonicalProductVariant.update({
+        where: { id: canonicalVariantId },
+        data: { gtin: identifierValue },
+      });
+      const offerId = await createOffer(owner, vendorId);
+      const variant = await createVariant(owner, vendorId, offerId, {
+        identifier_type: 'GTIN',
+        identifier_value: identifierValue,
+      });
+      expect(variant.match_proposal_status).toBe('PENDING');
+      expect(variant.proposed_canonical_variant_id).toBe(canonicalVariantId);
+
+      const cleared = await request(app.getHttpServer())
+        .put(
+          `/api/v1/vendors/${vendorId}/offers/${offerId}/variants/${variant.id}`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .send({ identifier_type: null, identifier_value: null })
+        .expect(200);
+
+      expect(cleared.body.match_proposal_status).toBe('NONE');
+      expect(cleared.body.proposed_canonical_variant_id).toBeNull();
+      expect(cleared.body.identifier_type).toBeNull();
+      expect(cleared.body.identifier_value).toBeNull();
+
+      const row = await prisma.offerVariant.findUniqueOrThrow({
+        where: { id: variant.id },
+      });
+      expect(row.matchProposalStatus).toBe('NONE');
+      expect(row.proposedCanonicalVariantId).toBeNull();
+    });
+
+    it('changing to a NEW identifier pair with no match still updates the proposal (never leaves a stale PENDING from before)', async () => {
+      const { owner, vendorId } = await setupOwnerVendor();
+      const { canonicalVariantId } = await createCanonicalVariant();
+      const firstIdentifier = unique('gtin').slice(0, 20);
+      await prisma.canonicalProductVariant.update({
+        where: { id: canonicalVariantId },
+        data: { gtin: firstIdentifier },
+      });
+      const offerId = await createOffer(owner, vendorId);
+      const variant = await createVariant(owner, vendorId, offerId, {
+        identifier_type: 'GTIN',
+        identifier_value: firstIdentifier,
+      });
+      expect(variant.match_proposal_status).toBe('PENDING');
+
+      // A new identifier value that matches nothing at all.
+      const noMatchIdentifier = unique('gtin').slice(0, 20);
+      const updated = await request(app.getHttpServer())
+        .put(
+          `/api/v1/vendors/${vendorId}/offers/${offerId}/variants/${variant.id}`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .send({ identifier_value: noMatchIdentifier })
+        .expect(200);
+
+      expect(updated.body.match_proposal_status).toBe('NONE');
+      expect(updated.body.proposed_canonical_variant_id).toBeNull();
+      expect(updated.body.identifier_value).toBe(noMatchIdentifier);
     });
   });
 
@@ -1638,6 +1757,42 @@ describe('Sprint 17 - owner catalog (pricing, PDR-036 templates, brand, media, i
       ]);
       expect(csvLines).toHaveLength(2); // header + exactly 1 failed row
       expect(csvLines[1]).toContain('T2');
+    });
+
+    it('sale_price >= base_price is a clean invalid row (never a DB CHECK crash / FAILED batch) - the other, valid row still imports', async () => {
+      const { owner, vendorId } = await setupOwnerVendor();
+      const csv = [
+        'title_ar,title_en,seller_sku,base_price,sale_price',
+        `ت1,T1,${unique('sku')},20,15`, // valid: sale_price < base_price
+        `ت2,T2,${unique('sku')},20,20`, // invalid: sale_price == base_price
+      ].join('\n');
+      const res = await request(app.getHttpServer())
+        .post(`/api/v1/vendors/${vendorId}/offers/import`)
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('import'))
+        .attach('file', Buffer.from(csv, 'utf-8'), 'products.csv')
+        .expect(201);
+
+      expect(res.body.imported).toHaveLength(1);
+      expect(res.body.invalid_rows).toHaveLength(1);
+      expect(res.body.invalid_rows[0].reason).toContain(
+        'sale_price must be strictly less than base_price',
+      );
+
+      const batch = await prisma.importBatch.findUniqueOrThrow({
+        where: { id: res.body.batch_id },
+      });
+      expect(batch.status).toBe('COMPLETED_WITH_ERRORS'); // never FAILED
+
+      const csvLines = (res.body.failed_rows_csv as string).split('\n');
+      expect(csvLines).toHaveLength(2); // header + exactly 1 failed row
+      expect(csvLines[1]).toContain('T2');
+
+      const offers = await prisma.vendorOffer.findMany({
+        where: { vendorId },
+      });
+      expect(offers).toHaveLength(1);
+      expect(offers[0].titleEn).toBe('T1');
     });
 
     it('brand_name resolution: a known Brand resolves; the sentinel alias resolves; an unresolvable name becomes an invalid row (never auto-creates a Brand)', async () => {

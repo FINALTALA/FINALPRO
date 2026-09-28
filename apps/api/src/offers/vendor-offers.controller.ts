@@ -55,7 +55,10 @@ import { UpdateOfferVariantDto } from './dto/update-offer-variant.dto';
 import { UpdateOfferVariantMediaDto } from './dto/update-offer-variant-media.dto';
 import { UpdateVendorOfferDto } from './dto/update-vendor-offer.dto';
 import { UpdateVendorOfferStatusDto } from './dto/update-vendor-offer-status.dto';
-import { computeEffectivePrice } from './pricing/effective-price.util';
+import {
+  computeDiscountedPrice,
+  computeEffectivePrice,
+} from './pricing/effective-price.util';
 
 const MEDIA_LIMITS: Record<'IMAGE' | 'VIDEO', number> = { IMAGE: 10, VIDEO: 3 };
 
@@ -1027,8 +1030,11 @@ export class VendorOffersController {
         });
       }
       if (dto.base_price !== undefined) {
-        const resultCents = Math.round(dto.base_price * (1 - pct / 100) * 100);
-        if (resultCents <= 0) {
+        // Review-round fix: the same computeDiscountedPrice() the live
+        // effective-price read path uses - never a separate
+        // Math.round(base*(1-pct/100)*100) floating-point calculation
+        // that could disagree with it at a rounding boundary.
+        if (computeDiscountedPrice(dto.base_price, pct).lessThanOrEqualTo(0)) {
           throw new BadRequestException({
             code: 'DISCOUNT_RESULTS_IN_ZERO_PRICE',
             message: 'This discount would round the price to zero or less',
@@ -1133,6 +1139,28 @@ export class VendorOffersController {
         dto.identifier_type !== undefined || dto.identifier_value !== undefined;
       this.assertVariantIdentityUnlocked(variant, touchesIdentifier);
 
+      // Review-round fix: the RESULTING pair after this request is
+      // applied - never each field updated independently, which could
+      // leave identifierType set with identifierValue still null (or
+      // vice versa) whenever a caller only ever sends one of the two.
+      // Both must end up set, or both cleared together; anything else
+      // is refused before any write.
+      const nextIdentifierType =
+        dto.identifier_type !== undefined
+          ? dto.identifier_type
+          : variant.identifierType;
+      const nextIdentifierValue =
+        dto.identifier_value !== undefined
+          ? dto.identifier_value
+          : variant.identifierValue;
+      if (!!nextIdentifierType !== !!nextIdentifierValue) {
+        throw new BadRequestException({
+          code: 'INCOMPLETE_IDENTIFIER_PAIR',
+          message:
+            'identifier_type and identifier_value must both be set, or both cleared together',
+        });
+      }
+
       const nextBasePrice = dto.base_price ?? Number(variant.basePrice);
       let nextSalePrice: number | null = variant.salePrice
         ? Number(variant.salePrice)
@@ -1179,11 +1207,13 @@ export class VendorOffersController {
       } else if (dto.base_price !== undefined && nextDiscountPercent !== null) {
         // base_price alone changed while a scheduled discount is still
         // active - re-check the rounding-to-zero guard against the NEW
-        // base price.
-        const resultCents = Math.round(
-          nextBasePrice * (1 - nextDiscountPercent / 100) * 100,
-        );
-        if (resultCents <= 0) {
+        // base price, via the same shared computeDiscountedPrice().
+        if (
+          computeDiscountedPrice(
+            nextBasePrice,
+            nextDiscountPercent,
+          ).lessThanOrEqualTo(0)
+        ) {
           throw new BadRequestException({
             code: 'DISCOUNT_RESULTS_IN_ZERO_PRICE',
             message:
@@ -1212,10 +1242,10 @@ export class VendorOffersController {
       if (dto.size !== undefined) data.size = dto.size;
       if (dto.specs_text_ar !== undefined) data.specsTextAr = dto.specs_text_ar;
       if (dto.specs_text_en !== undefined) data.specsTextEn = dto.specs_text_en;
-      if (dto.identifier_type !== undefined)
-        data.identifierType = dto.identifier_type;
-      if (dto.identifier_value !== undefined)
-        data.identifierValue = dto.identifier_value;
+      if (touchesIdentifier) {
+        data.identifierType = nextIdentifierType;
+        data.identifierValue = nextIdentifierValue;
+      }
 
       const updated = await tx.offerVariant.update({
         where: { id: variantId },
@@ -1264,13 +1294,29 @@ export class VendorOffersController {
         tx,
       );
 
-      // Sprint 17 (item 1): identifier re-proposal on an unmatched
-      // variant - same function createVariant() uses.
-      if (touchesIdentifier && updated.matchProposalStatus !== 'CONFIRMED') {
-        if (updated.identifierType && updated.identifierValue) {
+      // Review-round fix (item 1 continued): re-propose only when the
+      // identifier PAIR actually changed (never on a resubmission of
+      // the same pair, which would otherwise silently reset a
+      // REJECTED proposal back to PENDING for no reason) - and, unlike
+      // before, this now runs for BOTH directions: a new pair (rerun
+      // findExactMatch and write its result even when no match is
+      // found - never leave a stale PENDING/candidate from before) and
+      // clearing the pair entirely (explicitly reset
+      // proposedCanonicalVariantId/matchProposalStatus - previously
+      // skipped, since `identifierType && identifierValue` is false
+      // for a cleared pair, silently leaving the old proposal behind).
+      const identifierPairChanged =
+        touchesIdentifier &&
+        (variant.identifierType !== nextIdentifierType ||
+          variant.identifierValue !== nextIdentifierValue);
+      if (
+        identifierPairChanged &&
+        updated.matchProposalStatus !== 'CONFIRMED'
+      ) {
+        if (nextIdentifierType && nextIdentifierValue) {
           const match = await this.matching.findExactMatch(
-            updated.identifierType,
-            updated.identifierValue,
+            nextIdentifierType,
+            nextIdentifierValue,
             tx,
           );
           await tx.offerVariant.update({
@@ -1280,6 +1326,14 @@ export class VendorOffersController {
               matchProposalStatus: match.canonicalVariantId
                 ? 'PENDING'
                 : 'NONE',
+            },
+          });
+        } else {
+          await tx.offerVariant.update({
+            where: { id: variantId },
+            data: {
+              proposedCanonicalVariantId: null,
+              matchProposalStatus: 'NONE',
             },
           });
         }

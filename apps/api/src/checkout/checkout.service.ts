@@ -39,7 +39,9 @@ import { QuoteCheckoutDto } from './dto/quote-checkout.dto';
 import { ReserveCheckoutDto } from './dto/reserve-checkout.dto';
 import {
   PriceConfig,
+  addMoney,
   computeEffectivePrice,
+  sumLineAmounts,
 } from '../offers/pricing/effective-price.util';
 
 const RESERVATION_TTL_MS = 10 * 60 * 1000;
@@ -258,9 +260,12 @@ export class CheckoutService {
             unit_price: effectivePrice(ci.offerVariant),
           };
         });
-        const subtotal = items.reduce(
-          (sum, i) => sum + i.unit_price * i.quantity,
-          0,
+        // Review-round fix: Decimal-precise summation across every
+        // line (never native-float `sum + unit_price * quantity`,
+        // which can accumulate rounding error line by line) - see
+        // effective-price.util.ts's own comment.
+        const subtotal = sumLineAmounts(
+          items.map((i) => ({ amount: i.unit_price, quantity: i.quantity })),
         );
         const eligibleBranches = await Promise.all(
           g.eligibleBranchIds.map(async (branchId) => {
@@ -1134,13 +1139,18 @@ export class CheckoutService {
       let onlineTotal = 0;
       for (const [key, items] of itemsByBranch) {
         if (items[0].paymentMethod !== 'ONLINE') continue;
-        const subtotal = items.reduce(
-          (sum, i) => sum + Number(i.unitPriceAtReserve) * i.quantity,
-          0,
+        // Review-round fix: Decimal-precise, same as quote()'s own
+        // subtotal above - this is real money about to be charged via
+        // sandboxPayment.charge().
+        const subtotal = sumLineAmounts(
+          items.map((i) => ({
+            amount: i.unitPriceAtReserve,
+            quantity: i.quantity,
+          })),
         );
         const slot = slotByBranchKey.get(key);
         const deliveryFee = slot ? Number(slot.deliveryFeeAtReserve) : 0;
-        onlineTotal += subtotal + deliveryFee;
+        onlineTotal = addMoney(onlineTotal, subtotal, deliveryFee);
       }
 
       const customerOrder = await tx.customerOrder.create({
@@ -1186,12 +1196,16 @@ export class CheckoutService {
         const fulfilmentMethod = items[0].fulfilmentMethod;
         const paymentMethod = items[0].paymentMethod;
         const slot = slotByBranchKey.get(key);
-        const subtotal = items.reduce(
-          (sum, i) => sum + Number(i.unitPriceAtReserve) * i.quantity,
-          0,
+        // Review-round fix: Decimal-precise, same reasoning as above -
+        // this is the amount persisted on the BranchOrder row.
+        const subtotal = sumLineAmounts(
+          items.map((i) => ({
+            amount: i.unitPriceAtReserve,
+            quantity: i.quantity,
+          })),
         );
         const deliveryFee = slot ? Number(slot.deliveryFeeAtReserve) : null;
-        const total = subtotal + (deliveryFee ?? 0);
+        const total = addMoney(subtotal, deliveryFee ?? 0);
 
         const baseData = {
           customerOrderId: customerOrder.id,

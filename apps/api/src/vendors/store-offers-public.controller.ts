@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import {
   PriceConfig,
   computeEffectivePrice,
+  isEffectivelyDiscounted,
 } from '../offers/pricing/effective-price.util';
 
 // Sprint 8 (RB-STOREF-002, PDR-012 / RB-COMP-001, PDR-015): the public,
@@ -157,7 +158,7 @@ export class StoreOffersPublicController {
     // price (manual override OR an active scheduled discount) is below
     // basePrice - computed the same way, read-only, as everywhere else.
     const discounts = offers.filter((o) =>
-      o.variants.some((v) => computeEffectivePrice(v) < Number(v.basePrice)),
+      o.variants.some((v) => isEffectivelyDiscounted(v)),
     );
 
     const customSections = await this.prisma.storeSection.findMany({
@@ -312,12 +313,9 @@ export class StoreOffersPublicController {
           // Sprint 17 (blocker 1): the live effective price (manual
           // override OR an active scheduled discount), computed
           // read-only - never the raw salePrice column directly.
-          sale_price: (() => {
-            const effective = computeEffectivePrice(v);
-            return effective < Number(v.basePrice)
-              ? effective.toString()
-              : null;
-          })(),
+          sale_price: isEffectivelyDiscounted(v)
+            ? computeEffectivePrice(v).toString()
+            : null,
           specs_text_ar: v.specsTextAr,
           specs_text_en: v.specsTextEn,
           canonical_variant_id: v.canonicalVariantId,

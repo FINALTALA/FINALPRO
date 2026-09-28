@@ -1404,7 +1404,12 @@ model PriceHistory {
   reason                 PriceChangeReason
   /// NULL only for reason = MIGRATED_BASELINE (system/no real actor).
   changedBy              String?
-  changedByUser          User?             @relation(fields: [changedBy], references: [id])
+  /// Review-round fix: onDelete: Restrict, not the Prisma default
+  /// (SetNull) - see the migration's own comment on this exact FK: the
+  /// CHECK constraint already requires changedBy on every non-baseline
+  /// row, so SetNull could never be satisfied consistently for a User
+  /// who ever made a real (non-MIGRATED_BASELINE) price change.
+  changedByUser          User?             @relation(fields: [changedBy], references: [id], onDelete: Restrict)
   changedAt              DateTime          @default(now())
 
   @@index([vendorId, offerVariantId, changedAt])

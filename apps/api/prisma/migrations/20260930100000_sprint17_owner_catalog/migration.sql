@@ -136,7 +136,16 @@ ALTER TABLE "price_history" ADD CONSTRAINT "price_history_changed_by_check" CHEC
 CREATE INDEX "price_history_vendorId_offerVariantId_changedAt_idx" ON "price_history"("vendorId", "offerVariantId", "changedAt");
 
 ALTER TABLE "price_history" ADD CONSTRAINT "price_history_vendorId_offerVariantId_fkey" FOREIGN KEY ("vendorId", "offerVariantId") REFERENCES "offer_variants"("vendorId", "id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "price_history" ADD CONSTRAINT "price_history_changedBy_fkey" FOREIGN KEY ("changedBy") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+-- Review-round fix: RESTRICT, not SET NULL - price_history_changed_by_check
+-- above already requires changedBy IS NOT NULL on every non-baseline row
+-- (MANUAL_EDIT/IMPORT), so ON DELETE SET NULL could never actually
+-- satisfy both constraints together (deleting a User with any such row
+-- would either violate the CHECK or silently corrupt the audit trail by
+-- nulling out who really made a real, non-baseline change). RESTRICT
+-- makes that impossible: a User who has ever made a real price change
+-- can never be deleted while that history exists, which is the correct
+-- invariant for an audit trail, not a limitation to work around.
+ALTER TABLE "price_history" ADD CONSTRAINT "price_history_changedBy_fkey" FOREIGN KEY ("changedBy") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- Baseline backfill: one row per pre-existing OfferVariant. No
 -- scheduled discount existed before this migration (the columns did

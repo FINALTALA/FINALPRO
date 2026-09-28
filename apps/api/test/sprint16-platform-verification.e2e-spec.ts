@@ -39,7 +39,24 @@ describe('Sprint 16 - platform verification: queue, evidence reads, decisions (e
 
   beforeEach(async () => {
     await bootApp(ctx);
-    f = createFixtures(ctx, 0);
+    // Review-round fix (Sprint 17 clean-room flake): phoneBase 0 here
+    // was the exact same lane as auth.e2e-spec.ts's own unoffset
+    // `phoneSeq = Date.now() % 1_000_000` - the one true exact
+    // duplicate in this suite's whole phone-number-lane registry (every
+    // other file's own uniquePhone() picks a distinct ~100k-300k-wide
+    // offset specifically to avoid this). Under real parallel workers
+    // (--maxWorkers=50%, the same full-suite run CI/the clean-room
+    // uses) these two files' independently Date.now()-seeded counters
+    // could - and, confirmed by three separate clean-room reruns,
+    // reproducibly did - generate the same +97056XXXXXXX phone number,
+    // cross-contaminating each other's OTP records (a signup() in one
+    // file racing an otp/request in the other for the identical phone
+    // invalidates/replaces the OTP the first file's verify() expects,
+    // surfacing as a nondeterministic OTP_INVALID/OTP_EXPIRED). Moved
+    // onto its own lane, alongside this same helper's other two callers
+    // (2_000_000, 4_000_000) rather than a sub-1M lane already claimed
+    // by a dozen other files.
+    f = createFixtures(ctx, 3_000_000);
   });
 
   afterEach(async () => {

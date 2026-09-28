@@ -87,6 +87,15 @@ export function validateImportRow(
     if (!Number.isFinite(salePrice) || salePrice <= 0) {
       problems.push('sale_price must be a positive number when provided');
       salePrice = null;
+    } else if (Number.isFinite(basePrice) && salePrice >= basePrice) {
+      // Review-round fix: this used to fall through to the DB CHECK
+      // constraint (offer_variants_sale_price_check), which crashed the
+      // whole group's transaction (and, uncaught, the batch) instead of
+      // becoming a clean, reported invalid row - the exact same class
+      // of gap already fixed once for the JSON create-variant endpoint
+      // (see vendor-offers.controller.ts's own resolveDiscountFields()).
+      problems.push('sale_price must be strictly less than base_price');
+      salePrice = null;
     }
   }
 
