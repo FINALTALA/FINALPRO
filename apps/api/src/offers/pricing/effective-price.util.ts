@@ -104,7 +104,10 @@ export function computeEffectivePrice(
   now: Date = new Date(),
 ): number {
   if (isScheduledDiscountActive(cfg, now)) {
-    return computeDiscountedPrice(cfg.basePrice, cfg.discountPercent).toNumber();
+    return computeDiscountedPrice(
+      cfg.basePrice,
+      cfg.discountPercent,
+    ).toNumber();
   }
   if (cfg.salePrice !== null) {
     return roundIls(toDecimal(cfg.salePrice)).toNumber();
@@ -129,7 +132,9 @@ export function isEffectivelyDiscounted(
     );
   }
   if (cfg.salePrice !== null) {
-    return roundIls(toDecimal(cfg.salePrice)).lessThan(toDecimal(cfg.basePrice));
+    return roundIls(toDecimal(cfg.salePrice)).lessThan(
+      toDecimal(cfg.basePrice),
+    );
   }
   return false;
 }
@@ -160,9 +165,6 @@ export function sumLineAmounts(
  */
 export function addMoney(...amounts: unknown[]): number {
   return roundIls(
-    amounts.reduce<Decimal>(
-      (sum, a) => sum.plus(toDecimal(a)),
-      new Decimal(0),
-    ),
+    amounts.reduce<Decimal>((sum, a) => sum.plus(toDecimal(a)), new Decimal(0)),
   ).toNumber();
 }
