@@ -47,6 +47,27 @@ interface PriceHistoryRow {
   changed_at: string;
 }
 
+interface OfferSummaryDto {
+  canonical_product_id: string | null;
+}
+
+interface NameChangeRequestDto {
+  id: string;
+  canonical_product_id: string;
+  requested_name_ar: string;
+  requested_name_en: string;
+  reason: string | null;
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  decided_at: string | null;
+  created_at: string;
+}
+
+const NAME_CHANGE_STATUS_LABEL: Record<NameChangeRequestDto["status"], string> = {
+  PENDING: "بانتظار قرار المنصة",
+  APPROVED: "تمت الموافقة",
+  REJECTED: "تم الرفض",
+};
+
 type PriceMode = "none" | "sale" | "discount";
 
 const MATCH_LABEL: Record<VariantDto["match_proposal_status"], string> = {
@@ -88,6 +109,18 @@ export default function VariantDetailPage() {
   const [newMediaKind, setNewMediaKind] = useState<"PRIMARY" | "ADDITIONAL">("ADDITIONAL");
   const [newMediaType, setNewMediaType] = useState<"IMAGE" | "VIDEO">("IMAGE");
 
+  // Review-round fix (owner matching UI): the offer's own
+  // canonical_product_id (not variant.canonical_variant_id) is the
+  // exact condition requestNameChange() checks server-side
+  // (hasConfirmedMatch on VendorOffer) - gating the button on anything
+  // else could show it when the request would 403/404, or hide it when
+  // it would actually succeed.
+  const [offerCanonicalProductId, setOfferCanonicalProductId] = useState<string | null>(null);
+  const [nameChangeRequests, setNameChangeRequests] = useState<NameChangeRequestDto[] | null>(null);
+  const [newNameAr, setNewNameAr] = useState("");
+  const [newNameEn, setNewNameEn] = useState("");
+  const [newNameReason, setNewNameReason] = useState("");
+
   function load() {
     apiFetch<VariantDto[]>(`/vendors/${params.vendorId}/offers/${params.offerId}/variants`)
       .then((all) => {
@@ -121,6 +154,20 @@ export default function VariantDetailPage() {
       .catch(() => {});
     apiFetch<PriceHistoryRow[]>(`${base}/price-history`)
       .then(setHistory)
+      .catch(() => {});
+    apiFetch<OfferSummaryDto>(`/vendors/${params.vendorId}/offers/${params.offerId}`)
+      .then((offer) => {
+        setOfferCanonicalProductId(offer.canonical_product_id);
+        if (offer.canonical_product_id) {
+          apiFetch<NameChangeRequestDto[]>(
+            `/vendors/${params.vendorId}/canonical-products/${offer.canonical_product_id}/name-change-requests`,
+          )
+            .then(setNameChangeRequests)
+            .catch(() => {});
+        } else {
+          setNameChangeRequests(null);
+        }
+      })
       .catch(() => {});
   }
 
@@ -183,6 +230,35 @@ export default function VariantDetailPage() {
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "تعذّر تنفيذ القرار");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function requestNameChange() {
+    if (!offerCanonicalProductId || !newNameAr.trim() || !newNameEn.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await apiFetch(
+        `/vendors/${params.vendorId}/canonical-products/${offerCanonicalProductId}/name-change-requests`,
+        {
+          method: "POST",
+          body: {
+            requested_name_ar: newNameAr.trim(),
+            requested_name_en: newNameEn.trim(),
+            reason: newNameReason.trim() || undefined,
+          },
+          idempotencyKey: newIdempotencyKey("name-change-request"),
+        },
+      );
+      setNewNameAr("");
+      setNewNameEn("");
+      setNewNameReason("");
+      setNotice("تم إرسال طلب تغيير الاسم");
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "تعذّر إرسال الطلب");
     } finally {
       setBusy(false);
     }
@@ -442,6 +518,46 @@ export default function VariantDetailPage() {
           </div>
         )}
       </div>
+
+      {offerCanonicalProductId && (
+        <div className="card" style={{ maxWidth: 560, marginTop: 16 }}>
+          <h3 style={{ marginTop: 0 }}>طلب تغيير اسم المنتج المرجعي</h3>
+          <p className="muted">
+            هذا العرض مطابق لمنتج مرجعي. إن رأيتِ اسمه غير دقيق، يمكنك اقتراح اسم بديل يراجعه فريق المنصة.
+          </p>
+          {nameChangeRequests && nameChangeRequests.length > 0 && (
+            <ul style={{ margin: "8px 0", paddingInlineStart: 20 }}>
+              {nameChangeRequests.map((r) => (
+                <li key={r.id} className="muted">
+                  {r.requested_name_ar} / {r.requested_name_en} —{" "}
+                  <span className={`badge${r.status === "APPROVED" ? " badge-active" : ""}`}>
+                    {NAME_CHANGE_STATUS_LABEL[r.status]}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="field">
+            <label>الاسم المقترح بالعربية</label>
+            <input value={newNameAr} onChange={(e) => setNewNameAr(e.target.value)} />
+          </div>
+          <div className="field">
+            <label>الاسم المقترح بالإنجليزية</label>
+            <input value={newNameEn} onChange={(e) => setNewNameEn(e.target.value)} />
+          </div>
+          <div className="field">
+            <label>سبب التغيير (اختياري)</label>
+            <input value={newNameReason} onChange={(e) => setNewNameReason(e.target.value)} />
+          </div>
+          <button
+            className="button"
+            onClick={requestNameChange}
+            disabled={busy || !newNameAr.trim() || !newNameEn.trim()}
+          >
+            إرسال الطلب
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -9,6 +9,7 @@ import {
   NotFoundException,
   Param,
   Post,
+  Query,
   Req,
   UseGuards,
   UseInterceptors,
@@ -22,13 +23,24 @@ import {
 } from '../auth/session-auth.guard';
 import { VendorMembershipGuard } from '../auth/vendor-membership.guard';
 import { RequireVendorRole } from '../auth/vendor-role.decorator';
+import {
+  decodeCursor,
+  encodeCursor,
+  isIsoDateString,
+  isUuidLike,
+  parseLimit,
+} from '../platform-admin/cursor.util';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
+import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CanonicalNamingService } from './canonical-naming.service';
 import { MatchReviewDecisionDto } from './dto/match-review-decision.dto';
 import { RequestNameChangeDto } from './dto/request-name-change.dto';
 import { MatchingService } from './matching.service';
+
+const isFiniteNumberLike = (v: unknown): boolean =>
+  typeof v === 'number' && Number.isFinite(v);
 
 export function nameChangeRequestDto(r: {
   id: string;
@@ -56,6 +68,36 @@ export function nameChangeRequestDto(r: {
   };
 }
 
+// Review-round fix (owner matching UI): the owner never needs to know
+// which platform staff member decided their rename request -
+// decided_by_id is an internal reviewer identity, not something this
+// DTO exposes. A deliberately separate function from
+// nameChangeRequestDto() above (which stays as the fuller shape used
+// nowhere by an owner-facing route) rather than one shape with an
+// optional field, so a future field added to the admin-facing DTO
+// never silently leaks here too.
+function ownerNameChangeRequestDto(r: {
+  id: string;
+  canonicalProductId: string;
+  requestedNameAr: string;
+  requestedNameEn: string;
+  reason: string | null;
+  status: string;
+  decidedAt: Date | null;
+  createdAt: Date;
+}) {
+  return {
+    id: r.id,
+    canonical_product_id: r.canonicalProductId,
+    requested_name_ar: r.requestedNameAr,
+    requested_name_en: r.requestedNameEn,
+    reason: r.reason,
+    status: r.status,
+    decided_at: r.decidedAt?.toISOString() ?? null,
+    created_at: r.createdAt.toISOString(),
+  };
+}
+
 function candidateDto(c: {
   id: string;
   offerVariantId: string;
@@ -73,6 +115,54 @@ function candidateDto(c: {
     status: c.status,
     created_at: c.createdAt.toISOString(),
     decided_at: c.decidedAt?.toISOString() ?? null,
+  };
+}
+
+// Review-round fix (owner matching UI): candidateDto() above is the
+// bare shape search()/listCandidates()/decide() already return - each
+// of those is called with offerId/variantId already in the URL, so it
+// never needed offer/variant/canonical display data. queue() is
+// different: it is the one vendor-wide list a review-queue UI would
+// actually render cards from, with no other context to draw a link or
+// a label from - so it alone gets this richer shape, read via `include`
+// on relations that already exist (no schema change).
+function queueCandidateDto(c: {
+  id: string;
+  score: number;
+  status: string;
+  createdAt: Date;
+  decidedAt: Date | null;
+  offerVariant: {
+    id: string;
+    vendorOfferId: string;
+    sellerSku: string;
+    colour: string | null;
+    size: string | null;
+    vendorOffer: { titleAr: string; titleEn: string };
+  };
+  canonicalVariant: {
+    id: string;
+    structuralAttributes: Prisma.JsonValue;
+    canonicalProduct: { modelName: string; brand: { name: string } };
+  };
+}) {
+  return {
+    id: c.id,
+    score: c.score,
+    status: c.status,
+    created_at: c.createdAt.toISOString(),
+    decided_at: c.decidedAt?.toISOString() ?? null,
+    offer_id: c.offerVariant.vendorOfferId,
+    offer_variant_id: c.offerVariant.id,
+    offer_title_ar: c.offerVariant.vendorOffer.titleAr,
+    offer_title_en: c.offerVariant.vendorOffer.titleEn,
+    variant_colour: c.offerVariant.colour,
+    variant_size: c.offerVariant.size,
+    variant_seller_sku: c.offerVariant.sellerSku,
+    canonical_variant_id: c.canonicalVariant.id,
+    canonical_model_name: c.canonicalVariant.canonicalProduct.modelName,
+    canonical_brand_name: c.canonicalVariant.canonicalProduct.brand.name,
+    canonical_structural_attributes: c.canonicalVariant.structuralAttributes,
   };
 }
 
@@ -148,9 +238,12 @@ export class MatchReviewController {
     @Param('variantId') variantId: string,
   ) {
     await this.requireVariant(vendorId, offerId, variantId);
+    // Review-round fix: deterministic tie-break (createdAt, then id) so
+    // a genuine score tie - two candidates scored identically - can't
+    // leave the list order unstable across repeated reads.
     const candidates = await this.prisma.matchReviewCandidate.findMany({
       where: { vendorId, offerVariantId: variantId },
-      orderBy: { score: 'desc' },
+      orderBy: [{ score: 'desc' }, { createdAt: 'asc' }, { id: 'asc' }],
     });
     return candidates.map(candidateDto);
   }
@@ -314,17 +407,76 @@ export class MatchReviewController {
     });
   }
 
-  // The vendor-wide view a review-queue UI would actually list -
-  // every PENDING candidate across every offer variant for this
-  // vendor, ranked highest-score first.
+  // The vendor-wide view a review-queue UI would actually list - every
+  // PENDING candidate across every offer variant for this vendor,
+  // ranked highest-score first, deterministically tie-broken by
+  // (createdAt, id) so a genuine score tie can never leave a candidate
+  // to jump position (or be skipped/duplicated across pages) between
+  // reads - the same keyset-cursor pattern
+  // apps/api/src/platform-admin/admin-vendors.controller.ts already
+  // uses, reusing the shared ../platform-admin/cursor.util.ts rather
+  // than inventing a second cursor scheme. Sort direction is mixed
+  // (score DESC, createdAt/id ASC), so the keyset condition below is
+  // spelled out explicitly rather than as a single row-value tuple
+  // comparison (that shortcut only works when every column sorts the
+  // same direction).
   @Get(':vendorId/match-review/queue')
   @RequireVendorRole('OWNER')
-  async queue(@Param('vendorId') vendorId: string) {
-    const candidates = await this.prisma.matchReviewCandidate.findMany({
-      where: { vendorId, status: 'PENDING' },
-      orderBy: { score: 'desc' },
+  async queue(
+    @Param('vendorId') vendorId: string,
+    @Query('cursor') cursorRaw?: string,
+    @Query('limit') limitRaw?: string,
+  ) {
+    const limit = parseLimit(limitRaw);
+    const cursor = decodeCursor(cursorRaw, [
+      isFiniteNumberLike,
+      isIsoDateString,
+      isUuidLike,
+    ]);
+
+    const where: Prisma.MatchReviewCandidateWhereInput = {
+      vendorId,
+      status: 'PENDING',
+    };
+    if (cursor) {
+      const [cursorScore, cursorCreatedAtRaw, cursorId] = cursor as [
+        number,
+        string,
+        string,
+      ];
+      const cursorCreatedAt = new Date(cursorCreatedAtRaw);
+      where.OR = [
+        { score: { lt: cursorScore } },
+        { score: cursorScore, createdAt: { gt: cursorCreatedAt } },
+        {
+          score: cursorScore,
+          createdAt: cursorCreatedAt,
+          id: { gt: cursorId },
+        },
+      ];
+    }
+
+    const rows = await this.prisma.matchReviewCandidate.findMany({
+      where,
+      orderBy: [{ score: 'desc' }, { createdAt: 'asc' }, { id: 'asc' }],
+      take: limit + 1,
+      include: {
+        offerVariant: { include: { vendorOffer: true } },
+        canonicalVariant: {
+          include: { canonicalProduct: { include: { brand: true } } },
+        },
+      },
     });
-    return candidates.map(candidateDto);
+
+    const page = rows.slice(0, limit);
+    const last = page[page.length - 1];
+    return {
+      items: page.map(queueCandidateDto),
+      next_cursor:
+        rows.length > limit && last
+          ? encodeCursor([last.score, last.createdAt.toISOString(), last.id])
+          : null,
+    };
   }
 
   // Sprint 7 (RB-MATCH-003, Sec 3.2): "Any matched vendor may request a
@@ -380,7 +532,14 @@ export class MatchReviewController {
         },
         tx,
       );
-      const responseBody = nameChangeRequestDto(request);
+      // The HTTP response goes to the owner who just created this
+      // request - ownerNameChangeRequestDto(), never the fuller
+      // nameChangeRequestDto() (decided_by_id is always null on a
+      // fresh row anyway, but the same DTO the GET below uses is what
+      // keeps that guarantee structural, not incidental). The audit
+      // log's afterState is an internal record, not an HTTP response -
+      // it keeps the fuller shape.
+      const responseBody = ownerNameChangeRequestDto(request);
       await this.idempotencyCompletion.complete(
         tx,
         req.idempotencyClaimId,
@@ -391,5 +550,28 @@ export class MatchReviewController {
     });
 
     return body;
+  }
+
+  // Review-round fix (owner matching UI): the owner-scoped read this
+  // vendor's own name-change-request(s) for one canonical product -
+  // requestNameChange() above only ever returns the ONE row it just
+  // created, with nothing to re-fetch a request's current status on a
+  // later visit. Filtered by vendorId AND canonicalProductId together
+  // (never canonicalProductId alone) - more than one vendor can be
+  // confirmed-matched to the same canonical product, and a vendor must
+  // never see another vendor's request for it. See
+  // ownerNameChangeRequestDto() for why decided_by_id (an internal
+  // reviewer identity) is never included here.
+  @Get(':vendorId/canonical-products/:canonicalProductId/name-change-requests')
+  @RequireVendorRole('OWNER')
+  async listMyNameChangeRequests(
+    @Param('vendorId') vendorId: string,
+    @Param('canonicalProductId') canonicalProductId: string,
+  ) {
+    const requests = await this.prisma.canonicalNameChangeRequest.findMany({
+      where: { vendorId, canonicalProductId },
+      orderBy: { createdAt: 'desc' },
+    });
+    return requests.map(ownerNameChangeRequestDto);
   }
 }
