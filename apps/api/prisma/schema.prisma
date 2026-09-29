@@ -174,8 +174,22 @@ model OtpCode {
   consumedByKey String?
   attemptCount  Int        @default(0)
   createdAt     DateTime   @default(now())
+  /// checkCode() tie-break fix: a DB-generated, monotonically
+  /// increasing sequence, independent of wall-clock time - the
+  /// definitive answer to "which of two OTP rows for the same
+  /// (phone, purpose) was issued more recently" when their createdAt
+  /// (TIMESTAMP(3), millisecond resolution) ties, which real,
+  /// concurrent traffic can and does hit. A plain sequence-backed
+  /// column (@default(autoincrement()), not a strict identity column)
+  /// so an explicit value can still be inserted where needed (this
+  /// fix's own e2e test constructs two rows with an identical
+  /// createdAt but a controlled sequence order). Every pre-existing
+  /// row's own backfilled value is NOT a record of its true original
+  /// issuance order - see this migration's own comment for why that
+  /// is never relied upon.
+  issuedSequence Int       @default(autoincrement())
 
-  @@index([phone, purpose])
+  @@index([phone, purpose, consumedAt, createdAt, issuedSequence])
   @@map("otp_codes")
 }
 

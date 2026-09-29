@@ -93,6 +93,14 @@ export class OtpService {
    * does next) but does not consume the OTP, matching "consumption
    * happens exactly once, on first *successful* verification" (Part
    * 4, H.3).
+   *
+   * Review fix: ordered by createdAt DESC, then issuedSequence DESC -
+   * createdAt is TIMESTAMP(3) (millisecond resolution), which real,
+   * fast, concurrent traffic can and does tie on for the same
+   * (phone, purpose); issuedSequence (a DB sequence, independent of
+   * wall-clock time) is what makes "the latest OTP" unambiguous even
+   * then, so an older, already-superseded code can never win a tie
+   * against a newer one requested moments later.
    */
   async checkCode(
     phone: string,
@@ -101,7 +109,7 @@ export class OtpService {
   ): Promise<OtpCheckResult> {
     const latest = await this.prisma.otpCode.findFirst({
       where: { phone, purpose, consumedAt: null },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { issuedSequence: 'desc' }],
     });
 
     if (!latest) {
