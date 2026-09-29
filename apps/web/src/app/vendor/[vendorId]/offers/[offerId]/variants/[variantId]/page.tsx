@@ -117,6 +117,11 @@ export default function VariantDetailPage() {
   // it would actually succeed.
   const [offerCanonicalProductId, setOfferCanonicalProductId] = useState<string | null>(null);
   const [nameChangeRequests, setNameChangeRequests] = useState<NameChangeRequestDto[] | null>(null);
+  // Review-round fix: a failed load must never be indistinguishable
+  // from "no requests yet" - null above means "not loaded/unknown",
+  // this error means "loaded and failed", and only a successful (even
+  // empty) array means "loaded and there really are none".
+  const [nameChangeRequestsError, setNameChangeRequestsError] = useState<string | null>(null);
   const [newNameAr, setNewNameAr] = useState("");
   const [newNameEn, setNewNameEn] = useState("");
   const [newNameReason, setNewNameReason] = useState("");
@@ -159,16 +164,26 @@ export default function VariantDetailPage() {
       .then((offer) => {
         setOfferCanonicalProductId(offer.canonical_product_id);
         if (offer.canonical_product_id) {
-          apiFetch<NameChangeRequestDto[]>(
-            `/vendors/${params.vendorId}/canonical-products/${offer.canonical_product_id}/name-change-requests`,
-          )
-            .then(setNameChangeRequests)
-            .catch(() => {});
+          loadNameChangeRequests(offer.canonical_product_id);
         } else {
           setNameChangeRequests(null);
+          setNameChangeRequestsError(null);
         }
       })
       .catch(() => {});
+  }
+
+  function loadNameChangeRequests(canonicalProductId: string) {
+    setNameChangeRequestsError(null);
+    apiFetch<NameChangeRequestDto[]>(
+      `/vendors/${params.vendorId}/canonical-products/${canonicalProductId}/name-change-requests`,
+    )
+      .then(setNameChangeRequests)
+      .catch((err) => {
+        setNameChangeRequestsError(
+          err instanceof ApiError ? err.message : "تعذّر تحميل طلبات تغيير الاسم",
+        );
+      });
   }
 
   useEffect(() => {
@@ -525,7 +540,21 @@ export default function VariantDetailPage() {
           <p className="muted">
             هذا العرض مطابق لمنتج مرجعي. إن رأيتِ اسمه غير دقيق، يمكنك اقتراح اسم بديل يراجعه فريق المنصة.
           </p>
-          {nameChangeRequests && nameChangeRequests.length > 0 && (
+          {nameChangeRequestsError && (
+            <div style={{ marginBottom: 8 }}>
+              <ErrorBanner message={nameChangeRequestsError} />
+              <button
+                className="button-link"
+                onClick={() => loadNameChangeRequests(offerCanonicalProductId)}
+              >
+                إعادة المحاولة
+              </button>
+            </div>
+          )}
+          {!nameChangeRequestsError && nameChangeRequests === null && (
+            <p className="muted">جارٍ تحميل طلبات تغيير الاسم السابقة...</p>
+          )}
+          {!nameChangeRequestsError && nameChangeRequests && nameChangeRequests.length > 0 && (
             <ul style={{ margin: "8px 0", paddingInlineStart: 20 }}>
               {nameChangeRequests.map((r) => (
                 <li key={r.id} className="muted">

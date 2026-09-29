@@ -7,6 +7,17 @@
 **Scope:** the full SRS, Parts 0–9. Every `FR-*` ID in [SRS Part 2](srs/02-functional-requirements.md) (244 rows, including the E.0 September amendment), every `PDR-*` ID in [`approved-product-decisions-2026-09.md`](approved-product-decisions-2026-09.md) (36 rows, including the 2026-09-26 PDR-035/036 amendment), every `BR-*` (34) and `NFR-*` (32) in Part 3/4, and every remaining requirement, decision, screen, failure scenario, backlog item and state-machine transition in Parts 0, 1, and 3–9 — covered in the appendix starting at §6, with each ID-range explicitly expanded (no row stands for more than one ID; see §0 for the two narrow, explicitly-justified exceptions — the `O.1`/`O.2` test-level classification and the `BO`/module-matrix/recommendations rollup — neither of which carries an independent DONE/PARTIAL/MISSING status of its own).
 **Update rule:** this file is reviewed again after every sprint. Each review edits it in place under a new dated version note, rather than creating a new file, so it stays the one living record.
 
+## v7 — S17-owner-matching-ui applied, 2026-09-29
+
+`S17-owner-matching-ui` (branch `feat/sprint-17-owner-matching-ui`) is a small, owner-facing UI-only follow-up to Sprint 17 itself — **not** the `S17b` platform-catalog-administration item in §4/§5 below (`FR-CAT-001/002/003/006..012`, `FR-MATCH-005/006/007` — categories/brands/canonical-product admin, merge/split), which this pass does not touch, rename, or reclassify in any way. Two Sprint-17 review-round gaps that had a fully built and tested backend since Sprint 6/7 (`MatchReviewController`) but no UI at all — updated here per the DONE rule in §1 (a real UI route reachable from navigation, not just an API):
+
+- `FR-MATCH-003` 🟡→✅: the vendor-wide non-exact match review queue (`GET :vendorId/match-review/queue`, existing since S6/S7) now has a real, linked UI (`/vendor/:vendorId/match-review`, in `ownerHubTiles`) — the owner reviews every PENDING candidate across all their offers and approves/rejects. The queue endpoint itself was also extended (still no migration — every added field comes from relations that already existed) with the offer/variant/canonical display data an actual review card needs, deterministic pagination (`score DESC, createdAt ASC, id ASC` keyset, reusing `platform-admin/cursor.util.ts`), and the same tie-break ordering on `listCandidates()`.
+- **Owner-side half of `G-CA-07`** (§4) — submitting a canonical-product rename request and seeing its own status — now has a UI on the variant page, gated on the offer's own `canonical_product_id` (mirrors `requestNameChange()`'s own `hasConfirmedMatch` check). A new owner-scoped `GET :vendorId/canonical-products/:canonicalProductId/name-change-requests` backs it, filtered by `vendorId` AND `canonicalProductId` together (never `canonicalProductId` alone — more than one vendor can be matched to the same canonical product) and never exposing `decided_by_id` (an internal reviewer identity) to the owner. `G-CA-07`'s own row is narrowed accordingly — see below. This does **not** change `FR-MATCH-007`'s own status (admin-side decision UI predates this pass and is unrelated) nor build the admin-side of anything.
+- Rows inheriting `FR-MATCH-003`'s status: `BL-MATCH-003` and `BL-MATCH-003b` (§13, Part 8) 🟡→✅ — `BL-MATCH-003b`'s own note already said "UI improvement only" (تحسين واجهة فقط), which is exactly what this pass built.
+- `G-CA-07` (§4) narrowed from `FR-MATCH-003/010/012` to `FR-MATCH-010/012` only — the non-exact review queue and the owner-side rename-request UI are resolved; the import per-field conflict-resolution UI (`FR-MATCH-010`) and the image-similarity matching signal (`FR-MATCH-012`) are not, and stay listed as genuinely still missing.
+- **Not touched, deliberately:** `FR-MATCH-010`, `FR-MATCH-012`, every `S17b`-tagged platform-catalog-administration row (§4/§5), and every Sprint-18+ item (inventory management UI, branch hours, barcode labels) — none of this pass's scope.
+- Totals (§2, FR only): FR DONE 51→**52**, PARTIAL 69→**68** (1 PARTIAL→DONE). No row was added or removed, so §17's 663-row total is unchanged. The larger "grand total by source" table further below (before §17) was not re-derived for Sprint 17 itself (v6) and is not re-derived here either — it already understates FR/Part-8 DONE relative to §2's own v6/v7 numbers; flagged here rather than silently left inconsistent, fixing it is outside this pass's narrow scope.
+
 ## v6 — Sprint 17 (owner catalog) applied, 2026-09-27
 
 Sprint 17 (branch `feat/sprint-17-owner-catalog`) implemented the plan the product owner approved (PDR-036 templates, brand sentinel, scheduled relative discounts + `PriceHistory`, media type + per-type limits + ordering, `ImportBatch`, the publish gate, and the owner-facing web UI for all of it). Status changes, each verified against code, a 50-test dedicated e2e spec (`sprint17-owner-catalog.e2e-spec.ts`) plus a scratch-DB migration-backfill spec, and — per the DONE rule in §1 — a real UI route reachable from `/vendor/:vendorId/offers` and its own nav, not just an API:
@@ -82,15 +93,15 @@ The v4 pass above referenced PDR-035/PDR-036 inline on `FR-VEND-002`/`FR-VEND-01
 
 ## 2. Summary
 
-**Updated 2026-09-26 (v4)** — 18 FR-* rows moved from MISSING/PARTIAL to DEFERRED per the new §6 addition; see "v4 decisions applied" above. **Updated again 2026-09-26 (v4.1)** — PDR-035 and PDR-036 added as their own rows (both 🟡 PARTIAL: the decision is approved and documented, but the code for either — warehouse-evidence submission/review, and the category templates/model validation/UI — is not built yet). **Updated 2026-09-27 (v6)** — Sprint 17 implemented: 13 FR rows and 1 PDR row (PDR-036) moved PARTIAL/MISSING → DONE; 1 FR row (FR-IMPORT-004) moved MISSING → PARTIAL; several more stayed PARTIAL with their notes updated to reflect exactly what's now built vs. still missing. See "v6 — Sprint 17" above for the full per-ID list.
+**Updated 2026-09-26 (v4)** — 18 FR-* rows moved from MISSING/PARTIAL to DEFERRED per the new §6 addition; see "v4 decisions applied" above. **Updated again 2026-09-26 (v4.1)** — PDR-035 and PDR-036 added as their own rows (both 🟡 PARTIAL: the decision is approved and documented, but the code for either — warehouse-evidence submission/review, and the category templates/model validation/UI — is not built yet). **Updated 2026-09-27 (v6)** — Sprint 17 implemented: 13 FR rows and 1 PDR row (PDR-036) moved PARTIAL/MISSING → DONE; 1 FR row (FR-IMPORT-004) moved MISSING → PARTIAL; several more stayed PARTIAL with their notes updated to reflect exactly what's now built vs. still missing. See "v6 — Sprint 17" above for the full per-ID list. **Updated 2026-09-29 (v7)** — `S17-owner-matching-ui` (branch `feat/sprint-17-owner-matching-ui`, a small owner-facing UI-only follow-up to Sprint 17 - not the `S17b` platform-catalog-administration item below, which this pass does not touch): `FR-MATCH-003` PARTIAL → DONE. See "v7 — S17-owner-matching-ui" above for the full per-ID list.
 
 | | DONE | PARTIAL | MISSING | DEFERRED | SUPERSEDED |
 |---|---|---|---|---|---|
-| FR (244) | 51 | 69 | 83 | 27 | 14 |
+| FR (244) | 52 | 68 | 83 | 27 | 14 |
 | PDR (36) | 13 | 15 | 8 | 0 | 0 |
-| **Total** | **64** | **84** | **91** | **27** | **14** |
+| **Total** | **65** | **83** | **91** | **27** | **14** |
 
-(v1→v3: unchanged, only sprint reassignment. v4: 17 rows MISSING→DEFERRED and 1 row (`FR-FUL-007`) PARTIAL→DEFERRED, all within the FR module. v4.1: PDR-035/036 added, both PARTIAL. Total row count now 280 = 244+36.)
+(v1→v3: unchanged, only sprint reassignment. v4: 17 rows MISSING→DEFERRED and 1 row (`FR-FUL-007`) PARTIAL→DEFERRED, all within the FR module. v4.1: PDR-035/036 added, both PARTIAL. v7: FR-MATCH-003 PARTIAL→DONE. Total row count unchanged at 280 = 244+36.)
 
 ## 3. The ID table
 
@@ -187,7 +198,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 |---|---|---|---|---|---|---|---|
 | FR-MATCH-001 | عرض مرتبط بمنتج أساسي أو مستقل، ولا يصير منتجاً أساسياً | canonicalProductId اختياري | OWNER | صفحات /store | S3,S7 | ✅ DONE | - |
 | FR-MATCH-002 | ربط تلقائي بمعرّف دقيق (E.0: اقتراح يؤكده المالك) | اقتراح + match-confirmation | OWNER | تأكيد/رفض من صفحة المتغيّر (S17) | S6,S7,S17 | ✅ DONE | - |
-| FR-MATCH-003 | طابور مراجعة مع درجة ثقة | MatchReviewCandidate(score)؛ API الطابور | OWNER | لا (صفحة تأكيد المطابقة الدقيقة فقط مبنية — S17؛ طابور المراجعة غير الدقيقة بلا واجهة) | S6,S17 | 🟡 PARTIAL | S17 |
+| FR-MATCH-003 | طابور مراجعة مع درجة ثقة | MatchReviewCandidate(score)؛ API الطابور، موسَّع الآن بحقول عرض العرض/المتغيّر/المنتج المرجعي وترقيم صفحات حتمي (S17-owner-matching-ui) | OWNER | /vendor/:id/match-review (S17-owner-matching-ui، ضمن ownerHubTiles) | S6,S17,S17-owner-matching-ui | ✅ DONE | - |
 | FR-MATCH-004 | غير المعتمد لا يظهر في المقارنة | المقارنة تقرأ المؤكَّد فقط | عام | /compare/:id | S8 | ✅ DONE | - |
 | FR-MATCH-005 | العميل يبلّغ عن تطابق خاطئ | لا | - | لا | لا | ❌ MISSING | S17b |
 | FR-MATCH-006 | دمج/فصل المنتجات الأساسية | لا | - | لا | لا | ❌ MISSING | S17b |
@@ -472,7 +483,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | Gap | القدرة | يغطي | Sprint |
 |---|---|---|---|
 | G-CA-02 | واجهة الاستيراد: تسوية الأعمدة (القالب والتقرير والسجل مبنية الآن — S17) | FR-IMPORT-011 | غير مجدول |
-| G-CA-07 | طابور مراجعة التطابق غير الدقيق واعتماد الاسم (تأكيد/رفض المطابقة الدقيقة مبني الآن — S17) | FR-MATCH-003/010/012 | غير مجدول |
+| G-CA-07 | معالجة تعارض الحقل الواحد في الاستيراد، وإشارة تشابه الصور في التطابق غير الدقيق (طابور المراجعة غير الدقيق وطلب تغيير الاسم من جهة المالك مبنيان الآن — S17-owner-matching-ui) | FR-MATCH-010/012 | غير مجدول |
 | G-CA-08 | إدارة المنصة للتصنيفات والعلامات والمنتجات الأساسية وقوالب الخصائص (OPEN-013) | FR-CAT-001/002/003/006..012 | S17b |
 | G-CA-09 | دمج/فصل المنتجات وبلاغ العميل عن تطابق خاطئ | FR-MATCH-005/006/007 | S17b |
 
@@ -513,7 +524,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 |---|---|---|---|---|
 | S15 | إعداد المتجر: طلب متجر، أدلة، اشتراك، دعوة وقبول، نوع المتجر ونقاط الاستلام | 13 | لا شيء (الـAPIs موجودة) | ~~OPEN-011~~ **محسوم (PDR-035، 2026-09-26)** — تحقّق ONLINE_ONLY بدبوس عنوان مستودع لا صورة/دبوس فرع. لا map provider (مثبَّت §0.1) |
 | S16 | إدارة المنصة: قرار التحقق، تعليق/إعادة تفعيل، تنقل التطابق | **0 — منفَّذ** (كانت 4: FR-VEND-003/009 → DONE؛ FR-VEND-008 → قرار جديد؛ FR-ADMIN-001 → S25) | S15 | قُرّرت: أسباب التعليق (POLICY_VIOLATION/NON_PAYMENT/OTHER + نص إلزامي)، إشعار المالك = حدث Outbox الآن والتسليم في S19، وأسباب الرفض (OPEN-005 مغلقة) |
-| S17 | كتالوج المالك: نموذج العرض، الاستيراد، الوسائط، `PriceHistory`، الخصم النسبي، التطابق | **21 — منفَّذ جزئياً** (كانت 25: 14 صفاً FR/PDR انتقلت إلى ✅ DONE بالكامل — باكند + واجهة + تنقل + اختبار؛ الباقي 21 صفاً يبقى 🟡 PARTIAL أو ❌ MISSING، بالغالب أجزاء صريحة خارج نطاق S17 المخطَّط أصلاً: تسوية أعمدة الاستيراد، طابور مراجعة التطابق غير الدقيق، تعليم تقادم السعر، ضغط/سقف حجم الصور، سجلّ استيراد بتفصيل كل صف) | S15، S16 (قرارات الاسم) | ~~OPEN-013~~ **محسوم للملابس/الإكسسوارات (PDR-036، 2026-09-26)** — 10 قوالب حقول خمسة، اللون/المقاس variant لا حقلاً بنيوياً. **الخصم النسبي بُني ضمن هذا السبرنت نفسه (لم يُفصل).** حجم الوسائط: سقف 10 صور/3 فيديوهات مبني؛ لا ضغط/تحويل صيغة |
+| S17 | كتالوج المالك: نموذج العرض، الاستيراد، الوسائط، `PriceHistory`، الخصم النسبي، التطابق | **20 — منفَّذ جزئياً** (كانت 25: 14 صفاً FR/PDR انتقلت إلى ✅ DONE بالكامل — باكند + واجهة + تنقل + اختبار ضمن S17 نفسه؛ ثم طابور مراجعة التطابق غير الدقيق (`FR-MATCH-003`) انتقل إلى ✅ DONE أيضاً — S17-owner-matching-ui، 2026-09-29؛ الباقي 20 صفاً يبقى 🟡 PARTIAL أو ❌ MISSING، بالغالب أجزاء صريحة خارج نطاق S17 المخطَّط أصلاً: تسوية أعمدة الاستيراد، تعليم تقادم السعر، ضغط/سقف حجم الصور، سجلّ استيراد بتفصيل كل صف) | S15، S16 (قرارات الاسم) | ~~OPEN-013~~ **محسوم للملابس/الإكسسوارات (PDR-036، 2026-09-26)** — 10 قوالب حقول خمسة، اللون/المقاس variant لا حقلاً بنيوياً. **الخصم النسبي بُني ضمن هذا السبرنت نفسه (لم يُفصل).** حجم الوسائط: سقف 10 صور/3 فيديوهات مبني؛ لا ضغط/تحويل صيغة |
 | S17b | كتالوج المنصة: تصنيفات وعلامات ومنتجات أساسية وقوالب وتطابق ودمج/فصل | 13 | S16، S17 | ~~OPEN-013~~ **محسوم للفئات الحالية (PDR-036)** — أي فئة غير ملابس/إكسسوار مستقبلية تحتاج قرار قالب خاص بها |
 | S18 | عمليات المخزون: صفحة المخزون، البيع بالمسح، الملصق، الفروع/الساعات، نقل الموظف | 16 | S15، S17 | لا شيء جديد؛ تأكيد شكل الباركود المطبوع |
 | S18b | جودة البحث والاكتشاف: تطبيع عربي، اقتراحات، باركود، ترتيب | 19 | S17 (المشاهدات والأسعار) | وزن الترتيب 40/30/30. **"أقرب فرع" ليس ضمن هذا السبرنت** — انظر الصف المنفصل أدناه |
@@ -894,8 +905,8 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 | BL-CAT-004b | Must | FR-CAT-015 (E.0) | ✅ DONE | S17: بوابة النشر + قوالب PDR-036 مبنية بالكامل؛ specs_text يبقى حراً للفئات خارج العشرة بالتصميم (PDR-036 D2)، وهذا متوافق مع القرار المعتمد لا نقصاً |
 | BL-MATCH-001 | Must | FR-MATCH-008 | ✅ DONE | - |
 | BL-MATCH-002 | Must | FR-MATCH-002 | 🟡 PARTIAL | - |
-| BL-MATCH-003 | Must | FR-MATCH-003 | 🟡 PARTIAL | - |
-| BL-MATCH-003b | Should | FR-MATCH-003 | 🟡 PARTIAL | تحسين واجهة فقط |
+| BL-MATCH-003 | Must | FR-MATCH-003 | ✅ DONE | S17-owner-matching-ui: طابور المراجعة غير الدقيق الآن UI حقيقية |
+| BL-MATCH-003b | Should | FR-MATCH-003 | ✅ DONE | S17-owner-matching-ui: تحسين الواجهة الذي كانت هذه الصف تنتظره مبني الآن |
 | BL-MATCH-004 | Should | FR-MATCH-005 | ❌ MISSING | - |
 | BL-MATCH-005 | Must | FR-MATCH-007 | 🟡 PARTIAL | اختبارات منع تلقائي — انظر N.1..5 |
 | BL-VEND-001 | Must | FR-VEND-001 | 🟡 PARTIAL | - |
