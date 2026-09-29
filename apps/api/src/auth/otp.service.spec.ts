@@ -87,6 +87,17 @@ describe('OtpService', () => {
       expect(prisma.otpCode.updateMany).not.toHaveBeenCalled();
     });
 
+    it('orders by createdAt DESC then issuedSequence DESC - the tie-break fix (see the e2e spec for the real-DB proof)', async () => {
+      prisma.otpCode.findFirst.mockResolvedValue(null);
+
+      await service.checkCode('+970000000001', 'SIGNUP', '654321');
+
+      expect(prisma.otpCode.findFirst).toHaveBeenCalledWith({
+        where: { phone: '+970000000001', purpose: 'SIGNUP', consumedAt: null },
+        orderBy: [{ createdAt: 'desc' }, { issuedSequence: 'desc' }],
+      });
+    });
+
     it('fails with "invalid" and increments attemptCount on a wrong code, without returning a claim', async () => {
       prisma.otpCode.findFirst.mockResolvedValue({
         id: 'otp-2',

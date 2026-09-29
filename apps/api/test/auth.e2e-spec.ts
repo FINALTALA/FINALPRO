@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
@@ -736,6 +737,84 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
           .set('Authorization', `Bearer ${resB.body.session_token}`)
           .expect(200);
       }
+    });
+
+    it('two OTPs for the same phone/purpose with an IDENTICAL createdAt (a real millisecond tie, not just close timing) are still resolved unambiguously by issuedSequence - only the one issued later succeeds, and consume() stays exactly as atomic as before (review-round fix)', async () => {
+      const phone = uniquePhone();
+      await signup(phone, 'old-password');
+
+      // Constructed directly, not via two real reset-request calls -
+      // the whole point is a genuine createdAt TIE (TIMESTAMP(3) is
+      // millisecond resolution; two real HTTP round-trips essentially
+      // never land on the exact same millisecond, so this is the only
+      // way to prove the tie-break itself, not just "the two requests
+      // happened to be far enough apart that createdAt already
+      // disambiguated them" - which every OTHER OTP test in this file,
+      // including the one directly above, actually relies on).
+      const tiedCreatedAt = new Date();
+      const hashOf = (code: string) =>
+        createHash('sha256').update(code).digest('hex');
+      const olderCode = '111111';
+      const newerCode = '222222';
+      const older = await prisma.otpCode.create({
+        data: {
+          phone,
+          purpose: 'PASSWORD_RESET',
+          codeHash: hashOf(olderCode),
+          expiresAt: new Date(Date.now() + 5 * 60_000),
+          createdAt: tiedCreatedAt,
+        },
+      });
+      const newer = await prisma.otpCode.create({
+        data: {
+          phone,
+          purpose: 'PASSWORD_RESET',
+          codeHash: hashOf(newerCode),
+          expiresAt: new Date(Date.now() + 5 * 60_000),
+          createdAt: tiedCreatedAt,
+        },
+      });
+      expect(newer.createdAt.getTime()).toBe(older.createdAt.getTime()); // the tie is real, not accidental
+      expect(newer.issuedSequence).toBeGreaterThan(older.issuedSequence); // the tie-break exists regardless
+
+      // The older, already-superseded code must fail - checkCode()
+      // resolves "latest" to the newer row (by issuedSequence, since
+      // createdAt cannot decide), so the older code simply does not
+      // match its hash.
+      const olderAttempt = await request(app.getHttpServer())
+        .post('/api/v1/auth/password/reset-confirm')
+        .set('Idempotency-Key', `tie-older-${phone}`)
+        .send({ phone, otp_code: olderCode, new_password: 'password-older' });
+      expect(olderAttempt.status).toBe(400);
+      expect(olderAttempt.body.error.code).toBe('OTP_INVALID');
+
+      // Only the newer (higher issuedSequence) code succeeds.
+      const newerAttempt = await request(app.getHttpServer())
+        .post('/api/v1/auth/password/reset-confirm')
+        .set('Idempotency-Key', `tie-newer-${phone}`)
+        .send({ phone, otp_code: newerCode, new_password: 'password-newer' });
+      expect(newerAttempt.status).toBe(200);
+      expect(newerAttempt.body.password_reset_completed).toBe(true);
+
+      // consume() is exactly as atomic as before this fix: exactly one
+      // row (the newer one) was ever consumed, never both, never
+      // neither.
+      const rows = await prisma.otpCode.findMany({
+        where: { id: { in: [older.id, newer.id] } },
+      });
+      const consumedIds = rows
+        .filter((r) => r.consumedAt !== null)
+        .map((r) => r.id);
+      expect(consumedIds).toEqual([newer.id]);
+
+      // Replaying the now-consumed newer code a second time (a
+      // different, genuinely new attempt, not an idempotency replay)
+      // must still fail - single-use is unchanged.
+      const reuseAttempt = await request(app.getHttpServer())
+        .post('/api/v1/auth/password/reset-confirm')
+        .set('Idempotency-Key', `tie-reuse-${phone}`)
+        .send({ phone, otp_code: newerCode, new_password: 'password-reused' });
+      expect(reuseAttempt.status).toBe(400);
     });
 
     it('does not send a real OTP for an unregistered phone, but still returns the same response shape', async () => {
