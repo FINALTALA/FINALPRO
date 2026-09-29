@@ -5,6 +5,7 @@ import { AppModule } from './../src/app.module';
 import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
 import { PrismaService } from './../src/prisma/prisma.service';
+import { createUniquePhone } from './helpers/e2e-phone-lanes';
 
 /** Test double for the OPEN-004 SMS fallback - captures codes instead of logging them. */
 class FakeSmsService {
@@ -32,14 +33,9 @@ class FakeSmsService {
 // it actually uses) only under the 056/059 prefixes - 057/058 parse
 // but are not valid PS mobile numbers under that bundle, found the
 // hard way when this file's first draft used +97057 and every OTP
-// request came back 400. Reuses "56" (same as sprint3-catalog's own
-// uniquePhone()) with a distinct numeric offset, not a distinct
-// prefix, to avoid collisions between the two files' generated numbers.
-let phoneSeq = (Date.now() % 1_000_000) + 700_000;
-function uniquePhone(): string {
-  phoneSeq += 1;
-  return `+97056${(phoneSeq % 10_000_000).toString().padStart(7, '0')}`;
-}
+// request came back 400. Fixed, disjoint lane - see
+// ./helpers/e2e-phone-lanes.ts for the full rationale.
+const uniquePhone = createUniquePhone('sprint4-roles', '56');
 let counter = 0;
 function unique(label: string): string {
   counter += 1;

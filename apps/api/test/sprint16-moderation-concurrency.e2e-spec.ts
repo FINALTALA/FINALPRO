@@ -26,7 +26,7 @@ describe('Sprint 16 - moderation concurrency and conflict-of-interest serializat
 
   beforeEach(async () => {
     await bootApp(ctx);
-    f = createFixtures(ctx, 4_000_000);
+    f = createFixtures(ctx, 'sprint16-moderation-concurrency');
   });
 
   afterEach(async () => {

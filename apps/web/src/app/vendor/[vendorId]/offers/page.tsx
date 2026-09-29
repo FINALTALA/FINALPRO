@@ -1,101 +1,115 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import { EmptyState, ErrorBanner } from "@/components/States";
 import { ApiError, apiFetch } from "@/lib/api";
-import { useFetch } from "@/lib/useFetch";
+import { clearSession, getSessionToken } from "@/lib/session";
 
 interface OfferDto {
   id: string;
   title_ar: string;
   title_en: string;
-  status: "DRAFT" | "ACTIVE" | "INACTIVE";
+  status: "DRAFT" | "ACTIVE" | "INACTIVE" | "ARCHIVED";
   canonical_product_id: string | null;
+  brand_id: string | null;
 }
 
 const STATUS_LABEL: Record<OfferDto["status"], string> = {
   DRAFT: "مسودة",
   ACTIVE: "منشور",
   INACTIVE: "غير منشور",
+  ARCHIVED: "مؤرشف",
 };
 
-// Sprint 13: the owner's product/offer list - read-only listing of
-// GET /vendors/:vendorId/offers plus the existing status action
-// (PATCH .../status). Creating offers, variants, matching and import
-// remain API-only (unchanged). Owner-only server-side
-// (@RequireVendorRole('OWNER')).
+// Sprint 13 (list) + Sprint 17 (owner catalog: create/edit/archive,
+// PDR-036 templates, brand, media, pricing/discounts, import, matching)
+// - the real, reachable catalog management UI. Backend authorization
+// (VendorMembershipGuard + @RequireVendorRole('OWNER')) is the actual
+// boundary; this page just hides owner-only actions from anyone else.
 export default function OwnerOffersPage() {
   const params = useParams<{ vendorId: string }>();
-  const offers = useFetch<OfferDto[]>(`/vendors/${params.vendorId}/offers`, true);
-  const [overrides, setOverrides] = useState<Record<string, OfferDto["status"]>>({});
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const router = useRouter();
+  const [offers, setOffers] = useState<OfferDto[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function setStatus(offer: OfferDto, status: OfferDto["status"]) {
-    setBusyId(offer.id);
-    setError(null);
-    try {
-      await apiFetch(`/vendors/${params.vendorId}/offers/${offer.id}/status`, {
-        method: "PATCH",
-        body: { status },
+  function load() {
+    apiFetch<OfferDto[]>(`/vendors/${params.vendorId}/offers`)
+      .then(setOffers)
+      .catch((err) => {
+        if (err instanceof ApiError && err.status === 401) {
+          clearSession();
+          router.replace("/login");
+          return;
+        }
+        setError(err instanceof ApiError ? err.message : "تعذّر تحميل العروض");
       });
-      setOverrides((prev) => ({ ...prev, [offer.id]: status }));
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "تعذّر تغيير الحالة");
-    } finally {
-      setBusyId(null);
-    }
   }
+
+  useEffect(() => {
+    if (!getSessionToken()) {
+      router.replace("/login");
+      return;
+    }
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.vendorId]);
 
   return (
     <div className="page-shell">
       <div className="top-bar">
         <h1 className="page-title" style={{ margin: 0 }}>المنتجات والعروض</h1>
-        <Link href={`/vendor/${params.vendorId}`} className="button-link">لوحة المتجر</Link>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Link href={`/vendor/${params.vendorId}/offers/import`} className="button-link">
+            استيراد ملف CSV/XLSX
+          </Link>
+          <Link href={`/vendor/${params.vendorId}/offers/new`} className="button">
+            + عرض جديد
+          </Link>
+          <Link href={`/vendor/${params.vendorId}`} className="button-link">لوحة المتجر</Link>
+        </div>
       </div>
       {error && <ErrorBanner message={error} />}
-      {offers.error && <ErrorBanner message={offers.error} />}
-      {offers.loading && <div className="skeleton" style={{ height: 120, width: "100%", maxWidth: 1240 }} />}
-      {offers.data && offers.data.length === 0 && (
-        <EmptyState title="لا توجد عروض بعد" message="تُنشأ العروض عبر واجهة البرمجة أو الاستيراد." />
+      {!offers && !error && <div className="skeleton" style={{ height: 120, width: "100%", maxWidth: 1240 }} />}
+      {offers && offers.length === 0 && (
+        <EmptyState
+          title="لا توجد عروض بعد"
+          message="أنشئ أول عرض لمتجرك."
+          actionHref={`/vendor/${params.vendorId}/offers/new`}
+          actionLabel="+ عرض جديد"
+        />
       )}
-      {offers.data && offers.data.length > 0 && (
+      {offers && offers.length > 0 && (
         <div className="wide-shell" style={{ overflowX: "auto" }}>
           <table className="data-table">
             <thead>
               <tr>
                 <th>العنوان</th>
                 <th>الحالة</th>
+                <th>العلامة التجارية</th>
                 <th>مطابق لمنتج مرجعي</th>
                 <th />
               </tr>
             </thead>
             <tbody>
-              {offers.data.map((o) => {
-                const status = overrides[o.id] ?? o.status;
-                return (
-                  <tr key={o.id}>
-                    <td>{o.title_ar}</td>
-                    <td>
-                      <span className={`badge${status === "ACTIVE" ? " badge-active" : ""}`}>{STATUS_LABEL[status]}</span>
-                    </td>
-                    <td>{o.canonical_product_id ? "نعم" : "لا"}</td>
-                    <td>
-                      {status === "ACTIVE" ? (
-                        <button className="button-link" disabled={busyId === o.id} onClick={() => setStatus(o, "INACTIVE")}>
-                          إيقاف النشر
-                        </button>
-                      ) : (
-                        <button className="button-link" disabled={busyId === o.id} onClick={() => setStatus(o, "ACTIVE")}>
-                          نشر
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
+              {offers.map((o) => (
+                <tr key={o.id}>
+                  <td>{o.title_ar}</td>
+                  <td>
+                    <span className={`badge${o.status === "ACTIVE" ? " badge-active" : ""}`}>
+                      {STATUS_LABEL[o.status]}
+                    </span>
+                  </td>
+                  <td>{o.brand_id ? "محدّدة" : "—"}</td>
+                  <td>{o.canonical_product_id ? "نعم" : "لا"}</td>
+                  <td>
+                    <Link href={`/vendor/${params.vendorId}/offers/${o.id}`} className="button-link">
+                      فتح
+                    </Link>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>

@@ -6,6 +6,11 @@ import {
   totalAvailableStockLive,
 } from '../common/availability.util';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  PriceConfig,
+  computeEffectivePrice,
+  isEffectivelyDiscounted,
+} from '../offers/pricing/effective-price.util';
 
 // Sprint 8 (RB-STOREF-002, PDR-012 / RB-COMP-001, PDR-015): the public,
 // unauthenticated read side of a store's own catalog - deliberately NO
@@ -34,13 +39,11 @@ interface OfferSummaryRow {
   titleAr: string;
   titleEn: string;
   createdAt: Date;
-  variants: {
+  variants: (PriceConfig & {
     id: string;
-    basePrice: unknown;
-    salePrice: unknown;
     branchStocks: { branchId: string; quantity: number }[];
     media: { url: string; kind: string }[];
-  }[];
+  })[];
 }
 
 // Codex review round 4 on commit 95a8430 (fix #2): totalAvailableStock()
@@ -55,9 +58,8 @@ function offerSummaryDto(
   offer: OfferSummaryRow,
   liveReservedByKey: Map<string, number>,
 ) {
-  const prices = offer.variants.map(
-    (v) => Number(v.salePrice ?? v.basePrice) as number,
-  );
+  // Sprint 17 (blocker 1): shared, read-only computation.
+  const prices = offer.variants.map((v) => computeEffectivePrice(v));
   const totalStock = offer.variants.reduce(
     (sum, v) =>
       sum +
@@ -152,11 +154,11 @@ export class StoreOffersPublicController {
       Date.now() - NEW_ARRIVALS_WINDOW_DAYS * 24 * 60 * 60 * 1000,
     );
     const newArrivals = offers.filter((o) => o.createdAt >= newArrivalsCutoff);
+    // Sprint 17 (blocker 1): "discounted" now means the LIVE effective
+    // price (manual override OR an active scheduled discount) is below
+    // basePrice - computed the same way, read-only, as everywhere else.
     const discounts = offers.filter((o) =>
-      o.variants.some(
-        (v) =>
-          v.salePrice !== null && Number(v.salePrice) < Number(v.basePrice),
-      ),
+      o.variants.some((v) => isEffectivelyDiscounted(v)),
     );
 
     const customSections = await this.prisma.storeSection.findMany({
@@ -308,7 +310,12 @@ export class StoreOffersPublicController {
           condition: v.condition,
           currency: 'ILS' as const,
           base_price: v.basePrice.toString(),
-          sale_price: v.salePrice?.toString() ?? null,
+          // Sprint 17 (blocker 1): the live effective price (manual
+          // override OR an active scheduled discount), computed
+          // read-only - never the raw salePrice column directly.
+          sale_price: isEffectivelyDiscounted(v)
+            ? computeEffectivePrice(v).toString()
+            : null,
           specs_text_ar: v.specsTextAr,
           specs_text_en: v.specsTextEn,
           canonical_variant_id: v.canonicalVariantId,

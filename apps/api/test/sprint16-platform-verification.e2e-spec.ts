@@ -39,7 +39,16 @@ describe('Sprint 16 - platform verification: queue, evidence reads, decisions (e
 
   beforeEach(async () => {
     await bootApp(ctx);
-    f = createFixtures(ctx, 0);
+    // This file's own fixed, disjoint phone-number lane - see
+    // ./helpers/e2e-phone-lanes.ts. (History: this used to be a
+    // numeric `phoneBase` combined with a crypto.randomInt() draw,
+    // which caused real, reproduced cross-file phone collisions under
+    // parallel workers - first an exact-duplicate lane with
+    // auth.e2e-spec.ts, then, once that was fixed, a near-miss between
+    // two other files, since randomInt() only reduces collision
+    // probability rather than eliminating it. A fixed lane per file
+    // removes the possibility entirely.)
+    f = createFixtures(ctx, 'sprint16-platform-verification');
   });
 
   afterEach(async () => {
@@ -179,6 +188,16 @@ describe('Sprint 16 - platform verification: queue, evidence reads, decisions (e
         const { vendorId, branchIds } = await f.createPhysicalVendor(owner, 1);
         await f.submitBranchEvidence(owner, vendorId, branchIds[0]).expect(201);
         ids.push(branchIds[0]);
+        // Review-round fix (clean-room flake, unrelated to Sprint 17's
+        // own changes): submitted_at is TIMESTAMP(3) - millisecond
+        // resolution - and this loop's three sequential submissions can
+        // complete within the same millisecond on a fast/lightly-loaded
+        // run, tying the "stable order" this test's own positions
+        // assertion assumes matches insertion order (the real,
+        // documented tie-break is item_id, a random UUID unrelated to
+        // insertion order - see the same class of fix in
+        // sprint16-vendor-suspension.e2e-spec.ts's own admin-list test).
+        await new Promise((r) => setTimeout(r, 5));
       }
 
       const all = await queueAll(reviewer.token);

@@ -4,7 +4,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { AuditLogService } from '../audit/audit-log.service';
-import { liveReservedQuantityByKey } from '../common/availability.util';
+import {
+  liveReservedQuantityByKey,
+  stockLockKey,
+} from '../common/availability.util';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import {
   BranchOrderPaymentMethod,
@@ -34,15 +37,23 @@ import {
 } from './sandbox-payment.service';
 import { QuoteCheckoutDto } from './dto/quote-checkout.dto';
 import { ReserveCheckoutDto } from './dto/reserve-checkout.dto';
+import {
+  PriceConfig,
+  addMoney,
+  computeEffectivePrice,
+  sumLineAmounts,
+} from '../offers/pricing/effective-price.util';
 
 const RESERVATION_TTL_MS = 10 * 60 * 1000;
 const PICKUP_CODE_MAX_ATTEMPTS = 10;
 
-function effectivePrice(variant: {
-  basePrice: unknown;
-  salePrice: unknown;
-}): number {
-  return Number(variant.salePrice ?? variant.basePrice);
+// Sprint 17 (blocker 1): delegates to the single shared
+// computeEffectivePrice() - every call site below is unchanged, only
+// this function's own body moved to the shared utility so cart,
+// comparison and the public storefront can never compute a different
+// number for the "same" variant.
+function effectivePrice(variant: PriceConfig): number {
+  return computeEffectivePrice(variant);
 }
 
 function utcDateOnly(d: Date): Date {
@@ -93,13 +104,6 @@ function isUniqueViolation(err: unknown): boolean {
  * makes that order consistent across every caller, regardless of what
  * order the customer's own request happened to list groups/items in.
  */
-function stockLockKey(
-  vendorId: string,
-  branchId: string,
-  offerVariantId: string,
-): string {
-  return `${vendorId}:${branchId}:${offerVariantId}`;
-}
 function windowLockKey(
   vendorId: string,
   branchId: string,
@@ -157,6 +161,9 @@ export class CheckoutService {
           select: {
             basePrice: true,
             salePrice: true,
+            discountPercent: true,
+            discountStartAt: true,
+            discountEndAt: true,
             vendorOffer: { select: { titleAr: true, titleEn: true } },
           },
         },
@@ -253,9 +260,12 @@ export class CheckoutService {
             unit_price: effectivePrice(ci.offerVariant),
           };
         });
-        const subtotal = items.reduce(
-          (sum, i) => sum + i.unit_price * i.quantity,
-          0,
+        // Review-round fix: Decimal-precise summation across every
+        // line (never native-float `sum + unit_price * quantity`,
+        // which can accumulate rounding error line by line) - see
+        // effective-price.util.ts's own comment.
+        const subtotal = sumLineAmounts(
+          items.map((i) => ({ amount: i.unit_price, quantity: i.quantity })),
         );
         const eligibleBranches = await Promise.all(
           g.eligibleBranchIds.map(async (branchId) => {
@@ -403,7 +413,15 @@ export class CheckoutService {
       const cartItems = await tx.cartItem.findMany({
         where: { id: { in: allCartItemIds }, customerId },
         include: {
-          offerVariant: { select: { basePrice: true, salePrice: true } },
+          offerVariant: {
+            select: {
+              basePrice: true,
+              salePrice: true,
+              discountPercent: true,
+              discountStartAt: true,
+              discountEndAt: true,
+            },
+          },
         },
       });
       if (cartItems.length !== allCartItemIds.length) {
@@ -1121,13 +1139,18 @@ export class CheckoutService {
       let onlineTotal = 0;
       for (const [key, items] of itemsByBranch) {
         if (items[0].paymentMethod !== 'ONLINE') continue;
-        const subtotal = items.reduce(
-          (sum, i) => sum + Number(i.unitPriceAtReserve) * i.quantity,
-          0,
+        // Review-round fix: Decimal-precise, same as quote()'s own
+        // subtotal above - this is real money about to be charged via
+        // sandboxPayment.charge().
+        const subtotal = sumLineAmounts(
+          items.map((i) => ({
+            amount: i.unitPriceAtReserve,
+            quantity: i.quantity,
+          })),
         );
         const slot = slotByBranchKey.get(key);
         const deliveryFee = slot ? Number(slot.deliveryFeeAtReserve) : 0;
-        onlineTotal += subtotal + deliveryFee;
+        onlineTotal = addMoney(onlineTotal, subtotal, deliveryFee);
       }
 
       const customerOrder = await tx.customerOrder.create({
@@ -1173,12 +1196,16 @@ export class CheckoutService {
         const fulfilmentMethod = items[0].fulfilmentMethod;
         const paymentMethod = items[0].paymentMethod;
         const slot = slotByBranchKey.get(key);
-        const subtotal = items.reduce(
-          (sum, i) => sum + Number(i.unitPriceAtReserve) * i.quantity,
-          0,
+        // Review-round fix: Decimal-precise, same reasoning as above -
+        // this is the amount persisted on the BranchOrder row.
+        const subtotal = sumLineAmounts(
+          items.map((i) => ({
+            amount: i.unitPriceAtReserve,
+            quantity: i.quantity,
+          })),
         );
         const deliveryFee = slot ? Number(slot.deliveryFeeAtReserve) : null;
-        const total = subtotal + (deliveryFee ?? 0);
+        const total = addMoney(subtotal, deliveryFee ?? 0);
 
         const baseData = {
           customerOrderId: customerOrder.id,

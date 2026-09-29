@@ -1,4 +1,5 @@
 import {
+  IsDateString,
   IsEnum,
   IsIn,
   IsNumber,
@@ -38,6 +39,36 @@ export class CreateOfferVariantDto {
   @IsNumber()
   @IsPositive()
   sale_price?: number;
+
+  // Sprint 17 (blocker 1): the scheduled relative discount. Mutually
+  // exclusive with sale_price - the controller rejects sending both,
+  // and clears the other whenever one is actually set (see
+  // VendorOffersController's own comment for the exact rule); the DB
+  // CHECK is the final backstop. Precise range/interval validation
+  // (0 < percent < 100, start < end) happens in the controller, where
+  // it can produce an exact, named error code - these decorators only
+  // check type.
+  @IsOptional()
+  @IsNumber()
+  discount_percent?: number;
+
+  @IsOptional()
+  @IsDateString()
+  discount_start_at?: string;
+
+  @IsOptional()
+  @IsDateString()
+  discount_end_at?: string;
+
+  // Sprint 17 (PDR-036): free-text variant options, never one of the
+  // five governed structural fields (VendorOffer.templateAttributes).
+  @IsOptional()
+  @IsString()
+  colour?: string;
+
+  @IsOptional()
+  @IsString()
+  size?: string;
 
   @IsOptional()
   @IsString()

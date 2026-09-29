@@ -21,7 +21,7 @@ describe('Sprint 16 - vendor suspension and reactivation (e2e)', () => {
 
   beforeEach(async () => {
     await bootApp(ctx);
-    f = createFixtures(ctx, 2_000_000);
+    f = createFixtures(ctx, 'sprint16-vendor-suspension');
   });
 
   afterEach(async () => {
@@ -695,6 +695,16 @@ describe('Sprint 16 - vendor suspension and reactivation (e2e)', () => {
           })
           .expect(201);
         ids.push(res.body.id);
+        // Review-round fix (clean-room flake, unrelated to Sprint 17's
+        // own changes): `createdAt` is TIMESTAMP(3) - millisecond
+        // resolution - and this loop's three sequential POST requests
+        // can complete within the same millisecond on a fast/lightly-
+        // loaded run, tying on `created_at` and falling through to the
+        // (id-based, not insertion-order) tie-break this test doesn't
+        // expect. A 5ms pause is far below anything a human would
+        // notice and far above what's needed to guarantee three
+        // distinct millisecond timestamps.
+        await new Promise((r) => setTimeout(r, 5));
       }
       const list = (qs: string) =>
         request(http())

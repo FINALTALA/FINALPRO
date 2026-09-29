@@ -6,6 +6,7 @@ import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
 import { PrismaService } from './../src/prisma/prisma.service';
 import { BranchOrderService } from './../src/orders/branch-order.service';
+import { createUniquePhone } from './helpers/e2e-phone-lanes';
 
 class FakeSmsService {
   sent: { phone: string; code: string; expiresAt: Date }[] = [];
@@ -24,12 +25,9 @@ class FakeSmsService {
 // +97056 - the only PS mobile prefix libphonenumber-js/max actually
 // validates (see feedback memory: +97057/+97058 parse but are not
 // valid PS mobile numbers under that bundle, found the hard way twice
-// already in this project before).
-let phoneSeq = (Date.now() % 1_000_000) + 1_000_000;
-function uniquePhone(): string {
-  phoneSeq += 1;
-  return `+97056${(phoneSeq % 10_000_000).toString().padStart(7, '0')}`;
-}
+// already in this project before). Fixed, disjoint lane - see
+// ./helpers/e2e-phone-lanes.ts.
+const uniquePhone = createUniquePhone('sprint9-branch-orders-calendar', '56');
 let counter = 0;
 function unique(label: string): string {
   counter += 1;

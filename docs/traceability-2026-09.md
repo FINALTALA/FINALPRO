@@ -7,6 +7,25 @@
 **Scope:** the full SRS, Parts 0–9. Every `FR-*` ID in [SRS Part 2](srs/02-functional-requirements.md) (244 rows, including the E.0 September amendment), every `PDR-*` ID in [`approved-product-decisions-2026-09.md`](approved-product-decisions-2026-09.md) (36 rows, including the 2026-09-26 PDR-035/036 amendment), every `BR-*` (34) and `NFR-*` (32) in Part 3/4, and every remaining requirement, decision, screen, failure scenario, backlog item and state-machine transition in Parts 0, 1, and 3–9 — covered in the appendix starting at §6, with each ID-range explicitly expanded (no row stands for more than one ID; see §0 for the two narrow, explicitly-justified exceptions — the `O.1`/`O.2` test-level classification and the `BO`/module-matrix/recommendations rollup — neither of which carries an independent DONE/PARTIAL/MISSING status of its own).
 **Update rule:** this file is reviewed again after every sprint. Each review edits it in place under a new dated version note, rather than creating a new file, so it stays the one living record.
 
+## v6 — Sprint 17 (owner catalog) applied, 2026-09-27
+
+Sprint 17 (branch `feat/sprint-17-owner-catalog`) implemented the plan the product owner approved (PDR-036 templates, brand sentinel, scheduled relative discounts + `PriceHistory`, media type + per-type limits + ordering, `ImportBatch`, the publish gate, and the owner-facing web UI for all of it). Status changes, each verified against code, a 50-test dedicated e2e spec (`sprint17-owner-catalog.e2e-spec.ts`) plus a scratch-DB migration-backfill spec, and — per the DONE rule in §1 — a real UI route reachable from `/vendor/:vendorId/offers` and its own nav, not just an API:
+
+- `PDR-036` 🟡→✅: the ten fixed clothing/accessory templates (`ClothingCategoryTemplate` + `CLOTHING_CATEGORY_TEMPLATE_FIELDS`), structural validation (`validateTemplateAttributes`, both-or-neither DB `CHECK`), and the "No brand" sentinel (seeded at a fixed id, import-time alias resolution) are all built, with create/edit forms rendering the template's four fields dynamically and a brand dropdown (`/vendor/:id/offers/new`, `/vendor/:id/offers/:offerId`).
+- `FR-CAT-015 (E.0)` 🟡→✅: the publish gate (`PATCH .../status` → `ACTIVE`) now structurally requires title, brand, a valid template+attributes pair (only when a template is chosen — PDR-036 D2, categories outside the ten keep the free-text fallback by design, not a gap), a `PRIMARY` `IMAGE`, and live available stock (never the raw, potentially-stale `reservedQuantity` column) — proven race-free against a concurrent checkout reservation by two dedicated barrier-based tests (publish-locks-first, reserve-locks-first), never both live-locking `vendor_offers` and `branch_stock` in a cycle. The refusal reasons reach the owner's screen verbatim.
+- `FR-PRICE-002` ❌→✅ and `SRS-G3-09` ❌→✅: `PriceHistory` (append-only, one row per real config change, `effectivePriceAtChange` computed with the same shared `computeEffectivePrice()` every consumer uses, one-time `MIGRATED_BASELINE` backfill for every pre-existing variant at the exact `createdAt` it already had) with its own read-only screen on the variant page.
+- `FR-PRICE-009 (E.0)` 🟡→✅: the scheduled relative discount (percent + two dates, mutually exclusive with the manual `sale_price`) with its own create/edit UI toggle.
+- `FR-MATCH-002` 🟡→✅: the exact-match confirm/reject decision now has a UI banner on the variant page (the underlying "always a proposal, never silent" behaviour is unchanged from Sprint 3 — only the UI was missing before).
+- `FR-CAT-004`, `FR-CAT-013`, `FR-CAT-014` 🟡→✅: `condition` and `specs_text_ar/en` are now editable in the variant forms (previously API-only); the `seller_sku`/`store_inventory_barcode` uniqueness constraints (built since S5) now surface their error text through the same forms.
+- `FR-IMPORT-001`, `FR-IMPORT-003`, `FR-IMPORT-005`, `FR-IMPORT-012` 🟡→✅: single-offer/variant creation forms; the CSV/XLSX import screen (`/vendor/:id/offers/import`) shows the full per-category report and lets the owner download `failed_rows_csv` — exactly the failed rows, in the upload template's own columns plus `error_reason` — to fix and re-upload (a download-then-reupload retry, not a one-click in-app retry, stated plainly rather than implied).
+- `FR-VPORTAL-002`, `FR-VPORTAL-003` 🟡→✅: the owner catalog UI (create/edit/archive/restore, media, pricing, import, batch history) is what these two rows were waiting on.
+- `FR-IMPORT-004` ❌→🟡 (not ✅): `ImportBatch` is a real, durable, UI-visible history now (status/counts/timestamps, `/vendor/:id/offers/import`'s batch table) — but it is a **summary only**, never per-row detail, and a documented, disclosed limitation: if even the best-effort `FAILED` write cannot reach the database after a mid-processing exception, the row is left at `PROCESSING` rather than a false guarantee. `SRS-G3-03` (`ImportJob`/`ImportRow`, full per-row task detail) stays ❌ MISSING — `ImportBatch` does not satisfy that literal text.
+- `SRS-G0-04` 🟡→✅: the 10-image/3-video per-variant cap and the `IMAGE`/`VIDEO` `MediaType` distinction (previously both explicitly absent) are now built and DB-`CHECK`-backed (`PRIMARY` may only be `IMAGE`).
+- **Stay 🟡 PARTIAL, notes updated to reflect exactly what changed:** `FR-CAT-005` (alt text is now built and editable in the UI; platform-level media moderation is not — unrelated, owner self-service scope this sprint), `FR-MATCH-012 (E.0)` / `BR-001` (the non-exact scoring text signal now includes brand/colour/size/template values, still no image-similarity signal), `FR-MATCH-003` (only the exact-match confirm/reject got a UI — the broader non-exact `MatchReviewCandidate` review queue did not), `FR-IMPORT-002` (template download is now built; a pre-save dry-run/preview is not), `FR-IMPORT-008 (E.0)` / `PDR-019` (the additive/conflict mechanic is unchanged since S7; the import screen now shows conflict counts, but there is no in-app per-conflict resolution UI), `SRS-H1-03` (the import endpoint is now confirmed to use `IdempotencyInterceptor` too; not every other endpoint was re-audited this pass).
+- **Unchanged, genuinely out of this sprint's scope:** `FR-IMPORT-009/011/014`, `FR-PRICE-003`, `BR-004`, `NFR-BW-001`, `NFR-IMG-001`, `NFR-STALE-002`, `L-09` (source/freshness, column mapping, source-priority, price staleness rules/marker, image compression, upload size cap — none built; no approved decision defers them, so they stay ❌ MISSING, same as before).
+- `§4` capability-gap list: `G-CA-01` (create/edit form), `G-CA-03` (media upload/reorder/alt text), `G-CA-04` (`PriceHistory`), `G-CA-05` (scheduled discount), and `G-CA-06` (archive/restore) are fully resolved and **removed** from the missing-capability list (the convention already used for the 18 DEFERRED items in v4). `G-CA-02` and `G-CA-07` stay, narrowed to what's genuinely still missing: column-mapping only (template download and the report/batch-history screen are built) for `G-CA-02`; the non-exact review-queue UI and owner-side name-change-request UI only (exact-match confirm/reject is built) for `G-CA-07`.
+- Totals (§2, FR+PDR only): FR DONE 38→**51**, PARTIAL 80→**69**, MISSING 85→**83** (12 PARTIAL→DONE, 1 MISSING→DONE, 1 MISSING→PARTIAL, net −11 PARTIAL / −2 MISSING / +13 DONE). PDR DONE 12→**13**, PARTIAL 16→**15**. No row was added or removed (only existing rows' status/notes changed), so §17's 663-row total is unchanged; only §2's DONE/PARTIAL/MISSING counts move.
+
 ## v5 — Sprint 16 (platform moderation) applied, 2026-09-26
 
 Sprint 16 (branch `feat/sprint-16-platform-admin`) implemented the plan the product owner approved (decisions D1–D9). Status changes, each verified against code and tests:
@@ -63,13 +82,13 @@ The v4 pass above referenced PDR-035/PDR-036 inline on `FR-VEND-002`/`FR-VEND-01
 
 ## 2. Summary
 
-**Updated 2026-09-26 (v4)** — 18 FR-* rows moved from MISSING/PARTIAL to DEFERRED per the new §6 addition; see "v4 decisions applied" above. **Updated again 2026-09-26 (v4.1)** — PDR-035 and PDR-036 added as their own rows (both 🟡 PARTIAL: the decision is approved and documented, but the code for either — warehouse-evidence submission/review, and the category templates/model validation/UI — is not built yet).
+**Updated 2026-09-26 (v4)** — 18 FR-* rows moved from MISSING/PARTIAL to DEFERRED per the new §6 addition; see "v4 decisions applied" above. **Updated again 2026-09-26 (v4.1)** — PDR-035 and PDR-036 added as their own rows (both 🟡 PARTIAL: the decision is approved and documented, but the code for either — warehouse-evidence submission/review, and the category templates/model validation/UI — is not built yet). **Updated 2026-09-27 (v6)** — Sprint 17 implemented: 13 FR rows and 1 PDR row (PDR-036) moved PARTIAL/MISSING → DONE; 1 FR row (FR-IMPORT-004) moved MISSING → PARTIAL; several more stayed PARTIAL with their notes updated to reflect exactly what's now built vs. still missing. See "v6 — Sprint 17" above for the full per-ID list.
 
 | | DONE | PARTIAL | MISSING | DEFERRED | SUPERSEDED |
 |---|---|---|---|---|---|
-| FR (244) | 38 | 80 | 85 | 27 | 14 |
-| PDR (36) | 12 | 16 | 8 | 0 | 0 |
-| **Total** | **50** | **96** | **93** | **27** | **14** |
+| FR (244) | 51 | 69 | 83 | 27 | 14 |
+| PDR (36) | 13 | 15 | 8 | 0 | 0 |
+| **Total** | **64** | **84** | **91** | **27** | **14** |
 
 (v1→v3: unchanged, only sprint reassignment. v4: 17 rows MISSING→DEFERRED and 1 row (`FR-FUL-007`) PARTIAL→DEFERRED, all within the FR module. v4.1: PDR-035/036 added, both PARTIAL. Total row count now 280 = 244+36.)
 
@@ -87,17 +106,17 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-VEND-012 (E.0) | physical/online-only/hybrid، مستودع مخفي، نقاط استلام | Vendor.storeType، Warehouse، PickupPoint؛ PUT store-type/warehouse، POST/GET pickup-points. تحقّق ONLINE_ONLY محدَّد الآن بـPDR-035 (2026-09-26): دبوس عنوان المستودع بدل صورة/دبوس الفرع؛ لم يُبنَ بعد | OWNER | لا | S5 | 🟡 PARTIAL | S15 |
 | FR-VEND-013 (E.0) | مالك/موظف كصلاحيات على نفس الحساب؛ موظف لفرع واحد | VendorUser(role,branchId)؛ staff-invites وaccept API | OWNER يدعو | مبدّل في /account؛ لا صفحة دعوة أو قبول | S4,NAV | 🟡 PARTIAL | S15 |
 | FR-VEND-014 (E.0) | وسيلة تواصل خارجية واحدة على الأقل | بوابة النشر في storefront.controller | OWNER | /vendor/:id/storefront | S7 | ✅ DONE | - |
-| FR-CAT-015 (E.0) | النشر يتطلب عنواناً وصورة وتصنيفاً وسعراً ومخزوناً و5 حقول فئة | VendorOffer/OfferVariant؛ specs_text حر، لا قالب الحقول الخمسة. الحقول الخمسة لكل فئة ملابس/إكسسوار محدَّدة الآن بـPDR-036 (2026-09-26، 10 قوالب)؛ اللون والمقاس خيارات variant لا حقلين بنيويين؛ لم تُبنَ في الكود بعد | OWNER | لا | S3,S6,S7 | 🟡 PARTIAL | S17 |
+| FR-CAT-015 (E.0) | النشر يتطلب عنواناً وصورة وتصنيفاً وسعراً ومخزوناً و5 حقول فئة | بوابة النشر (`PATCH .../status` → ACTIVE، S17) تتحقق فعلياً من: عنوان، علامة تجارية، قالب+خصائص صالحين (فقط إن اختير قالب — PDR-036 D2، الفئات خارج العشرة تبقى نصاً حراً بالتصميم)، صورة PRIMARY (IMAGE فقط)، ومخزون متاح حي (لا reservedQuantity الخام) — مُثبتة خالية من التسابق/الجمود عبر اختبارين بحاجز (publish-locks-first، reserve-locks-first) | OWNER | /vendor/:id/offers/:offerId (زر النشر ورسالة الرفض بالنص الحرفي) | S3,S6,S7,S17 | ✅ DONE | - |
 | FR-CAT-016 (E.0) | أقسام المتجر: All، New arrivals، Discounts، حتى 20 مخصصاً | StoreSection(+Offer)؛ /storefronts/:slug/sections | OWNER؛ قراءة عامة | /vendor/:id/sections، /store/:slug | S7 | ✅ DONE | - |
 | FR-MATCH-011 (E.0) | باركود المتجر فريد؛ ملصق داخلي قابل للطباعة؛ باركود المنصة منفصل | storeInventoryBarcode؛ platformProductBarcode؛ لا توليد ملصق/طباعة | OWNER | لا | S6 | 🟡 PARTIAL | S18 |
-| FR-MATCH-012 (E.0) | خصائص ثم نص ثم صورة؛ المالك يؤكد | MatchReviewCandidate، match-review، match-confirmation؛ لا تشابه صور | OWNER | لا | S6,S7 | 🟡 PARTIAL | S17 |
-| FR-IMPORT-008 (E.0) | نفس الباركود + لون/مقاس جديد يضيف variant؛ تعارضات للمراجعة | POST offers/import + expected-offer-variant-conflict | OWNER | لا | S7 | 🟡 PARTIAL | S17 |
+| FR-MATCH-012 (E.0) | خصائص ثم نص ثم صورة؛ المالك يؤكد | MatchReviewCandidate، match-review، match-confirmation؛ إشارة النص الآن تشمل العلامة/اللون/المقاس/قيم القالب (S17)؛ لا تشابه صور | OWNER | تأكيد/رفض المطابقة الدقيقة فقط (S17، صفحة المتغيّر)؛ طابور المراجعة غير الدقيقة بلا واجهة | S6,S7,S17 | 🟡 PARTIAL | S17 |
+| FR-IMPORT-008 (E.0) | نفس الباركود + لون/مقاس جديد يضيف variant؛ تعارضات للمراجعة | POST offers/import + expected-offer-variant-conflict؛ آلية الإضافة/التعارض دون تغيير منذ S7 | OWNER | عدد التعارضات يظهر في تقرير الاستيراد (S17)؛ لا واجهة لحلّ كل تعارض | S7,S17 | 🟡 PARTIAL | S17 |
 | FR-SEARCH-013 (E.0) | صفحات All/Women/Men/Kids/Accessories؛ المتجر يختار الأنواع؛ بحث مع اقتراحات وتسامح AR/EN | discovery?segment,q (contains)؛ VendorApplicableCategory؛ PUT applicable-categories | عام؛ OWNER للتعديل | /، /discovery؛ التعديل في /vendor/:id/storefront؛ لا اقتراحات ولا اختيار عند التسجيل | S13 | 🟡 PARTIAL | S18b |
 | FR-SEARCH-014 (E.0) | مشاهدة واحدة لكل حساب/جهاز كل ساعتين للترتيب | لا | - | لا | لا | ❌ MISSING | S18b |
 | FR-COMP-010 (E.0) | بطاقة: أرخص سعر متاح، حتى 5 شعارات، كسر التعادل بالتقييم ثم المسافة | comparison-card API؛ لا تقييم ولا مسافة | عام | / و/discovery؛ الشعار يفتح العرض | S8,S13 | 🟡 PARTIAL | S18b |
 | FR-COMP-011 (E.0) | كل العروض من الأرخص؛ فلتر لون/مقاس؛ الإضافة للسلة من صفحة المتجر فقط | comparison API | عام | /compare/:id، /store/:slug/products/:offerId | S8 | ✅ DONE | - |
 | FR-PRICE-008 (E.0) | كل المبالغ ILS بلا FX | العملة ILS فقط | n/a | كل واجهات السعر | S10,S14 | ✅ DONE | - |
-| FR-PRICE-009 (E.0) | سعر أساسي لكل variant؛ خصم نسبي واحد بتاريخين؛ للمالك | basePrice + salePrice مطلق؛ لا نسبة ولا تواريخ | OWNER | لا | S3 | 🟡 PARTIAL | S17 |
+| FR-PRICE-009 (E.0) | سعر أساسي لكل variant؛ خصم نسبي واحد بتاريخين؛ للمالك | basePrice + salePrice المطلق (متبادلان استبعادياً) + discountPercent/discountStartAt/discountEndAt (S17)، مع فحوص DB CHECK والتحقق التطبيقي | OWNER | نموذج إنشاء/تعديل المتغيّر (S17) | S3,S17 | ✅ DONE | - |
 | FR-INV-008 (E.0) | مخزون لكل فرع وvariant؛ Available/Low/Sold out؛ الحد الأقصى عند الـcheckout؛ بلا نقل | BranchStock، bucketForStock، cart max_quantity | عام/session | البطاقات، /cart، /checkout | S6,S8,S14 | ✅ DONE | - |
 | FR-INV-009 (E.0) | بيع فعلي: مسح، لون/مقاس، كمية، خصم ذري، تدقيق | لا reason من نوع بيع، ولا endpoint مسح | موظف الفرع | لا | لا | ❌ MISSING | S18 |
 | FR-INV-010 (E.0) | خصم يدوي بسبب + إشعار فوري للمالك بهوية الموظف والفرع | StockMovement(reason,note)؛ صف outbox فقط | OWNER/موظف | لا | S6 | 🟡 PARTIAL | S18 |
@@ -151,8 +170,8 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-CAT-001 | شجرة تصنيفات AR/EN يديرها الأدمن | Category tree؛ /categories CRUD | PLATFORM_ADMIN | لا | S3 | 🟡 PARTIAL | S17b |
 | FR-CAT-002 | علامات مضبوطة مع كشف تكرار | Brand.normalizedName فريد؛ POST /brands | PLATFORM_ADMIN | لا | S3 | 🟡 PARTIAL | S17b |
 | FR-CAT-003 | قوالب خصائص لكل فئة | لا (structuralAttributes حر) | - | لا | لا | ❌ MISSING | S17b |
-| FR-CAT-004 | حالة المنتج على العرض | OfferVariant.condition | OWNER | لا تُعرض ولا تُحرَّر | S3 | 🟡 PARTIAL | S17 |
-| FR-CAT-005 | نص بديل للوسائط ووضع إشراف | OfferVariantMedia(url,kind)؛ لا alt ولا إشراف | OWNER | لا | S6 | 🟡 PARTIAL | S17 |
+| FR-CAT-004 | حالة المنتج على العرض | OfferVariant.condition | OWNER | تُعرض وتُحرَّر (S17، نموذج إنشاء/تعديل المتغيّر) | S3,S17 | ✅ DONE | - |
+| FR-CAT-005 | نص بديل للوسائط ووضع إشراف | OfferVariantMedia(url,kind,mediaType,altTextAr/En,sortOrder) (S17)؛ لا وضع إشراف على مستوى المنصة | OWNER | نص بديل قابل للتحرير لكل وسائط (S17) | S6,S17 | 🟡 PARTIAL | S17 |
 | FR-CAT-006 | تقييد فئات/منتجات من الأدمن | لا | - | لا | لا | ❌ MISSING | S17b |
 | FR-CAT-007 | بيانات SEO | لا | - | لا | لا | ❌ MISSING | S17b |
 | FR-CAT-008 | دورة Draft>Pending>Published>Archived | enum CanonicalProductStatus؛ إنشاء أدمن فقط | PLATFORM_ADMIN | لا | S3,S7 | 🟡 PARTIAL | S17b |
@@ -160,15 +179,15 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-CAT-010 | حقل الضمان | لا | - | لا | لا | ❌ MISSING | S17b |
 | FR-CAT-011 | وسوم يديرها الأدمن | لا | - | لا | لا | ❌ MISSING | S17b |
 | FR-CAT-012 | نوع المنتج الأساسي | لا | - | لا | لا | ❌ MISSING | S17b |
-| FR-CAT-013 | SKU فريد لكل متجر | @@unique(vendorId,sellerSku) | OWNER | لا | S3,S7 | 🟡 PARTIAL | S17 |
-| FR-CAT-014 | عنوان/وصف/مواصفات مستقلة لكل لغة | titleAr/En، specsTextAr/En | OWNER | تُعرض؛ لا تحرير | S3 | 🟡 PARTIAL | S17 |
+| FR-CAT-013 | SKU فريد لكل متجر | @@unique(vendorId,sellerSku)؛ خطأ SELLER_SKU_ALREADY_EXISTS واضح | OWNER | رسالة الخطأ تظهر في نموذج إنشاء المتغيّر (S17) | S3,S7,S17 | ✅ DONE | - |
+| FR-CAT-014 | عنوان/وصف/مواصفات مستقلة لكل لغة | titleAr/En، specsTextAr/En | OWNER | العنوان قابل للتحرير (تعديل العرض)؛ المواصفات قابلة للتحرير (S17، نموذج إنشاء/تعديل المتغيّر) | S3,S17 | ✅ DONE | - |
 
 ### E.4 — التطابق
 | ID | Requirement | Backend | Authz | UI | Test | Status | Sprint |
 |---|---|---|---|---|---|---|---|
 | FR-MATCH-001 | عرض مرتبط بمنتج أساسي أو مستقل، ولا يصير منتجاً أساسياً | canonicalProductId اختياري | OWNER | صفحات /store | S3,S7 | ✅ DONE | - |
-| FR-MATCH-002 | ربط تلقائي بمعرّف دقيق (E.0: اقتراح يؤكده المالك) | اقتراح + match-confirmation | OWNER | لا | S6,S7 | 🟡 PARTIAL | S17 |
-| FR-MATCH-003 | طابور مراجعة مع درجة ثقة | MatchReviewCandidate(score)؛ API الطابور | OWNER | لا | S6 | 🟡 PARTIAL | S17 |
+| FR-MATCH-002 | ربط تلقائي بمعرّف دقيق (E.0: اقتراح يؤكده المالك) | اقتراح + match-confirmation | OWNER | تأكيد/رفض من صفحة المتغيّر (S17) | S6,S7,S17 | ✅ DONE | - |
+| FR-MATCH-003 | طابور مراجعة مع درجة ثقة | MatchReviewCandidate(score)؛ API الطابور | OWNER | لا (صفحة تأكيد المطابقة الدقيقة فقط مبنية — S17؛ طابور المراجعة غير الدقيقة بلا واجهة) | S6,S17 | 🟡 PARTIAL | S17 |
 | FR-MATCH-004 | غير المعتمد لا يظهر في المقارنة | المقارنة تقرأ المؤكَّد فقط | عام | /compare/:id | S8 | ✅ DONE | - |
 | FR-MATCH-005 | العميل يبلّغ عن تطابق خاطئ | لا | - | لا | لا | ❌ MISSING | S17b |
 | FR-MATCH-006 | دمج/فصل المنتجات الأساسية | لا | - | لا | لا | ❌ MISSING | S17b |
@@ -180,18 +199,18 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 ### E.5 — الاستيراد
 | ID | Requirement | Backend | Authz | UI | Test | Status | Sprint |
 |---|---|---|---|---|---|---|---|
-| FR-IMPORT-001 | نموذج إنشاء عرض واحد | POST /offers، /variants | OWNER | لا | S3 | 🟡 PARTIAL | S17 |
-| FR-IMPORT-002 | CSV/Excel بقالب وتقرير قبل الحفظ | POST offers/import (تقرير)؛ لا قالب للتنزيل ولا dry-run | OWNER | لا | S7 | 🟡 PARTIAL | S17 |
-| FR-IMPORT-003 | نجاح جزئي | نتائج لكل صف | OWNER | لا | S7 | 🟡 PARTIAL | S17 |
-| FR-IMPORT-004 | سجل مهام الاستيراد | لا (ImportIdentifierRecord لمنع التكرار) | - | لا | لا | ❌ MISSING | S17 |
-| FR-IMPORT-005 | أخطاء صفوف قابلة للتنفيذ | أسباب لكل صف | OWNER | لا | S7 | 🟡 PARTIAL | S17 |
+| FR-IMPORT-001 | نموذج إنشاء عرض واحد | POST /offers، /variants | OWNER | نموذج إنشاء عرض/متغيّر (S17) | S3,S17 | ✅ DONE | - |
+| FR-IMPORT-002 | CSV/Excel بقالب وتقرير قبل الحفظ | POST offers/import (تقرير)؛ قالب للتنزيل الآن مبني (S17)؛ لا dry-run/معاينة قبل الحفظ | OWNER | زر تنزيل القالب ورفع الملف (S17) | S7,S17 | 🟡 PARTIAL | S17 |
+| FR-IMPORT-003 | نجاح جزئي | نتائج لكل صف | OWNER | تقرير الاستيراد الكامل يُعرض (S17) | S7,S17 | ✅ DONE | - |
+| FR-IMPORT-004 | سجل مهام الاستيراد | ImportBatch (S17): حالة+عدادات+طوابع زمنية، ملخّص فقط لا تفصيل لكل صف | OWNER | جدول سجلّ عمليات الاستيراد (S17) | S17 | 🟡 PARTIAL | S17 |
+| FR-IMPORT-005 | أخطاء صفوف قابلة للتنفيذ | أسباب لكل صف + failed_rows_csv قابل لإعادة الرفع (S17) | OWNER | يظهر في نتيجة الاستيراد مع زر تنزيل (S17) | S7,S17 | ✅ DONE | - |
 | FR-IMPORT-006 | استيراد عبر API/feed بصلاحية | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
 | FR-IMPORT-007 | feeds مجدولة وPOS/ERP خارج FYP (الـSRS) | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
 | FR-IMPORT-008 (E.5) | لا scraping | لم يُبنَ | n/a | n/a | n/a | ✅ DONE | - |
 | FR-IMPORT-009 | مصدر وحداثة كل عرض تظهر في المقارنة | لا | - | لا | لا | ❌ MISSING | S17 |
 | FR-IMPORT-010 | استيراد الصور بالروابط/أرشيف | PDR §6: استيراد الروابط مؤجل، الرفع اليدوي لاحقاً | - | - | - | ⏸ DEFERRED | - |
 | FR-IMPORT-011 | ربط أعمدة قابل للضبط | لا | - | لا | لا | ❌ MISSING | S17 |
-| FR-IMPORT-012 | إعادة محاولة الصفوف الفاشلة فقط | ImportIdentifierRecord | OWNER | لا | S7 | 🟡 PARTIAL | S17 |
+| FR-IMPORT-012 | إعادة محاولة الصفوف الفاشلة فقط | ImportIdentifierRecord؛ failed_rows_csv بأعمدة القالب نفسها + error_reason (S17) — تنزيل ثم إعادة رفع، وليس زر "إعادة محاولة" داخل التطبيق بنقرة واحدة | OWNER | زر تنزيل الصفوف الفاشلة (S17) | S7,S17 | ✅ DONE | - |
 | FR-IMPORT-013 | تقرير تسوية | لا | - | لا | لا | ❌ MISSING | S25 |
 | FR-IMPORT-014 | أولوية المصدر وحفظ القيمة الخاسرة | لا | - | لا | لا | ❌ MISSING | S17 |
 
@@ -227,7 +246,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-COMP-008 | يعمل على الجوال وRTL | واجهة متجاوبة؛ تحقق بصري فقط، بلا اختبار آلي | عام | /compare/:id | لقطات فقط | 🟡 PARTIAL | S24 |
 | FR-COMP-009 | مقارنة بعملات متعددة | استُبدل بـFR-PRICE-008 (E.0) | - | - | - | ↪ SUPERSEDED | - |
 | FR-PRICE-001 | سعر أساسي وتخفيض وعملة | استُبدل بـFR-PRICE-008/009 (E.0) | - | - | - | ↪ SUPERSEDED | - |
-| FR-PRICE-002 | تاريخ أسعار كامل | لا | - | لا | لا | ❌ MISSING | S17 |
+| FR-PRICE-002 | تاريخ أسعار كامل | PriceHistory (S17): سجلّ إضافة فقط، صف واحد لكل تغيير حقيقي، تعبئة أولية MIGRATED_BASELINE للمتغيّرات السابقة | OWNER | صفحة سجلّ الأسعار في المتغيّر (S17) | S17 | ✅ DONE | - |
 | FR-PRICE-003 | قواعد تقادم السعر | لا | - | لا | لا | ❌ MISSING | S17 |
 | FR-PRICE-004 | قواعد تراكب الخصومات/الكوبونات (Phase 2 بحسب الـSRS) | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
 | FR-PRICE-005 | المبلغ المستحق: أصناف + توصيل + رسوم + ضريبة | الأصناف والتوصيل؛ لا رسوم ولا ضريبة (OPEN-009) | session | /checkout | S10 | 🟡 PARTIAL | S20b |
@@ -365,8 +384,8 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-ADMIN-006 | لوحات إشارات الاحتيال | لا | - | لا | لا | ❌ MISSING | S25 |
 | FR-ADMIN-007 | تصدير البيانات | لا | - | لا | لا | ❌ MISSING | S25 |
 | FR-VPORTAL-001 | لوحة: طلبات تحتاج انتباهاً واشتراك وKPIs | مركز روابط فقط | OWNER | /vendor/:id | NAV | 🟡 PARTIAL | S18 |
-| FR-VPORTAL-002 | إدارة المنتجات والمخزون والتسعير | قائمة عروض وتبديل حالة فقط | OWNER | /vendor/:id/offers | S3 | 🟡 PARTIAL | S17 |
-| FR-VPORTAL-003 | استيراد وسجل وأخطاء | API الاستيراد؛ لا سجل | OWNER | لا | S7 | 🟡 PARTIAL | S17 |
+| FR-VPORTAL-002 | إدارة المنتجات والمخزون والتسعير | إنشاء/تعديل/أرشفة عرض ومتغيّر، أسعار وخصومات، وسائط (S17) | OWNER | /vendor/:id/offers وكل الصفحات الفرعية (جديد/تعديل/متغيّر/وسائط، S17) | S3,S17 | ✅ DONE | - |
+| FR-VPORTAL-003 | استيراد وسجل وأخطاء | API الاستيراد + ImportBatch (سجل ملخّص، S17) | OWNER | /vendor/:id/offers/import (تقرير + سجلّ الدفعات، S17) | S7,S17 | ✅ DONE | - |
 | FR-VPORTAL-004 | إدارة الطلبات مع الإلغاء والمرتجعات | إجراءات الطلب؛ الإلغاء والمرتجعات غير موجودة | OWNER/موظف | /vendor/:id/orders، طلبات الفرع | S9,S11 | 🟡 PARTIAL | S20a |
 | FR-VPORTAL-005 | إدارة الفروع والموظفين | قائمة فروع للقراءة؛ API الدعوة | OWNER | /vendor/:id/branches | S4 | 🟡 PARTIAL | S15 |
 | FR-VPORTAL-006 | حالة وسجل الاشتراك | GET subscription | OWNER | لا | S3 | 🟡 PARTIAL | S15 |
@@ -408,7 +427,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | PDR-016 | شبكة مقارنة 4-6/1-2 وفلتر variant | واجهة المقارنة | عام | /compare/:id | S8 | ✅ DONE | - |
 | PDR-017 | Available/Low/Sold out؛ السلة تعرض الحد الأقصى | bucketForStock؛ max_quantity لفرع واحد | عام/session | البطاقات، /cart | S8,S14 | ✅ DONE | - |
 | PDR-018 | باركود لكل منتج؛ داخلي قابل للطباعة؛ فريد للمتجر | storeInventoryBarcode فريد؛ لا ملصق قابل للطباعة | OWNER | لا | S6 | 🟡 PARTIAL | S18 |
-| PDR-019 | نفس الباركود + لون/مقاس جديد إضافة؛ 3 تعارضات للمراجعة | منطق تعارض الاستيراد | OWNER | لا | S7 | 🟡 PARTIAL | S17 |
+| PDR-019 | نفس الباركود + لون/مقاس جديد إضافة؛ 3 تعارضات للمراجعة | منطق تعارض الاستيراد؛ دون تغيير منذ S7 | OWNER | عدد التعارضات في تقرير الاستيراد (S17)؛ لا حلّ لكل تعارض | S7,S17 | 🟡 PARTIAL | S17 |
 | PDR-020 | مخزون لكل فرع؛ بيع فعلي بالمسح؛ بلا نقل | BranchStock، movements؛ لا بيع فعلي | موظف الفرع | لا | S6 | 🟡 PARTIAL | S18 |
 | PDR-021 | خصم يدوي بسبب وإشعار المالك | السبب مطلوب؛ الإشعار outbox فقط | OWNER/موظف | لا | S6 | 🟡 PARTIAL | S18 |
 | PDR-022 | إعدادات الفرع؛ رسوم إقليمية للمتجر؛ تعطيل المناطق | VendorDeliveryZone، DeliveryWindow | OWNER | /vendor/:id/delivery-zones، /delivery-windows | S9 | ✅ DONE | - |
@@ -425,7 +444,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | PDR-033 | اشتراك sandbox شهر وتجديد؛ تعطيل عند الانتهاء؛ تذكيرات | VendorSubscription وبوابة الانتهاء؛ لا تذكيرات | OWNER | لا | S3 | 🟡 PARTIAL | S15 |
 | PDR-034 | تعطيل الحساب مع استرجاع 30 يوماً | لا | - | لا | لا | ❌ MISSING | S22 |
 | PDR-035 | **(2026-09-26)** تحقّق ONLINE_ONLY بدبوس عنوان مستودع (lat/lng + ملاحظة) بدل صورة/دبوس فرع؛ PHYSICAL/HYBRID تحتفظ بالشرط الحالي؛ المستودع لا يظهر في أي endpoint عام؛ المراجع وحده يراه داخل مسار التحقق | قرار معتمد وموثَّق؛ مسار أدلة المستودع مبني (S15: لقطة غير قابلة للتغيير، submit/GET/decision)، وقراءة المراجع له مدقَّقة ومحصورة بالمراجع/الأدمن (S16: لا تظهر للعامة ولا للمالك ولا للموظف عبر مسار المراجع، ولا في الطابور أو AuditLog)؛ الناقص: واجهة المالك لتقديم الدليل (S15/UI) | OWNER + REVIEWER | /admin/verification/:vendorId (المراجع)؛ واجهة المالك لم تُبنَ | S15,S16 | 🟡 PARTIAL | S15 |
-| PDR-036 | **(2026-09-26)** اللون والمقاس خياري variant لا حقلين بنيويين؛ 10 قوالب حقول خمسة لفئات الملابس/الإكسسوارات؛ "بدون علامة تجارية" كقيمة منظمة بدل الفراغ | قرار معتمد وموثَّق (approved-product-decisions-2026-09.md §3.2)؛ لا قوالب الفئات ولا التحقق من صحتها (model validation) ولا واجهة مبنية في الكود بعد — specs_text لا يزال حراً | OWNER | لا | لا | 🟡 PARTIAL | S17 |
+| PDR-036 | **(2026-09-26)** اللون والمقاس خياري variant لا حقلين بنيويين؛ 10 قوالب حقول خمسة لفئات الملابس/الإكسسوارات؛ "بدون علامة تجارية" كقيمة منظمة بدل الفراغ | ClothingCategoryTemplate + CLOTHING_CATEGORY_TEMPLATE_FIELDS + validateTemplateAttributes (كلاهما-أو-لا-شيء بقيد DB CHECK)؛ Brand.isNoBrandSentinel مزروعة بمعرّف ثابت مع قائمة أسماء بديلة للاستيراد (S17) | OWNER | نموذج إنشاء/تعديل العرض يعرض حقول القالب الأربعة ديناميكياً وقائمة العلامات التجارية (S17) | S17 | ✅ DONE | - |
 
 ## 4. سطر مستقل لكل قدرة ناقصة (onboarding/verification/admin/catalog/inventory/notifications/account)
 
@@ -452,13 +471,8 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 ### Catalog
 | Gap | القدرة | يغطي | Sprint |
 |---|---|---|---|
-| G-CA-01 | نموذج إنشاء وتعديل العرض بالحقول الخمسة (10 قوالب ملابس/إكسسوار محدَّدة الآن بـPDR-036؛ لم تُبنَ بعد) | FR-CAT-015 (E.0)، FR-IMPORT-001، FR-VPORTAL-002 | S17 |
-| G-CA-02 | واجهة الاستيراد: قالب وتقرير وسجل وتسوية الأعمدة | FR-IMPORT-002/003/004/005/011/012 | S17 |
-| G-CA-03 | رفع الوسائط وترتيبها وبدائلها النصية | FR-CAT-005 | S17 |
-| G-CA-04 | `PriceHistory` مع كل تغيير سعر | FR-PRICE-002/003، FR-IMPORT-014 | S17 |
-| G-CA-05 | الخصم النسبي بتاريخين | FR-PRICE-009 (E.0) | S17 |
-| G-CA-06 | أرشفة العرض واستعادته | PDR §3.2 (بلا ID مستقل) | S17 |
-| G-CA-07 | واجهة تأكيد التطابق وطابور المراجعة واعتماد الاسم | FR-MATCH-002/003/010/012 | S17 |
+| G-CA-02 | واجهة الاستيراد: تسوية الأعمدة (القالب والتقرير والسجل مبنية الآن — S17) | FR-IMPORT-011 | غير مجدول |
+| G-CA-07 | طابور مراجعة التطابق غير الدقيق واعتماد الاسم (تأكيد/رفض المطابقة الدقيقة مبني الآن — S17) | FR-MATCH-003/010/012 | غير مجدول |
 | G-CA-08 | إدارة المنصة للتصنيفات والعلامات والمنتجات الأساسية وقوالب الخصائص (OPEN-013) | FR-CAT-001/002/003/006..012 | S17b |
 | G-CA-09 | دمج/فصل المنتجات وبلاغ العميل عن تطابق خاطئ | FR-MATCH-005/006/007 | S17b |
 
@@ -499,7 +513,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 |---|---|---|---|---|
 | S15 | إعداد المتجر: طلب متجر، أدلة، اشتراك، دعوة وقبول، نوع المتجر ونقاط الاستلام | 13 | لا شيء (الـAPIs موجودة) | ~~OPEN-011~~ **محسوم (PDR-035، 2026-09-26)** — تحقّق ONLINE_ONLY بدبوس عنوان مستودع لا صورة/دبوس فرع. لا map provider (مثبَّت §0.1) |
 | S16 | إدارة المنصة: قرار التحقق، تعليق/إعادة تفعيل، تنقل التطابق | **0 — منفَّذ** (كانت 4: FR-VEND-003/009 → DONE؛ FR-VEND-008 → قرار جديد؛ FR-ADMIN-001 → S25) | S15 | قُرّرت: أسباب التعليق (POLICY_VIOLATION/NON_PAYMENT/OTHER + نص إلزامي)، إشعار المالك = حدث Outbox الآن والتسليم في S19، وأسباب الرفض (OPEN-005 مغلقة) |
-| S17 | كتالوج المالك: نموذج العرض، الاستيراد، الوسائط، `PriceHistory`، الخصم النسبي، التطابق | 25 | S15، S16 (قرارات الاسم) | ~~OPEN-013~~ **محسوم للملابس/الإكسسوارات (PDR-036، 2026-09-26)** — 10 قوالب حقول خمسة، اللون/المقاس variant لا حقلاً بنيوياً. هل يبقى الخصم النسبي هنا أم يُفصل؛ حجم الوسائط والرفع |
+| S17 | كتالوج المالك: نموذج العرض، الاستيراد، الوسائط، `PriceHistory`، الخصم النسبي، التطابق | **21 — منفَّذ جزئياً** (كانت 25: 14 صفاً FR/PDR انتقلت إلى ✅ DONE بالكامل — باكند + واجهة + تنقل + اختبار؛ الباقي 21 صفاً يبقى 🟡 PARTIAL أو ❌ MISSING، بالغالب أجزاء صريحة خارج نطاق S17 المخطَّط أصلاً: تسوية أعمدة الاستيراد، طابور مراجعة التطابق غير الدقيق، تعليم تقادم السعر، ضغط/سقف حجم الصور، سجلّ استيراد بتفصيل كل صف) | S15، S16 (قرارات الاسم) | ~~OPEN-013~~ **محسوم للملابس/الإكسسوارات (PDR-036، 2026-09-26)** — 10 قوالب حقول خمسة، اللون/المقاس variant لا حقلاً بنيوياً. **الخصم النسبي بُني ضمن هذا السبرنت نفسه (لم يُفصل).** حجم الوسائط: سقف 10 صور/3 فيديوهات مبني؛ لا ضغط/تحويل صيغة |
 | S17b | كتالوج المنصة: تصنيفات وعلامات ومنتجات أساسية وقوالب وتطابق ودمج/فصل | 13 | S16، S17 | ~~OPEN-013~~ **محسوم للفئات الحالية (PDR-036)** — أي فئة غير ملابس/إكسسوار مستقبلية تحتاج قرار قالب خاص بها |
 | S18 | عمليات المخزون: صفحة المخزون، البيع بالمسح، الملصق، الفروع/الساعات، نقل الموظف | 16 | S15، S17 | لا شيء جديد؛ تأكيد شكل الباركود المطبوع |
 | S18b | جودة البحث والاكتشاف: تطبيع عربي، اقتراحات، باركود، ترتيب | 19 | S17 (المشاهدات والأسعار) | وزن الترتيب 40/30/30. **"أقرب فرع" ليس ضمن هذا السبرنت** — انظر الصف المنفصل أدناه |
@@ -555,7 +569,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 
 | ID | Rule (paraphrase) | Backend | Authz | UI | Test | Status | Sprint |
 |---|---|---|---|---|---|---|---|
-| BR-001 | معرّف دقيق يربط تلقائياً؛ غير ذلك يحتاج مراجعة بشرية | proposal + match-confirmation (ليس ربطاً تلقائياً حقيقياً حتى للمطابقة الدقيقة — يمر بنفس خطوة تأكيد المالك) | OWNER | لا | S6,S7 | 🟡 PARTIAL | S17 |
+| BR-001 | معرّف دقيق يربط تلقائياً؛ غير ذلك يحتاج مراجعة بشرية | proposal + match-confirmation (ليس ربطاً تلقائياً حقيقياً حتى للمطابقة الدقيقة — يمر بنفس خطوة تأكيد المالك، هذا لم يتغيّر) | OWNER | تأكيد/رفض من صفحة المتغيّر (S17) | S6,S7,S17 | 🟡 PARTIAL | S17 |
 | BR-002 | البائع يملك فقط سجلاته (Vendor/Branch/Offer/Variant)؛ الكتالوج الأساسي والتصنيف ملك المنصة دائماً | VendorMembershipGuard + RequireVendorRole('OWNER') على كل مسار بائع؛ POST/PATCH/DELETE على categories/brands/canonical-products محصورة بـPLATFORM_ADMIN | OWNER + PLATFORM_ADMIN | — (backend) | S3,S4,S6,S7,VV | ✅ DONE | - |
 | BR-003 | كل قائمة انتقاء (فئات، أسباب إرجاع، فئات تذاكر) قابلة للضبط إدارياً، لا hardcoded | Regions/segments/PlatformRole/StockMovementReason/OfferCondition كلها Prisma enums ثابتة في الكود | - | لا | لا | ❌ MISSING | S25 |
 | BR-004 | سعر لم يُعاد تأكيده ضمن نافذة التقادم يُعلَّم قديماً في المقارنة/البحث | لا | - | لا | لا | ❌ MISSING | S17 |
@@ -640,7 +654,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | SRS-G0-01 | هوية المتجر: slug/display_name/bio/logo/cover، أقسام، StoreFollow | Vendor له كل هذه الحقول؛ StoreSection/StoreSectionOffer/StoreFollow موجودة | ✅ DONE | - |
 | SRS-G0-02 | الأدوار: VendorUser بدور OWNER/BRANCH_EMPLOYEE، branchId إلزامي وفريد للموظف النشط | مطابق تماماً للسكيما الفعلية | ✅ DONE | - |
 | SRS-G0-03 | المواقع: StoreBranch (فعلي)، Warehouse (مخفي)، PickupPoint (بلا مخزون) | الثلاثة موجودة كنماذج Prisma منفصلة | ✅ DONE | - |
-| SRS-G0-04 | الكتالوج والمال: ILS فقط بلا حقل عملة، لا FxRate؛ باركود محلي+داخلي؛ حتى 10 صور و3 فيديوهات | ILS ضمنية DONE؛ لا FxRate DONE؛ الباركودان DONE؛ لا سقف عدد صور/فيديو مفروض في الكود ولا نوع فيديو منفصل | 🟡 PARTIAL | S17 |
+| SRS-G0-04 | الكتالوج والمال: ILS فقط بلا حقل عملة، لا FxRate؛ باركود محلي+داخلي؛ حتى 10 صور و3 فيديوهات | ILS ضمنية DONE؛ لا FxRate DONE؛ الباركودان DONE؛ سقف 10 صور/3 فيديوهات لكل متغيّر ونوع MediaType (IMAGE/VIDEO) منفصل مبنيان ومدعومان بقيد DB CHECK (S17) | ✅ DONE | - |
 | SRS-G0-05 | المخزون: OfferBranchInventory (= BranchStock فعلياً) لفرع فعلي/مستودع فقط؛ InventoryMovement بكل الأسباب المذكورة؛ لا نوع نقل | BranchStock+StockMovement موجودان؛ أسباب الحركة تغطي DAMAGE/LOSS/COUNT_CORRECTION فقط، لا "بيع" ولا "استرجاع مرتجع" ولا "استيراد/إضافة" كأسباب حركة منفصلة | 🟡 PARTIAL | S18 |
 | SRS-G0-06 | السلة والطلب: Cart لعميل موثّق فقط، CartItem بلا فرع/تنفيذ عند الإضافة؛ CustomerOrder له BranchOrder واحد أو أكثر | مطابق تماماً | ✅ DONE | - |
 | SRS-G0-07 | التنفيذ والدفع: Fulfillment واحد لكل BranchOrder بلا سائق؛ دفع sandbox واحد يغطي عدة BranchOrders بتخصيص عبر branch_order_id | لا كيان Fulfillment منفصل (مدموج داخل BranchOrder، وهذا يحقق نفس الغرض عملياً)؛ PaymentTransaction واحد + BranchOrder.paymentTransactionId كإحالة (يحقق التخصيص فعلياً) | ✅ DONE | - |
@@ -658,7 +672,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | SRS-G3-06 | `VendorSettlement`/`Promotion`/`Coupon` (Phase 2 بحسب الـSRS) | غير موجودة | ❌ MISSING | قرار-نطاق |
 | SRS-G3-07 | `Review`/`ReturnRequest`/`Refund`/`Dispute` | غير موجودة (متوافق مع FR-REV-*/FR-RET-* MISSING أعلاه) | ❌ MISSING | S21/S23 |
 | SRS-G3-08 | `Notification`/`SupportTicket` | غير موجودتين (متوافق مع FR-NOTIF-008/FR-SUP-* أعلاه) | ❌ MISSING | S19/قرار-نطاق |
-| SRS-G3-09 | `PriceHistory` | غير موجود (متوافق مع FR-PRICE-002) | ❌ MISSING | S17 |
+| SRS-G3-09 | `PriceHistory` | موجود (متوافق مع FR-PRICE-002، S17): سجلّ إضافة فقط، صف واحد لكل تغيير سعر حقيقي، تعبئة أولية MIGRATED_BASELINE لكل متغيّر سابق | ✅ DONE | - |
 | SRS-G3-10 | ثابتان معماريان: لا `vendor_id` على `CanonicalProduct`/`CanonicalProductVariant` أبداً؛ كل جدول مملوك للبائع يحمل `vendor_id` إلزامياً | مطابق تماماً في السكيما الفعلية (تحقّقت من `CanonicalProduct`/`CanonicalProductVariant`/`OfferVariant`) | ✅ DONE | - |
 
 ## §9 — Part 4, Section H: اتفاقيات وواجهات API
@@ -669,7 +683,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 |---|---|---|---|---|
 | SRS-H1-01 | ترقيم إصدار بادئة URI `/api/v1` | `app.setGlobalPrefix('api/v1')` في main.ts | ✅ DONE | - |
 | SRS-H1-02 | شكل خطأ موحّد `{error:{code,message,details,correlation_id}}` مع أكواد HTTP قياسية | `HttpExceptionFilter` يطابق الشكل تماماً، مع correlation_id | ✅ DONE | - |
-| SRS-H1-03 | مفتاح Idempotency-Key إلزامي على كل نقطة تُنشئ موارد مالية/طلبات | `IdempotencyInterceptor` مطبَّق على checkout؛ لم أتحقق من كل نقطة أخرى (مثل استيراد لو وُجد) | 🟡 PARTIAL | S17 |
+| SRS-H1-03 | مفتاح Idempotency-Key إلزامي على كل نقطة تُنشئ موارد مالية/طلبات | `IdempotencyInterceptor` مطبَّق على checkout وعلى استيراد العروض (S17، مؤكَّد بالقراءة)؛ لم أتحقق من كل نقطة أخرى | 🟡 PARTIAL | S17 |
 | SRS-H1-04 | X-Correlation-Id يرافق كل طلب ويظهر في كل تدقيق وخطأ | `CorrelationIdMiddleware` + مُدرَج في AuditLog وHttpExceptionFilter | ✅ DONE | - |
 | SRS-H1-05 | تقييد معدل لكل جهة فاعلة، أشد على OTP/بحث | `@nestjs/throttler` عام + `@Throttle` على OTP/login؛ لا تقييد أشد خاص بالبحث موجود | 🟡 PARTIAL | S18b |
 | SRS-H1-06 | توقيع HMAC-SHA256 صادر لأي webhook من المنصة | لا webhooks صادرة من المنصة أصلاً (لا تكامل خارجي حقيقي) | ❌ MISSING | قرار-نطاق |
@@ -712,7 +726,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | SRS-K1A-07 | طلبات العميل | موجودة، بلا جدول زمني موحّد وبلا إلغاء/إرجاع | 🟡 PARTIAL | S20a |
 | SRS-K1A-08 | مساحة عمل المالك | مركز روابط فقط، أغلب الشاشات الفرعية API-only | 🟡 PARTIAL | S15-S18 |
 | SRS-K1A-09 | مساحة عمل الموظف | طلبات الفرع فقط؛ لا ماسح/بيع فعلي | 🟡 PARTIAL | S18 |
-| SRS-K1A-10 | ماسح المخزون والاستيراد | API فقط بلا واجهة | 🟡 PARTIAL | S17/S18 |
+| SRS-K1A-10 | ماسح المخزون والاستيراد | الاستيراد له واجهة كاملة الآن (S17: `/vendor/:id/offers/import`)؛ ماسح المخزون (قراءة باركود بالكاميرا) لا يزال API فقط بلا واجهة | 🟡 PARTIAL | S18 |
 | SRS-K1A-11 | مساحة عمل الأدمن | API فقط بلا واجهة | 🟡 PARTIAL | S16 |
 
 ### حالات Empty/Loading/Error وRTL/A11y (تجميعي بدل تفكيك ~50 شاشة)
@@ -877,7 +891,7 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 | BL-CAT-002 | Should | FR-CAT-002 | 🟡 PARTIAL | - |
 | BL-CAT-003 | Should | FR-CAT-012 | ❌ MISSING | - |
 | BL-CAT-004 | Should | FR-CAT-003 | ❌ MISSING | - |
-| BL-CAT-004b | Must | FR-CAT-015 (E.0) | 🟡 PARTIAL | specs_text حر، هذا فعلاً ما بُني |
+| BL-CAT-004b | Must | FR-CAT-015 (E.0) | ✅ DONE | S17: بوابة النشر + قوالب PDR-036 مبنية بالكامل؛ specs_text يبقى حراً للفئات خارج العشرة بالتصميم (PDR-036 D2)، وهذا متوافق مع القرار المعتمد لا نقصاً |
 | BL-MATCH-001 | Must | FR-MATCH-008 | ✅ DONE | - |
 | BL-MATCH-002 | Must | FR-MATCH-002 | 🟡 PARTIAL | - |
 | BL-MATCH-003 | Must | FR-MATCH-003 | 🟡 PARTIAL | - |
@@ -891,11 +905,11 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 | BL-VEND-005 | Should | FR-VEND-013 (E.0) | 🟡 PARTIAL | أدوار فرعية متعددة — استُبدل بنموذج OWNER/BRANCH_EMPLOYEE الأبسط |
 | BL-VEND-005b | Must | FR-VEND-013 (E.0) | 🟡 PARTIAL | حساب مالك واحد بلا أدوار فرعية — هذا فعلاً المبني |
 | BL-VEND-006 | Should | FR-VEND-009 | ✅ DONE | اختبارات التعليق واختبار تصنيف المسارات (S16) |
-| BL-IMPORT-001 | Must | FR-IMPORT-001 | 🟡 PARTIAL | PriceHistory جزء من acceptance — غير موجود |
-| BL-IMPORT-002 | Must | FR-IMPORT-002 | 🟡 PARTIAL | PriceHistory جزء من acceptance — غير موجود |
+| BL-IMPORT-001 | Must | FR-IMPORT-001 | ✅ DONE | S17: PriceHistory موجود الآن؛ نموذج الإنشاء مبني |
+| BL-IMPORT-002 | Must | FR-IMPORT-002 | 🟡 PARTIAL | S17: PriceHistory موجود الآن؛ يبقى الناقص هو FR-IMPORT-002 نفسه (لا dry-run/معاينة قبل الحفظ) |
 | BL-IMPORT-002b | Should | FR-IMPORT-011 | ❌ MISSING | - |
-| BL-IMPORT-003 | Should | FR-IMPORT-012 | 🟡 PARTIAL | - |
-| BL-IMPORT-004 | Must | FR-IMPORT-003 | 🟡 PARTIAL | - |
+| BL-IMPORT-003 | Should | FR-IMPORT-012 | ✅ DONE | S17: failed_rows_csv |
+| BL-IMPORT-004 | Must | FR-IMPORT-003 | ✅ DONE | S17: تقرير كامل في الواجهة |
 | BL-SEARCH-001 | Must | FR-SEARCH-001 | 🟡 PARTIAL | - |
 | BL-SEARCH-002 | Must | FR-SEARCH-002 | ❌ MISSING | - |
 | BL-SEARCH-002b | Should | FR-SEARCH-002 | ❌ MISSING | - |
@@ -1000,7 +1014,7 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 
 ### BO-1..8، مصفوفة الوحدات، والتوصيات الاثنتا عشرة
 
-**لم تُفكَّك.** هذه ملخصات إستراتيجية تُشتق مباشرة من صفوف `FR-*`/`PDR-*`/`BDR-*` أعلاه، وليست متطلبات مستقلة. أبرز ما تكشفه المطابقة معها: **الفجوتان اللتان حدَّدهما Part 9 بنفسه** (`FR-SUP` بلا backlog، و`PriceHistory` بلا اختبار مسمّى) ما زالتا — بحسب هذا التدقيق — **غير مبنيتين فعلياً**: `FR-SUP` كله MISSING (قرار-نطاق)، و`PriceHistory` كنموذج بيانات MISSING (S17)، رغم أن التوثيق يقول إن "القرار" حُلّ — القرار التوثيقي محلول، البناء نفسه لا يزال معلَّقاً.
+**لم تُفكَّك.** هذه ملخصات إستراتيجية تُشتق مباشرة من صفوف `FR-*`/`PDR-*`/`BDR-*` أعلاه، وليست متطلبات مستقلة. أبرز ما تكشفه المطابقة معها: **الفجوتان اللتان حدَّدهما Part 9 بنفسه** (`FR-SUP` بلا backlog، و`PriceHistory` بلا اختبار مسمّى) — `FR-SUP` كله لا يزال MISSING (قرار-نطاق)، أما `PriceHistory` كنموذج بيانات فأصبح ✅ DONE (S17: سجلّ إضافة فقط + تعبئة أولية MIGRATED_BASELINE + شاشة سجلّ أسعار على صفحة المتغيّر)، مع اختبار مسمّى (`sprint17-owner-catalog.e2e-spec.ts` وscratch-DB migration-backfill spec) — هذه الفجوة أُغلقت فعلياً، لا توثيقياً فقط.
 
 ## §15 — E.11 آلات الحالة القديمة: صفوف بمعرّفات ثابتة
 

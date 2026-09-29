@@ -7,6 +7,7 @@ import {
   totalAvailableStockLive,
 } from '../common/availability.util';
 import { PrismaService } from '../prisma/prisma.service';
+import { computeEffectivePrice } from '../offers/pricing/effective-price.util';
 
 export interface EligibleOffer {
   offerVariantId: string;
@@ -211,7 +212,8 @@ export class ComparisonService {
         vendorDisplayName: v.vendor.displayName ?? v.vendor.legalName,
         vendorLogoUrl: v.vendor.logoUrl,
         vendorCreatedAt: v.vendor.createdAt,
-        price: Number(v.salePrice ?? v.basePrice),
+        // Sprint 17 (blocker 1): shared, read-only computation.
+        price: computeEffectivePrice(v),
         availability: bucketForStock(totalStock),
         imageUrl: primaryMediaUrl(v.media),
       };

@@ -20,6 +20,25 @@ export interface BranchStockKey {
 }
 
 /**
+ * The canonical lock-order key for a `branch_stock` row (vendorId,
+ * branchId, offerVariantId) - locking rows in ascending order of this
+ * string is what lets checkout.service.ts's reserve()/confirm()/
+ * cancel() paths and Sprint 17's publish-gate stock check lock
+ * overlapping sets of stock rows without ever deadlocking each other,
+ * regardless of the order the caller's own request listed them in.
+ * Originally private to checkout.service.ts; moved here so every
+ * caller shares the exact same key derivation rather than each keeping
+ * its own copy that could silently drift apart.
+ */
+export function stockLockKey(
+  vendorId: string,
+  branchId: string,
+  offerVariantId: string,
+): string {
+  return `${vendorId}:${branchId}:${offerVariantId}`;
+}
+
+/**
  * Codex review round 4 on commit 95a8430 (fix #2): BranchStock.
  * reservedQuantity is a LAZILY-SWEPT counter - it only decreases when
  * something actually touches that exact row (reserve()/POS/cancel()/

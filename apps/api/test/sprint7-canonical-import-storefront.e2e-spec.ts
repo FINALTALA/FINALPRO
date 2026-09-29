@@ -7,6 +7,7 @@ import { HttpExceptionFilter } from './../src/common/filters/http-exception.filt
 import { PrismaService } from './../src/prisma/prisma.service';
 import { generateVendorSlug } from './../src/common/slug.util';
 import { randomUUID } from 'crypto';
+import { createUniquePhone } from './helpers/e2e-phone-lanes';
 
 class FakeSmsService {
   sent: { phone: string; code: string; expiresAt: Date }[] = [];
@@ -22,11 +23,11 @@ class FakeSmsService {
   }
 }
 
-let phoneSeq = (Date.now() % 1_000_000) + 1_100_000;
-function uniquePhone(): string {
-  phoneSeq += 1;
-  return `+97056${(phoneSeq % 10_000_000).toString().padStart(7, '0')}`;
-}
+// Fixed, disjoint lane - see ./helpers/e2e-phone-lanes.ts.
+const uniquePhone = createUniquePhone(
+  'sprint7-canonical-import-storefront',
+  '56',
+);
 let counter = 0;
 function unique(label: string): string {
   counter += 1;
@@ -243,6 +244,23 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
       canonicalProductId: productRes.body.id,
       variantId: variantRes.body.id,
     };
+  }
+
+  // Sprint 17 (blocker 3, D3): import's brand_name column now resolves
+  // to a real, governed Brand row (offers-import.controller.ts's
+  // brandIdByName lookup, matched via normalize() = trim+lowercase) -
+  // an unresolvable name is moved to invalid_rows before PDR-019's own
+  // conflict detection ever runs. These PDR-019 tests only care about
+  // free-text consistency between rows, not brand governance, so they
+  // seed a real, uniquely-named Brand for whatever name they put in the
+  // CSV (unique() keeps normalizedName collision-free across runs)
+  // rather than using a literal like "Acme" that no longer resolves.
+  async function seedResolvableBrand(label: string): Promise<string> {
+    const name = unique(label);
+    await prisma.brand.create({
+      data: { name, normalizedName: name.trim().toLowerCase() },
+    });
+    return name;
   }
 
   async function confirmExactMatch(
@@ -666,10 +684,11 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
       const sharedGtin = unique('gtin').slice(0, 20);
       const skuRed = unique('sku');
       const skuBlue = unique('sku');
+      const brand = await seedResolvableBrand('Acme');
       const csv = [
         'title_ar,title_en,seller_sku,base_price,identifier_type,identifier_value,brand_name,product_type,specs_text_en',
-        `تيشيرت,T-Shirt,${skuRed},20,GTIN,${sharedGtin},Acme,Apparel,Red`,
-        `تيشيرت,T-Shirt,${skuBlue},20,GTIN,${sharedGtin},Acme,Apparel,Blue`,
+        `تيشيرت,T-Shirt,${skuRed},20,GTIN,${sharedGtin},${brand},Apparel,Red`,
+        `تيشيرت,T-Shirt,${skuBlue},20,GTIN,${sharedGtin},${brand},Apparel,Blue`,
       ].join('\n');
 
       const res = await request(app.getHttpServer())
@@ -690,10 +709,12 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
       await activateVendorSubscription(owner, vendorId);
 
       const sharedGtin = unique('gtin').slice(0, 20);
+      const brandOne = await seedResolvableBrand('BrandOne');
+      const brandTwo = await seedResolvableBrand('BrandTwo');
       const csv = [
         'title_ar,title_en,seller_sku,base_price,identifier_type,identifier_value,brand_name',
-        `أ,A,${unique('sku')},20,GTIN,${sharedGtin},BrandOne`,
-        `ب,B,${unique('sku')},20,GTIN,${sharedGtin},BrandTwo`,
+        `أ,A,${unique('sku')},20,GTIN,${sharedGtin},${brandOne}`,
+        `ب,B,${unique('sku')},20,GTIN,${sharedGtin},${brandTwo}`,
       ].join('\n');
 
       const res = await request(app.getHttpServer())
@@ -722,9 +743,10 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
 
       const sharedGtin = unique('gtin').slice(0, 20);
       const skuRed = unique('sku');
+      const brand = await seedResolvableBrand('Acme');
       const firstCsv = [
         'title_ar,title_en,seller_sku,base_price,identifier_type,identifier_value,brand_name,product_type,specs_text_en',
-        `تيشيرت,T-Shirt,${skuRed},20,GTIN,${sharedGtin},Acme,Apparel,Red`,
+        `تيشيرت,T-Shirt,${skuRed},20,GTIN,${sharedGtin},${brand},Apparel,Red`,
       ].join('\n');
       const firstRes = await request(app.getHttpServer())
         .post(`/api/v1/vendors/${vendorId}/offers/import`)
@@ -738,7 +760,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
       const skuBlue = unique('sku');
       const secondCsv = [
         'title_ar,title_en,seller_sku,base_price,identifier_type,identifier_value,brand_name,product_type,specs_text_en',
-        `تيشيرت,T-Shirt,${skuBlue},20,GTIN,${sharedGtin},Acme,Apparel,Blue`,
+        `تيشيرت,T-Shirt,${skuBlue},20,GTIN,${sharedGtin},${brand},Apparel,Blue`,
       ].join('\n');
       const secondRes = await request(app.getHttpServer())
         .post(`/api/v1/vendors/${vendorId}/offers/import`)
@@ -809,10 +831,12 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
       await activateVendorSubscription(owner, vendorId);
 
       const sharedGtin = unique('gtin').slice(0, 20);
+      const nike = await seedResolvableBrand('Nike');
+      const adidas = await seedResolvableBrand('Adidas');
       const firstCsv = [
         'title_ar,title_en,seller_sku,base_price,identifier_type,identifier_value,brand_name',
         `أ,A,${unique('sku')},20,GTIN,${sharedGtin},`,
-        `ب,B,${unique('sku')},20,GTIN,${sharedGtin},Nike`,
+        `ب,B,${unique('sku')},20,GTIN,${sharedGtin},${nike}`,
       ].join('\n');
       const firstRes = await request(app.getHttpServer())
         .post(`/api/v1/vendors/${vendorId}/offers/import`)
@@ -832,11 +856,11 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
           },
         },
       });
-      expect(record?.brandName).toBe('Nike');
+      expect(record?.brandName).toBe(nike);
 
       const secondCsv = [
         'title_ar,title_en,seller_sku,base_price,identifier_type,identifier_value,brand_name',
-        `ج,C,${unique('sku')},20,GTIN,${sharedGtin},Adidas`,
+        `ج,C,${unique('sku')},20,GTIN,${sharedGtin},${adidas}`,
       ].join('\n');
       const secondRes = await request(app.getHttpServer())
         .post(`/api/v1/vendors/${vendorId}/offers/import`)
