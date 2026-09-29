@@ -1,4 +1,4 @@
-import { createHash, randomInt } from 'crypto';
+import { createHash } from 'crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
@@ -9,6 +9,7 @@ import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
 import { IdempotencyCompletionService } from './../src/common/idempotency/idempotency-completion.service';
 import { PrismaService } from './../src/prisma/prisma.service';
+import { createUniquePhone } from './helpers/e2e-phone-lanes';
 
 /** Test double for the OPEN-004 SMS fallback - captures codes instead of logging them. */
 class FakeSmsService {
@@ -37,39 +38,24 @@ class FakeSmsService {
 // and caused cross-test phone collisions - a plain counter is simpler
 // and can't make that mistake).
 // +970 59 XXXXXXX - a 9-digit national number (libphonenumber-js
-// validates this shape for the PS region). The dev database isn't
-// truncated between test runs, so a counter alone (restarting from 0
-// on every run) would regenerate the same phone numbers - and the
-// same deterministic `verify-${phone}` Idempotency-Key - as a *prior*
-// run, colliding with its leftover rows (409, not the business-logic
-// status each test expects). Seeding from the current time and only
-// incrementing from there keeps numbers unique both within one run
-// and across repeated runs against the same persistent database.
+// validates this shape for the PS region).
 //
-// Review-round fix (Sprint 17 clean-room flake): Date.now() alone is
-// wall-clock-synced at millisecond resolution, so two DIFFERENT test
-// files running as separate parallel Jest worker PROCESSES (this
-// project's whole e2e suite - many files, each with its own
-// uniquePhone() and a distinct but nearby numeric "lane") can compute
-// the *same* `Date.now() % 1_000_000` starting value whenever their
-// beforeEach()s land close enough in time, letting their sequences
-// overlap despite the lane spacing - reproduced repeatedly across
-// clean-room full-suite runs, a different pair of files each time.
-// Folding in `process.pid` (guaranteed distinct between concurrently-
-// running processes) was tried first and only partly helped - Docker
-// often assigns nearby worker processes nearby PIDs, so `pid % 1000`
-// frequently added little real separation. `crypto.randomInt()` draws
-// uniformly from the *entire* remaining digit budget instead: with a
-// 900,000-wide draw, the interval-overlap probability across every
-// pair of files actually running at once is well under 1% even for
-// this suite's total call volume - and, being truly random rather
-// than clock-derived, it keeps the cross-run property above too
-// (arguably better than Date.now() ever did).
-let phoneSeq = randomInt(0, 900_000);
-function uniquePhone(): string {
-  phoneSeq += 1;
-  return `+97059${(phoneSeq % 10_000_000).toString().padStart(7, '0')}`;
-}
+// Review-round fix (Sprint 17 clean-room flake, then a further review
+// round): this used to be Date.now()-seeded, then crypto.randomInt()-
+// seeded, both trying to keep two DIFFERENT test files running as
+// separate parallel Jest worker PROCESSES from ever drawing
+// overlapping ranges. Neither was actually deterministic -
+// crypto.randomInt() only reduces the collision probability, it does
+// not eliminate it, and this suite hit that in practice (a different
+// pair of files each time, across repeated clean-room runs). This
+// file's lane is now a fixed, disjoint slice of the 7-digit number
+// space, assigned in the single shared table in
+// ./helpers/e2e-phone-lanes.ts - no two files' lanes can overlap by
+// construction, regardless of timing. See that file for the full
+// rationale, including why cross-run reuse against a stale persistent
+// database (the original reason for seeding from wall-clock time) is
+// not a property this needs to provide.
+const uniquePhone = createUniquePhone('auth', '59');
 
 describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
   let app: INestApplication;

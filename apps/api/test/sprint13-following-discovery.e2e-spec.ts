@@ -1,4 +1,3 @@
-import { randomInt } from 'crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
@@ -7,6 +6,7 @@ import { AppModule } from './../src/app.module';
 import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
 import { PrismaService } from './../src/prisma/prisma.service';
+import { createUniquePhone } from './helpers/e2e-phone-lanes';
 
 class FakeSmsService {
   sent: { phone: string; code: string; expiresAt: Date }[] = [];
@@ -23,13 +23,9 @@ class FakeSmsService {
 }
 
 // PS mobile numbers validate only under 056/059 (see the same note in
-// the Sprint 8 spec); a distinct numeric offset keeps every test's
-// phone unique without using the invalid 057/058 prefixes.
-let phoneSeq = randomInt(0, 900_000) + 1_700_000;
-function uniquePhone(): string {
-  phoneSeq += 1;
-  return `+97056${(phoneSeq % 10_000_000).toString().padStart(7, '0')}`;
-}
+// the Sprint 8 spec). Fixed, disjoint lane - see
+// ./helpers/e2e-phone-lanes.ts.
+const uniquePhone = createUniquePhone('sprint13-following-discovery', '56');
 let counter = 0;
 function unique(label: string): string {
   counter += 1;

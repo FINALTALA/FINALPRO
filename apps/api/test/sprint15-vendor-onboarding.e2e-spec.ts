@@ -1,11 +1,12 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
-import { randomInt, randomUUID } from 'crypto';
+import { randomUUID } from 'crypto';
 import { AppModule } from './../src/app.module';
 import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
 import { PrismaService } from './../src/prisma/prisma.service';
+import { createUniquePhone } from './helpers/e2e-phone-lanes';
 
 /** Test double for the OPEN-004 SMS fallback - captures codes instead of logging them. */
 class FakeSmsService {
@@ -24,15 +25,10 @@ class FakeSmsService {
   }
 }
 
-// +97059 prefix (not +97056/+97057/+97058 already used by sibling
-// spec files - see the PS-phone-prefix convention this codebase
-// follows) with its own numeric offset, so this file's phones never
-// collide with another spec running in the same worker.
-let phoneSeq = randomInt(0, 900_000) + 500_000;
-function uniquePhone(): string {
-  phoneSeq += 1;
-  return `+97059${(phoneSeq % 10_000_000).toString().padStart(7, '0')}`;
-}
+// +97059 prefix (not +97056/+97057/+97058 - see the PS-phone-prefix
+// convention this codebase follows). Fixed, disjoint lane - see
+// ./helpers/e2e-phone-lanes.ts.
+const uniquePhone = createUniquePhone('sprint15-vendor-onboarding', '59');
 let counter = 0;
 function unique(label: string): string {
   counter += 1;

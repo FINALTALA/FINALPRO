@@ -1,4 +1,3 @@
-import { randomInt } from 'crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
@@ -7,6 +6,7 @@ import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
 import { PrismaService } from './../src/prisma/prisma.service';
 import { NO_BRAND_SENTINEL_ID } from './../src/common/no-brand-sentinel';
+import { createUniquePhone } from './helpers/e2e-phone-lanes';
 
 class FakeSmsService {
   sent: { phone: string; code: string; expiresAt: Date }[] = [];
@@ -26,14 +26,12 @@ class FakeSmsService {
 // IsPhoneNumber -> libphonenumber-js/max) only under the 056/059
 // prefixes - 057/058 parse but are not valid PS mobile numbers under
 // that bundle (already found and documented once, in sprint4-roles.
-// e2e-spec.ts's own uniquePhone() comment - the exact same mistake,
-// independently repeated here and now fixed the same way: reuse "56"
-// with a distinct numeric offset, not a distinct prefix).
-let phoneSeq = randomInt(0, 900_000) + 900_000;
-function uniquePhone(): string {
-  phoneSeq += 1;
-  return `+97056${(phoneSeq % 10_000_000).toString().padStart(7, '0')}`;
-}
+// e2e-spec.ts's own uniquePhone() comment). Fixed, disjoint lane -
+// see ./helpers/e2e-phone-lanes.ts.
+const uniquePhone = createUniquePhone(
+  'sprint8-storefront-discovery-comparison',
+  '56',
+);
 let counter = 0;
 function unique(label: string): string {
   counter += 1;

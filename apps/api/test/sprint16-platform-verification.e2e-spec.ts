@@ -39,31 +39,16 @@ describe('Sprint 16 - platform verification: queue, evidence reads, decisions (e
 
   beforeEach(async () => {
     await bootApp(ctx);
-    // Review-round fix (Sprint 17 clean-room flake): phoneBase 0 here
-    // used to be the exact same lane as auth.e2e-spec.ts's own unoffset
-    // uniquePhone() - the one true exact duplicate in this suite's
-    // whole phone-number-lane registry (every other file's own
-    // uniquePhone() picks a distinct ~100k-300k-wide offset specifically
-    // to avoid this). Under real parallel workers (--maxWorkers=50%,
-    // the same full-suite run CI uses) two files sharing an identical
-    // lane could generate the exact same phone number, cross-
-    // contaminating each other's OTP records (a signup() in one file
-    // racing an otp/request in the other for the identical phone
-    // invalidates/replaces the OTP the first file's verify() expects).
-    // Confirmed reproducible across repeated clean-room full-suite runs
-    // - and, once this exact-duplicate lane was fixed, confirmed to
-    // recur between two OTHER files that had never shared an identical
-    // lane at all (just nearby ones), proving the deeper issue is
-    // uniquePhone()'s own Date.now()-only seed (millisecond resolution,
-    // wall-clock-synced, so two processes starting within the same
-    // millisecond get near-identical values regardless of lane
-    // spacing) - see auth.e2e-spec.ts's own uniquePhone() comment for
-    // the real fix (crypto.randomInt() over the full remaining digit
-    // budget, not a clock-derived seed at all). This file's own lane is
-    // moved to 3_000_000 anyway, alongside this same helper's other two
-    // callers (2_000_000, 4_000_000) rather than a sub-1M lane already
-    // claimed by a dozen other files.
-    f = createFixtures(ctx, 3_000_000);
+    // This file's own fixed, disjoint phone-number lane - see
+    // ./helpers/e2e-phone-lanes.ts. (History: this used to be a
+    // numeric `phoneBase` combined with a crypto.randomInt() draw,
+    // which caused real, reproduced cross-file phone collisions under
+    // parallel workers - first an exact-duplicate lane with
+    // auth.e2e-spec.ts, then, once that was fixed, a near-miss between
+    // two other files, since randomInt() only reduces collision
+    // probability rather than eliminating it. A fixed lane per file
+    // removes the possibility entirely.)
+    f = createFixtures(ctx, 'sprint16-platform-verification');
   });
 
   afterEach(async () => {

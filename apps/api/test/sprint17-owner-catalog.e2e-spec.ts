@@ -1,4 +1,3 @@
-import { randomInt } from 'crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
@@ -9,6 +8,7 @@ import { IdempotencyCompletionService } from './../src/common/idempotency/idempo
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
 import { NO_BRAND_SENTINEL_ID } from './../src/common/no-brand-sentinel';
 import { PrismaService } from './../src/prisma/prisma.service';
+import { createUniquePhone } from './helpers/e2e-phone-lanes';
 
 class FakeSmsService {
   sent: { phone: string; code: string; expiresAt: Date }[] = [];
@@ -25,12 +25,8 @@ class FakeSmsService {
 }
 
 // +97056/+97059 only validate as real PS mobile numbers under this
-// bundle - see every earlier sprint's own uniquePhone() comment.
-let phoneSeq = randomInt(0, 900_000) + 100_000;
-function uniquePhone(): string {
-  phoneSeq += 1;
-  return `+97059${(phoneSeq % 10_000_000).toString().padStart(7, '0')}`;
-}
+// bundle. Fixed, disjoint lane - see ./helpers/e2e-phone-lanes.ts.
+const uniquePhone = createUniquePhone('sprint17-owner-catalog', '59');
 let counter = 0;
 function unique(label: string): string {
   counter += 1;

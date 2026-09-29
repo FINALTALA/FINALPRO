@@ -1,4 +1,3 @@
-import { randomInt } from 'crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
@@ -6,6 +5,7 @@ import { AppModule } from './../src/app.module';
 import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
 import { PrismaService } from './../src/prisma/prisma.service';
+import { createUniquePhone } from './helpers/e2e-phone-lanes';
 
 /** Test double for the OPEN-004 SMS fallback - captures codes instead of logging them. */
 class FakeSmsService {
@@ -26,13 +26,9 @@ class FakeSmsService {
 
 // Same +97056 prefix as every other e2e spec's own uniquePhone() (the
 // only PS mobile prefixes class-validator's IsPhoneNumber accepts under
-// libphonenumber-js/max) - a distinct numeric offset avoids collisions
-// between files.
-let phoneSeq = randomInt(0, 900_000) + 100_000;
-function uniquePhone(): string {
-  phoneSeq += 1;
-  return `+97056${(phoneSeq % 10_000_000).toString().padStart(7, '0')}`;
-}
+// libphonenumber-js/max). Fixed, disjoint lane - see
+// ./helpers/e2e-phone-lanes.ts.
+const uniquePhone = createUniquePhone('sprint6-inventory-matching', '56');
 let counter = 0;
 function unique(label: string): string {
   counter += 1;

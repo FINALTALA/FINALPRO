@@ -6,7 +6,8 @@ import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
 import { PrismaService } from './../src/prisma/prisma.service';
 import { generateVendorSlug } from './../src/common/slug.util';
-import { randomInt, randomUUID } from 'crypto';
+import { randomUUID } from 'crypto';
+import { createUniquePhone } from './helpers/e2e-phone-lanes';
 
 class FakeSmsService {
   sent: { phone: string; code: string; expiresAt: Date }[] = [];
@@ -22,11 +23,11 @@ class FakeSmsService {
   }
 }
 
-let phoneSeq = randomInt(0, 900_000) + 1_100_000;
-function uniquePhone(): string {
-  phoneSeq += 1;
-  return `+97056${(phoneSeq % 10_000_000).toString().padStart(7, '0')}`;
-}
+// Fixed, disjoint lane - see ./helpers/e2e-phone-lanes.ts.
+const uniquePhone = createUniquePhone(
+  'sprint7-canonical-import-storefront',
+  '56',
+);
 let counter = 0;
 function unique(label: string): string {
   counter += 1;

@@ -1,4 +1,3 @@
-import { randomInt } from 'crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
@@ -6,6 +5,7 @@ import { AppModule } from './../src/app.module';
 import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
 import { PrismaService } from './../src/prisma/prisma.service';
+import { createUniquePhone } from './helpers/e2e-phone-lanes';
 
 class FakeSmsService {
   sent: { phone: string; code: string; expiresAt: Date }[] = [];
@@ -21,14 +21,9 @@ class FakeSmsService {
   }
 }
 
-// PS mobile numbers validate only under 056/059; a distinct numeric
-// offset per spec file keeps parallel specs from ever generating the
-// same phone.
-let phoneSeq = randomInt(0, 900_000) + 1_400_000;
-function uniquePhone(): string {
-  phoneSeq += 1;
-  return `+97056${(phoneSeq % 10_000_000).toString().padStart(7, '0')}`;
-}
+// PS mobile numbers validate only under 056/059. Fixed, disjoint lane
+// - see ./helpers/e2e-phone-lanes.ts.
+const uniquePhone = createUniquePhone('sprint14-delivery-checkout', '56');
 let counter = 0;
 function unique(label: string): string {
   counter += 1;

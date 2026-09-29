@@ -1,4 +1,3 @@
-import { randomInt } from 'crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
@@ -7,6 +6,7 @@ import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
 import { IdempotencyCompletionService } from './../src/common/idempotency/idempotency-completion.service';
 import { PrismaService } from './../src/prisma/prisma.service';
+import { createUniquePhone } from './helpers/e2e-phone-lanes';
 
 /** Test double for the OPEN-004 SMS fallback - captures codes instead of logging them. */
 class FakeSmsService {
@@ -25,12 +25,9 @@ class FakeSmsService {
   }
 }
 
-// Same collision-avoidance rationale as auth.e2e-spec.ts's uniquePhone().
-let phoneSeq = randomInt(0, 900_000) + 500_000;
-function uniquePhone(): string {
-  phoneSeq += 1;
-  return `+97056${(phoneSeq % 10_000_000).toString().padStart(7, '0')}`;
-}
+// Fixed, disjoint lane - see auth.e2e-spec.ts's uniquePhone() comment
+// and ./helpers/e2e-phone-lanes.ts for the full rationale.
+const uniquePhone = createUniquePhone('sprint3-catalog', '56');
 let counter = 0;
 function unique(label: string): string {
   counter += 1;

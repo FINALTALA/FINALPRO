@@ -21,7 +21,7 @@ describe('Sprint 16 - vendor suspension and reactivation (e2e)', () => {
 
   beforeEach(async () => {
     await bootApp(ctx);
-    f = createFixtures(ctx, 2_000_000);
+    f = createFixtures(ctx, 'sprint16-vendor-suspension');
   });
 
   afterEach(async () => {
