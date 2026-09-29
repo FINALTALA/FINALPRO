@@ -116,6 +116,13 @@ export default function VariantDetailPage() {
   // else could show it when the request would 403/404, or hide it when
   // it would actually succeed.
   const [offerCanonicalProductId, setOfferCanonicalProductId] = useState<string | null>(null);
+  // Review-round fix: a failed offer-summary load must not look like
+  // "this offer has no confirmed match" - offerCanonicalProductId
+  // would stay null either way, so a separate error state is what lets
+  // the render below tell "unknown (load failed)" apart from "known:
+  // none" and show a real retry instead of silently hiding the whole
+  // rename-request section.
+  const [offerSummaryError, setOfferSummaryError] = useState<string | null>(null);
   const [nameChangeRequests, setNameChangeRequests] = useState<NameChangeRequestDto[] | null>(null);
   // Review-round fix: a failed load must never be indistinguishable
   // from "no requests yet" - null above means "not loaded/unknown",
@@ -160,6 +167,11 @@ export default function VariantDetailPage() {
     apiFetch<PriceHistoryRow[]>(`${base}/price-history`)
       .then(setHistory)
       .catch(() => {});
+    loadOfferSummary();
+  }
+
+  function loadOfferSummary() {
+    setOfferSummaryError(null);
     apiFetch<OfferSummaryDto>(`/vendors/${params.vendorId}/offers/${params.offerId}`)
       .then((offer) => {
         setOfferCanonicalProductId(offer.canonical_product_id);
@@ -170,7 +182,11 @@ export default function VariantDetailPage() {
           setNameChangeRequestsError(null);
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        setOfferSummaryError(
+          err instanceof ApiError ? err.message : "تعذّر تحميل بيانات العرض",
+        );
+      });
   }
 
   function loadNameChangeRequests(canonicalProductId: string) {
@@ -534,7 +550,16 @@ export default function VariantDetailPage() {
         )}
       </div>
 
-      {offerCanonicalProductId && (
+      {offerSummaryError && (
+        <div className="card" style={{ maxWidth: 560, marginTop: 16 }}>
+          <h3 style={{ marginTop: 0 }}>طلب تغيير اسم المنتج المرجعي</h3>
+          <ErrorBanner message={offerSummaryError} />
+          <button className="button-link" onClick={loadOfferSummary}>
+            إعادة المحاولة
+          </button>
+        </div>
+      )}
+      {!offerSummaryError && offerCanonicalProductId && (
         <div className="card" style={{ maxWidth: 560, marginTop: 16 }}>
           <h3 style={{ marginTop: 0 }}>طلب تغيير اسم المنتج المرجعي</h3>
           <p className="muted">
