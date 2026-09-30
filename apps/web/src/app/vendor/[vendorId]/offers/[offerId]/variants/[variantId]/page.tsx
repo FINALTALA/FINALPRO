@@ -211,13 +211,26 @@ export default function VariantDetailPage() {
         if (generation === generationRef.current) setHistory(h);
       })
       .catch(() => {});
-    // Passed explicitly so this cascade shares load()'s own
-    // generation - loadOfferSummary() only mints its own new one when
-    // called standalone (a manual retry, not part of this cascade).
+    // Always passed explicitly - loadOfferSummary()/
+    // loadNameChangeRequests() never mint their own generation (see
+    // their own comments below for why), so this cascade and theirs
+    // are always the SAME generation, load()'s own.
     loadOfferSummary(generation);
   }
 
-  function loadOfferSummary(generation: number = ++generationRef.current) {
+  // Review-round fix: `generation` is a required parameter, not an
+  // optional one that defaults to minting a fresh generation - it
+  // used to, so a "Retry" button calling this alone (skipping load())
+  // would bump the shared generationRef by itself. That silently
+  // invalidated load()'s own still-in-flight variant/media/history
+  // fetches (their earlier-captured generation no longer matched) -
+  // fine ones, not what the user asked to retry - without ever
+  // re-issuing them, so a slow variant/media/history response could
+  // leave the page permanently missing that data. The Retry buttons
+  // now call the full load() instead (see the JSX below), which reuses
+  // this same function as part of one shared generation - never
+  // called standalone from the UI anymore.
+  function loadOfferSummary(generation: number) {
     setOfferSummaryError(null);
     apiFetch<OfferSummaryDto>(`/vendors/${params.vendorId}/offers/${params.offerId}`)
       .then((offer) => {
@@ -238,10 +251,9 @@ export default function VariantDetailPage() {
       });
   }
 
-  function loadNameChangeRequests(
-    canonicalProductId: string,
-    generation: number = ++generationRef.current,
-  ) {
+  // Same reasoning as loadOfferSummary() above - `generation` required,
+  // never minted standalone; the Retry button below calls load().
+  function loadNameChangeRequests(canonicalProductId: string, generation: number) {
     setNameChangeRequestsError(null);
     apiFetch<NameChangeRequestDto[]>(
       `/vendors/${params.vendorId}/canonical-products/${canonicalProductId}/name-change-requests`,
@@ -627,7 +639,12 @@ export default function VariantDetailPage() {
         <div className="card" style={{ maxWidth: 560, marginTop: 16 }}>
           <h3 style={{ marginTop: 0 }}>طلب تغيير اسم المنتج المرجعي</h3>
           <ErrorBanner message={offerSummaryError} />
-          <button className="button-link" onClick={() => loadOfferSummary()}>
+          {/* Review-round fix: retries the full load(), not just this
+              section - loadOfferSummary() alone would silently
+              invalidate load()'s own still-in-flight variant/media/
+              history fetches (a different, shared generation) without
+              ever re-issuing them. */}
+          <button className="button-link" onClick={() => load()}>
             إعادة المحاولة
           </button>
         </div>
@@ -641,10 +658,9 @@ export default function VariantDetailPage() {
           {nameChangeRequestsError && (
             <div style={{ marginBottom: 8 }}>
               <ErrorBanner message={nameChangeRequestsError} />
-              <button
-                className="button-link"
-                onClick={() => loadNameChangeRequests(offerCanonicalProductId)}
-              >
+              {/* Same reasoning as the offer-summary Retry above -
+                  the full load(), same shared generation. */}
+              <button className="button-link" onClick={() => load()}>
                 إعادة المحاولة
               </button>
             </div>
