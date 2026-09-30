@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ErrorBanner } from "@/components/States";
 import { apiFetch, ApiError, newIdempotencyKey } from "@/lib/api";
 import { getSessionToken } from "@/lib/session";
@@ -47,6 +47,27 @@ interface PriceHistoryRow {
   changed_at: string;
 }
 
+interface OfferSummaryDto {
+  canonical_product_id: string | null;
+}
+
+interface NameChangeRequestDto {
+  id: string;
+  canonical_product_id: string;
+  requested_name_ar: string;
+  requested_name_en: string;
+  reason: string | null;
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  decided_at: string | null;
+  created_at: string;
+}
+
+const NAME_CHANGE_STATUS_LABEL: Record<NameChangeRequestDto["status"], string> = {
+  PENDING: "بانتظار قرار المنصة",
+  APPROVED: "تمت الموافقة",
+  REJECTED: "تم الرفض",
+};
+
 type PriceMode = "none" | "sale" | "discount";
 
 const MATCH_LABEL: Record<VariantDto["match_proposal_status"], string> = {
@@ -88,9 +109,70 @@ export default function VariantDetailPage() {
   const [newMediaKind, setNewMediaKind] = useState<"PRIMARY" | "ADDITIONAL">("ADDITIONAL");
   const [newMediaType, setNewMediaType] = useState<"IMAGE" | "VIDEO">("IMAGE");
 
+  // Review-round fix (owner matching UI): the offer's own
+  // canonical_product_id (not variant.canonical_variant_id) is the
+  // exact condition requestNameChange() checks server-side
+  // (hasConfirmedMatch on VendorOffer) - gating the button on anything
+  // else could show it when the request would 403/404, or hide it when
+  // it would actually succeed.
+  const [offerCanonicalProductId, setOfferCanonicalProductId] = useState<string | null>(null);
+  // Review-round fix: a failed offer-summary load must not look like
+  // "this offer has no confirmed match" - offerCanonicalProductId
+  // would stay null either way, so a separate error state is what lets
+  // the render below tell "unknown (load failed)" apart from "known:
+  // none" and show a real retry instead of silently hiding the whole
+  // rename-request section.
+  const [offerSummaryError, setOfferSummaryError] = useState<string | null>(null);
+  const [nameChangeRequests, setNameChangeRequests] = useState<NameChangeRequestDto[] | null>(null);
+  // Review-round fix: a failed load must never be indistinguishable
+  // from "no requests yet" - null above means "not loaded/unknown",
+  // this error means "loaded and failed", and only a successful (even
+  // empty) array means "loaded and there really are none".
+  const [nameChangeRequestsError, setNameChangeRequestsError] = useState<string | null>(null);
+  const [newNameAr, setNewNameAr] = useState("");
+  const [newNameEn, setNewNameEn] = useState("");
+  const [newNameReason, setNewNameReason] = useState("");
+
+  // Review-round fix: a per-generation guard against navigating
+  // between variants. This route actually UNMOUNTS and remounts this
+  // component on every variant navigation (verified directly with a
+  // real browser), so a plain `useRef` counter bumped only inside
+  // load() doesn't work (a fresh mount gets a fresh, disconnected
+  // ref, and the OLD, now-orphaned instance's own ref is never
+  // touched again). A single shared boolean flipped by the effect's
+  // own cleanup doesn't work EITHER, for a different reason: on a
+  // same-instance effect re-run (params change without an actual
+  // unmount), the OLD effect's cleanup sets it true, but the NEW
+  // effect immediately sets it back to false - reviving it - so a
+  // response that was already in flight from the OLD generation reads
+  // "not cancelled" once the new effect has started and can still
+  // write stale state.
+  //
+  // What's actually correct is a monotonically increasing generation
+  // number, never reset, only ever incremented - by load() itself
+  // (every real load attempt) AND by the effect's own cleanup (so a
+  // generation is invalidated the moment its effect run ends, whether
+  // that's a re-run or a true unmount, with nothing after it ever
+  // reviving a smaller number). Every async callback captures the
+  // generation in effect *when its fetch started* and compares it
+  // against the live ref before writing any state - only the single
+  // most-recent generation can ever win.
+  const generationRef = useRef(0);
+
   function load() {
+    const generation = ++generationRef.current;
+    // Offer-scoped state belongs to the offer/variant this load() call
+    // is for - clear it immediately so the previous offer's canonical
+    // match/name-change data can never still be on screen while the
+    // new one loads.
+    setOfferCanonicalProductId(null);
+    setOfferSummaryError(null);
+    setNameChangeRequests(null);
+    setNameChangeRequestsError(null);
+
     apiFetch<VariantDto[]>(`/vendors/${params.vendorId}/offers/${params.offerId}/variants`)
       .then((all) => {
+        if (generation !== generationRef.current) return;
         const v = all.find((x) => x.id === params.variantId);
         if (v) {
           setVariant(v);
@@ -115,13 +197,77 @@ export default function VariantDetailPage() {
           setError("تعذّر العثور على هذا المتغيّر");
         }
       })
-      .catch((err) => setError(err instanceof ApiError ? err.message : "تعذّر تحميل المتغيّر"));
+      .catch((err) => {
+        if (generation !== generationRef.current) return;
+        setError(err instanceof ApiError ? err.message : "تعذّر تحميل المتغيّر");
+      });
     apiFetch<MediaDto[]>(`${base}/media`)
-      .then(setMedia)
+      .then((m) => {
+        if (generation === generationRef.current) setMedia(m);
+      })
       .catch(() => {});
     apiFetch<PriceHistoryRow[]>(`${base}/price-history`)
-      .then(setHistory)
+      .then((h) => {
+        if (generation === generationRef.current) setHistory(h);
+      })
       .catch(() => {});
+    // Always passed explicitly - loadOfferSummary()/
+    // loadNameChangeRequests() never mint their own generation (see
+    // their own comments below for why), so this cascade and theirs
+    // are always the SAME generation, load()'s own.
+    loadOfferSummary(generation);
+  }
+
+  // Review-round fix: `generation` is a required parameter, not an
+  // optional one that defaults to minting a fresh generation - it
+  // used to, so a "Retry" button calling this alone (skipping load())
+  // would bump the shared generationRef by itself. That silently
+  // invalidated load()'s own still-in-flight variant/media/history
+  // fetches (their earlier-captured generation no longer matched) -
+  // fine ones, not what the user asked to retry - without ever
+  // re-issuing them, so a slow variant/media/history response could
+  // leave the page permanently missing that data. The Retry buttons
+  // now call the full load() instead (see the JSX below), which reuses
+  // this same function as part of one shared generation - never
+  // called standalone from the UI anymore.
+  function loadOfferSummary(generation: number) {
+    setOfferSummaryError(null);
+    apiFetch<OfferSummaryDto>(`/vendors/${params.vendorId}/offers/${params.offerId}`)
+      .then((offer) => {
+        if (generation !== generationRef.current) return;
+        setOfferCanonicalProductId(offer.canonical_product_id);
+        if (offer.canonical_product_id) {
+          loadNameChangeRequests(offer.canonical_product_id, generation);
+        } else {
+          setNameChangeRequests(null);
+          setNameChangeRequestsError(null);
+        }
+      })
+      .catch((err) => {
+        if (generation !== generationRef.current) return;
+        setOfferSummaryError(
+          err instanceof ApiError ? err.message : "تعذّر تحميل بيانات العرض",
+        );
+      });
+  }
+
+  // Same reasoning as loadOfferSummary() above - `generation` required,
+  // never minted standalone; the Retry button below calls load().
+  function loadNameChangeRequests(canonicalProductId: string, generation: number) {
+    setNameChangeRequestsError(null);
+    apiFetch<NameChangeRequestDto[]>(
+      `/vendors/${params.vendorId}/canonical-products/${canonicalProductId}/name-change-requests`,
+    )
+      .then((r) => {
+        if (generation !== generationRef.current) return;
+        setNameChangeRequests(r);
+      })
+      .catch((err) => {
+        if (generation !== generationRef.current) return;
+        setNameChangeRequestsError(
+          err instanceof ApiError ? err.message : "تعذّر تحميل طلبات تغيير الاسم",
+        );
+      });
   }
 
   useEffect(() => {
@@ -129,7 +275,24 @@ export default function VariantDetailPage() {
       router.replace("/login");
       return;
     }
-    load();
+    // Deferred one microtask - load() itself calls setState
+    // synchronously (the offer-scoped resets above), which React's
+    // set-state-in-effect rule flags when reachable directly from the
+    // effect body; every fetch load() issues is genuinely async
+    // regardless, so this costs nothing real.
+    Promise.resolve().then(load);
+    // Invalidates whatever generation this effect run's own load()
+    // issues (or will issue, if the deferred call above hasn't run
+    // yet), without ever reviving an earlier one - a plain increment,
+    // never a reset. Runs before every later re-run of this effect AND
+    // on a genuine unmount (this route remounts the component on each
+    // variant navigation - see generationRef's own comment above), so
+    // it correctly covers both, and self-corrects even if effects tear
+    // down faster than their own deferred load() call: whichever
+    // load() actually runs last always holds the highest number.
+    return () => {
+      generationRef.current += 1;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.vendorId, params.offerId, params.variantId]);
 
@@ -183,6 +346,35 @@ export default function VariantDetailPage() {
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "تعذّر تنفيذ القرار");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function requestNameChange() {
+    if (!offerCanonicalProductId || !newNameAr.trim() || !newNameEn.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await apiFetch(
+        `/vendors/${params.vendorId}/canonical-products/${offerCanonicalProductId}/name-change-requests`,
+        {
+          method: "POST",
+          body: {
+            requested_name_ar: newNameAr.trim(),
+            requested_name_en: newNameEn.trim(),
+            reason: newNameReason.trim() || undefined,
+          },
+          idempotencyKey: newIdempotencyKey("name-change-request"),
+        },
+      );
+      setNewNameAr("");
+      setNewNameEn("");
+      setNewNameReason("");
+      setNotice("تم إرسال طلب تغيير الاسم");
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "تعذّر إرسال الطلب");
     } finally {
       setBusy(false);
     }
@@ -442,6 +634,73 @@ export default function VariantDetailPage() {
           </div>
         )}
       </div>
+
+      {offerSummaryError && (
+        <div className="card" style={{ maxWidth: 560, marginTop: 16 }}>
+          <h3 style={{ marginTop: 0 }}>طلب تغيير اسم المنتج المرجعي</h3>
+          <ErrorBanner message={offerSummaryError} />
+          {/* Review-round fix: retries the full load(), not just this
+              section - loadOfferSummary() alone would silently
+              invalidate load()'s own still-in-flight variant/media/
+              history fetches (a different, shared generation) without
+              ever re-issuing them. */}
+          <button className="button-link" onClick={() => load()}>
+            إعادة المحاولة
+          </button>
+        </div>
+      )}
+      {!offerSummaryError && offerCanonicalProductId && (
+        <div className="card" style={{ maxWidth: 560, marginTop: 16 }}>
+          <h3 style={{ marginTop: 0 }}>طلب تغيير اسم المنتج المرجعي</h3>
+          <p className="muted">
+            هذا العرض مطابق لمنتج مرجعي. إن رأيتِ اسمه غير دقيق، يمكنك اقتراح اسم بديل يراجعه فريق المنصة.
+          </p>
+          {nameChangeRequestsError && (
+            <div style={{ marginBottom: 8 }}>
+              <ErrorBanner message={nameChangeRequestsError} />
+              {/* Same reasoning as the offer-summary Retry above -
+                  the full load(), same shared generation. */}
+              <button className="button-link" onClick={() => load()}>
+                إعادة المحاولة
+              </button>
+            </div>
+          )}
+          {!nameChangeRequestsError && nameChangeRequests === null && (
+            <p className="muted">جارٍ تحميل طلبات تغيير الاسم السابقة...</p>
+          )}
+          {!nameChangeRequestsError && nameChangeRequests && nameChangeRequests.length > 0 && (
+            <ul style={{ margin: "8px 0", paddingInlineStart: 20 }}>
+              {nameChangeRequests.map((r) => (
+                <li key={r.id} className="muted">
+                  {r.requested_name_ar} / {r.requested_name_en} —{" "}
+                  <span className={`badge${r.status === "APPROVED" ? " badge-active" : ""}`}>
+                    {NAME_CHANGE_STATUS_LABEL[r.status]}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="field">
+            <label>الاسم المقترح بالعربية</label>
+            <input value={newNameAr} onChange={(e) => setNewNameAr(e.target.value)} />
+          </div>
+          <div className="field">
+            <label>الاسم المقترح بالإنجليزية</label>
+            <input value={newNameEn} onChange={(e) => setNewNameEn(e.target.value)} />
+          </div>
+          <div className="field">
+            <label>سبب التغيير (اختياري)</label>
+            <input value={newNameReason} onChange={(e) => setNewNameReason(e.target.value)} />
+          </div>
+          <button
+            className="button"
+            onClick={requestNameChange}
+            disabled={busy || !newNameAr.trim() || !newNameEn.trim()}
+          >
+            إرسال الطلب
+          </button>
+        </div>
+      )}
     </div>
   );
 }

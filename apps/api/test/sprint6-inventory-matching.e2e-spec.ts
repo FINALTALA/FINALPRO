@@ -1086,11 +1086,290 @@ describe('Sprint 6 - branch inventory, stock movements, media, non-exact match r
         .set('Authorization', `Bearer ${owner}`)
         .expect(200);
       expect(
-        queueRes.body.some(
+        queueRes.body.items.some(
           (c: { canonical_variant_id: string }) =>
             c.canonical_variant_id === canonicalVariantId,
         ),
       ).toBe(true);
+      expect(queueRes.body.next_cursor).toBeDefined();
+    });
+
+    // Review-round fix (owner matching UI): queue() used to return the
+    // bare candidateDto() shape (offer_variant_id/canonical_variant_id/
+    // score/status only) - not enough to build a card or a link to the
+    // variant page. This proves the enriched shape queueCandidateDto()
+    // now returns, its vendor scoping (BOLA), the deterministic
+    // pagination cursor, and that a decision actually removes the
+    // candidate from the next read.
+    describe('queue(): enriched payload, pagination, deterministic ordering (review-round fix)', () => {
+      it('returns offer/variant/canonical display data, is scoped to one vendor only (BOLA), and is paginated', async () => {
+        const admin = await signupWithPlatformRole('PLATFORM_ADMIN');
+        const modelToken = unique('AirRunner');
+        const { variantId: canonicalVariantId } = await createCanonicalVariant(
+          admin,
+          'Nike',
+          `Air ${modelToken}`,
+          { color: 'Red', size: '42' },
+        );
+        const owner = await signup(uniquePhone(), 'a-strong-password');
+        const { vendorId, branchAId } =
+          await createVendorWithTwoBranches(owner);
+        const { offerId, variantId } = await createOfferVariant(
+          owner,
+          vendorId,
+          branchAId,
+          { colour: 'Red', size: '42' },
+        );
+        await prisma.vendorOffer.update({
+          where: { id: offerId },
+          data: { titleAr: 'حذاء رياضي', titleEn: 'Sport Shoe' },
+        });
+        await prisma.matchReviewCandidate.create({
+          data: {
+            vendorId,
+            offerVariantId: variantId,
+            canonicalVariantId,
+            score: 0.6,
+          },
+        });
+
+        const res = await request(app.getHttpServer())
+          .get(`/api/v1/vendors/${vendorId}/match-review/queue`)
+          .set('Authorization', `Bearer ${owner}`)
+          .expect(200);
+        expect(res.body.items).toHaveLength(1);
+        const item = res.body.items[0];
+        expect(item.offer_id).toBe(offerId);
+        expect(item.offer_variant_id).toBe(variantId);
+        expect(item.offer_title_ar).toBe('حذاء رياضي');
+        expect(item.offer_title_en).toBe('Sport Shoe');
+        expect(item.variant_colour).toBe('Red');
+        expect(item.variant_size).toBe('42');
+        expect(item.canonical_variant_id).toBe(canonicalVariantId);
+        expect(item.canonical_brand_name).toBe('Nike');
+        expect(item.canonical_model_name).toBe(`Air ${modelToken}`);
+        expect(item.canonical_structural_attributes).toEqual({
+          color: 'Red',
+          size: '42',
+        });
+        expect(res.body.next_cursor).toBeNull();
+
+        // BOLA: a second, unrelated vendor's own queue never sees this
+        // candidate, even though the endpoint has no per-vendor filter
+        // in the URL beyond :vendorId itself.
+        const owner2 = await signup(uniquePhone(), 'a-strong-password');
+        const { vendorId: vendor2Id } =
+          await createVendorWithTwoBranches(owner2);
+        const res2 = await request(app.getHttpServer())
+          .get(`/api/v1/vendors/${vendor2Id}/match-review/queue`)
+          .set('Authorization', `Bearer ${owner2}`)
+          .expect(200);
+        expect(res2.body.items).toEqual([]);
+      });
+
+      it('refuses a BRANCH_EMPLOYEE from reading the queue', async () => {
+        const { vendorId, employeeToken } =
+          await setupVendorWithTwoBranchesAndEmployee();
+        const res = await request(app.getHttpServer())
+          .get(`/api/v1/vendors/${vendorId}/match-review/queue`)
+          .set('Authorization', `Bearer ${employeeToken}`)
+          .expect(403);
+        expect(res.body.error.code).toBe('VENDOR_ROLE_FORBIDDEN');
+      });
+
+      it('a decision removes the candidate from the next queue read', async () => {
+        const admin = await signupWithPlatformRole('PLATFORM_ADMIN');
+        const { variantId: canonicalVariantId } = await createCanonicalVariant(
+          admin,
+          'Puma',
+          unique('Runner'),
+        );
+        const owner = await signup(uniquePhone(), 'a-strong-password');
+        const { vendorId, branchAId } =
+          await createVendorWithTwoBranches(owner);
+        const { offerId, variantId } = await createOfferVariant(
+          owner,
+          vendorId,
+          branchAId,
+        );
+        const candidate = await prisma.matchReviewCandidate.create({
+          data: {
+            vendorId,
+            offerVariantId: variantId,
+            canonicalVariantId,
+            score: 0.5,
+          },
+        });
+
+        const before = await request(app.getHttpServer())
+          .get(`/api/v1/vendors/${vendorId}/match-review/queue`)
+          .set('Authorization', `Bearer ${owner}`)
+          .expect(200);
+        expect(before.body.items.map((i: { id: string }) => i.id)).toContain(
+          candidate.id,
+        );
+
+        await request(app.getHttpServer())
+          .post(
+            `/api/v1/vendors/${vendorId}/offers/${offerId}/variants/${variantId}/match-review/candidates/${candidate.id}/decision`,
+          )
+          .set('Authorization', `Bearer ${owner}`)
+          .set('Idempotency-Key', unique('decide'))
+          .send({ decision: 'reject' })
+          .expect(200);
+
+        const after = await request(app.getHttpServer())
+          .get(`/api/v1/vendors/${vendorId}/match-review/queue`)
+          .set('Authorization', `Bearer ${owner}`)
+          .expect(200);
+        expect(after.body.items.map((i: { id: string }) => i.id)).not.toContain(
+          candidate.id,
+        );
+      });
+
+      it('deterministic tie-break (score DESC, createdAt ASC, id ASC): identical score AND createdAt keep a stable order across repeated reads and after an unrelated decision', async () => {
+        const admin = await signupWithPlatformRole('PLATFORM_ADMIN');
+        const owner = await signup(uniquePhone(), 'a-strong-password');
+        const { vendorId, branchAId } =
+          await createVendorWithTwoBranches(owner);
+        const { offerId, variantId } = await createOfferVariant(
+          owner,
+          vendorId,
+          branchAId,
+        );
+        const tiedAt = new Date();
+        const created: { id: string }[] = [];
+        for (let i = 0; i < 3; i++) {
+          const { variantId: cv } = await createCanonicalVariant(
+            admin,
+            'TieBrand',
+            unique(`TieModel${i}`),
+          );
+          created.push(
+            await prisma.matchReviewCandidate.create({
+              data: {
+                vendorId,
+                offerVariantId: variantId,
+                canonicalVariantId: cv,
+                score: 0.42,
+                createdAt: tiedAt,
+              },
+            }),
+          );
+        }
+        const expectedOrder = [...created]
+          .sort((a, b) => (a.id < b.id ? -1 : 1))
+          .map((c) => c.id);
+
+        const read1 = await request(app.getHttpServer())
+          .get(`/api/v1/vendors/${vendorId}/match-review/queue`)
+          .set('Authorization', `Bearer ${owner}`)
+          .expect(200);
+        expect(read1.body.items.map((i: { id: string }) => i.id)).toEqual(
+          expectedOrder,
+        );
+
+        const read2 = await request(app.getHttpServer())
+          .get(`/api/v1/vendors/${vendorId}/match-review/queue`)
+          .set('Authorization', `Bearer ${owner}`)
+          .expect(200);
+        expect(read2.body.items.map((i: { id: string }) => i.id)).toEqual(
+          expectedOrder,
+        );
+
+        // An unrelated decision - a DIFFERENT candidate entirely, for a
+        // different offer variant - must not disturb this order. A
+        // second variant on the SAME offer (not a second call to
+        // createOfferVariant(), which would re-activate this vendor's
+        // already-ACTIVE subscription and 409) is enough to be "a
+        // different offer variant".
+        const otherVariantRes = await request(app.getHttpServer())
+          .post(`/api/v1/vendors/${vendorId}/offers/${offerId}/variants`)
+          .set('Authorization', `Bearer ${owner}`)
+          .set('Idempotency-Key', unique('variant'))
+          .send({ seller_sku: unique('sku'), base_price: 10 })
+          .expect(201);
+        const otherVariantId = otherVariantRes.body.id;
+        const { variantId: unrelatedCv } = await createCanonicalVariant(
+          admin,
+          'Other',
+          unique('Unrelated'),
+        );
+        const unrelated = await prisma.matchReviewCandidate.create({
+          data: {
+            vendorId,
+            offerVariantId: otherVariantId,
+            canonicalVariantId: unrelatedCv,
+            score: 0.9,
+          },
+        });
+        await request(app.getHttpServer())
+          .post(
+            `/api/v1/vendors/${vendorId}/offers/${offerId}/variants/${otherVariantId}/match-review/candidates/${unrelated.id}/decision`,
+          )
+          .set('Authorization', `Bearer ${owner}`)
+          .set('Idempotency-Key', unique('decide'))
+          .send({ decision: 'reject' })
+          .expect(200);
+
+        const read3 = await request(app.getHttpServer())
+          .get(`/api/v1/vendors/${vendorId}/match-review/queue`)
+          .set('Authorization', `Bearer ${owner}`)
+          .expect(200);
+        expect(read3.body.items.map((i: { id: string }) => i.id)).toEqual(
+          expectedOrder,
+        );
+      });
+
+      it('paginates deterministically: identical score AND createdAt across many candidates produce no duplicate or dropped id across pages', async () => {
+        const admin = await signupWithPlatformRole('PLATFORM_ADMIN');
+        const owner = await signup(uniquePhone(), 'a-strong-password');
+        const { vendorId, branchAId } =
+          await createVendorWithTwoBranches(owner);
+        const { variantId } = await createOfferVariant(
+          owner,
+          vendorId,
+          branchAId,
+        );
+        const tiedAt = new Date();
+        const createdIds: string[] = [];
+        for (let i = 0; i < 5; i++) {
+          const { variantId: cv } = await createCanonicalVariant(
+            admin,
+            'PageBrand',
+            unique(`PageModel${i}`),
+          );
+          const c = await prisma.matchReviewCandidate.create({
+            data: {
+              vendorId,
+              offerVariantId: variantId,
+              canonicalVariantId: cv,
+              score: 0.33,
+              createdAt: tiedAt,
+            },
+          });
+          createdIds.push(c.id);
+        }
+
+        const seen: string[] = [];
+        let cursor: string | undefined;
+        for (let page = 0; page < 10; page++) {
+          const qs = cursor
+            ? `?limit=2&cursor=${encodeURIComponent(cursor)}`
+            : '?limit=2';
+          const res = await request(app.getHttpServer())
+            .get(`/api/v1/vendors/${vendorId}/match-review/queue${qs}`)
+            .set('Authorization', `Bearer ${owner}`)
+            .expect(200);
+          for (const item of res.body.items as { id: string }[]) {
+            seen.push(item.id);
+          }
+          cursor = res.body.next_cursor;
+          if (!cursor) break;
+        }
+        expect(seen.sort()).toEqual([...createdIds].sort());
+        expect(new Set(seen).size).toBe(createdIds.length);
+      });
     });
 
     it('approving a candidate links the offer variant to the canonical product and auto-rejects other pending candidates for the same variant', async () => {

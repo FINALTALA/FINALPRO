@@ -129,11 +129,12 @@ describe('Sprint 13 - web navigation model', () => {
   });
 
   describe('owner dashboard', () => {
-    it('links directly to store, sections, offers, branches, zones, windows and orders', () => {
+    it('links directly to store, sections, offers, match review, branches, zones, windows and orders', () => {
       expect(ownerHubTiles(VENDOR).map((t) => t.href)).toEqual([
         `/vendor/${VENDOR}/storefront`,
         `/vendor/${VENDOR}/sections`,
         `/vendor/${VENDOR}/offers`,
+        `/vendor/${VENDOR}/match-review`,
         `/vendor/${VENDOR}/branches`,
         `/vendor/${VENDOR}/delivery-zones`,
         `/vendor/${VENDOR}/delivery-windows`,

@@ -123,6 +123,7 @@ export function ownerHubTiles(vendorId: string): HubTile[] {
     { href: `${base}/storefront`, title: "صفحة المتجر", description: "الاسم والشعار والغلاف والتواصل والنشر" },
     { href: `${base}/sections`, title: "الأقسام", description: "أقسام المنتجات في صفحة المتجر" },
     { href: `${base}/offers`, title: "المنتجات والعروض", description: "قائمة عروض المتجر وحالتها" },
+    { href: `${base}/match-review`, title: "مراجعة التطابق", description: "مرشّحو التطابق غير الدقيق بانتظار قرارك" },
     { href: `${base}/branches`, title: "الفروع", description: "فروع المتجر وطلباتها ونوافذ توصيلها" },
     { href: `${base}/delivery-zones`, title: "مناطق التوصيل", description: "الأسعار والمناطق المفعّلة" },
     { href: `${base}/delivery-windows`, title: "نوافذ التوصيل", description: "أوقات التوصيل وسعتها لكل فرع" },

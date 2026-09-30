@@ -80,6 +80,7 @@ export const SUSPENDED_ALLOW_ROUTES: readonly string[] = [
   'GET vendors/:vendorId/offers/:offerId/variants/:variantId/media',
   'GET vendors/:vendorId/offers/:offerId/variants/:variantId/match-review/candidates',
   'GET vendors/:vendorId/match-review/queue',
+  'GET vendors/:vendorId/canonical-products/:canonicalProductId/name-change-requests',
   'GET vendors/:vendorId/sections',
   'GET vendors/:vendorId/storefront',
   'GET vendors/:vendorId/applicable-categories',

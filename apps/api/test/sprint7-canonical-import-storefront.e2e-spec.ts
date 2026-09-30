@@ -606,6 +606,99 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
         .expect(403);
       expect(nonAdminRes.body.error.code).toBeDefined();
     });
+
+    it('owner-scoped GET returns only the requesting vendor own requests, omits decided_by_id (review-round fix, item 1), and refuses a BRANCH_EMPLOYEE (BOLA + role)', async () => {
+      const admin = await signupWithPlatformRole('PLATFORM_ADMIN');
+      const { canonicalProductId, variantId: canonicalVariantId } =
+        await createCanonicalVariant(admin, 'Bose', 'QC45');
+      const gtin = unique('gtin').slice(0, 20);
+      await prisma.canonicalProductVariant.update({
+        where: { id: canonicalVariantId },
+        data: { gtin },
+      });
+
+      // Two DIFFERENT vendors, both confirmed-matched to the SAME
+      // canonical product - the realistic case the vendorId +
+      // canonicalProductId double-filter has to get right (filtering
+      // by canonicalProductId alone would leak vendor A's request to
+      // vendor B here).
+      const ownerA = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId: vendorAId } = await createVendorWithTwoBranches(ownerA);
+      await confirmExactMatch(
+        ownerA,
+        vendorAId,
+        canonicalVariantId,
+        gtin,
+        'بوز إيه',
+        'Bose A',
+      );
+      const ownerB = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId: vendorBId } = await createVendorWithTwoBranches(ownerB);
+      await confirmExactMatch(
+        ownerB,
+        vendorBId,
+        canonicalVariantId,
+        gtin,
+        'بوز بي',
+        'Bose B',
+      );
+
+      const requestRes = await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorAId}/canonical-products/${canonicalProductId}/name-change-requests`,
+        )
+        .set('Authorization', `Bearer ${ownerA}`)
+        .set('Idempotency-Key', unique('rename'))
+        .send({ requested_name_ar: 'اسم بوز', requested_name_en: 'Bose name' })
+        .expect(201);
+      // The POST response itself is owner-facing too - never leaks
+      // decided_by_id, even though it's always null on a fresh row.
+      expect(requestRes.body.decided_by_id).toBeUndefined();
+      expect(requestRes.body.vendor_id).toBeUndefined();
+
+      const ownAList = await request(app.getHttpServer())
+        .get(
+          `/api/v1/vendors/${vendorAId}/canonical-products/${canonicalProductId}/name-change-requests`,
+        )
+        .set('Authorization', `Bearer ${ownerA}`)
+        .expect(200);
+      expect(ownAList.body).toHaveLength(1);
+      expect(ownAList.body[0].id).toBe(requestRes.body.id);
+      expect(ownAList.body[0].decided_by_id).toBeUndefined();
+      expect(ownAList.body[0].status).toBe('PENDING');
+
+      // BOLA: vendor B, matched to the SAME canonical product, must
+      // not see vendor A's request through its own vendorId-scoped GET.
+      const ownBList = await request(app.getHttpServer())
+        .get(
+          `/api/v1/vendors/${vendorBId}/canonical-products/${canonicalProductId}/name-change-requests`,
+        )
+        .set('Authorization', `Bearer ${ownerB}`)
+        .expect(200);
+      expect(ownBList.body).toEqual([]);
+    });
+
+    // Split into its own test (rather than appended to the one above)
+    // to stay under the /auth/otp/request throttle (5/60s per IP) - the
+    // BOLA test above already spends 3 signups (admin + two owners) in
+    // one run; a fresh test gets a fresh app instance (see this file's
+    // own beforeEach) and so a fresh in-memory throttler count.
+    it('refuses a BRANCH_EMPLOYEE from reading name-change-requests - owner-only, same as every other matching route', async () => {
+      const { vendorId, employeeToken } =
+        await setupVendorWithTwoBranchesAndEmployee();
+      // The role guard runs before any resource lookup, so a
+      // syntactically-valid but nonexistent canonicalProductId is
+      // enough here - no need for a real canonical product/admin
+      // signup just to prove a BRANCH_EMPLOYEE never reaches the query.
+      const fakeCanonicalProductId = '00000000-0000-0000-0000-000000000000';
+      const employeeRes = await request(app.getHttpServer())
+        .get(
+          `/api/v1/vendors/${vendorId}/canonical-products/${fakeCanonicalProductId}/name-change-requests`,
+        )
+        .set('Authorization', `Bearer ${employeeToken}`)
+        .expect(403);
+      expect(employeeRes.body.error.code).toBe('VENDOR_ROLE_FORBIDDEN');
+    });
   });
 
   describe('RB-MATCH-004: CSV/Excel import', () => {
