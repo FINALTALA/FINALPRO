@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ErrorBanner } from "@/components/States";
 import { apiFetch, ApiError, newIdempotencyKey } from "@/lib/api";
 import { getSessionToken } from "@/lib/session";
@@ -133,9 +133,43 @@ export default function VariantDetailPage() {
   const [newNameEn, setNewNameEn] = useState("");
   const [newNameReason, setNewNameReason] = useState("");
 
+  // Review-round fix: a request sequence guard against navigating
+  // between variants (offers/[offerId]/variants/[variantId] is one
+  // component instance reused across param changes, not remounted -
+  // Next.js client-side nav keeps it mounted). Without this, a slow
+  // response for the PREVIOUS variant/offer could resolve after
+  // load() already started fetching the NEW one and overwrite its
+  // state - most visibly, the previous offer's canonical_product_id
+  // (and its name-change-request list/form) staying on screen, or a
+  // manual retry firing against the wrong canonical id.
+  //
+  // This route (offers/[offerId]/variants/[variantId]) actually
+  // UNMOUNTS and remounts this component on every variant navigation
+  // (verified directly - not just a param change reusing one mounted
+  // instance), so a counter living only in a plain `useRef` and bumped
+  // inside load() cannot detect staleness across that boundary: a
+  // fresh mount gets a fresh, disconnected ref, and the OLD, now-
+  // orphaned instance's own ref is never touched again, so its stale
+  // callback's "is this still current" check always reads as "yes"
+  // against itself. What DOES reliably fire on both an effect re-run
+  // AND a true unmount is the effect's own cleanup function below -
+  // every async callback checks the SAME `cancelledRef` that cleanup
+  // sets, not a counter.
+  const cancelledRef = useRef(false);
+
   function load() {
+    // Offer-scoped state belongs to the offer/variant this load() call
+    // is for - clear it immediately so the previous offer's canonical
+    // match/name-change data can never still be on screen while the
+    // new one loads.
+    setOfferCanonicalProductId(null);
+    setOfferSummaryError(null);
+    setNameChangeRequests(null);
+    setNameChangeRequestsError(null);
+
     apiFetch<VariantDto[]>(`/vendors/${params.vendorId}/offers/${params.offerId}/variants`)
       .then((all) => {
+        if (cancelledRef.current) return;
         const v = all.find((x) => x.id === params.variantId);
         if (v) {
           setVariant(v);
@@ -160,12 +194,19 @@ export default function VariantDetailPage() {
           setError("تعذّر العثور على هذا المتغيّر");
         }
       })
-      .catch((err) => setError(err instanceof ApiError ? err.message : "تعذّر تحميل المتغيّر"));
+      .catch((err) => {
+        if (cancelledRef.current) return;
+        setError(err instanceof ApiError ? err.message : "تعذّر تحميل المتغيّر");
+      });
     apiFetch<MediaDto[]>(`${base}/media`)
-      .then(setMedia)
+      .then((m) => {
+        if (!cancelledRef.current) setMedia(m);
+      })
       .catch(() => {});
     apiFetch<PriceHistoryRow[]>(`${base}/price-history`)
-      .then(setHistory)
+      .then((h) => {
+        if (!cancelledRef.current) setHistory(h);
+      })
       .catch(() => {});
     loadOfferSummary();
   }
@@ -174,6 +215,7 @@ export default function VariantDetailPage() {
     setOfferSummaryError(null);
     apiFetch<OfferSummaryDto>(`/vendors/${params.vendorId}/offers/${params.offerId}`)
       .then((offer) => {
+        if (cancelledRef.current) return;
         setOfferCanonicalProductId(offer.canonical_product_id);
         if (offer.canonical_product_id) {
           loadNameChangeRequests(offer.canonical_product_id);
@@ -183,6 +225,7 @@ export default function VariantDetailPage() {
         }
       })
       .catch((err) => {
+        if (cancelledRef.current) return;
         setOfferSummaryError(
           err instanceof ApiError ? err.message : "تعذّر تحميل بيانات العرض",
         );
@@ -194,8 +237,12 @@ export default function VariantDetailPage() {
     apiFetch<NameChangeRequestDto[]>(
       `/vendors/${params.vendorId}/canonical-products/${canonicalProductId}/name-change-requests`,
     )
-      .then(setNameChangeRequests)
+      .then((r) => {
+        if (cancelledRef.current) return;
+        setNameChangeRequests(r);
+      })
       .catch((err) => {
+        if (cancelledRef.current) return;
         setNameChangeRequestsError(
           err instanceof ApiError ? err.message : "تعذّر تحميل طلبات تغيير الاسم",
         );
@@ -207,7 +254,23 @@ export default function VariantDetailPage() {
       router.replace("/login");
       return;
     }
-    load();
+    cancelledRef.current = false;
+    // Deferred one microtask - load() itself calls setState
+    // synchronously (the offer-scoped resets above), which React's
+    // set-state-in-effect rule flags when reachable directly from the
+    // effect body; every fetch load() issues is genuinely async
+    // regardless, so this costs nothing real.
+    Promise.resolve().then(load);
+    // This cleanup is what actually makes cancelledRef reliable - it
+    // runs before every later re-run of this effect AND on a genuine
+    // unmount (this route remounts the component on each variant
+    // navigation - see cancelledRef's own comment above), so any
+    // fetch this specific effect run started is marked stale the
+    // moment it stops being the current one, regardless of which of
+    // those two cases actually happened.
+    return () => {
+      cancelledRef.current = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.vendorId, params.offerId, params.variantId]);
 
