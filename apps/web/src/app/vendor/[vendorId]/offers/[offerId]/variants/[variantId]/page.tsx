@@ -133,31 +133,34 @@ export default function VariantDetailPage() {
   const [newNameEn, setNewNameEn] = useState("");
   const [newNameReason, setNewNameReason] = useState("");
 
-  // Review-round fix: a request sequence guard against navigating
-  // between variants (offers/[offerId]/variants/[variantId] is one
-  // component instance reused across param changes, not remounted -
-  // Next.js client-side nav keeps it mounted). Without this, a slow
-  // response for the PREVIOUS variant/offer could resolve after
-  // load() already started fetching the NEW one and overwrite its
-  // state - most visibly, the previous offer's canonical_product_id
-  // (and its name-change-request list/form) staying on screen, or a
-  // manual retry firing against the wrong canonical id.
+  // Review-round fix: a per-generation guard against navigating
+  // between variants. This route actually UNMOUNTS and remounts this
+  // component on every variant navigation (verified directly with a
+  // real browser), so a plain `useRef` counter bumped only inside
+  // load() doesn't work (a fresh mount gets a fresh, disconnected
+  // ref, and the OLD, now-orphaned instance's own ref is never
+  // touched again). A single shared boolean flipped by the effect's
+  // own cleanup doesn't work EITHER, for a different reason: on a
+  // same-instance effect re-run (params change without an actual
+  // unmount), the OLD effect's cleanup sets it true, but the NEW
+  // effect immediately sets it back to false - reviving it - so a
+  // response that was already in flight from the OLD generation reads
+  // "not cancelled" once the new effect has started and can still
+  // write stale state.
   //
-  // This route (offers/[offerId]/variants/[variantId]) actually
-  // UNMOUNTS and remounts this component on every variant navigation
-  // (verified directly - not just a param change reusing one mounted
-  // instance), so a counter living only in a plain `useRef` and bumped
-  // inside load() cannot detect staleness across that boundary: a
-  // fresh mount gets a fresh, disconnected ref, and the OLD, now-
-  // orphaned instance's own ref is never touched again, so its stale
-  // callback's "is this still current" check always reads as "yes"
-  // against itself. What DOES reliably fire on both an effect re-run
-  // AND a true unmount is the effect's own cleanup function below -
-  // every async callback checks the SAME `cancelledRef` that cleanup
-  // sets, not a counter.
-  const cancelledRef = useRef(false);
+  // What's actually correct is a monotonically increasing generation
+  // number, never reset, only ever incremented - by load() itself
+  // (every real load attempt) AND by the effect's own cleanup (so a
+  // generation is invalidated the moment its effect run ends, whether
+  // that's a re-run or a true unmount, with nothing after it ever
+  // reviving a smaller number). Every async callback captures the
+  // generation in effect *when its fetch started* and compares it
+  // against the live ref before writing any state - only the single
+  // most-recent generation can ever win.
+  const generationRef = useRef(0);
 
   function load() {
+    const generation = ++generationRef.current;
     // Offer-scoped state belongs to the offer/variant this load() call
     // is for - clear it immediately so the previous offer's canonical
     // match/name-change data can never still be on screen while the
@@ -169,7 +172,7 @@ export default function VariantDetailPage() {
 
     apiFetch<VariantDto[]>(`/vendors/${params.vendorId}/offers/${params.offerId}/variants`)
       .then((all) => {
-        if (cancelledRef.current) return;
+        if (generation !== generationRef.current) return;
         const v = all.find((x) => x.id === params.variantId);
         if (v) {
           setVariant(v);
@@ -195,54 +198,60 @@ export default function VariantDetailPage() {
         }
       })
       .catch((err) => {
-        if (cancelledRef.current) return;
+        if (generation !== generationRef.current) return;
         setError(err instanceof ApiError ? err.message : "تعذّر تحميل المتغيّر");
       });
     apiFetch<MediaDto[]>(`${base}/media`)
       .then((m) => {
-        if (!cancelledRef.current) setMedia(m);
+        if (generation === generationRef.current) setMedia(m);
       })
       .catch(() => {});
     apiFetch<PriceHistoryRow[]>(`${base}/price-history`)
       .then((h) => {
-        if (!cancelledRef.current) setHistory(h);
+        if (generation === generationRef.current) setHistory(h);
       })
       .catch(() => {});
-    loadOfferSummary();
+    // Passed explicitly so this cascade shares load()'s own
+    // generation - loadOfferSummary() only mints its own new one when
+    // called standalone (a manual retry, not part of this cascade).
+    loadOfferSummary(generation);
   }
 
-  function loadOfferSummary() {
+  function loadOfferSummary(generation: number = ++generationRef.current) {
     setOfferSummaryError(null);
     apiFetch<OfferSummaryDto>(`/vendors/${params.vendorId}/offers/${params.offerId}`)
       .then((offer) => {
-        if (cancelledRef.current) return;
+        if (generation !== generationRef.current) return;
         setOfferCanonicalProductId(offer.canonical_product_id);
         if (offer.canonical_product_id) {
-          loadNameChangeRequests(offer.canonical_product_id);
+          loadNameChangeRequests(offer.canonical_product_id, generation);
         } else {
           setNameChangeRequests(null);
           setNameChangeRequestsError(null);
         }
       })
       .catch((err) => {
-        if (cancelledRef.current) return;
+        if (generation !== generationRef.current) return;
         setOfferSummaryError(
           err instanceof ApiError ? err.message : "تعذّر تحميل بيانات العرض",
         );
       });
   }
 
-  function loadNameChangeRequests(canonicalProductId: string) {
+  function loadNameChangeRequests(
+    canonicalProductId: string,
+    generation: number = ++generationRef.current,
+  ) {
     setNameChangeRequestsError(null);
     apiFetch<NameChangeRequestDto[]>(
       `/vendors/${params.vendorId}/canonical-products/${canonicalProductId}/name-change-requests`,
     )
       .then((r) => {
-        if (cancelledRef.current) return;
+        if (generation !== generationRef.current) return;
         setNameChangeRequests(r);
       })
       .catch((err) => {
-        if (cancelledRef.current) return;
+        if (generation !== generationRef.current) return;
         setNameChangeRequestsError(
           err instanceof ApiError ? err.message : "تعذّر تحميل طلبات تغيير الاسم",
         );
@@ -254,22 +263,23 @@ export default function VariantDetailPage() {
       router.replace("/login");
       return;
     }
-    cancelledRef.current = false;
     // Deferred one microtask - load() itself calls setState
     // synchronously (the offer-scoped resets above), which React's
     // set-state-in-effect rule flags when reachable directly from the
     // effect body; every fetch load() issues is genuinely async
     // regardless, so this costs nothing real.
     Promise.resolve().then(load);
-    // This cleanup is what actually makes cancelledRef reliable - it
-    // runs before every later re-run of this effect AND on a genuine
-    // unmount (this route remounts the component on each variant
-    // navigation - see cancelledRef's own comment above), so any
-    // fetch this specific effect run started is marked stale the
-    // moment it stops being the current one, regardless of which of
-    // those two cases actually happened.
+    // Invalidates whatever generation this effect run's own load()
+    // issues (or will issue, if the deferred call above hasn't run
+    // yet), without ever reviving an earlier one - a plain increment,
+    // never a reset. Runs before every later re-run of this effect AND
+    // on a genuine unmount (this route remounts the component on each
+    // variant navigation - see generationRef's own comment above), so
+    // it correctly covers both, and self-corrects even if effects tear
+    // down faster than their own deferred load() call: whichever
+    // load() actually runs last always holds the highest number.
     return () => {
-      cancelledRef.current = true;
+      generationRef.current += 1;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.vendorId, params.offerId, params.variantId]);
@@ -617,7 +627,7 @@ export default function VariantDetailPage() {
         <div className="card" style={{ maxWidth: 560, marginTop: 16 }}>
           <h3 style={{ marginTop: 0 }}>طلب تغيير اسم المنتج المرجعي</h3>
           <ErrorBanner message={offerSummaryError} />
-          <button className="button-link" onClick={loadOfferSummary}>
+          <button className="button-link" onClick={() => loadOfferSummary()}>
             إعادة المحاولة
           </button>
         </div>
