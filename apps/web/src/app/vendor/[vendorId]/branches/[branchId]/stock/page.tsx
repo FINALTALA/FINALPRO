@@ -257,15 +257,32 @@ export default function BranchStockPage() {
     const dataUrl = canvas.toDataURL("image/png");
     const win = window.open("", "_blank", "width=420,height=320");
     if (!win) return;
+    // Review-round fix (XSS): the HTML written here is a fixed skeleton
+    // with no interpolated value at all - an offer title or
+    // colour/size is untrusted vendor-entered text, and the earlier
+    // version embedded it directly into an HTML string passed to
+    // document.write(), letting literal markup/script in a title
+    // execute in the popup. The label is set via .textContent (always
+    // rendered as plain text, never parsed as markup) and the barcode
+    // image via .src, both after the static document has loaded -
+    // never by building HTML out of either value.
     win.document.write(
       `<!doctype html><html><head><meta charset="utf-8"><title>ملصق</title></head>` +
         `<body style="margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;">` +
-        `<img src="${dataUrl}" style="max-width:100%;" />` +
-        `<div style="margin-top:8px;">${variantLabel(row)}</div>` +
-        `<script>window.onload = function () { window.print(); };</script>` +
+        `<img id="barcode-label-image" style="max-width:100%;" />` +
+        `<div id="barcode-label-text" style="margin-top:8px;"></div>` +
         `</body></html>`,
     );
     win.document.close();
+    const img = win.document.getElementById("barcode-label-image") as HTMLImageElement | null;
+    const labelEl = win.document.getElementById("barcode-label-text");
+    if (labelEl) {
+      labelEl.textContent = variantLabel(row);
+    }
+    if (img) {
+      img.onload = () => win.print();
+      img.src = dataUrl;
+    }
   }
 
   function renderRow(row: StockRowDto, draft: MovementDraft) {
@@ -430,8 +447,8 @@ export default function BranchStockPage() {
         )}
         {items && items.length === 0 && (
           <EmptyState
-            title="لا توجد أصناف مسجّلة في مخزون هذا الفرع بعد"
-            message="ستظهر هنا أي متغيّر عرض بعد أول حركة مخزون أو تأكيد جرد عليه في هذا الفرع."
+            title="لا توجد متغيّرات عروض لهذا المتجر بعد"
+            message="تظهر هنا كل متغيّرات عروض متجركِ - بما فيها متغيّر لم تُسجَّل له أي كمية في هذا الفرع بعد، بكمية صفر."
           />
         )}
         {items && items.length > 0 && (
