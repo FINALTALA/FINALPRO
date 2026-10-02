@@ -7,6 +7,22 @@
 **Scope:** the full SRS, Parts 0–9. Every `FR-*` ID in [SRS Part 2](srs/02-functional-requirements.md) (244 rows, including the E.0 September amendment), every `PDR-*` ID in [`approved-product-decisions-2026-09.md`](approved-product-decisions-2026-09.md) (36 rows, including the 2026-09-26 PDR-035/036 amendment), every `BR-*` (34) and `NFR-*` (32) in Part 3/4, and every remaining requirement, decision, screen, failure scenario, backlog item and state-machine transition in Parts 0, 1, and 3–9 — covered in the appendix starting at §6, with each ID-range explicitly expanded (no row stands for more than one ID; see §0 for the two narrow, explicitly-justified exceptions — the `O.1`/`O.2` test-level classification and the `BO`/module-matrix/recommendations rollup — neither of which carries an independent DONE/PARTIAL/MISSING status of its own).
 **Update rule:** this file is reviewed again after every sprint. Each review edits it in place under a new dated version note, rather than creating a new file, so it stays the one living record.
 
+## v8 — S18a-inventory-barcode applied, 2026-10-02
+
+`S18a-inventory-barcode` (branch `feat/sprint-18a-inventory-barcode`) is the first half of the approved Sprint 18 split (the second half, `S18b` — new branches, hours/closures, staff list/transfer/suspend — is untouched by this pass; see each bullet's own "not touched" note). Migration-additive only (`SALE` added to `StockMovementReason`; `BranchStock.safetyStockThreshold`/`lastPhysicalCountAt` added, the latter `NULL` for every pre-existing row — no backfill, since no pre-existing row was ever actually physically counted). Updated here per the DONE rule in §1 (a real, reachable UI, not just an API):
+
+- `FR-INV-001` 🟡→✅, `FR-INV-005` 🟡→✅: the stock page now exists (`/vendor/:vendorId/branches/:branchId/stock`) — a movement form (including the new `SALE` reason), a dedicated physical-count-confirmation action, and a barcode-lookup field, reachable from both the owner's branches list and the employee's branch-orders page.
+- `FR-INV-006` ❌→✅, `FR-INV-007` ❌→✅, `NFR-STALE-001` ❌→🟡: `safetyStockThreshold` per `(branch, offerVariant)` (`0` = disabled, checked as `threshold > 0 AND available <= threshold`, never a bare `<=`) and `lastPhysicalCountAt` (set only by a `COUNT_CORRECTION` movement or the new `confirm-count` endpoint — never by `SALE`/`DAMAGE`/`LOSS`, which are real stock changes, not a human having looked at the shelf) now back an `is_low_stock`/`is_stale` badge pair in the stock page. `NFR-STALE-001` only reaches 🟡, not ✅: the 7-day manual threshold is a hard-coded constant, not "قابل للضبط" (configurable), and no 24-hour API/feed-staleness source exists at all — both still genuinely missing.
+- `FR-INV-009 (E.0)` ❌→✅, `PDR-020` 🟡→✅: a real scan-then-sell flow — `GET .../stock/lookup?barcode=` resolves a scanned/typed barcode to the actual `BranchStock` row at *this* branch (not just a vendor-level barcode match — a barcode known to the vendor but only ever stocked at a *different* branch returns the same 404 as a barcode unknown to the vendor at all, deliberately, so as not to leak "this exists at your other branch"), then a `SALE` movement records the sale through the same atomic, already-proven-safe-under-concurrency `createMovement` path every other reason uses. `SALE` deliberately does **not** enqueue the PDR-021 owner-notification Outbox event (a routine, repeatedly-firing sale is not what PDR-021's "notify immediately" means) and deliberately does **not** touch `lastPhysicalCountAt` — both still correctly fire for `DAMAGE`/`LOSS`/`COUNT_CORRECTION`.
+- `PDR-018` 🟡→✅, `FR-MATCH-011 (E.0)` 🟡→✅: a Code128 label (via `jsbarcode`, a new runtime dependency) and a print button, rendered from the stock page.
+- `PDR-021` 🟡→✅, `BR-030` 🟡→✅, `BR-031` 🟡→✅, `BR-005` 🟡→✅, `L-10` 🟡→✅: each of these was already substantively built (reason-required deduction, outbox notification, barcode uniqueness/non-replacement, atomic floor-at-zero, checkout's own independent reverification) but blocked on "no UI exists yet" or "no staleness flag exists yet" — both now true.
+- `BL-INV-001` 🟡→✅, `BL-INV-003` ❌→✅ (§13, Part 8): inherit `FR-INV-001`/`FR-INV-006`'s own status, per this doc's own cross-reference convention.
+- `G-IN-01`..`G-IN-04` (§4) closed — each now carries a "(مبنية/مبني الآن — S18a)" note and moved to "غير مجدول", matching `G-CA-02`'s own established convention for a closed gap row. `G-IN-05` (employee transfer/suspend) is untouched — explicitly `S18b` scope.
+- `FR-INV-010 (E.0)` stays 🟡 PARTIAL (UI column only: the movement form now covers it) — its Sprint target is corrected from `S18` to `S19`, since the one real remaining gap (an actual delivered owner notification, not just an outbox row) is `G-NO-03`'s own scope, already tagged `S19` elsewhere in this same document.
+- `SRS-G0-05`, `SRS-H3A-04` (§8/§9): backend notes updated to record that `SALE` now exists as a movement reason and that a real scan-to-sell endpoint exists; both stay 🟡 PARTIAL — `SRS-G0-05` because "استرجاع مرتجع"/"استيراد" still aren't distinct movement reasons, `SRS-H3A-04` because its "استيراد" clause is unrelated to this pass and unverified either way.
+- **Not touched, deliberately:** every `S18b`-tagged row (`FR-VEND-006`, `FR-VPORTAL-009`, `G-ON-07`, `G-IN-05`, `SRS-H3A-03`'s transfer/disable clause, new-branch creation/activation, hours/closures, staff list/transfer/suspend), preorder/backorder/on-demand (`FR-INV-002` — explicitly deferred by the same product-owner decision that split S18, not by this pass), any barcode-camera/scanner-hardware UI (the lookup field accepts typed or externally-scanned-then-pasted text only — no `getUserMedia`/camera code was written), and anything checkout/POS/payment-related (`SALE` is a plain `StockMovement`, never a `PaymentTransaction`, never linked to any `CustomerOrder`/`BranchOrder`).
+- Totals (§2, FR only, re-derived directly from §3's own rows, not inherited arithmetic): FR DONE 52→**58** (+6: `FR-INV-001/005/006/007`, `FR-INV-009 (E.0)`, `FR-MATCH-011 (E.0)`), PARTIAL 68→**65** (−3: the same three rows that left PARTIAL, net of none entering it), MISSING 84→**81** (−3: `FR-INV-006/007`, `FR-INV-009 (E.0)` leaving MISSING). Total FR row count unchanged at 245 (58+81+65+27+14=245). §6's own BR recount: DONE 7→**10**, PARTIAL 13→**10** (`BR-005/030/031`). §7's own NFR recount: PARTIAL 10→**11**, MISSING 18→**17** (`NFR-STALE-001`).
+
 ## v7 — S17-owner-matching-ui applied, 2026-09-29
 
 `S17-owner-matching-ui` (branch `feat/sprint-17-owner-matching-ui`) is a small, owner-facing follow-up to Sprint 17 itself — a UI layer plus a few small, additive API extensions (no migration; see each bullet below for exactly what was added), **not** UI-only. It is **not** the `S17b` platform-catalog-administration item in §4/§5 below (`FR-CAT-001/002/003/006..012`, `FR-MATCH-005/006/007` — categories/brands/canonical-product admin, merge/split), which this pass does not touch, rename, or reclassify in any way. Two Sprint-17 review-round gaps that had a fully built and tested backend since Sprint 6/7 (`MatchReviewController`) but no UI at all — updated here per the DONE rule in §1 (a real UI route reachable from navigation, not just an API):
@@ -119,7 +135,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-VEND-014 (E.0) | وسيلة تواصل خارجية واحدة على الأقل | بوابة النشر في storefront.controller | OWNER | /vendor/:id/storefront | S7 | ✅ DONE | - |
 | FR-CAT-015 (E.0) | النشر يتطلب عنواناً وصورة وتصنيفاً وسعراً ومخزوناً و5 حقول فئة | بوابة النشر (`PATCH .../status` → ACTIVE، S17) تتحقق فعلياً من: عنوان، علامة تجارية، قالب+خصائص صالحين (فقط إن اختير قالب — PDR-036 D2، الفئات خارج العشرة تبقى نصاً حراً بالتصميم)، صورة PRIMARY (IMAGE فقط)، ومخزون متاح حي (لا reservedQuantity الخام) — مُثبتة خالية من التسابق/الجمود عبر اختبارين بحاجز (publish-locks-first، reserve-locks-first) | OWNER | /vendor/:id/offers/:offerId (زر النشر ورسالة الرفض بالنص الحرفي) | S3,S6,S7,S17 | ✅ DONE | - |
 | FR-CAT-016 (E.0) | أقسام المتجر: All، New arrivals، Discounts، حتى 20 مخصصاً | StoreSection(+Offer)؛ /storefronts/:slug/sections | OWNER؛ قراءة عامة | /vendor/:id/sections، /store/:slug | S7 | ✅ DONE | - |
-| FR-MATCH-011 (E.0) | باركود المتجر فريد؛ ملصق داخلي قابل للطباعة؛ باركود المنصة منفصل | storeInventoryBarcode؛ platformProductBarcode؛ لا توليد ملصق/طباعة | OWNER | لا | S6 | 🟡 PARTIAL | S18 |
+| FR-MATCH-011 (E.0) | باركود المتجر فريد؛ ملصق داخلي قابل للطباعة؛ باركود المنصة منفصل | storeInventoryBarcode؛ platformProductBarcode؛ ملصق Code128 (jsbarcode) وزر طباعة (S18a) | OWNER | صفحة مخزون الفرع (S18a) | S6,S18a | ✅ DONE | - |
 | FR-MATCH-012 (E.0) | خصائص ثم نص ثم صورة؛ المالك يؤكد | MatchReviewCandidate، match-review، match-confirmation؛ إشارة النص الآن تشمل العلامة/اللون/المقاس/قيم القالب (S17)؛ لا تشابه صور | OWNER | تأكيد/رفض المطابقة الدقيقة فقط (S17، صفحة المتغيّر)؛ طابور المراجعة غير الدقيقة بلا واجهة | S6,S7,S17 | 🟡 PARTIAL | S17 |
 | FR-IMPORT-008 (E.0) | نفس الباركود + لون/مقاس جديد يضيف variant؛ تعارضات للمراجعة | POST offers/import + expected-offer-variant-conflict؛ آلية الإضافة/التعارض دون تغيير منذ S7 | OWNER | عدد التعارضات يظهر في تقرير الاستيراد (S17)؛ لا واجهة لحلّ كل تعارض | S7,S17 | 🟡 PARTIAL | S17 |
 | FR-SEARCH-013 (E.0) | صفحات All/Women/Men/Kids/Accessories؛ المتجر يختار الأنواع؛ بحث مع اقتراحات وتسامح AR/EN | discovery?segment,q (contains)؛ VendorApplicableCategory؛ PUT applicable-categories | عام؛ OWNER للتعديل | /، /discovery؛ التعديل في /vendor/:id/storefront؛ لا اقتراحات ولا اختيار عند التسجيل | S13 | 🟡 PARTIAL | S18b |
@@ -129,8 +145,8 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-PRICE-008 (E.0) | كل المبالغ ILS بلا FX | العملة ILS فقط | n/a | كل واجهات السعر | S10,S14 | ✅ DONE | - |
 | FR-PRICE-009 (E.0) | سعر أساسي لكل variant؛ خصم نسبي واحد بتاريخين؛ للمالك | basePrice + salePrice المطلق (متبادلان استبعادياً) + discountPercent/discountStartAt/discountEndAt (S17)، مع فحوص DB CHECK والتحقق التطبيقي | OWNER | نموذج إنشاء/تعديل المتغيّر (S17) | S3,S17 | ✅ DONE | - |
 | FR-INV-008 (E.0) | مخزون لكل فرع وvariant؛ Available/Low/Sold out؛ الحد الأقصى عند الـcheckout؛ بلا نقل | BranchStock، bucketForStock، cart max_quantity | عام/session | البطاقات، /cart، /checkout | S6,S8,S14 | ✅ DONE | - |
-| FR-INV-009 (E.0) | بيع فعلي: مسح، لون/مقاس، كمية، خصم ذري، تدقيق | لا reason من نوع بيع، ولا endpoint مسح | موظف الفرع | لا | لا | ❌ MISSING | S18 |
-| FR-INV-010 (E.0) | خصم يدوي بسبب + إشعار فوري للمالك بهوية الموظف والفرع | StockMovement(reason,note)؛ صف outbox فقط | OWNER/موظف | لا | S6 | 🟡 PARTIAL | S18 |
+| FR-INV-009 (E.0) | بيع فعلي: مسح، لون/مقاس، كمية، خصم ذري، تدقيق | reason=SALE (خصم فقط)؛ GET stock/lookup?barcode= يحلّ الباركود إلى صف BranchStock الفعلي بهذا الفرع؛ الخصم ذري (نفس آلية createMovement القائمة)؛ AuditLog لكل حركة (S18a) | موظف الفرع | صفحة مخزون الفرع: بحث بالباركود + نموذج حركة SALE (S18a) | S6,S18a | ✅ DONE | - |
+| FR-INV-010 (E.0) | خصم يدوي بسبب + إشعار فوري للمالك بهوية الموظف والفرع | StockMovement(reason,note)؛ صف outbox فقط — لا تسليم حقيقي بعد (G-NO-03) | OWNER/موظف | صفحة مخزون الفرع: نموذج الحركة بسبب وملاحظة (S18a) | S6,S18a | 🟡 PARTIAL | S19 |
 | FR-CART-017 (E.0) | اختيار صريح؛ مجموعات فرع واحد؛ وإلا مجموعات منفصلة | CartItem، checkout-grouping | session | /cart، /checkout | S10,S14 | ✅ DONE | - |
 | FR-CART-018 (E.0) | اقتراح **أقرب** فرع؛ العميل يختار غيره؛ موعد من 3 أيام | التجميع يختار فرعاً افتراضياً ثابتاً موثّقاً، ليس الأقرب (لا مصدر مسافة)؛ كل الفروع المؤهلة تُعرض؛ اختيار الفرع والموعد يعملان — بديل مقصود عن nearest، وليس فجوة تنفيذية؛ انظر PDR-023 | session | /checkout | S10,S14 | 🟡 PARTIAL | — (قرار جديد) |
 | FR-ORD-009 (E.0) | CustomerOrder + BranchOrders، لكلٍّ تنفيذه ورسومه ودفعه وموعده | CustomerOrder، BranchOrder | session | /orders | S9,S10,S11 | ✅ DONE | - |
@@ -269,13 +285,13 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 ### E.9 — المخزون
 | ID | Requirement | Backend | Authz | UI | Test | Status | Sprint |
 |---|---|---|---|---|---|---|---|
-| FR-INV-001 | مخزون لكل فرع وvariant | BranchStock؛ stock GET/movements | OWNER/موظف | لا (الإدارة) | S5,S6 | 🟡 PARTIAL | S18 |
+| FR-INV-001 | مخزون لكل فرع وvariant | BranchStock؛ stock GET/movements/page (S18a) | OWNER/موظف | صفحة مخزون الفرع (S18a) | S5,S6,S18a | ✅ DONE | - |
 | FR-INV-002 | حالات توفر تشمل Preorder/Backorder/عند الطلب | ثلاث فئات فقط (PDR-017) | - | البطاقات | S8 | 🟡 PARTIAL | S18 |
 | FR-INV-003 | حجز بنافذة انتهاء | CheckoutReservation 10 دقائق | session | /checkout | S10 | ✅ DONE | - |
 | FR-INV-004 | منع السطر النافد وخصم شرطي ذري | خصم ذري داخل txn التأكيد؛ حالة نفاد في السلة | session | /cart، /checkout | S10,S14 | ✅ DONE | - |
-| FR-INV-005 | تحديث يدوي للمخزون | POST movements (خصم فقط)/stock API | OWNER/موظف | لا | S6 | 🟡 PARTIAL | S18 |
-| FR-INV-006 | تنبيه مخزون قديم | لا | - | لا | لا | ❌ MISSING | S18 |
-| FR-INV-007 | مخزون أمان | لا | - | لا | لا | ❌ MISSING | S18 |
+| FR-INV-005 | تحديث يدوي للمخزون | POST movements (DAMAGE/LOSS/SALE خصم فقط؛ COUNT_CORRECTION باتجاهين)/stock API (S18a أضافت SALE) | OWNER/موظف | صفحة مخزون الفرع: نموذج الحركة (S18a) | S6,S18a | ✅ DONE | - |
+| FR-INV-006 | تنبيه مخزون قديم | lastPhysicalCountAt + is_stale (قديم = لا جرد فعلي منذ 7 أيام، NFR-STALE-001) (S18a) | OWNER/موظف | شارة "جرد قديم" في صفحة مخزون الفرع (S18a) | S18a | ✅ DONE | - |
+| FR-INV-007 | مخزون أمان | safetyStockThreshold لكل (فرع، variant)؛ 0=معطّل؛ is_low_stock = threshold>0 AND available<=threshold؛ PUT safety-stock (OWNER فقط) (S18a) | OWNER | حقل حد الأمان (owner فقط) في صفحة مخزون الفرع (S18a) | S18a | ✅ DONE | - |
 | FR-INV-008 (E.9) | تقرير تسوية المخزون | لا | - | لا | لا | ❌ MISSING | S25 |
 
 ### E.10 — السلة والـcheckout
@@ -437,10 +453,10 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | PDR-015 | بطاقة عالمية: أرخص متاح، 5 شعارات، كسر التعادل تقييم ثم قرب | البطاقة والشعارات؛ لا تقييم ولا قرب | عام | /discovery | S8,S13 | 🟡 PARTIAL | S18b |
 | PDR-016 | شبكة مقارنة 4-6/1-2 وفلتر variant | واجهة المقارنة | عام | /compare/:id | S8 | ✅ DONE | - |
 | PDR-017 | Available/Low/Sold out؛ السلة تعرض الحد الأقصى | bucketForStock؛ max_quantity لفرع واحد | عام/session | البطاقات، /cart | S8,S14 | ✅ DONE | - |
-| PDR-018 | باركود لكل منتج؛ داخلي قابل للطباعة؛ فريد للمتجر | storeInventoryBarcode فريد؛ لا ملصق قابل للطباعة | OWNER | لا | S6 | 🟡 PARTIAL | S18 |
+| PDR-018 | باركود لكل منتج؛ داخلي قابل للطباعة؛ فريد للمتجر | storeInventoryBarcode فريد (@@unique([vendorId, storeInventoryBarcode]))؛ ملصق Code128 وطباعة (S18a) | OWNER | صفحة مخزون الفرع (S18a) | S6,S18a | ✅ DONE | - |
 | PDR-019 | نفس الباركود + لون/مقاس جديد إضافة؛ 3 تعارضات للمراجعة | منطق تعارض الاستيراد؛ دون تغيير منذ S7 | OWNER | عدد التعارضات في تقرير الاستيراد (S17)؛ لا حلّ لكل تعارض | S7,S17 | 🟡 PARTIAL | S17 |
-| PDR-020 | مخزون لكل فرع؛ بيع فعلي بالمسح؛ بلا نقل | BranchStock، movements؛ لا بيع فعلي | موظف الفرع | لا | S6 | 🟡 PARTIAL | S18 |
-| PDR-021 | خصم يدوي بسبب وإشعار المالك | السبب مطلوب؛ الإشعار outbox فقط | OWNER/موظف | لا | S6 | 🟡 PARTIAL | S18 |
+| PDR-020 | مخزون لكل فرع؛ بيع فعلي بالمسح؛ بلا نقل | BranchStock، movements؛ reason=SALE + stock/lookup بالباركود = بيع فعلي بالمسح (S18a)؛ لا نقل بين الفروع (بالتصميم) | موظف الفرع | صفحة مخزون الفرع: بحث بالباركود + تسجيل SALE (S18a) | S6,S18a | ✅ DONE | - |
+| PDR-021 | خصم يدوي بسبب وإشعار المالك | السبب مطلوب؛ الإشعار outbox فقط (ADR-006، نفس نمط كل الإشعارات الحالية) | OWNER/موظف | صفحة مخزون الفرع: نموذج الحركة (سبب + ملاحظة) (S18a) | S6,S18a | ✅ DONE | - |
 | PDR-022 | إعدادات الفرع؛ رسوم إقليمية للمتجر؛ تعطيل المناطق | VendorDeliveryZone، DeliveryWindow | OWNER | /vendor/:id/delivery-zones، /delivery-windows | S9 | ✅ DONE | - |
 | PDR-023 | أقرب فرع مؤهل؛ اختيار العميل؛ تقويم 3 أيام | فرع افتراضي ثابت موثّق (لا مصدر مسافة)؛ كل الفروع المؤهلة تُعرض؛ الاختيار والموعد يعملان — **بديل مقصود عن nearest، وليس فجوة تنفيذية** | session | /checkout | S10,S14 | 🟡 PARTIAL — بديل مقصود، ليس فجوة | — (قرار جديد) |
 | PDR-024 | تقاويم الفروع وسعة واستثناءات وحماية المحجوز | DeliveryWindow + الحمايات | OWNER | /vendor/:id/branches/:b/delivery-windows | S9 | ✅ DONE | - |
@@ -490,10 +506,10 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 ### Inventory
 | Gap | القدرة | يغطي | Sprint |
 |---|---|---|---|
-| G-IN-01 | صفحة المخزون للمالك والموظف (تعديل) | FR-INV-001/005، PDR-020 | S18 |
-| G-IN-02 | البيع الفعلي بالمسح | FR-INV-009 (E.0) | S18 |
-| G-IN-03 | ملصق باركود قابل للطباعة | FR-MATCH-011 (E.0)، PDR-018 | S18 |
-| G-IN-04 | مخزون أمان وتقادم المخزون | FR-INV-006/007 | S18 |
+| G-IN-01 | صفحة المخزون للمالك والموظف (تعديل) (مبنية الآن — S18a) | FR-INV-001/005، PDR-020 | غير مجدول |
+| G-IN-02 | البيع الفعلي بالمسح (مبني الآن — S18a) | FR-INV-009 (E.0) | غير مجدول |
+| G-IN-03 | ملصق باركود قابل للطباعة (مبني الآن — S18a) | FR-MATCH-011 (E.0)، PDR-018 | غير مجدول |
+| G-IN-04 | مخزون أمان وتقادم المخزون (مبني الآن — S18a) | FR-INV-006/007 | غير مجدول |
 | G-IN-05 | نقل الموظف وتعطيله فوراً | FR-VEND-013، PDR-009 | S18 |
 
 ### Notifications
@@ -584,7 +600,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | BR-002 | البائع يملك فقط سجلاته (Vendor/Branch/Offer/Variant)؛ الكتالوج الأساسي والتصنيف ملك المنصة دائماً | VendorMembershipGuard + RequireVendorRole('OWNER') على كل مسار بائع؛ POST/PATCH/DELETE على categories/brands/canonical-products محصورة بـPLATFORM_ADMIN | OWNER + PLATFORM_ADMIN | — (backend) | S3,S4,S6,S7,VV | ✅ DONE | - |
 | BR-003 | كل قائمة انتقاء (فئات، أسباب إرجاع، فئات تذاكر) قابلة للضبط إدارياً، لا hardcoded | Regions/segments/PlatformRole/StockMovementReason/OfferCondition كلها Prisma enums ثابتة في الكود | - | لا | لا | ❌ MISSING | S25 |
 | BR-004 | سعر لم يُعاد تأكيده ضمن نافذة التقادم يُعلَّم قديماً في المقارنة/البحث | لا | - | لا | لا | ❌ MISSING | S17 |
-| BR-005 | مخزون قديم يُعلَّم؛ لا يُعتمد كحقيقة لمنع checkout بلا إعادة تحقق أحدث | إعادة التحقق عند الـcheckout DONE (FR-CART-002)؛ علم "قديم" نفسه غير موجود | session | /checkout | S10 | 🟡 PARTIAL | S18 |
+| BR-005 | مخزون قديم يُعلَّم؛ لا يُعتمد كحقيقة لمنع checkout بلا إعادة تحقق أحدث | إعادة التحقق عند الـcheckout DONE (FR-CART-002)؛ علم "قديم" (is_stale، lastPhysicalCountAt، 7 أيام) موجود الآن (S18a) ولا يُستخدم في checkout — إعادة التحقق تبقى المصدر الوحيد هناك | session | /checkout؛ شارة "جرد قديم" في صفحة مخزون الفرع (S18a) | S10,S18a | ✅ DONE | - |
 | BR-006 | التوصيل مؤهل فقط داخل منطقة الفرع؛ الاستلام مؤهل دائماً | فحص المنطقة في quote/reserve + PICKUP_REQUIRES_PHYSICAL_BRANCH | session | /checkout | S10,S14 | ✅ DONE | - |
 | BR-007 | فقط العروض المعتمدة تدخل المقارنة؛ غير المطابق يظل قابلاً للبحث والشراء لكن مستبعداً من المقارنة | استبعاد المقارنة DONE؛ "قابل للبحث" فقط عبر صفحة المتجر، ليس الاكتشاف العام | public | /compare, /store/:slug/products/:id | S8,S13 | 🟡 PARTIAL | S18b |
 | BR-008 | تراكب الخصومات/الكوبونات بجدول موثّق؛ الافتراضي عدم التراكب (Phase 2 بحسب الـSRS) | لا | - | لا | لا | ❌ MISSING | قرار-نطاق |
@@ -609,13 +625,13 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | BR-027 | كل المبالغ ILS؛ لا FX ولا تسوية متعددة العملات؛ يُلغي BR-021 ويُغلق OPEN-002/007 | بيانات ILS فقط في كل مكان | n/a | كل واجهات السعر | S10,S14 | ✅ DONE | - |
 | BR-028 | checkout واحد ينتج CustomerOrder أب وBranchOrder واحد أو أكثر، كل BranchOrder بطريقة تنفيذ/رسم/دفع/موعد/دورة حياة خاصة به | BranchOrder | session | /orders | S9,S10 | ✅ DONE | - |
 | BR-029 | العميل يختار سطور السلة صراحة؛ النظام يقترح فقط فروعاً تحوي كل المتغيرات المختارة، ويقترح الأقرب لكن العميل يختار فرعاً أبعد مؤهلاً | الاختيار الصريح ومجموعة الفروع المؤهلة DONE؛ "الأقرب" بديل حتمي موثّق لا مسافة حقيقية | session | /checkout | S10,S14 | 🟡 PARTIAL | — (قرار جديد) |
-| BR-030 | باركود المخزون فريد وscanner-facing؛ الباركود المشترك داخلي لا يُستبدل أبداً؛ بيع/تخفيض لا يمكن أن ينزل المخزون تحت الصفر | فصل الباركودين DONE؛ لا واجهة ماسح؛ منع النزول تحت الصفر DONE (خصم ذري) | OWNER | لا | S6 | 🟡 PARTIAL | S18 |
-| BR-031 | خصم يدوي غير بيعي له سبب دائماً ويُشعِر المالك؛ لا نقل مخزون بين الفروع في المرحلة الأولى | السبب مفروض؛ لا نقل مبني (متوافق مع القرار)؛ الإشعار outbox فقط | OWNER/EMP | لا | S6 | 🟡 PARTIAL | S18 |
+| BR-030 | باركود المخزون فريد وscanner-facing؛ الباركود المشترك داخلي لا يُستبدل أبداً؛ بيع/تخفيض لا يمكن أن ينزل المخزون تحت الصفر | فصل الباركودين DONE؛ واجهة بحث بالباركود (scanner-facing) موجودة الآن (S18a)؛ منع النزول تحت الصفر DONE (خصم ذري) | OWNER | صفحة مخزون الفرع: حقل البحث بالباركود (S18a) | S6,S18a | ✅ DONE | - |
+| BR-031 | خصم يدوي غير بيعي له سبب دائماً ويُشعِر المالك؛ لا نقل مخزون بين الفروع في المرحلة الأولى | السبب مفروض؛ لا نقل مبني (متوافق مع القرار)؛ الإشعار outbox فقط | OWNER/EMP | صفحة مخزون الفرع: نموذج الحركة (S18a) | S6,S18a | ✅ DONE | - |
 | BR-032 | التوفر العام مشتق من مجموع مخزون الفروع المؤهلة لكن يُعرض فقط Available/Low/Sold out؛ الكمية الحقيقية خاصة إلا حد أقصى عند تحقق السلة | البطاقات العامة تستخدم المجموع (bucketForStock) كما هو منصوص؛ حد السلة الأقصى أصبح عمداً لكل فرع مفرد (إصلاح مراجعة Sprint 14) بما يطابق أن checkout لا يقسّم سطراً على فرعين | public/session | البطاقات، /cart | S8,S14 | ✅ DONE | - |
 | BR-033 | سياسة إرجاع المتجر ورسومه تُلقَط لحظة الشراء؛ تتغير كل 6 أشهر فقط؛ قبول موحّد عبر كل الفروع/نقاط الاستلام | لا | - | لا | لا | ❌ MISSING | S21 |
 | BR-034 | التوصيل يديره موظفو الفرع؛ تأكيد العميل يُطلب بعد تحديث الموظف؛ تذكير 48 ساعة وتأكيد تلقائي 72؛ لا هوية سائق ولا نزاع داخل المنصة | الإجراءات اليدوية DONE؛ التذكير/التأكيد التلقائي غير مجدوَل (يُحسب فقط عند القراءة) | EMP/session | صفحة الفرع،/orders | S11 | 🟡 PARTIAL | S19 |
 
-**عدّاد BR:** 34 صفاً (BR-001..034)، منها 2 SUPERSEDED (021، 024). أُعيد فرز الـ32 الحيّة مباشرة من الجدول أعلاه (لا تقدير): DONE=7 (002، 006، 010، 015، 027، 028، 032)، PARTIAL=13 (001، 005، 007، 009، 014، 020، 022، 023، 026، 029، 030، 031، 034)، MISSING=12 (003، 004، 008، 011، 012، 013، 016، 017، 018، 019، 025، 033). المجموع 7+13+12+2=34. (النسخة v2 كانت ذكرت 8/17/7 خطأً؛ صُحِّحت هنا وفي §16.)
+**عدّاد BR:** 34 صفاً (BR-001..034)، منها 2 SUPERSEDED (021، 024). أُعيد فرز الـ32 الحيّة مباشرة من الجدول أعلاه بعد S18a (لا تقدير): DONE=10 (002، 005، 006، 010، 015، 027، 028، 030، 031، 032)، PARTIAL=10 (001، 007، 009، 014، 020، 022، 023، 026، 029، 034)، MISSING=12 (003، 004، 008، 011، 012، 013، 016، 017، 018، 019، 025، 033). المجموع 10+10+12+2=34. (قبل S18a: DONE=7، PARTIAL=13 — BR-005/030/031 انتقلت PARTIAL←DONE. النسخة v2 كانت ذكرت 8/17/7 خطأً؛ صُحِّحت في v3/§16.)
 
 ## §7 — `NFR-*` Non-functional requirements (Part 4, Section I)
 
@@ -650,11 +666,11 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | NFR-DEVICE-001 | أحدث إصدارين من Android/iOS | لا بناء موبايل إطلاقاً | ❌ MISSING | قرار-نطاق |
 | NFR-SEO-001 | صفحات المنتج الأساسي مُقدَّمة من السيرفر لا JS فقط | Next.js App Router (خادمي افتراضياً)، لم أتحقق من كل صفحة إن كانت client component بلا داعٍ | 🟡 PARTIAL | S18b |
 | NFR-IMG-001 | حد أقصى لحجم الصورة المرفوعة (10MB افتراضي) | لا رفع صور مبني أصلاً (روابط فقط) | ❌ MISSING | S17 |
-| NFR-STALE-001 | تأخير تعليم المخزون قديماً: 7 أيام يدوي / 24 ساعة API، قابل للضبط | لا تعليم تقادم مخزون موجود | ❌ MISSING | S18 |
+| NFR-STALE-001 | تأخير تعليم المخزون قديماً: 7 أيام يدوي / 24 ساعة API، قابل للضبط | الشق اليدوي موجود الآن: is_stale إن مرّ 7 أيام منذ lastPhysicalCountAt (S18a) — لكنه ثابت بالكود لا "قابل للضبط"، ولا مصدر تقادم API/تغذية مؤتمتة من نوعه | 🟡 PARTIAL | S18 |
 | NFR-STALE-002 | تأخير تعليم السعر قديماً: 30 يوماً، قابل للضبط | لا تعليم تقادم سعر موجود | ❌ MISSING | S17 |
 | NFR-AUDIT-001 | 100% من انتقالات الحالة وكل فعل إداري متجاوِز يُنتج صف AuditLog | نسبة عالية من الانتقالات المبنية فعلاً تُدقَّق (checkout، تحقق، اشتراك، مخزون)؛ "100%" غير مؤكَّد شمولاً، ولا فعل "تجاوز إداري" مبني أصلاً (BR-019) | 🟡 PARTIAL | S25 |
 
-**عدّاد NFR:** 32 صفاً، أُعيد فرزها مباشرة من الجدول أعلاه: DONE=2 (SEC-002، OBS-001)، PARTIAL=10 (REL-003، SEC-003، PRIV-001، A11Y-001، RTL-001، MOBILE-001، TEST-001، BROWSER-001، SEO-001، AUDIT-001)، MISSING=18 (الباقي)، n/a (غير منطبق على بيئة تطوير حالياً، لا يُحسب DONE/MISSING)=2 (NFR-AVAIL-001، NFR-SEC-001). المجموع 2+10+18+2=32. (النسخة v2 كانت ذكرت 2/13/15 خطأً؛ صُحِّحت هنا وفي §16.)
+**عدّاد NFR:** 32 صفاً، أُعيد فرزها مباشرة من الجدول أعلاه بعد S18a: DONE=2 (SEC-002، OBS-001)، PARTIAL=11 (REL-003، SEC-003، PRIV-001، A11Y-001، RTL-001، MOBILE-001، TEST-001، BROWSER-001، SEO-001، AUDIT-001، STALE-001)، MISSING=17 (الباقي)، n/a (غير منطبق على بيئة تطوير حالياً، لا يُحسب DONE/MISSING)=2 (NFR-AVAIL-001، NFR-SEC-001). المجموع 2+11+17+2=32. (قبل S18a: PARTIAL=10، MISSING=18 — NFR-STALE-001 انتقل MISSING←PARTIAL. النسخة v2 كانت ذكرت 2/13/15 خطأً؛ صُحِّحت في v3/§16.)
 
 ## §8 — Part 3, Section G: نموذج البيانات
 
@@ -666,7 +682,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | SRS-G0-02 | الأدوار: VendorUser بدور OWNER/BRANCH_EMPLOYEE، branchId إلزامي وفريد للموظف النشط | مطابق تماماً للسكيما الفعلية | ✅ DONE | - |
 | SRS-G0-03 | المواقع: StoreBranch (فعلي)، Warehouse (مخفي)، PickupPoint (بلا مخزون) | الثلاثة موجودة كنماذج Prisma منفصلة | ✅ DONE | - |
 | SRS-G0-04 | الكتالوج والمال: ILS فقط بلا حقل عملة، لا FxRate؛ باركود محلي+داخلي؛ حتى 10 صور و3 فيديوهات | ILS ضمنية DONE؛ لا FxRate DONE؛ الباركودان DONE؛ سقف 10 صور/3 فيديوهات لكل متغيّر ونوع MediaType (IMAGE/VIDEO) منفصل مبنيان ومدعومان بقيد DB CHECK (S17) | ✅ DONE | - |
-| SRS-G0-05 | المخزون: OfferBranchInventory (= BranchStock فعلياً) لفرع فعلي/مستودع فقط؛ InventoryMovement بكل الأسباب المذكورة؛ لا نوع نقل | BranchStock+StockMovement موجودان؛ أسباب الحركة تغطي DAMAGE/LOSS/COUNT_CORRECTION فقط، لا "بيع" ولا "استرجاع مرتجع" ولا "استيراد/إضافة" كأسباب حركة منفصلة | 🟡 PARTIAL | S18 |
+| SRS-G0-05 | المخزون: OfferBranchInventory (= BranchStock فعلياً) لفرع فعلي/مستودع فقط؛ InventoryMovement بكل الأسباب المذكورة؛ لا نوع نقل | BranchStock+StockMovement موجودان؛ أسباب الحركة تغطي DAMAGE/LOSS/COUNT_CORRECTION/SALE الآن (S18a)، لا "استرجاع مرتجع" ولا "استيراد/إضافة" كأسباب حركة منفصلة | 🟡 PARTIAL | S18 |
 | SRS-G0-06 | السلة والطلب: Cart لعميل موثّق فقط، CartItem بلا فرع/تنفيذ عند الإضافة؛ CustomerOrder له BranchOrder واحد أو أكثر | مطابق تماماً | ✅ DONE | - |
 | SRS-G0-07 | التنفيذ والدفع: Fulfillment واحد لكل BranchOrder بلا سائق؛ دفع sandbox واحد يغطي عدة BranchOrders بتخصيص عبر branch_order_id | لا كيان Fulfillment منفصل (مدموج داخل BranchOrder، وهذا يحقق نفس الغرض عملياً)؛ PaymentTransaction واحد + BranchOrder.paymentTransactionId كإحالة (يحقق التخصيص فعلياً) | ✅ DONE | - |
 | SRS-G0-08 | الجدولة والإرجاع: DeliverySlot لفرع مالك مخزون؛ ReturnPolicy مُلقَطة على BranchOrder/Item؛ Notification بحالة قراءة ورابط عميق؛ Review لمنتج/متجر فقط، غير قابل للتعديل | DeliveryWindow/Exception DONE؛ ReturnPolicy/ReturnRequest/Notification/Review كلها غير موجودة | 🟡 PARTIAL (نصفه DONE، نصفه MISSING بالكامل) | S17/S19/S21/S23 |
@@ -716,7 +732,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | SRS-H3A-01 | الاكتشاف العام: `/discover/*`, `/stores/:slug`, `/products/:id`, `.../compare` | `GET /discovery/all(?segment)`, `GET /storefronts/:slug`, `GET /canonical-products/:id/comparison` — تطابق وظيفي وإن اختلفت المسارات الحرفية | ✅ DONE | - |
 | SRS-H3A-02 | المتجر والمتابعة: PATCH storefront، sections، follow/following | كلها موجودة (Sprint 7/13) | ✅ DONE | - |
 | SRS-H3A-03 | الأدوار والمواقع: دعوة موظف بـOTP، نقل/تعطيل، warehouse/pickup-points | الدعوة والقبول والـwarehouse/pickup-points API موجودة؛ **النقل/التعطيل غير موجود** | 🟡 PARTIAL | S15/S18 |
-| SRS-H3A-04 | المخزون: مبيعات فرع، تعديلات، استيراد | التعديلات (خصم بسبب) موجودة؛ **لا endpoint بيع فعلي بالباركود** | 🟡 PARTIAL | S18 |
+| SRS-H3A-04 | المخزون: مبيعات فرع، تعديلات، استيراد | التعديلات (خصم بسبب) موجودة؛ بيع فعلي بالباركود موجود الآن (`GET .../stock/lookup` + `POST .../movements` بسبب SALE، S18a) | 🟡 PARTIAL | S18 |
 | SRS-H3A-05 | Checkout: quote بلا تعديل، ثم إنشاء ذري | `POST /checkout/quote`, `/reserve`, `/confirm` — يطابق المعنى وإن كان بثلاث خطوات لا خطوتين | ✅ DONE | - |
 | SRS-H3A-06 | طلبات الفرع: GET orders، PATCH actions (بدء تحضير، رجوع، إلغاء صنف، إعادة محاولة توصيل، موافقة استرداد) | البدء/الإرسال/التسليم/الاستلام موجودة؛ **الرجوع، إلغاء الصنف، إعادة محاولة التوصيل، موافقة الاسترداد غير موجودة** | 🟡 PARTIAL | S20a |
 | SRS-H3A-07 | التقويم/العناوين: فترات، إعادة جدولة، تعديل عنوان قبل التحضير فقط | فترات التوصيل CRUD موجودة؛ **لا إعادة جدولة، لا تعديل عنوان لطلب قائم** | 🟡 PARTIAL | S20a/S22 |
@@ -762,7 +778,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | L-07 | حزمة مقابل منتج فردي | لا `product_type` على المنتج الأساسي | ❌ MISSING | S17b |
 | L-08 | وحدات/أحجام تعبئة مختلفة | يُعامَل كـ variant منفصل عبر الآلية القياسية | ✅ DONE | - |
 | L-09 | سعر قديم | لا علم تقادم، لا رسالة "قد يكون قديماً" | ❌ MISSING | S17 |
-| L-10 | مخزون قديم | لا علم تقادم؛ إعادة التحقق عند checkout موجودة | 🟡 PARTIAL | S18 |
+| L-10 | مخزون قديم | علم تقادم (is_stale، S18a) موجود الآن؛ إعادة التحقق عند checkout موجودة | ✅ DONE | - |
 | L-11 | نفاد أثناء checkout | مغطى بالكامل (خصم ذري + رسالة إزالة/استبدال) | ✅ DONE | - |
 | L-12 | بائع يغلق بعد إرسال الطلب | لا رفض/إلغاء BranchOrder موجود | ❌ MISSING | S20a |
 | L-13 | رفض جزئي في طلب متعدد البائعين | لا آلية رفض؛ لا تجميع "PartiallyCancelled" على مستوى CustomerOrder | ❌ MISSING | S20a |
@@ -930,9 +946,9 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 | BL-COMP-002 | Must | FR-COMP-005 | 🟡 PARTIAL | - |
 | BL-COMP-003 | Must | FR-COMP-009 | ↪ SUPERSEDED | استُبدل: PDR-001 يزيل FX كلياً |
 | BL-COMP-004 | Should | FR-COMP-007 | 🟡 PARTIAL | - |
-| BL-INV-001 | Must | FR-INV-001 | 🟡 PARTIAL | - |
+| BL-INV-001 | Must | FR-INV-001 | ✅ DONE | - |
 | BL-INV-002 | Must | FR-INV-004 | ✅ DONE | - |
-| BL-INV-003 | Should | FR-INV-006 | ❌ MISSING | - |
+| BL-INV-003 | Should | FR-INV-006 | ✅ DONE | - |
 | BL-INV-004 | Should | FR-INV-003 | ✅ DONE | الحجز 10 دقائق — هذا فعلاً موجود ومختبر (DONE)، أعلى مما كان مخططاً كـShould هنا |
 | BL-CART-001 | Must | FR-CART-017 (E.0) | ✅ DONE | استُبدل: التقسيم بالفرع الآن (PDR-004) لا بالبائع |
 | BL-CART-002 | Must | FR-CART-003 | ❌ MISSING | - |

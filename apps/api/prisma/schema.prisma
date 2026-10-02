@@ -1506,6 +1506,25 @@ model BranchStock {
   /// is the actual reservation-respecting guard, and an increase, where
   /// it is always trivially satisfied - restocking is never blocked).
   reservedQuantity Int          @default(0)
+  /// Sprint 18a (FR-INV-007, product decision): the owner's own
+  /// per-(branch, variant) low-stock threshold. 0 (the default) means
+  /// "no alert" - deliberately not "alert at zero", which a bare
+  /// `available <= threshold` would wrongly do (every row starts at
+  /// 0/0). Checked as `threshold > 0 AND available <= threshold`,
+  /// never bare `<=`.
+  safetyStockThreshold Int       @default(0)
+  /// Sprint 18a (FR-INV-006/NFR-STALE-001, product decision): the last
+  /// time a human actually verified this row against the physical
+  /// shelf - either a confirm-count call (quantity happened to already
+  /// be right) or a COUNT_CORRECTION movement (it wasn't). Deliberately
+  /// NOT touched by SALE/DAMAGE/LOSS - those are real stock changes,
+  /// not someone having looked at and counted the shelf - and
+  /// deliberately NOT `updatedAt` above, which a reservation or an
+  /// online sale also changes with no human ever near the shelf. NULL
+  /// (the default, and every pre-existing row's value after this
+  /// migration - no backfill) means "never physically confirmed",
+  /// itself `is_stale` by definition, not an absent/assumed fact.
+  lastPhysicalCountAt  DateTime?
   createdAt        DateTime     @default(now())
   updatedAt        DateTime     @updatedAt
 
@@ -1515,14 +1534,16 @@ model BranchStock {
 }
 
 /// Sprint 6 (RB-INV-003, PDR-021): the three non-sale adjustment
-/// reasons PDR-021 names. Physical-sale decrements (RB-INV-004, not
-/// built this sprint - no scanner/checkout flow exists yet) would be a
-/// separate reason if/when that flow lands; this enum deliberately only
-/// covers the manual, non-sale case this sprint actually builds.
+/// reasons PDR-021 names. Sprint 18a adds SALE (RB-INV-004/PDR-020's
+/// manual/POS-sale path - a plain stock movement, never a checkout/
+/// payment flow of its own) - see CreateStockMovementDto's own comment
+/// for the full reasoning on why SALE doesn't get the PDR-021
+/// owner-notification Outbox event the other three do.
 enum StockMovementReason {
   DAMAGE
   LOSS
   COUNT_CORRECTION
+  SALE
 }
 
 /// Sprint 6 (RB-INV-003, PDR-021): "Manual non-sale stock reductions

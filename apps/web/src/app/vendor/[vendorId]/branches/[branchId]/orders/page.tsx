@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
@@ -135,6 +136,9 @@ export default function BranchOrdersPage() {
     <div className="page-shell">
       <div className="top-bar">
         <div className="brand" style={{ margin: 0 }}>طلبات الفرع</div>
+        <Link href={`/vendor/${params.vendorId}/branches/${params.branchId}/stock`} className="button-link">
+          المخزون
+        </Link>
       </div>
 
       {error && <div className="error-banner" style={{ maxWidth: 720 }}>{error}</div>}
