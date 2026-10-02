@@ -55,6 +55,7 @@ const LANES = [
   'sprint16-platform-verification',
   'sprint17-owner-catalog',
   'vendor-verification-owner-authorization',
+  'sprint18a-inventory-barcode',
 ] as const;
 
 export type PhoneLane = (typeof LANES)[number];

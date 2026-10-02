@@ -29,6 +29,9 @@ export const SUSPENDED_DENY_ROUTES: readonly string[] = [
   'POST vendors/:vendorId/offers/:offerId/variants/:variantId/match-review/candidates/:candidateId/decision',
   'POST vendors/:vendorId/canonical-products/:canonicalProductId/name-change-requests',
   'POST vendors/:vendorId/branches/:branchId/stock/:offerVariantId/movements',
+  // Sprint 18a.
+  'POST vendors/:vendorId/branches/:branchId/stock/:offerVariantId/confirm-count',
+  'PUT vendors/:vendorId/branches/:branchId/stock/:offerVariantId/safety-stock',
   'PUT vendors/:vendorId/storefront',
   'POST vendors/:vendorId/storefront/publish',
   'POST vendors/:vendorId/storefront/unpublish',
@@ -69,6 +72,9 @@ export const SUSPENDED_ALLOW_ROUTES: readonly string[] = [
   'GET vendors/:vendorId/delivery-zones',
   'GET vendors/:vendorId/branches/:branchId/delivery-windows',
   'GET vendors/:vendorId/branches/:branchId/stock',
+  // Sprint 18a.
+  'GET vendors/:vendorId/branches/:branchId/stock/page',
+  'GET vendors/:vendorId/branches/:branchId/stock/lookup',
   'GET vendors/:vendorId/branches/:branchId/stock/:offerVariantId',
   'GET vendors/:vendorId/branches/:branchId/stock/:offerVariantId/movements',
   'GET vendors/:vendorId/offers',

@@ -51,6 +51,9 @@ export default function BranchesPage() {
                 <Link href={`/vendor/${params.vendorId}/branches/${b.id}/delivery-windows`} className="button-link">
                   نوافذ التوصيل
                 </Link>
+                <Link href={`/vendor/${params.vendorId}/branches/${b.id}/stock`} className="button-link">
+                  المخزون
+                </Link>
               </div>
             </div>
           ))}

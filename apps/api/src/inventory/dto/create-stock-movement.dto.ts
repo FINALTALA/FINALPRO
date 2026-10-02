@@ -8,12 +8,21 @@ import { StockMovementReason } from '../../../generated/prisma/client';
 // PDR-021's "mandatory reason" literally (a category alone, with no
 // explanation, would not tell an owner reviewing the log *why* three
 // units were marked damaged). quantity_delta is signed: negative for a
-// reduction (the only direction DAMAGE/LOSS allow - enforced in
+// reduction (the only direction DAMAGE/LOSS/SALE allow - enforced in
 // InventoryController, not here, since it depends on `reason`), either
 // direction for COUNT_CORRECTION (a physical recount can find more
 // stock than recorded, not just less).
+//
+// Sprint 18a adds SALE (RB-INV-004/PDR-020): a real, physical sale
+// recorded as a plain stock movement - never a checkout/payment flow
+// of its own, no PaymentTransaction, no link to any CustomerOrder/
+// BranchOrder. InventoryController's own comment on the outbox-enqueue
+// call explains why SALE deliberately does NOT get the PDR-021
+// owner-notification event the other three reasons do - a routine sale
+// is not the kind of thing PDR-021 means by "notify the owner
+// immediately."
 export class CreateStockMovementDto {
-  @IsIn(['DAMAGE', 'LOSS', 'COUNT_CORRECTION'])
+  @IsIn(['DAMAGE', 'LOSS', 'COUNT_CORRECTION', 'SALE'])
   reason!: StockMovementReason;
 
   @IsInt()
