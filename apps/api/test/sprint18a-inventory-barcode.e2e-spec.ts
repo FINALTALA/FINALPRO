@@ -991,7 +991,7 @@ describe('Sprint 18a - inventory: safety stock, physical count, SALE movements, 
       expect(res.body.error.code).toBe('BARCODE_NOT_FOUND_AT_BRANCH');
     });
 
-    it('404s - same code - a barcode that belongs to this vendor but is only ever stocked at a DIFFERENT branch of the same vendor', async () => {
+    it("a barcode that belongs to this vendor but is only ever stocked at a DIFFERENT branch resolves to a LOCAL zero row here - never 404, never the other branch's real quantity", async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId, branchAId, branchBId } =
         await createVendorWithTwoBranches(owner);
@@ -1003,7 +1003,7 @@ describe('Sprint 18a - inventory: safety stock, physical count, SALE movements, 
       const variant = await prisma.offerVariant.findUniqueOrThrow({
         where: { id: variantId },
       });
-      // Stocked at branch A only.
+      // Stocked at branch A only - a real, nonzero quantity there.
       await request(app.getHttpServer())
         .post(
           `/api/v1/vendors/${vendorId}/branches/${branchAId}/stock/${variantId}/movements`,
@@ -1012,19 +1012,24 @@ describe('Sprint 18a - inventory: safety stock, physical count, SALE movements, 
         .set('Idempotency-Key', unique('mv'))
         .send({
           reason: 'COUNT_CORRECTION',
-          quantity_delta: 1,
+          quantity_delta: 7,
           reason_note: 'جرد',
         })
         .expect(201);
 
-      // Scanned at branch B - never touched there.
+      // Scanned at branch B - never touched there. The variant genuinely
+      // belongs to this vendor, so this is a real, locally-zero row at
+      // branch B, not a 404 - and it must not leak branch A's real 7.
       const res = await request(app.getHttpServer())
         .get(
           `/api/v1/vendors/${vendorId}/branches/${branchBId}/stock/lookup?barcode=${variant.storeInventoryBarcode}`,
         )
         .set('Authorization', `Bearer ${owner}`)
-        .expect(404);
-      expect(res.body.error.code).toBe('BARCODE_NOT_FOUND_AT_BRANCH');
+        .expect(200);
+      expect(res.body.offer_variant_id).toBe(variantId);
+      expect(res.body.id).toBeNull();
+      expect(res.body.quantity).toBe(0);
+      expect(res.body.available_quantity).toBe(0);
     });
 
     it('404s - same code - a barcode that belongs to a completely different vendor', async () => {
@@ -1132,6 +1137,96 @@ describe('Sprint 18a - inventory: safety stock, physical count, SALE movements, 
       }
       expect(seenVariantIds.sort()).toEqual([...createdIds].sort());
       expect(new Set(seenVariantIds).size).toBe(createdIds.length);
+    });
+  });
+
+  describe('a variant with no BranchStock row at this branch yet (review-round fix)', () => {
+    it('appears in stock/page with a synthetic zero row, not omitted', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
+      const { variantId } = await createOfferVariant(
+        owner,
+        vendorId,
+        branchAId,
+      );
+      // Deliberately NO movement, NO confirm-count - this variant has
+      // never touched BranchStock at this branch at all.
+
+      const res = await request(app.getHttpServer())
+        .get(
+          `/api/v1/vendors/${vendorId}/branches/${branchAId}/stock/page?limit=20`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .expect(200);
+      const item = res.body.items.find(
+        (i: { offer_variant_id: string }) => i.offer_variant_id === variantId,
+      );
+      expect(item).toBeDefined();
+      expect(item.id).toBeNull();
+      expect(item.quantity).toBe(0);
+      expect(item.reserved_quantity).toBe(0);
+      expect(item.available_quantity).toBe(0);
+      expect(item.safety_stock_threshold).toBe(0);
+      expect(item.last_physical_count_at).toBeNull();
+      expect(item.is_stale).toBe(true);
+      expect(item.is_low_stock).toBe(false);
+    });
+
+    it('a positive COUNT_CORRECTION on it creates the real BranchStock row and stock/page then shows the real quantity', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
+      const { variantId } = await createOfferVariant(
+        owner,
+        vendorId,
+        branchAId,
+      );
+
+      const before = await prisma.branchStock.findUnique({
+        where: {
+          branchId_offerVariantId: {
+            branchId: branchAId,
+            offerVariantId: variantId,
+          },
+        },
+      });
+      expect(before).toBeNull();
+
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/branches/${branchAId}/stock/${variantId}/movements`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('mv'))
+        .send({
+          reason: 'COUNT_CORRECTION',
+          quantity_delta: 12,
+          reason_note: 'أول جرد لمنتج جديد',
+        })
+        .expect(201);
+
+      const after = await prisma.branchStock.findUnique({
+        where: {
+          branchId_offerVariantId: {
+            branchId: branchAId,
+            offerVariantId: variantId,
+          },
+        },
+      });
+      expect(after).not.toBeNull();
+      expect(after?.quantity).toBe(12);
+
+      const res = await request(app.getHttpServer())
+        .get(
+          `/api/v1/vendors/${vendorId}/branches/${branchAId}/stock/page?limit=20`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .expect(200);
+      const item = res.body.items.find(
+        (i: { offer_variant_id: string }) => i.offer_variant_id === variantId,
+      );
+      expect(item.id).not.toBeNull();
+      expect(item.quantity).toBe(12);
+      expect(item.available_quantity).toBe(12);
     });
   });
 });

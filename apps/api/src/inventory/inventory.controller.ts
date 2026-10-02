@@ -80,6 +80,37 @@ interface VariantDisplayInfo {
   vendorOffer: { titleAr: string; titleEn: string };
 }
 
+// Review-round fix: a variant that has never had a movement at this
+// branch (no BranchStock row at all yet) is a perfectly normal, real
+// state - zero stock - not an absent/unknown one. Shared by getStock,
+// listStockPage and lookupByBarcode so all three report the exact same
+// shape for "this branch just hasn't touched this variant yet".
+function zeroStockRow(
+  vendorId: string,
+  branchId: string,
+  offerVariantId: string,
+): {
+  id: string | null;
+  vendorId: string;
+  branchId: string;
+  offerVariantId: string;
+  quantity: number;
+  reservedQuantity: number;
+  safetyStockThreshold: number;
+  lastPhysicalCountAt: Date | null;
+} {
+  return {
+    id: null,
+    vendorId,
+    branchId,
+    offerVariantId,
+    quantity: 0,
+    reservedQuantity: 0,
+    safetyStockThreshold: 0,
+    lastPhysicalCountAt: null,
+  };
+}
+
 // Sprint 18a: the one rich shape used by every endpoint that an actual
 // inventory UI reads from (stock/page, stock/lookup, and the
 // single-variant GET) - offer/variant display data a bare BranchStock
@@ -240,6 +271,18 @@ export class InventoryController {
   // rejected). Declared before the :offerVariantId route below so
   // Nest/Express's declaration-order route matching doesn't swallow
   // the literal "page" segment as a variant id.
+  //
+  // Review-round fix: this is now based on every OfferVariant the
+  // vendor owns, left-joined to BranchStock at THIS branch (via
+  // `include: { branchStocks: { where: { branchId } } }`, which
+  // returns an empty array rather than excluding the variant when no
+  // row exists here) - not on BranchStock alone. A brand-new variant
+  // that has never had a movement at this branch previously vanished
+  // from this page entirely, with no way for the owner/employee to
+  // ever enter its first quantity from the UI even though the
+  // backend already supports exactly that via createMovement's own
+  // ensure-row-exists INSERT. Pagination is therefore keyset on
+  // OfferVariant's own (createdAt, id), not BranchStock's.
   @Get(':vendorId/branches/:branchId/stock/page')
   async listStockPage(
     @Param('vendorId') vendorId: string,
@@ -251,7 +294,7 @@ export class InventoryController {
     const limit = parseLimit(limitRaw);
     const cursor = decodeCursor(cursorRaw, [isIsoDateString, isUuidLike]);
 
-    const where: Prisma.BranchStockWhereInput = { vendorId, branchId };
+    const where: Prisma.OfferVariantWhereInput = { vendorId };
     if (cursor) {
       const [cursorCreatedAtRaw, cursorId] = cursor as [string, string];
       const cursorCreatedAt = new Date(cursorCreatedAtRaw);
@@ -261,17 +304,26 @@ export class InventoryController {
       ];
     }
 
-    const rows = await this.prisma.branchStock.findMany({
+    const rows = await this.prisma.offerVariant.findMany({
       where,
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       take: limit + 1,
-      include: { offerVariant: { include: { vendorOffer: true } } },
+      include: {
+        vendorOffer: true,
+        branchStocks: { where: { branchId } },
+      },
     });
 
     const page = rows.slice(0, limit);
     const last = page[page.length - 1];
     return {
-      items: page.map((r) => enrichedStockDto(r, r.offerVariant)),
+      items: page.map((variant) =>
+        enrichedStockDto(
+          variant.branchStocks[0] ??
+            zeroStockRow(vendorId, branchId, variant.id),
+          variant,
+        ),
+      ),
       next_cursor:
         rows.length > limit && last
           ? encodeCursor([last.createdAt.toISOString(), last.id])
@@ -280,18 +332,24 @@ export class InventoryController {
   }
 
   // Sprint 18a: resolves a scanned/typed storeInventoryBarcode to its
-  // stock row at THIS branch. Scoped to (vendorId, storeInventoryBarcode)
-  // first - that column is @@unique([vendorId, storeInventoryBarcode]),
-  // never globally unique, so a barcode belonging to a DIFFERENT vendor
-  // is structurally invisible to this query, not a case to special-case.
-  // Then requires an ACTUAL BranchStock row at THIS branchId - a
-  // product this vendor sells but has never stocked at this specific
-  // branch must not silently "open" a row that doesn't exist here
-  // (review-round fix). Both failure cases - barcode unknown to this
-  // vendor at all, or known but not stocked at this branch - return the
-  // exact same 404 code, deliberately: distinguishing them would leak
-  // "this barcode exists at one of your other branches" to a request
-  // scoped to a branch that doesn't have it.
+  // stock state at THIS branch. Scoped to (vendorId, storeInventoryBarcode)
+  // - that column is @@unique([vendorId, storeInventoryBarcode]), never
+  // globally unique, so a barcode belonging to a DIFFERENT vendor is
+  // structurally invisible to this query, not a case to special-case:
+  // that's the only real BOLA concern here, and it 404s.
+  //
+  // Review-round fix: a barcode that belongs to THIS vendor but has no
+  // BranchStock row at this specific branch yet is no longer a 404 -
+  // it returns the same zero-quantity DTO listStockPage/getStock would
+  // (the variant genuinely belongs to this vendor; this branch is
+  // entitled to stock it, it just hasn't yet). The earlier "same 404
+  // either way" design was based on a leak concern that was never
+  // actually reachable: VendorMembershipGuard already restricts a
+  // BRANCH_EMPLOYEE's own :branchId to their one assigned branch before
+  // this handler ever runs, and an OWNER is already entitled to every
+  // one of their own branches - so there was no "this exists at your
+  // OTHER branch" fact left to protect against leaking. The zero DTO
+  // itself carries no information about any other branch's real stock.
   @Get(':vendorId/branches/:branchId/stock/lookup')
   async lookupByBarcode(
     @Param('vendorId') vendorId: string,
@@ -307,18 +365,15 @@ export class InventoryController {
       });
     }
 
-    const notFoundAtBranch = () =>
-      new NotFoundException({
-        code: 'BARCODE_NOT_FOUND_AT_BRANCH',
-        message: 'No stock record for this barcode at this branch',
-      });
-
     const variant = await this.prisma.offerVariant.findFirst({
       where: { vendorId, storeInventoryBarcode: barcode },
       include: { vendorOffer: true },
     });
     if (!variant) {
-      throw notFoundAtBranch();
+      throw new NotFoundException({
+        code: 'BARCODE_NOT_FOUND_AT_BRANCH',
+        message: 'No stock record for this barcode at this branch',
+      });
     }
 
     const row = await this.prisma.branchStock.findUnique({
@@ -326,11 +381,10 @@ export class InventoryController {
         branchId_offerVariantId: { branchId, offerVariantId: variant.id },
       },
     });
-    if (!row) {
-      throw notFoundAtBranch();
-    }
-
-    return enrichedStockDto(row, variant);
+    return enrichedStockDto(
+      row ?? zeroStockRow(vendorId, branchId, variant.id),
+      variant,
+    );
   }
 
   @Get(':vendorId/branches/:branchId/stock/:offerVariantId')
@@ -350,16 +404,7 @@ export class InventoryController {
     // own note on there being no separate "initialize stock" endpoint).
     if (!row) {
       return enrichedStockDto(
-        {
-          id: null,
-          vendorId,
-          branchId,
-          offerVariantId,
-          quantity: 0,
-          reservedQuantity: 0,
-          safetyStockThreshold: 0,
-          lastPhysicalCountAt: null,
-        },
+        zeroStockRow(vendorId, branchId, offerVariantId),
         variant,
       );
     }
