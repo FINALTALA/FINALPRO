@@ -6,6 +6,7 @@ import { BranchOrderService } from './branch-order.service';
 import { BranchOrdersStaffController } from './branch-orders-staff.controller';
 import { CustomerOrdersController } from './customer-orders.controller';
 import { FulfilmentReconciliationService } from './fulfilment-reconciliation.service';
+import { FulfilmentSweepService } from './fulfilment-sweep.service';
 
 // Sprint 9 (RB-ORD-001): BranchOrderService, exported for Sprint 10's
 // checkout module to inject. See branch-order.service.ts's own
@@ -26,7 +27,15 @@ import { FulfilmentReconciliationService } from './fulfilment-reconciliation.ser
 @Module({
   imports: [AuditModule, AuthModule, OutboxModule],
   controllers: [BranchOrdersStaffController, CustomerOrdersController],
-  providers: [BranchOrderService, FulfilmentReconciliationService],
-  exports: [BranchOrderService, FulfilmentReconciliationService],
+  providers: [
+    BranchOrderService,
+    FulfilmentReconciliationService,
+    FulfilmentSweepService,
+  ],
+  exports: [
+    BranchOrderService,
+    FulfilmentReconciliationService,
+    FulfilmentSweepService,
+  ],
 })
 export class OrdersModule {}

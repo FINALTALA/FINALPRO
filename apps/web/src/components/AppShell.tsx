@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
 import {
   BagIcon,
+  BellIcon,
   CartIcon,
   CompassIcon,
   HeartIcon,
@@ -25,6 +26,7 @@ import {
   useActiveWorkspace,
   useCartCount,
   useSessionToken,
+  useUnreadNotificationCount,
   useWorkspaces,
 } from "@/lib/useSession";
 
@@ -49,6 +51,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const workspaces = useWorkspaces(token);
   const active = useActiveWorkspace();
   const cartCount = useCartCount(token, pathname);
+  const unreadCount = useUnreadNotificationCount(token, pathname);
   const [query, setQuery] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -151,6 +154,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
           </form>
 
           <div className="app-header-actions">
+            {token && (
+              <Link href="/notifications" className="icon-button" aria-label="الإشعارات">
+                <BellIcon />
+                {unreadCount > 0 && <span className="badge-count">{unreadCount}</span>}
+              </Link>
+            )}
+
             <Link
               href="/following"
               className="icon-button mobile-only"

@@ -240,14 +240,21 @@ describe('Sprint 16 - vendor suspension and reactivation (e2e)', () => {
       expect(sEvents).toHaveLength(1);
       expect(rEvents).toHaveLength(1);
       expect(sEvents[0].status).toBe('PENDING');
+      // Sprint 19 (review-round): recipient_user_id is now snapshotted
+      // into the payload at enqueue time (one owner, one row, in this
+      // test) - a real, deliberate, necessary addition, not a
+      // regression - see admin-vendors.controller.ts's own comment on
+      // both call sites.
       expect(Object.keys(sEvents[0].payload as object).sort()).toEqual([
         'occurred_at',
         'reason_code',
+        'recipient_user_id',
         'suspension_id',
         'vendor_id',
       ]);
       expect(Object.keys(rEvents[0].payload as object).sort()).toEqual([
         'occurred_at',
+        'recipient_user_id',
         'suspension_id',
         'vendor_id',
       ]);

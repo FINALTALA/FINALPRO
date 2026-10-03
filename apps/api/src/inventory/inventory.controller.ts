@@ -561,23 +561,39 @@ export class InventoryController {
       // codebase already established (ADR-006, see OutboxEventService's
       // own comment) for every not-yet-integrated notification channel.
       if (dto.reason !== 'SALE') {
-        await this.outbox.enqueue(
-          {
-            eventType: 'stock_movement.owner_notification',
-            payload: {
-              vendor_id: vendorId,
-              branch_id: branchId,
-              offer_variant_id: offerVariantId,
-              stock_movement_id: movement.id,
-              quantity_delta: dto.quantity_delta,
-              resulting_quantity: resultingQuantity,
-              reason: dto.reason,
-              reason_note: dto.reason_note,
-              actor_id: user.id,
+        // Sprint 19 (review-round): the recipient is snapshotted HERE,
+        // inside this same transaction - one outbox row per CURRENT
+        // owner - never resolved later at relay/dispatch time. Same
+        // pattern customer-orders.controller.ts's
+        // not_received_reported already used before this sprint.
+        // reason_note is never copied past this payload - the relay's
+        // own buildSafeData() whitelist deliberately excludes it from
+        // Notification.data (it is free text, same sensitivity class
+        // as BranchOrder.notReceivedReason).
+        const owners = await tx.vendorUser.findMany({
+          where: { vendorId, role: 'OWNER' },
+          select: { userId: true },
+        });
+        for (const owner of owners) {
+          await this.outbox.enqueue(
+            {
+              eventType: 'stock_movement.owner_notification',
+              payload: {
+                vendor_id: vendorId,
+                branch_id: branchId,
+                offer_variant_id: offerVariantId,
+                stock_movement_id: movement.id,
+                quantity_delta: dto.quantity_delta,
+                resulting_quantity: resultingQuantity,
+                reason: dto.reason,
+                reason_note: dto.reason_note,
+                actor_id: user.id,
+                recipient_user_id: owner.userId,
+              },
             },
-          },
-          tx,
-        );
+            tx,
+          );
+        }
       }
 
       // Sprint 18a: a COUNT_CORRECTION is, by PDR-021's own definition,

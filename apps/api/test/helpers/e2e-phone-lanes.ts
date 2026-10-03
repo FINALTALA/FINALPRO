@@ -30,7 +30,11 @@
  * persistent dev database.
  */
 
-const LANE_WIDTH = 500_000; // usable numbers per lane: base .. base + LANE_WIDTH - 1
+// Sprint 19: shrunk from 500_000 to fit a 21st lane under the
+// 10,000,000 ceiling (21 * 476_190 = 9_999_990) - no test asserts a
+// literal phone value (see this file's own header comment), so
+// changing which raw digits a lane's numbers land on is safe.
+const LANE_WIDTH = 476_190; // usable numbers per lane: base .. base + LANE_WIDTH - 1
 
 // Order is arbitrary but stable - reordering shifts every later lane's
 // numbers. That's harmless (no test asserts a literal phone value) but
@@ -57,6 +61,7 @@ const LANES = [
   'vendor-verification-owner-authorization',
   'sprint18a-inventory-barcode',
   'sprint18b-branches-operations',
+  'sprint19-notification-relay',
 ] as const;
 
 export type PhoneLane = (typeof LANES)[number];
@@ -65,10 +70,11 @@ const LANE_INDEX: Record<PhoneLane, number> = Object.fromEntries(
   LANES.map((name, i) => [name, i]),
 ) as Record<PhoneLane, number>;
 
-// 18 lanes * 500_000 = 9,000,000, comfortably inside the 10,000,000-wide
-// (0000000-9999999) 7-digit space this leaves per prefix, with room for
-// more lanes later. Fails loudly at module load, not silently at some
-// far-off runtime call, if that ever stops being true.
+// 21 lanes * 476_190 = 9_999_990, inside the 10,000,000-wide
+// (0000000-9999999) 7-digit space this leaves per prefix, with very
+// little room left for more lanes at this LANE_WIDTH. Fails loudly at
+// module load, not silently at some far-off runtime call, if that ever
+// stops being true.
 if (LANES.length * LANE_WIDTH > 10_000_000) {
   throw new Error(
     'e2e-phone-lanes: LANES no longer fit the 7-digit space at this LANE_WIDTH - widen the space (use both prefixes for one file) or shrink LANE_WIDTH before adding more lanes.',
