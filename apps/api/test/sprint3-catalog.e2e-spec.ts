@@ -717,7 +717,11 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
           verification_photo_url: 'https://example.com/newer.jpg',
         })
         .expect(409);
-      expect(resubmit.body.error.code).toBe('VENDOR_NOT_REVIEWABLE');
+      // Sprint 18b: an ACTIVE vendor is now reviewable again (a branch
+      // added after onboarding submits evidence the same way), so the
+      // refusal here comes from this *branch* already being decided,
+      // not from the vendor's own status.
+      expect(resubmit.body.error.code).toBe('BRANCH_ALREADY_DECIDED');
 
       const branchRow = await prisma.storeBranch.findUniqueOrThrow({
         where: { id: branchId },

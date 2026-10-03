@@ -8,6 +8,10 @@ import {
   liveReservedQuantityByKey,
   stockLockKey,
 } from '../common/availability.util';
+import {
+  hasActiveBranchClosure,
+  lockBranchOperationalStatus,
+} from '../common/branch-operational-lock.util';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import {
   BranchOrderPaymentMethod,
@@ -348,11 +352,33 @@ export class CheckoutService {
       where: { offerVariantId: { in: variantIds } },
     });
     const branchIds = [...new Set(stocks.map((s) => s.branchId))];
-    const branches = await this.prisma.storeBranch.findMany({
-      where: { id: { in: branchIds } },
-    });
+    // Sprint 18b: a PENDING/archived/temporarily-closed branch is
+    // filtered out here too - UX only (don't suggest a branch reserve()
+    // would refuse a moment later), not the real enforcement, which is
+    // reserve()'s own fresh, lock-guaranteed check.
+    const now = new Date();
+    const [branches, activeClosures] = await Promise.all([
+      this.prisma.storeBranch.findMany({
+        where: {
+          id: { in: branchIds },
+          verificationStatus: 'APPROVED',
+          archivedAt: null,
+        },
+      }),
+      this.prisma.branchClosure.findMany({
+        where: {
+          branchId: { in: branchIds },
+          startsAt: { lte: now },
+          endsAt: { gt: now },
+        },
+        select: { branchId: true },
+      }),
+    ]);
+    const closedBranchIds = new Set(activeClosures.map((c) => c.branchId));
     const branchCreatedAtById = new Map(
-      branches.map((b) => [b.id, b.createdAt]),
+      branches
+        .filter((b) => !closedBranchIds.has(b.id))
+        .map((b) => [b.id, b.createdAt]),
     );
 
     const liveReservedByKey = await liveReservedQuantityByKey(
@@ -368,6 +394,11 @@ export class CheckoutService {
       { branchId: string; availableQuantity: number; createdAt: Date }[]
     >();
     for (const stock of stocks) {
+      // Sprint 18b: a branch filtered out above (not APPROVED,
+      // archived, or temporarily closed right now) is excluded
+      // entirely here, not just given a fallback createdAt - it must
+      // never appear as an eligible branch at all.
+      if (!branchCreatedAtById.has(stock.branchId)) continue;
       const key = `${stock.branchId}:${stock.offerVariantId}`;
       const liveReserved = liveReservedByKey.get(key) ?? 0;
       const list = map.get(stock.offerVariantId) ?? [];
@@ -432,7 +463,39 @@ export class CheckoutService {
       }
       const cartItemById = new Map(cartItems.map((ci) => [ci.id, ci]));
 
-      // Phase 1: resolve every group (read-only validation, no locks yet).
+      // Phase 0 (Sprint 18b): lock every distinct branch's own
+      // operational-status advisory lock FIRST, sorted ascending by
+      // branchId - a fixed order, so two concurrent multi-branch
+      // checkouts can never deadlock against each other, and so this
+      // is always acquired before this method's own later stock-row
+      // locks (same already-established principle as
+      // loadEligibilityContext's own vendorId sort). This is the real
+      // guarantee against a branch being closed/archived in the
+      // instant between Phase 1's read below and this transaction
+      // committing - see branch-operational-lock.util.ts's own
+      // comment for why a plain read-then-decide is not enough.
+      const distinctBranchIds = [...new Set(branchIds)].sort();
+      // vendorId is immutable once a branch exists (no endpoint ever
+      // moves a branch to a different vendor) - safe to read before
+      // the lock below; only the MUTABLE fields this method checks
+      // next (verificationStatus/archivedAt/closure) need the lock-
+      // then-read discipline, which Phase 1 below provides.
+      const branchVendorIds = await tx.storeBranch.findMany({
+        where: { id: { in: distinctBranchIds } },
+        select: { id: true, vendorId: true },
+      });
+      for (const id of distinctBranchIds) {
+        const found = branchVendorIds.find((b) => b.id === id);
+        if (found) {
+          await lockBranchOperationalStatus(tx, found.vendorId, id);
+        }
+        // A branch that doesn't exist at all simply has nothing to
+        // lock here - Phase 1's own findUnique below reports
+        // BRANCH_NOT_FOUND for it as it already did before this change.
+      }
+
+      // Phase 1: resolve every group (read-only validation, now under
+      // the locks above).
       const resolvedGroups: ResolvedGroup[] = [];
       for (const group of dto.groups) {
         const branch = await tx.storeBranch.findUnique({
@@ -442,6 +505,25 @@ export class CheckoutService {
           throw new NotFoundException({
             code: 'BRANCH_NOT_FOUND',
             message: 'Branch not found',
+          });
+        }
+        // Sprint 18b: a branch that isn't APPROVED, is archived, or is
+        // under an active temporary closure right now may not be used
+        // for a NEW reservation - checked fresh, under the lock taken
+        // in Phase 0 above, so this can never read a branch as open a
+        // moment before a concurrent archive()/closure POST commits.
+        // confirm() deliberately does NOT repeat this check - a
+        // reservation already created before a closure/archive stays
+        // confirmable (product decision).
+        if (
+          branch.verificationStatus !== 'APPROVED' ||
+          branch.archivedAt !== null ||
+          (await hasActiveBranchClosure(tx, branch.id))
+        ) {
+          throw new ConflictException({
+            code: 'BRANCH_NOT_AVAILABLE_FOR_ORDERS',
+            message:
+              'This branch is not approved, is archived, or is temporarily closed right now',
           });
         }
         const vendorId = branch.vendorId;

@@ -1,3 +1,4 @@
+import { BlockWhenBranchArchived } from '../auth/branch-archived.guard';
 import { BlockWhenSuspended } from '../auth/vendor-suspended.guard';
 import {
   BadRequestException,
@@ -450,6 +451,7 @@ export class InventoryController {
   // the owner immediately" - only the owner notification differs;
   // StockMovement + AuditLog are recorded for every reason alike.
   @BlockWhenSuspended()
+  @BlockWhenBranchArchived()
   @Post(':vendorId/branches/:branchId/stock/:offerVariantId/movements')
   @HttpCode(201)
   @UseInterceptors(IdempotencyInterceptor)
@@ -614,6 +616,7 @@ export class InventoryController {
   // is still the moment this employee actually read the shelf, not a
   // `now()` evaluated late after whatever it waited on.
   @BlockWhenSuspended()
+  @BlockWhenBranchArchived()
   @Post(':vendorId/branches/:branchId/stock/:offerVariantId/confirm-count')
   @HttpCode(200)
   @UseInterceptors(IdempotencyInterceptor)
@@ -692,6 +695,7 @@ export class InventoryController {
   // between reading the old value and writing the new one under
   // concurrent calls.
   @BlockWhenSuspended()
+  @BlockWhenBranchArchived()
   @Put(':vendorId/branches/:branchId/stock/:offerVariantId/safety-stock')
   @HttpCode(200)
   @UseInterceptors(IdempotencyInterceptor)

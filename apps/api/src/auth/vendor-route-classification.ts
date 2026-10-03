@@ -49,6 +49,11 @@ export const SUSPENDED_DENY_ROUTES: readonly string[] = [
   'PUT vendors/:vendorId/offers/:offerId/variants/:variantId',
   'PATCH vendors/:vendorId/offers/:offerId/variants/:variantId/media/:mediaId',
   'PUT vendors/:vendorId/offers/:offerId/variants/:variantId/media/reorder',
+  // Sprint 18b: adding a branch is new operational footprint while
+  // suspended - the same reasoning that already blocks new-offer-
+  // creation. Hours/closures/staff stay ALLOW below - see that list's
+  // own note.
+  'POST vendors/:vendorId/branches',
 ];
 
 export const SUSPENDED_ALLOW_ROUTES: readonly string[] = [
@@ -115,4 +120,18 @@ export const SUSPENDED_ALLOW_ROUTES: readonly string[] = [
   'POST vendors/:vendorId/warehouse/verification-evidence',
   'POST vendors/:vendorId/warehouse/verification-decision',
   'GET vendors/:vendorId/warehouse/verification-evidence',
+  // Sprint 18b: hours/closures/staff management are operational
+  // housekeeping on EXISTING resources (not new footprint, not
+  // catalog) - the same ALLOW reasoning as store configuration/staff/
+  // delivery setup above. Archiving a branch REDUCES footprint, not
+  // expands it, so it's ALLOW too (unlike adding one, DENY above).
+  'POST vendors/:vendorId/branches/:branchId/archive',
+  'GET vendors/:vendorId/branches/:branchId/operating-hours',
+  'PUT vendors/:vendorId/branches/:branchId/operating-hours',
+  'GET vendors/:vendorId/branches/:branchId/closures',
+  'POST vendors/:vendorId/branches/:branchId/closures',
+  'GET vendors/:vendorId/staff',
+  'POST vendors/:vendorId/staff/:vendorUserId/transfer',
+  'POST vendors/:vendorId/staff/:vendorUserId/suspend',
+  'POST vendors/:vendorId/staff/:vendorUserId/reactivate',
 ];

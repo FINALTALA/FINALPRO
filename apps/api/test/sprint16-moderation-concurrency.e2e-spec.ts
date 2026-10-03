@@ -75,14 +75,26 @@ describe('Sprint 16 - moderation concurrency and conflict-of-interest serializat
       sleep(ms).then(() => false),
     ]);
 
-  /** A transaction is genuinely waiting on a vendors-row lock right now. */
+  /**
+   * A transaction is genuinely waiting on the vendor-serializing lock
+   * chain right now. Sprint 18b: decide()/acceptStaffInvite() both now
+   * take the branch-operational-status advisory lock BEFORE the
+   * `vendors ... FOR UPDATE` row (see branch-operational-lock.util.ts's
+   * own comment on the fixed lock order) - for these two branch-scoped
+   * scenarios that advisory lock is the first, and therefore the real,
+   * contention point between them, so it must be detected here too, not
+   * only the (now strictly later) vendors-row lock.
+   */
   async function someoneWaitsOnVendorLock(): Promise<boolean> {
     for (let i = 0; i < 30; i++) {
       const rows = await ctx.prisma.$queryRaw<{ n: bigint }[]>`
         SELECT count(*)::bigint AS n FROM pg_stat_activity
          WHERE datname = current_database()
            AND wait_event_type = 'Lock'
-           AND query ILIKE '%FROM vendors%FOR UPDATE%'`;
+           AND (
+             query ILIKE '%FROM vendors%FOR UPDATE%'
+             OR query ILIKE '%pg_advisory_xact_lock%branch_operational_status%'
+           )`;
       if (Number(rows[0].n) > 0) return true;
       await sleep(100);
     }

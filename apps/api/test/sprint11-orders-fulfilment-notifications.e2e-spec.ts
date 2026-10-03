@@ -146,6 +146,10 @@ describe('Sprint 11 - Orders UI, fulfilment loop, notification dispatch (e2e)', 
     return accept.body;
   }
 
+  // Sprint 18b: checkout also now genuinely requires each branch to be
+  // APPROVED and non-archived (closing a real pre-existing gap -
+  // reserve()/buildAvailabilityMap() never checked this before) - set
+  // directly here for the same reason the vendor fields above are.
   async function makeVendorEligible(vendorId: string): Promise<void> {
     await prisma.vendor.update({
       where: { id: vendorId },
@@ -154,6 +158,10 @@ describe('Sprint 11 - Orders UI, fulfilment loop, notification dispatch (e2e)', 
         subscriptionStatus: 'ACTIVE',
         storefrontPublished: true,
       },
+    });
+    await prisma.storeBranch.updateMany({
+      where: { vendorId },
+      data: { verificationStatus: 'APPROVED' },
     });
   }
 

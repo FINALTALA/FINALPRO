@@ -30,10 +30,14 @@ import {
 } from '../auth/vendor-membership.guard';
 import { RequireVendorRole } from '../auth/vendor-role.decorator';
 import { DeliveryZoneRegion, Prisma } from '../../generated/prisma/client';
+import { BlockWhenBranchArchived } from '../auth/branch-archived.guard';
+import { BlockWhenSuspended } from '../auth/vendor-suspended.guard';
+import { lockBranchOperationalStatus } from '../common/branch-operational-lock.util';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { generateVendorSlug } from '../common/slug.util';
 import { PrismaService } from '../prisma/prisma.service';
+import { CreateNewBranchDto } from './dto/create-new-branch.dto';
 import { CreatePickupPointDto } from './dto/create-pickup-point.dto';
 import { CreateVendorDto } from './dto/create-vendor.dto';
 import { InviteStaffDto } from './dto/invite-staff.dto';
@@ -57,6 +61,7 @@ function branchSummaryDto(branch: {
   name: string;
   isPhysical: boolean;
   verificationStatus: string;
+  archivedAt: Date | null;
 }) {
   return {
     id: branch.id,
@@ -64,6 +69,7 @@ function branchSummaryDto(branch: {
     name: branch.name,
     is_physical: branch.isPhysical,
     verification_status: branch.verificationStatus,
+    archived_at: branch.archivedAt?.toISOString() ?? null,
   };
 }
 
@@ -353,6 +359,217 @@ export class VendorsController {
     return branchSummaryDto(branch);
   }
 
+  // Sprint 18b (G-ON-07, FR-VEND-006): adding a branch AFTER the
+  // initial application - the original CreateBranchDto flow
+  // (POST /vendors) stays completely untouched. Always physical
+  // (forced below, never trusted from the body), starts PENDING - it
+  // then goes through the EXACT SAME verification-evidence/
+  // verification-decision endpoints as any original branch (now
+  // extended to also accept a vendor already ACTIVE - see that
+  // controller's own comment). DENY under vendor suspension - this is
+  // genuinely new operational footprint, the same reasoning that
+  // already blocks new-offer-creation on a suspended store.
+  @Post(':vendorId/branches')
+  @UseGuards(VendorMembershipGuard)
+  @RequireVendorRole('OWNER')
+  @BlockWhenSuspended()
+  @UseInterceptors(IdempotencyInterceptor)
+  async addBranch(
+    @Param('vendorId') vendorId: string,
+    @Body() dto: CreateNewBranchDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
+  ) {
+    const vendor = await this.prisma.vendor.findUniqueOrThrow({
+      where: { id: vendorId },
+    });
+    if (vendor.storeType === 'ONLINE_ONLY') {
+      throw new ConflictException({
+        code: 'STORE_TYPE_HAS_NO_BRANCHES',
+        message:
+          'An ONLINE_ONLY store has no physical branches - see its own hidden warehouse instead',
+      });
+    }
+    if (vendor.status !== 'ACTIVE') {
+      throw new ConflictException({
+        code: 'SUBSCRIPTION_INACTIVE',
+        message: 'An active subscription is required to add a branch',
+      });
+    }
+
+    const body = await this.prisma.$transaction(async (tx) => {
+      const branch = await tx.storeBranch.create({
+        data: {
+          vendorId,
+          name: dto.name,
+          isPhysical: true,
+          lat: dto.lat,
+          lng: dto.lng,
+        },
+      });
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'store_branch.added',
+          entityType: 'StoreBranch',
+          entityId: branch.id,
+          afterState: branchSummaryDto(branch),
+        },
+        tx,
+      );
+      const responseBody = branchSummaryDto(branch);
+      await this.idempotencyCompletion.complete(
+        tx,
+        req.idempotencyClaimId,
+        responseBody,
+        201,
+      );
+      return responseBody;
+    });
+    return body;
+  }
+
+  // Sprint 18b (G-ON-07): long-term retirement, never a delete, no
+  // unarchive. Four rejection checks, in this order, each closing a
+  // specific real inconsistency an archive could otherwise leave
+  // behind:
+  //  1. A live CheckoutReservationItem at this branch - a customer
+  //     mid-checkout must not have the branch vanish under them.
+  //  2. A non-terminal BranchOrder at this branch - an order still in
+  //     progress must complete normally; archive is for a branch with
+  //     nothing left running, not a way to abandon one.
+  //  3. An ACTIVE BRANCH_EMPLOYEE still assigned here - never leave a
+  //     working membership pointing at a retired branch; transfer or
+  //     suspend them first.
+  //  4. PENDING verification evidence actually awaiting a decision
+  //     (verificationStatus PENDING AND evidenceRevision >= 1 - a
+  //     brand-new PENDING branch that never had evidence submitted,
+  //     or one sitting at RESUBMISSION_REQUESTED, is NOT this case and
+  //     may be archived) - never leave a reviewer's queue holding a
+  //     decision for a branch that no longer operates.
+  // All four read fresh under the SAME branch-operational-status
+  // advisory lock submitEvidence()/decide() also take on this exact
+  // (vendorId, branchId) - see that lock's own comment for why a
+  // plain pre-transaction read is not enough here.
+  // Allowed while the VENDOR itself is suspended - archiving reduces
+  // operational footprint rather than expanding it, matching this
+  // route's own ALLOW classification in vendor-route-classification.ts
+  // (unlike addBranch() above, which stays DENY there). Only
+  // @BlockWhenBranchArchived() applies, to refuse archiving an
+  // already-archived branch a second time.
+  @Post(':vendorId/branches/:branchId/archive')
+  @HttpCode(200)
+  @UseGuards(VendorMembershipGuard)
+  @RequireVendorRole('OWNER')
+  @BlockWhenBranchArchived()
+  @UseInterceptors(IdempotencyInterceptor)
+  async archiveBranch(
+    @Param('vendorId') vendorId: string,
+    @Param('branchId') branchId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
+  ) {
+    const branch = await this.prisma.storeBranch.findUnique({
+      where: { id: branchId },
+    });
+    if (!branch || branch.vendorId !== vendorId) {
+      throw new NotFoundException({
+        code: 'BRANCH_NOT_FOUND',
+        message: 'Branch not found for this vendor',
+      });
+    }
+
+    const body = await this.prisma.$transaction(async (tx) => {
+      await lockBranchOperationalStatus(tx, vendorId, branchId);
+      const freshBranch = await tx.storeBranch.findUniqueOrThrow({
+        where: { id: branchId },
+      });
+      if (freshBranch.archivedAt !== null) {
+        throw new ConflictException({
+          code: 'BRANCH_ARCHIVED',
+          message: 'This branch is already archived',
+        });
+      }
+
+      const liveReservation = await tx.checkoutReservationItem.findFirst({
+        where: { branchId, reservation: { expiresAt: { gt: new Date() } } },
+        select: { id: true },
+      });
+      if (liveReservation) {
+        throw new ConflictException({
+          code: 'BRANCH_HAS_LIVE_RESERVATIONS',
+          message:
+            'This branch has live customer reservations and cannot be archived yet',
+        });
+      }
+
+      const activeOrder = await tx.branchOrder.findFirst({
+        where: {
+          branchId,
+          status: { notIn: ['COMPLETED', 'CANCELLED', 'REFUNDED'] },
+        },
+        select: { id: true },
+      });
+      if (activeOrder) {
+        throw new ConflictException({
+          code: 'BRANCH_HAS_ACTIVE_ORDERS',
+          message:
+            'This branch has non-terminal orders and cannot be archived yet',
+        });
+      }
+
+      const activeStaff = await tx.vendorUser.findFirst({
+        where: { branchId, role: 'BRANCH_EMPLOYEE', status: 'ACTIVE' },
+        select: { id: true },
+      });
+      if (activeStaff) {
+        throw new ConflictException({
+          code: 'BRANCH_HAS_ACTIVE_STAFF',
+          message:
+            'This branch has an active staff member assigned - transfer or suspend them first',
+        });
+      }
+
+      if (
+        freshBranch.verificationStatus === 'PENDING' &&
+        freshBranch.evidenceRevision >= 1
+      ) {
+        throw new ConflictException({
+          code: 'BRANCH_HAS_PENDING_VERIFICATION_EVIDENCE',
+          message:
+            'This branch has verification evidence awaiting a reviewer decision and cannot be archived yet',
+        });
+      }
+
+      const updated = await tx.storeBranch.update({
+        where: { id: branchId },
+        data: { archivedAt: new Date() },
+      });
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'store_branch.archived',
+          entityType: 'StoreBranch',
+          entityId: branchId,
+          beforeState: branchSummaryDto(freshBranch),
+          afterState: branchSummaryDto(updated),
+        },
+        tx,
+      );
+      const responseBody = branchSummaryDto(updated);
+      await this.idempotencyCompletion.complete(
+        tx,
+        req.idempotencyClaimId,
+        responseBody,
+        200,
+      );
+      return responseBody;
+    });
+    return body;
+  }
+
   // Sprint 4 (RB-ROLE-002, PDR-008/009): owner-only ("staff" is store
   // configuration - PDR-009 explicitly lists it among what an employee
   // may never touch). Creates the StaffInvite record and issues the
@@ -364,6 +581,7 @@ export class VendorsController {
   @HttpCode(201)
   @UseGuards(VendorMembershipGuard)
   @RequireVendorRole('OWNER')
+  @BlockWhenBranchArchived()
   @UseInterceptors(IdempotencyInterceptor)
   async inviteStaff(
     @Param('vendorId') vendorId: string,
@@ -379,6 +597,19 @@ export class VendorsController {
       throw new NotFoundException({
         code: 'BRANCH_NOT_FOUND',
         message: 'Branch not found for this vendor',
+      });
+    }
+    // Sprint 18b: fast, non-authoritative fail-fast - see the real,
+    // lock-guaranteed re-check inside the transaction below for why
+    // this alone cannot be trusted (a concurrent archive could commit
+    // between this read and the transaction's own). Archived-only:
+    // staff are routinely invited to a branch well before its
+    // verification completes (every onboarding flow does this) - that
+    // is unrelated, pre-existing behaviour this sprint does not touch.
+    if (branch.archivedAt !== null) {
+      throw new ConflictException({
+        code: 'BRANCH_NOT_AVAILABLE_FOR_STAFF',
+        message: 'This branch is archived - staff cannot be invited to it',
       });
     }
 
@@ -446,6 +677,22 @@ export class VendorsController {
         // deserialize (see categories.controller.ts for the same
         // pattern/note).
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('finalpro:staff_invite:' || ${dto.phone}))`;
+
+        // Sprint 18b (review-round finding): the fast pre-check above
+        // is not enough - the branch could be archived in the moment
+        // between that read and this transaction's own start. Real
+        // guarantee: lock this exact (vendorId, branchId), then read
+        // StoreBranch fresh under it, before ever creating the invite.
+        await lockBranchOperationalStatus(tx, vendorId, branchId);
+        const freshBranch = await tx.storeBranch.findUniqueOrThrow({
+          where: { id: branchId },
+        });
+        if (freshBranch.archivedAt !== null) {
+          throw new ConflictException({
+            code: 'BRANCH_NOT_AVAILABLE_FOR_STAFF',
+            message: 'This branch is archived - staff cannot be invited to it',
+          });
+        }
 
         const freshMember = await tx.vendorUser.findFirst({
           where: { vendorId, user: { phone: dto.phone } },
