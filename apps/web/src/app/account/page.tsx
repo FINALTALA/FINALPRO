@@ -138,28 +138,38 @@ export default function AccountPage() {
                     ? active.type === "platform"
                     : active.type === "vendor" && active.vendor_id === w.vendor_id;
             return (
-              <div key={entry.id} className={`workspace-card${isActive ? " active" : ""}`}>
+              <div
+                key={entry.id}
+                className={`workspace-card${isActive ? " active" : ""}`}
+                style={entry.disabled ? { opacity: 0.6 } : undefined}
+              >
                 <div>
                   <div className="workspace-title">{entry.label}</div>
                   <div className="workspace-subtitle">{entry.subtitle}</div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  {isActive && <span className="badge badge-active">نشطة الآن</span>}
-                  <button
-                    className="button"
-                    onClick={() => {
-                      setActiveWorkspace(
-                        w.type === "customer"
-                          ? { type: "customer" }
-                          : w.type === "platform"
-                            ? { type: "platform" }
-                            : { type: "vendor", vendor_id: w.vendor_id, branch_id: w.branch_id },
-                      );
-                      router.push(entry.href);
-                    }}
-                  >
-                    {entry.kind === "customer" ? "التسوّق" : entry.kind === "owner" ? "لوحة المتجر" : entry.kind === "platform" ? "فتح الإدارة" : "طلبات الفرع"}
-                  </button>
+                  {entry.disabled ? (
+                    <span className="badge">معلّق</span>
+                  ) : (
+                    <>
+                      {isActive && <span className="badge badge-active">نشطة الآن</span>}
+                      <button
+                        className="button"
+                        onClick={() => {
+                          setActiveWorkspace(
+                            w.type === "customer"
+                              ? { type: "customer" }
+                              : w.type === "platform"
+                                ? { type: "platform" }
+                                : { type: "vendor", vendor_id: w.vendor_id, branch_id: w.branch_id },
+                          );
+                          router.push(entry.href);
+                        }}
+                      >
+                        {entry.kind === "customer" ? "التسوّق" : entry.kind === "owner" ? "لوحة المتجر" : entry.kind === "platform" ? "فتح الإدارة" : "طلبات الفرع"}
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             );

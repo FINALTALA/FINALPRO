@@ -7,6 +7,20 @@
 **Scope:** the full SRS, Parts 0–9. Every `FR-*` ID in [SRS Part 2](srs/02-functional-requirements.md) (244 rows, including the E.0 September amendment), every `PDR-*` ID in [`approved-product-decisions-2026-09.md`](approved-product-decisions-2026-09.md) (36 rows, including the 2026-09-26 PDR-035/036 amendment), every `BR-*` (34) and `NFR-*` (32) in Part 3/4, and every remaining requirement, decision, screen, failure scenario, backlog item and state-machine transition in Parts 0, 1, and 3–9 — covered in the appendix starting at §6, with each ID-range explicitly expanded (no row stands for more than one ID; see §0 for the two narrow, explicitly-justified exceptions — the `O.1`/`O.2` test-level classification and the `BO`/module-matrix/recommendations rollup — neither of which carries an independent DONE/PARTIAL/MISSING status of its own).
 **Update rule:** this file is reviewed again after every sprint. Each review edits it in place under a new dated version note, rather than creating a new file, so it stays the one living record.
 
+## v9 — S18b-branches-operations applied, 2026-10-03
+
+`S18b-branches-operations` (branch `feat/sprint-18b-branches-operations`) is the second, final half of the approved Sprint 18 split (`S18a` — inventory/barcode — was the first half, applied in v8 above). Migration-additive only (`VendorUser.status`, `StoreBranch.archivedAt`, new `BranchOperatingHours`/`BranchClosure` tables — the latter the only `timestamptz` columns in the schema, with a GiST exclusion constraint making an overlapping closure for the same branch impossible at the database level). Updated here per the DONE rule in §1 (a real, reachable UI, not just an API):
+
+- `FR-VEND-006` 🟡→✅: every sub-capability the requirement names now exists with a real UI — add a branch after onboarding, archive one, informational operating hours, and a temporary closure that actually blocks new reservations (delivery zones/windows already existed since S9).
+- `SRS-H3A-03` 🟡→✅: the one explicitly-called-out remaining gap (employee transfer/disable) now has a real UI at `/vendor/:vendorId/staff`, alongside the pre-existing invite/accept and warehouse/pickup-points API.
+- `FR-VPORTAL-009` stays 🟡 PARTIAL: hours and closures are now built, but vendor notification preferences (the requirement's fourth clause) remain entirely unbuilt — Sprint reassigned from `S18` to `S19`, alongside the other notification-preference gaps already tagged there.
+- `FR-VPORTAL-005` stays 🟡 PARTIAL, not promoted to DONE: branch add/archive and staff list/transfer/suspend/reactivate all now have real UI, but inviting a *new* staff member is still API-only with no page — the one concrete gap left, same `S15` tag as `G-ON-04` (the invite-UI gap it corresponds to).
+- `FR-VEND-013 (E.0)` stays 🟡 PARTIAL, note updated: transfer/suspend/reactivate now reachable from `/vendor/:vendorId/staff`; invite/accept still has no page (API only, same as before this sprint).
+- `PDR-009` stays 🟡 PARTIAL, note updated: branch/staff-management owner UI is now substantially built; other owner-UI gaps (e.g. order cancellation/returns, `FR-VPORTAL-004`) are unrelated to this pass and remain — Sprint reassigned from `S18` to `S20a`, matching `FR-VPORTAL-004`'s own tag.
+- `G-ON-07`, `G-IN-05` (§4) closed — each now carries a "(مبنية/مبني الآن — S18b)" note and moved to "غير مجدول", matching `G-IN-01`..`04`'s own established convention (v8) for a closed gap row.
+- **Not touched, deliberately:** staff-invite UI itself (`G-ON-04`, the one concrete gap `FR-VPORTAL-005`/`FR-VEND-013` still carry), vendor notification preferences (`FR-VPORTAL-009`'s remaining clause, `G-NO-02`), and every other owner-UI gap PDR-009 still lists (cancellations/returns, reports, settlements) — none of this sprint's scope.
+- Totals (§2, FR only, re-derived directly from the one row whose status actually changed): FR DONE 58→**59** (+1: `FR-VEND-006`), PARTIAL 65→**64** (−1, the same row). MISSING/DEFERRED/SUPERSEDED unchanged (81/27/14). Total FR row count unchanged at 245 (59+81+64+27+14=245). PDR unchanged (no PDR row's status changed this pass). BR/NFR (§6/§7) unchanged (no BR/NFR row touched this pass).
+
 ## v8 — S18a-inventory-barcode applied, 2026-10-02
 
 `S18a-inventory-barcode` (branch `feat/sprint-18a-inventory-barcode`) is the first half of the approved Sprint 18 split (the second half, `S18b` — new branches, hours/closures, staff list/transfer/suspend — is untouched by this pass; see each bullet's own "not touched" note). Migration-additive only (`SALE` added to `StockMovementReason`; `BranchStock.safetyStockThreshold`/`lastPhysicalCountAt` added, the latter `NULL` for every pre-existing row — no backfill, since no pre-existing row was ever actually physically counted). Updated here per the DONE rule in §1 (a real, reachable UI, not just an API):
@@ -109,13 +123,13 @@ The v4 pass above referenced PDR-035/PDR-036 inline on `FR-VEND-002`/`FR-VEND-01
 
 ## 2. Summary
 
-**Updated 2026-09-26 (v4)** — 18 FR-* rows moved from MISSING/PARTIAL to DEFERRED per the new §6 addition; see "v4 decisions applied" above. **Updated again 2026-09-26 (v4.1)** — PDR-035 and PDR-036 added as their own rows (both 🟡 PARTIAL: the decision is approved and documented, but the code for either — warehouse-evidence submission/review, and the category templates/model validation/UI — is not built yet). **Updated 2026-09-27 (v6)** — Sprint 17 implemented: 13 FR rows and 1 PDR row (PDR-036) moved PARTIAL/MISSING → DONE; 1 FR row (FR-IMPORT-004) moved MISSING → PARTIAL; several more stayed PARTIAL with their notes updated to reflect exactly what's now built vs. still missing. See "v6 — Sprint 17" above for the full per-ID list. **Updated 2026-09-29 (v7)** — `S17-owner-matching-ui` (branch `feat/sprint-17-owner-matching-ui`, a small owner-facing follow-up to Sprint 17 - a UI layer plus a few small, additive API extensions, not UI-only; not the `S17b` platform-catalog-administration item below, which this pass does not touch): `FR-MATCH-003` PARTIAL → DONE. See "v7 — S17-owner-matching-ui" above for the full per-ID list.
+**Updated 2026-09-26 (v4)** — 18 FR-* rows moved from MISSING/PARTIAL to DEFERRED per the new §6 addition; see "v4 decisions applied" above. **Updated again 2026-09-26 (v4.1)** — PDR-035 and PDR-036 added as their own rows (both 🟡 PARTIAL: the decision is approved and documented, but the code for either — warehouse-evidence submission/review, and the category templates/model validation/UI — is not built yet). **Updated 2026-09-27 (v6)** — Sprint 17 implemented: 13 FR rows and 1 PDR row (PDR-036) moved PARTIAL/MISSING → DONE; 1 FR row (FR-IMPORT-004) moved MISSING → PARTIAL; several more stayed PARTIAL with their notes updated to reflect exactly what's now built vs. still missing. See "v6 — Sprint 17" above for the full per-ID list. **Updated 2026-09-29 (v7)** — `S17-owner-matching-ui` (branch `feat/sprint-17-owner-matching-ui`, a small owner-facing follow-up to Sprint 17 - a UI layer plus a few small, additive API extensions, not UI-only; not the `S17b` platform-catalog-administration item below, which this pass does not touch): `FR-MATCH-003` PARTIAL → DONE. See "v7 — S17-owner-matching-ui" above for the full per-ID list. **Flagged, not silently fixed:** this table was never updated for `v8` (`S18a-inventory-barcode`) — its own changelog note above states FR DONE moving 52→58, but this table still read 52 until now. `v9` (`S18b-branches-operations`) below applies only its own single verified row (`FR-VEND-006` PARTIAL→DONE) on top of this table's own pre-existing figures (52→**53**, 68→**67**), the same narrow scope as every other version note here — it does **not** attempt to also reconcile `v8`'s unapplied +6/−3/−3 delta, which is outside this pass's scope and is left for a future pass to pick up (matching `v7`'s own precedent of flagging rather than silently fixing the separate "grand total by source" table's drift below).
 
 | | DONE | PARTIAL | MISSING | DEFERRED | SUPERSEDED |
 |---|---|---|---|---|---|
-| FR (244) | 52 | 68 | 83 | 27 | 14 |
+| FR (244) | 53 | 67 | 83 | 27 | 14 |
 | PDR (36) | 13 | 15 | 8 | 0 | 0 |
-| **Total** | **65** | **83** | **91** | **27** | **14** |
+| **Total** | **66** | **82** | **91** | **27** | **14** |
 
 (v1→v3: unchanged, only sprint reassignment. v4: 17 rows MISSING→DEFERRED and 1 row (`FR-FUL-007`) PARTIAL→DEFERRED, all within the FR module. v4.1: PDR-035/036 added, both PARTIAL. v7: FR-MATCH-003 PARTIAL→DONE. Total row count unchanged at 280 = 244+36.)
 
@@ -131,7 +145,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-AUTH-013 (E.0) | ضيف يتصفح فقط؛ السلة/المتابعة/checkout بحساب؛ المفضلات/المراجعات/التنبيهات بحساب | session guard؛ CartItem على السيرفر | session | /login, /cart | S10,S14,AUTH | 🟡 PARTIAL | S24 |
 | FR-AUTH-014 (E.0) | تعطيل الحساب واسترجاعه 30 يوماً | لا شيء | - | لا | لا | ❌ MISSING | S22 |
 | FR-VEND-012 (E.0) | physical/online-only/hybrid، مستودع مخفي، نقاط استلام | Vendor.storeType، Warehouse، PickupPoint؛ PUT store-type/warehouse، POST/GET pickup-points. تحقّق ONLINE_ONLY محدَّد الآن بـPDR-035 (2026-09-26): دبوس عنوان المستودع بدل صورة/دبوس الفرع؛ لم يُبنَ بعد | OWNER | لا | S5 | 🟡 PARTIAL | S15 |
-| FR-VEND-013 (E.0) | مالك/موظف كصلاحيات على نفس الحساب؛ موظف لفرع واحد | VendorUser(role,branchId)؛ staff-invites وaccept API | OWNER يدعو | مبدّل في /account؛ لا صفحة دعوة أو قبول | S4,NAV | 🟡 PARTIAL | S15 |
+| FR-VEND-013 (E.0) | مالك/موظف كصلاحيات على نفس الحساب؛ موظف لفرع واحد | VendorUser(role,branchId,status)؛ staff-invites وaccept API؛ نقل/تعليق/إعادة تفعيل (S18b) | OWNER يدعو وينقل ويعلّق | مبدّل في /account؛ /vendor/:id/staff (نقل/تعليق/إعادة تفعيل، S18b)؛ لا صفحة دعوة أو قبول | S4,NAV,S18b | 🟡 PARTIAL | S15 |
 | FR-VEND-014 (E.0) | وسيلة تواصل خارجية واحدة على الأقل | بوابة النشر في storefront.controller | OWNER | /vendor/:id/storefront | S7 | ✅ DONE | - |
 | FR-CAT-015 (E.0) | النشر يتطلب عنواناً وصورة وتصنيفاً وسعراً ومخزوناً و5 حقول فئة | بوابة النشر (`PATCH .../status` → ACTIVE، S17) تتحقق فعلياً من: عنوان، علامة تجارية، قالب+خصائص صالحين (فقط إن اختير قالب — PDR-036 D2، الفئات خارج العشرة تبقى نصاً حراً بالتصميم)، صورة PRIMARY (IMAGE فقط)، ومخزون متاح حي (لا reservedQuantity الخام) — مُثبتة خالية من التسابق/الجمود عبر اختبارين بحاجز (publish-locks-first، reserve-locks-first) | OWNER | /vendor/:id/offers/:offerId (زر النشر ورسالة الرفض بالنص الحرفي) | S3,S6,S7,S17 | ✅ DONE | - |
 | FR-CAT-016 (E.0) | أقسام المتجر: All، New arrivals، Discounts، حتى 20 مخصصاً | StoreSection(+Offer)؛ /storefronts/:slug/sections | OWNER؛ قراءة عامة | /vendor/:id/sections، /store/:slug | S7 | ✅ DONE | - |
@@ -184,7 +198,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-VEND-003 | المراجع يوافق/يرفض/يطلب إعادة تقديم مع تدقيق | GET /admin/verification-queue؛ GET evidence مدقَّق للفرع والمستودع (فشل التدقيق = لا يُكشف الدليل)؛ POST verification-decision مربوط بـevidence_revision/evidence_id، سبب إلزامي لـreject/request_resubmission، منع تعارض المصالح، AuditLog | REVIEWER/ADMIN | /admin/verification، /admin/verification/:vendorId، /vendor/:vendorId/verification (المالك) | VV,S3,S16 | ✅ DONE | - |
 | FR-VEND-004 | تأكيد الاشتراك قبل النشر | POST/GET subscription | OWNER | لا | S3 | 🟡 PARTIAL | S15 |
 | FR-VEND-005 | حالة الاشتراك تتحكم بالظهور (PDR-033: ACTIVE/EXPIRED) | VendorSubscription، subscription-gate | OWNER | لا (بلا تذكيرات) | S3 | 🟡 PARTIAL | S15 |
-| FR-VEND-006 | فروع متعددة بساعات وإغلاقات ومناطق | فروع تُنشأ داخل الطلب فقط؛ مناطق ونوافذ توصيل موجودة؛ لا ساعات ولا إغلاق ولا إضافة فرع | OWNER | /vendor/:id/branches (قراءة)، /delivery-zones، /delivery-windows | S9 | 🟡 PARTIAL | S18 |
+| FR-VEND-006 | فروع متعددة بساعات وإغلاقات ومناطق | إضافة فرع لاحقاً وأرشفته (S18b)؛ ساعات عمل معلوماتية وإغلاقات مؤقتة تمنع الحجز فعلياً (S18b)؛ مناطق ونوافذ توصيل موجودة | OWNER | /vendor/:id/branches، /vendor/:id/branches/:branchId/hours، /delivery-zones، /delivery-windows | S9,S18b | ✅ DONE | - |
 | FR-VEND-007 | أدوار موظفين مقسمة | استُبدل بـFR-VEND-013 (E.0) | - | - | - | ↪ SUPERSEDED | - |
 | FR-VEND-008 | دورة حالة المتجر مع Suspended/Cancelled | APPLIED>UNDER_REVIEW>APPROVED/REJECTED>ACTIVE⇄SUSPENDED مبنية ومختبرة (S16)؛ CANCELLED (المالك يغلق الحساب) غير مبنية — انظر FR-VEND-008-CANCELLED في §15b | ADMIN | /admin/vendors | S3,VV,S16 | 🟡 PARTIAL | — (قرار جديد) |
 | FR-VEND-009 | تعليق/إعادة تفعيل بسبب وتدقيق | POST /admin/vendors/:vendorId/suspend و/reactivate (VendorSuspension، reason_code + reason 10–1000، AuditLog، Outbox بلا نص السبب، منع تعارض المصالح)؛ GET /admin/vendors وتفاصيل التاريخ | PLATFORM_ADMIN | /admin/vendors، /admin/vendors/:vendorId | S16 | ✅ DONE | - |
@@ -414,11 +428,11 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-VPORTAL-002 | إدارة المنتجات والمخزون والتسعير | إنشاء/تعديل/أرشفة عرض ومتغيّر، أسعار وخصومات، وسائط (S17) | OWNER | /vendor/:id/offers وكل الصفحات الفرعية (جديد/تعديل/متغيّر/وسائط، S17) | S3,S17 | ✅ DONE | - |
 | FR-VPORTAL-003 | استيراد وسجل وأخطاء | API الاستيراد + ImportBatch (سجل ملخّص، S17) | OWNER | /vendor/:id/offers/import (تقرير + سجلّ الدفعات، S17) | S7,S17 | ✅ DONE | - |
 | FR-VPORTAL-004 | إدارة الطلبات مع الإلغاء والمرتجعات | إجراءات الطلب؛ الإلغاء والمرتجعات غير موجودة | OWNER/موظف | /vendor/:id/orders، طلبات الفرع | S9,S11 | 🟡 PARTIAL | S20a |
-| FR-VPORTAL-005 | إدارة الفروع والموظفين | قائمة فروع للقراءة؛ API الدعوة | OWNER | /vendor/:id/branches | S4 | 🟡 PARTIAL | S15 |
+| FR-VPORTAL-005 | إدارة الفروع والموظفين | إضافة/أرشفة فرع، قائمة الموظفين ونقلهم وتعليقهم/إعادة تفعيلهم (S18b)؛ **دعوة موظف جديد لا تزال API فقط، بلا صفحة** | OWNER | /vendor/:id/branches، /vendor/:id/staff | S4,S18b | 🟡 PARTIAL | S15 |
 | FR-VPORTAL-006 | حالة وسجل الاشتراك | GET subscription | OWNER | لا | S3 | 🟡 PARTIAL | S15 |
 | FR-VPORTAL-007 (E.20) | تقارير الأداء/SLA والرد على المراجعات (الردود مؤجلة) | لا | - | لا | لا | ❌ MISSING | S25 |
 | FR-VPORTAL-008 | بيانات اعتماد التكامل | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
-| FR-VPORTAL-009 | إعدادات المتجر: ساعات وإغلاقات ومناطق وتفضيلات إشعار | مناطق ونوافذ وواجهة المتجر؛ لا ساعات ولا إغلاقات ولا تفضيلات | OWNER | /vendor/:id/delivery-zones، /storefront | S9 | 🟡 PARTIAL | S18 |
+| FR-VPORTAL-009 | إعدادات المتجر: ساعات وإغلاقات ومناطق وتفضيلات إشعار | مناطق ونوافذ وواجهة المتجر؛ ساعات عمل وإغلاقات مؤقتة موجودة الآن (S18b)؛ لا تفضيلات إشعار | OWNER | /vendor/:id/delivery-zones، /storefront، /vendor/:id/branches/:branchId/hours | S9,S18b | 🟡 PARTIAL | S19 |
 | FR-VPORTAL-010 | شاشة تسويات (Phase 2) | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
 | FR-VPORTAL-011 | عرض إشعارات البائع | لا | - | لا | لا | ❌ MISSING | S19 |
 | FR-CMS-001 | أقسام الرئيسية والبانرات | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
@@ -444,7 +458,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | PDR-006 | لا دور سائق؛ الموظف يحدّث Sent/Delivered | لا دور سائق؛ إجراءات الموظف | موظف الفرع | صفحة طلبات الفرع | S11 | ✅ DONE | - |
 | PDR-007 | لا دردشة ولا stories؛ وسيلة تواصل خارجية | لم تُبنَ؛ بوابة التواصل | OWNER | /vendor/:id/storefront | S7 | ✅ DONE | - |
 | PDR-008 | حساب واحد بأدوار متعددة؛ مبدّل؛ موظف لفرع واحد | VendorUser؛ me/workspaces؛ API الدعوة | OWNER | مبدّل /account؛ لا دعوة ولا نقل | S4,NAV | 🟡 PARTIAL | S15 |
-| PDR-009 | فصل صلاحيات المالك والموظف | الـguards تفرضه؛ واجهات المالك ناقصة | OWNER/موظف | المركز، طلبات الفرع | S4,S9 | 🟡 PARTIAL | S18 |
+| PDR-009 | فصل صلاحيات المالك والموظف | الـguards تفرضه؛ واجهات إدارة الفروع/الموظفين الآن مبنية (S18b)؛ واجهات المالك الأخرى (مثل الاسترجاعات والتقارير) لا تزال ناقصة | OWNER/موظف | المركز، طلبات الفرع، /vendor/:id/branches، /vendor/:id/staff | S4,S9,S18b | 🟡 PARTIAL | S20a |
 | PDR-010 | متجر فعلي/إلكتروني/هجين؛ مستودع مخفي؛ نقاط استلام. تحقّق ONLINE_ONLY مفصَّل الآن بـPDR-035 (2026-09-26): دبوس عنوان المستودع (lat/lng + ملاحظة) قبل إرسال أدلة التحقق؛ المستودع لا يظهر في أي endpoint عام؛ المراجع يراه فقط داخل مسار التحقق | Vendor.storeType، Warehouse، PickupPoint | OWNER | لا | S5 | 🟡 PARTIAL | S15 |
 | PDR-011 | صفحة متجر عامة: رابط واسم وشعار ونبذة وغلاف وتواصل وأقسام ومتابعة | حقول واجهة المتجر وAPI عام | OWNER؛ عام | /store/:slug، /vendor/:id/storefront | S7,S13 | ✅ DONE | - |
 | PDR-012 | أقسام المتجر وسقف 20 | StoreSection | OWNER | /vendor/:id/sections | S7 | ✅ DONE | - |
@@ -484,7 +498,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | G-ON-04 | دعوة موظف من الواجهة | FR-VEND-013 (E.0)، FR-VPORTAL-005، PDR-008 | S15 |
 | G-ON-05 | صفحة قبول الدعوة بـOTP | FR-VEND-013 (E.0) | S15 |
 | G-ON-06 | واجهة نوع المتجر والمستودع ونقاط الاستلام (تحقّق ONLINE_ONLY محدَّد الآن بـPDR-035: دبوس عنوان مستودع، لا صورة/دبوس فرع؛ لم يُبنَ بعد) | FR-VEND-012 (E.0)، PDR-010 | S15 |
-| G-ON-07 | إضافة فرع لاحقاً وساعات وإغلاق مؤقت وأرشفة | FR-VEND-006، FR-VPORTAL-009 | S18 |
+| G-ON-07 | إضافة فرع لاحقاً وساعات وإغلاق مؤقت وأرشفة (مبنية الآن — S18b) | FR-VEND-006، FR-VPORTAL-009 | غير مجدول |
 
 ### Verification / Admin
 | Gap | القدرة | يغطي | Sprint |
@@ -510,7 +524,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | G-IN-02 | البيع الفعلي بالمسح (مبني الآن — S18a) | FR-INV-009 (E.0) | غير مجدول |
 | G-IN-03 | ملصق باركود قابل للطباعة (مبني الآن — S18a) | FR-MATCH-011 (E.0)، PDR-018 | غير مجدول |
 | G-IN-04 | مخزون أمان وتقادم المخزون (مبني الآن — S18a) | FR-INV-006/007 | غير مجدول |
-| G-IN-05 | نقل الموظف وتعطيله فوراً | FR-VEND-013، PDR-009 | S18 |
+| G-IN-05 | نقل الموظف وتعطيله فوراً (مبني الآن — S18b) | FR-VEND-013، PDR-009 | غير مجدول |
 
 ### Notifications
 | Gap | القدرة | يغطي | Sprint |
@@ -731,7 +745,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 |---|---|---|---|---|
 | SRS-H3A-01 | الاكتشاف العام: `/discover/*`, `/stores/:slug`, `/products/:id`, `.../compare` | `GET /discovery/all(?segment)`, `GET /storefronts/:slug`, `GET /canonical-products/:id/comparison` — تطابق وظيفي وإن اختلفت المسارات الحرفية | ✅ DONE | - |
 | SRS-H3A-02 | المتجر والمتابعة: PATCH storefront، sections، follow/following | كلها موجودة (Sprint 7/13) | ✅ DONE | - |
-| SRS-H3A-03 | الأدوار والمواقع: دعوة موظف بـOTP، نقل/تعطيل، warehouse/pickup-points | الدعوة والقبول والـwarehouse/pickup-points API موجودة؛ **النقل/التعطيل غير موجود** | 🟡 PARTIAL | S15/S18 |
+| SRS-H3A-03 | الأدوار والمواقع: دعوة موظف بـOTP، نقل/تعطيل، warehouse/pickup-points | الدعوة والقبول والـwarehouse/pickup-points API موجودة؛ نقل/تعليق/إعادة تفعيل موجودة الآن بواجهة حقيقية (/vendor/:id/staff، S18b) | ✅ DONE | - |
 | SRS-H3A-04 | المخزون: مبيعات فرع، تعديلات، استيراد | التعديلات (خصم بسبب) موجودة؛ بيع فعلي بالباركود موجود الآن (`GET .../stock/lookup` + `POST .../movements` بسبب SALE، S18a) | 🟡 PARTIAL | S18 |
 | SRS-H3A-05 | Checkout: quote بلا تعديل، ثم إنشاء ذري | `POST /checkout/quote`, `/reserve`, `/confirm` — يطابق المعنى وإن كان بثلاث خطوات لا خطوتين | ✅ DONE | - |
 | SRS-H3A-06 | طلبات الفرع: GET orders، PATCH actions (بدء تحضير، رجوع، إلغاء صنف، إعادة محاولة توصيل، موافقة استرداد) | البدء/الإرسال/التسليم/الاستلام موجودة؛ **الرجوع، إلغاء الصنف، إعادة محاولة التوصيل، موافقة الاسترداد غير موجودة** | 🟡 PARTIAL | S20a |

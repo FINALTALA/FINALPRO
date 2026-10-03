@@ -14,6 +14,7 @@ import {
 } from '@nestjs/common';
 import { Request } from 'express';
 import { AuditLogService } from '../audit/audit-log.service';
+import { BlockWhenBranchArchived } from '../auth/branch-archived.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
 import {
   AuthenticatedUser,
@@ -268,6 +269,7 @@ export class DeliveryWindowsController {
   @Post()
   @HttpCode(201)
   @RequireVendorRole('OWNER')
+  @BlockWhenBranchArchived()
   async create(
     @Param('vendorId') vendorId: string,
     @Param('branchId') branchId: string,
@@ -342,6 +344,7 @@ export class DeliveryWindowsController {
 
   @Put(':windowId')
   @RequireVendorRole('OWNER')
+  @BlockWhenBranchArchived()
   async update(
     @Param('vendorId') vendorId: string,
     @Param('branchId') branchId: string,
@@ -425,6 +428,7 @@ export class DeliveryWindowsController {
   @Delete(':windowId')
   @HttpCode(200)
   @RequireVendorRole('OWNER')
+  @BlockWhenBranchArchived()
   async remove(
     @Param('vendorId') vendorId: string,
     @Param('branchId') branchId: string,
@@ -469,6 +473,7 @@ export class DeliveryWindowsController {
   @Post(':windowId/exceptions')
   @HttpCode(201)
   @RequireVendorRole('OWNER')
+  @BlockWhenBranchArchived()
   async createException(
     @Param('vendorId') vendorId: string,
     @Param('branchId') branchId: string,
@@ -534,6 +539,7 @@ export class DeliveryWindowsController {
   @Delete(':windowId/exceptions/:exceptionId')
   @HttpCode(200)
   @RequireVendorRole('OWNER')
+  @BlockWhenBranchArchived()
   async removeException(
     @Param('vendorId') vendorId: string,
     @Param('branchId') branchId: string,

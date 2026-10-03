@@ -17,6 +17,11 @@ export type WorkspaceInfo =
       role: "OWNER" | "BRANCH_EMPLOYEE";
       branch_id: string | null;
       branch_name: string | null;
+      // Sprint 18b (G-IN-05): SUSPENDED only ever occurs for
+      // role=BRANCH_EMPLOYEE (enforced at the DB level) - workspaceEntry()
+      // below renders this as a disabled card with a reason, never a
+      // normal actionable link (product decision: show it, don't hide it).
+      status: "ACTIVE" | "SUSPENDED";
     };
 
 export interface NavLink {
@@ -57,6 +62,10 @@ export interface WorkspaceEntry {
   subtitle: string;
   href: string;
   kind: "customer" | "owner" | "employee" | "platform";
+  // Sprint 18b: true only for a SUSPENDED branch-employee membership -
+  // the switcher renders this entry as a disabled card (no navigation),
+  // not a normal clickable workspace.
+  disabled?: boolean;
 }
 
 /**
@@ -93,6 +102,16 @@ export function workspaceEntry(w: WorkspaceInfo): WorkspaceEntry {
       kind: "owner",
     };
   }
+  if (w.status === "SUSPENDED") {
+    return {
+      id: `vendor:${w.vendor_id}`,
+      label: w.vendor_legal_name,
+      subtitle: `حسابك في هذا الفرع معلّق من صاحب المتجر${w.branch_name ? ` (${w.branch_name})` : ""}`,
+      href: "/account",
+      kind: "employee",
+      disabled: true,
+    };
+  }
   return {
     id: `vendor:${w.vendor_id}`,
     label: w.vendor_legal_name,
@@ -125,6 +144,7 @@ export function ownerHubTiles(vendorId: string): HubTile[] {
     { href: `${base}/offers`, title: "المنتجات والعروض", description: "قائمة عروض المتجر وحالتها" },
     { href: `${base}/match-review`, title: "مراجعة التطابق", description: "مرشّحو التطابق غير الدقيق بانتظار قرارك" },
     { href: `${base}/branches`, title: "الفروع", description: "فروع المتجر وطلباتها ونوافذ توصيلها" },
+    { href: `${base}/staff`, title: "الموظفون", description: "قائمة موظفي الفروع، نقلهم وتعليقهم" },
     { href: `${base}/delivery-zones`, title: "مناطق التوصيل", description: "الأسعار والمناطق المفعّلة" },
     { href: `${base}/delivery-windows`, title: "نوافذ التوصيل", description: "أوقات التوصيل وسعتها لكل فرع" },
     { href: `${base}/orders`, title: "الطلبات", description: "طلبات كل الفروع" },

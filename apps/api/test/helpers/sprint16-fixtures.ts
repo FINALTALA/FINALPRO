@@ -303,7 +303,12 @@ export function createFixtures(ctx: Sprint16Ctx, phoneLane: PhoneLane) {
       .send(body);
   }
 
-  /** Straight to an ACTIVE, published, subscribed vendor (DB-level). */
+  /**
+   * Straight to an ACTIVE, published, subscribed vendor (DB-level).
+   * Sprint 18b: also marks every branch APPROVED - checkout now
+   * genuinely requires this (reserve()/buildAvailabilityMap() closed a
+   * real pre-existing gap that never checked it before).
+   */
   async function makeVendorActive(vendorId: string) {
     await ctx.prisma.vendor.update({
       where: { id: vendorId },
@@ -312,6 +317,10 @@ export function createFixtures(ctx: Sprint16Ctx, phoneLane: PhoneLane) {
         subscriptionStatus: 'ACTIVE',
         storefrontPublished: true,
       },
+    });
+    await ctx.prisma.storeBranch.updateMany({
+      where: { vendorId },
+      data: { verificationStatus: 'APPROVED' },
     });
   }
 

@@ -18,6 +18,7 @@ import { Throttle } from '@nestjs/throttler';
 import * as bcrypt from 'bcryptjs';
 import { Request } from 'express';
 import { AuditLogService } from '../audit/audit-log.service';
+import { lockBranchOperationalStatus } from '../common/branch-operational-lock.util';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { IdempotencyTtl } from '../common/idempotency/idempotency-ttl.decorator';
@@ -644,6 +645,28 @@ export class AuthController {
           });
         }
 
+        // Sprint 18b (review-round finding): the invite's own target
+        // branch can have been archived at any point between it being
+        // sent and accepted here - potentially much later. Real
+        // guarantee: lock this exact (vendorId, branchId) - the same
+        // shared lock archive()/addBranch()/transfer() all take - then
+        // read StoreBranch fresh under it, before ever creating the
+        // VendorUser. On rejection the StaffInvite row is left exactly
+        // as it was (still PENDING until it naturally expires) -
+        // nothing commits. Archived-only, matching inviteStaff() - a
+        // branch's verification status is unrelated, pre-existing
+        // behaviour this sprint does not touch.
+        await lockBranchOperationalStatus(tx, invite.vendorId, invite.branchId);
+        const inviteBranch = await tx.storeBranch.findUniqueOrThrow({
+          where: { id: invite.branchId },
+        });
+        if (inviteBranch.archivedAt !== null) {
+          throw new ConflictException({
+            code: 'BRANCH_NOT_AVAILABLE_FOR_STAFF',
+            message: 'This branch is archived - the invite cannot be accepted',
+          });
+        }
+
         // Review-round finding (round 4): re-checked fresh, under the
         // same phone-keyed lock inviteStaff() uses - PDR-008 ties this
         // phone to one BRANCH_EMPLOYEE assignment at a time, across
@@ -711,10 +734,14 @@ export class AuthController {
         // action already committed. Taken as late as possible, after the
         // bcrypt hash above, so the vendor lock is held only for the
         // insert.
-        // Lock order: phone advisory lock (above) -> vendor row. No other
-        // code path takes the vendor lock and then the phone lock
-        // (moderation and checkout never touch the phone lock), so no
-        // cycle is possible.
+        // Lock order: phone advisory lock -> branch-operational-status
+        // advisory lock (above) -> vendor row (here) - the global fixed
+        // order every lock in this codebase now follows (see
+        // branch-operational-lock.util.ts). No other code path takes
+        // the vendor row lock and then either of the two advisory
+        // locks (moderation and checkout never touch the phone lock;
+        // nothing else takes vendor-row-then-branch-operational), so
+        // no cycle is possible.
         // apply() is the only other VendorUser creator; it inserts the
         // OWNER row in the same transaction that creates a brand-new
         // vendor, which no moderation action can target before commit.

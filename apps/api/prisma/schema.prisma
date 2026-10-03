@@ -55,6 +55,7 @@ model User {
   vendorUsers                  VendorUser[]
   auditLogs                    AuditLog[]
   reviewedBranches             StoreBranch[]                   @relation("BranchReviewer")
+  createdBranchClosures        BranchClosure[]
   /// Sprint 15 (PDR-035): a platform reviewer's decisions on
   /// WarehouseVerificationEvidence snapshots - the ONLINE_ONLY
   /// counterpart to reviewedBranches above.
@@ -223,6 +224,18 @@ enum VendorUserRole {
   BRANCH_EMPLOYEE
 }
 
+/// Sprint 18b (G-IN-05, SRS-H3A-03): a branch employee's own membership
+/// can be suspended without deleting it - preserves audit/history, and
+/// a suspension is reversible (reactivate), unlike a delete. Never
+/// meaningful for OWNER - see VendorUser's own hand-written CHECK
+/// constraint (role/branchId CHECK's migration) enforcing SUSPENDED can
+/// only ever occur alongside role=BRANCH_EMPLOYEE at the DB level, not
+/// just in application code.
+enum VendorUserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
 /// Part 3, G.3. Sprint 2 (BL-VEND-001) captures just enough to submit
 /// an application - name, whether it's a physical location, and an
 /// optional pin. The verification-evidence fields FR-VEND-002 requires
@@ -350,6 +363,8 @@ model Vendor {
   deliveryWindows               DeliveryWindow[]
   followers                     StoreFollow[]
   importBatches                 ImportBatch[]
+  operatingHours                BranchOperatingHours[]
+  closures                      BranchClosure[]
 
   @@map("vendors")
 }
@@ -585,6 +600,14 @@ model VendorUser {
   vendorId String
   vendor   Vendor         @relation(fields: [vendorId], references: [id])
   role     VendorUserRole @default(OWNER)
+  /// Sprint 18b (G-IN-05): SUSPENDED is meaningful only for
+  /// role=BRANCH_EMPLOYEE - enforced by a hand-written CHECK constraint
+  /// in this model's migration (`status != 'SUSPENDED' OR role =
+  /// 'BRANCH_EMPLOYEE'`), the real guarantee, not just application
+  /// logic. Default ACTIVE is honestly true for every pre-existing row
+  /// - no suspension mechanism existed before this migration, so every
+  /// row really is ACTIVE, not an assumed backfill.
+  status   VendorUserStatus @default(ACTIVE)
   branchId String?
   /// Composite FK (vendorId, branchId) -> StoreBranch(vendorId, id), not
   /// a plain branchId -> StoreBranch.id FK (review-round finding): a
@@ -614,8 +637,11 @@ model VendorUser {
   /// excluded by the index's WHERE clause) and always remains a
   /// customer regardless, but may only ever hold one BRANCH_EMPLOYEE
   /// row at a time, full stop. Reassigning an employee to a different
-  /// branch/vendor is RB-ROLE-003 (disable/transfer, Should, not built
-  /// this sprint) - until then this is a one-way assignment.
+  /// branch of the SAME vendor (RB-ROLE-003) is Sprint 18b's transfer
+  /// endpoint - a plain `branchId` update on this same row, never a
+  /// new row (this partial index already allows it: the old row is
+  /// updated in place, so there is still only ever one BRANCH_EMPLOYEE
+  /// row for this account at any instant).
   @@map("vendor_users")
 }
 
@@ -657,6 +683,17 @@ model StoreBranch {
   evidenceRevision     Int                      @default(0)
   evidenceSubmittedAt  DateTime?
   createdAt            DateTime                 @default(now())
+  /// Sprint 18b (G-ON-07): long-term retirement, never a delete - the
+  /// same pattern as Offer.archivedAt. NULL (every pre-existing row's
+  /// true value - no branch was ever archived before this migration,
+  /// not an assumed default) = not archived. No unarchive endpoint
+  /// exists; see BranchesController's own comment on why. Rejected
+  /// unconditionally whenever a live CheckoutReservation, a non-
+  /// terminal BranchOrder, an ACTIVE BRANCH_EMPLOYEE, or PENDING
+  /// verification evidence actually awaiting a decision still
+  /// references this branch - see archive()'s own comment for the
+  /// exact four checks and why each exists.
+  archivedAt           DateTime?
 
   vendorUsers              VendorUser[]
   staffInvites             StaffInvite[]
@@ -665,6 +702,8 @@ model StoreBranch {
   branchOrders             BranchOrder[]
   deliveryWindows          DeliveryWindow[]
   checkoutReservationItems CheckoutReservationItem[]
+  operatingHours           BranchOperatingHours[]
+  closures                 BranchClosure[]
 
   /// Backs the composite FKs on VendorUser/StaffInvite (vendorId,
   /// branchId) -> (vendorId, id) - a plain PK-only unique on `id`
@@ -674,6 +713,78 @@ model StoreBranch {
   @@index([vendorId])
   @@index([verificationStatus, evidenceSubmittedAt])
   @@map("store_branches")
+}
+
+/// Sprint 18b (FR-VEND-006/FR-VPORTAL-009, informational only - product
+/// decision): a branch's weekly walk-in hours, interpreted as
+/// Asia/Jerusalem wall-clock time (DST-aware - see
+/// branch-operating-hours.util.ts). Deliberately NOT read by
+/// checkout/reserve - only BranchClosure gates new reservations; this
+/// table only ever backs a display ("open now"/"closed"). At most one
+/// row per (branch, day) this version - no split-shift/overnight-
+/// spanning hours without an explicit new decision (see the two CHECK
+/// constraints, hand-written in this model's migration since Prisma's
+/// DSL can't express them: openMinute >= 0 AND openMinute < closeMinute
+/// AND closeMinute <= 1440; dayOfWeek >= 0 AND dayOfWeek <= 6 - the DTO
+/// already validates this range, but a direct DB write must not be
+/// able to create an unrepresentable day). A day with no row is closed
+/// that day.
+model BranchOperatingHours {
+  id          String      @id @default(uuid())
+  vendorId    String
+  vendor      Vendor      @relation(fields: [vendorId], references: [id])
+  branchId    String
+  branch      StoreBranch @relation(fields: [vendorId, branchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  dayOfWeek   Int
+  openMinute  Int
+  closeMinute Int
+  createdAt   DateTime    @default(now())
+
+  @@unique([vendorId, branchId, dayOfWeek])
+  @@index([vendorId, branchId])
+  @@map("branch_operating_hours")
+}
+
+/// Sprint 18b (FR-VEND-006/G-ON-07, PDR-009): a temporary closure -
+/// never deleted or edited, a full historical record of every closure
+/// ever declared (a correction is a new row, not an update). Blocks
+/// new checkout/reserve at this branch for the duration (and only the
+/// duration) of `[startsAt, endsAt)` - a genuinely half-open interval,
+/// not BETWEEN, so two closures that merely touch at a shared instant
+/// (one's endsAt equals the next's startsAt) do not count as
+/// overlapping. Does NOT affect an already-live reservation's own
+/// confirm, and does NOT block transferring a staff member to this
+/// branch (only an unapproved or archived branch blocks that). The
+/// real non-overlap guarantee is this model's own hand-written
+/// `EXCLUDE USING gist` constraint (btree_gist extension required,
+/// added in this same migration) - "whether two closures for the same
+/// branch overlap in time" must never depend on application-level
+/// pre-checks alone, same established philosophy as DeliveryWindow's
+/// own exclusion constraint.
+model BranchClosure {
+  id        String      @id @default(uuid())
+  vendorId  String
+  vendor    Vendor      @relation(fields: [vendorId], references: [id])
+  branchId  String
+  branch    StoreBranch @relation(fields: [vendorId, branchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  /// Genuinely timezone-aware (timestamptz), unlike every other
+  /// DateTime column in this schema (plain TIMESTAMP(3)) - a
+  /// deliberate, explicit choice for this one table: the EXCLUDE
+  /// constraint below needs a real tstzrange, not an implicit cast
+  /// from a naive timestamp whose meaning would depend on the
+  /// session's own TimeZone setting.
+  startsAt  DateTime @db.Timestamptz(3)
+  endsAt    DateTime @db.Timestamptz(3)
+  /// Optional note on why the branch closed - trimmed, blank-after-trim
+  /// rejected if sent at all, length-capped (ConfirmPhysicalCountDto.note's
+  /// own established validation pattern).
+  reason    String?
+  createdBy String
+  creator   User        @relation(fields: [createdBy], references: [id])
+  createdAt DateTime    @default(now())
+
+  @@index([vendorId, branchId, startsAt, endsAt])
+  @@map("branch_closures")
 }
 
 enum StaffInviteStatus {

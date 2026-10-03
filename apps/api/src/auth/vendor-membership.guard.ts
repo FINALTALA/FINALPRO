@@ -88,6 +88,24 @@ export class VendorMembershipGuard implements CanActivate {
       });
     }
 
+    // Sprint 18b (G-IN-05): a suspended membership is refused here,
+    // before any role/branch check below - this is the ONE place
+    // every vendor-scoped route's membership is read, so this is the
+    // one place that needs this check. SUSPENDED is only ever
+    // reachable for role=BRANCH_EMPLOYEE (enforced by this table's
+    // own hand-written CHECK constraint, not just this guard) - an
+    // OWNER row can never be suspended through this mechanism.
+    // Scoped to exactly this one VendorUser row: the session itself,
+    // every other VendorUser row for this same account (an OWNER
+    // membership at a different vendor), and every PlatformRole on
+    // the underlying User are all untouched by this check.
+    if (membership.status === 'SUSPENDED') {
+      throw new ForbiddenException({
+        code: 'STAFF_SUSPENDED',
+        message: 'Your membership in this vendor account has been suspended',
+      });
+    }
+
     const requiredRoles = this.reflector.get<VendorUserRole[]>(
       VENDOR_ROLES_KEY,
       context.getHandler(),

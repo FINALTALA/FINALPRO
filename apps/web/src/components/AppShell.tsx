@@ -81,6 +81,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
     if (!workspaces) return;
     const w = workspaces[index];
     const entry = workspaceEntry(w);
+    if (entry.disabled) return;
     setActiveWorkspace(
       w.type === "customer"
         ? { type: "customer" }
@@ -182,6 +183,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
                           key={entry.id}
                           role="menuitem"
                           className={`menu-item${isActiveWorkspace(i) ? " active" : ""}`}
+                          disabled={entry.disabled}
+                          style={entry.disabled ? { opacity: 0.6, cursor: "not-allowed" } : undefined}
                           onClick={() => switchTo(i)}
                         >
                           <span>
@@ -189,7 +192,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
                             <br />
                             <small>{entry.subtitle}</small>
                           </span>
-                          {isActiveWorkspace(i) && <span className="badge badge-active">نشطة</span>}
+                          {entry.disabled ? (
+                            <span className="badge">معلّق</span>
+                          ) : (
+                            isActiveWorkspace(i) && <span className="badge badge-active">نشطة</span>
+                          )}
                         </button>
                       );
                     })}

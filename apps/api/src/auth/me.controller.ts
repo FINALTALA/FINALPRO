@@ -45,6 +45,14 @@ export class MeController {
           role: m.role,
           branch_id: m.branchId,
           branch_name: m.branch?.name ?? null,
+          // Sprint 18b (G-IN-05): a suspended membership is NOT hidden
+          // from this list - the person needs to know why their
+          // branch workspace no longer works. The web app renders this
+          // one as a disabled card with the reason, never a normal
+          // actionable link (product decision) - every actual route
+          // for this vendor still refuses it server-side regardless
+          // (VendorMembershipGuard), this is UX only.
+          status: m.status,
         })),
       ],
     };

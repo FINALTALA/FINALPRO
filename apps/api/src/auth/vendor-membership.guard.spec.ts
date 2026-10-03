@@ -22,7 +22,11 @@ function makeContext(
 }
 
 function makePrisma(
-  membership: { role: string; branchId: string | null } | null,
+  membership: {
+    role: string;
+    branchId: string | null;
+    status?: string;
+  } | null,
 ) {
   return {
     vendorUser: { findUnique: jest.fn().mockResolvedValue(membership) },
@@ -174,6 +178,45 @@ describe('VendorMembershipGuard', () => {
       { vendorId: 'v1', branchId: 'branch-B' },
     );
     const prisma = makePrisma({ role: 'OWNER', branchId: null });
+    const guard = new VendorMembershipGuard(
+      reflector as unknown as Reflector,
+      prisma as unknown as PrismaService,
+    );
+
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+  });
+
+  // Sprint 18b (G-IN-05).
+  it('rejects (STAFF_SUSPENDED) a BRANCH_EMPLOYEE membership with status SUSPENDED, before any role/branch check', async () => {
+    const { context, reflector } = makeContext(
+      { id: 'u1' },
+      { vendorId: 'v1', branchId: 'branch-A' },
+    );
+    const prisma = makePrisma({
+      role: 'BRANCH_EMPLOYEE',
+      branchId: 'branch-A',
+      status: 'SUSPENDED',
+    });
+    const guard = new VendorMembershipGuard(
+      reflector as unknown as Reflector,
+      prisma as unknown as PrismaService,
+    );
+
+    await expect(guard.canActivate(context)).rejects.toMatchObject({
+      response: { code: 'STAFF_SUSPENDED' },
+    });
+  });
+
+  it('allows a BRANCH_EMPLOYEE membership with status ACTIVE through, unaffected', async () => {
+    const { context, reflector } = makeContext(
+      { id: 'u1' },
+      { vendorId: 'v1', branchId: 'branch-A' },
+    );
+    const prisma = makePrisma({
+      role: 'BRANCH_EMPLOYEE',
+      branchId: 'branch-A',
+      status: 'ACTIVE',
+    });
     const guard = new VendorMembershipGuard(
       reflector as unknown as Reflector,
       prisma as unknown as PrismaService,

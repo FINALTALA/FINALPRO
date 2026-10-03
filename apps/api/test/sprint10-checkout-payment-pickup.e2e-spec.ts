@@ -152,6 +152,10 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
   // this fixture explicitly makes the vendor/offer eligible, the same
   // way a real vendor would be after verification + subscribing +
   // publishing - none of which this sprint's own tests are about.
+  // Sprint 18b: checkout also now genuinely requires each branch to be
+  // APPROVED and non-archived (closing a real pre-existing gap -
+  // reserve()/buildAvailabilityMap() never checked this before) - set
+  // directly here for the same reason the vendor fields above are.
   async function makeVendorEligible(vendorId: string): Promise<void> {
     await prisma.vendor.update({
       where: { id: vendorId },
@@ -160,6 +164,10 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         subscriptionStatus: 'ACTIVE',
         storefrontPublished: true,
       },
+    });
+    await prisma.storeBranch.updateMany({
+      where: { vendorId },
+      data: { verificationStatus: 'APPROVED' },
     });
   }
 

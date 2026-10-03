@@ -85,6 +85,7 @@ describe('Sprint 13 - web navigation model', () => {
       role: 'OWNER',
       branch_id: null,
       branch_name: null,
+      status: 'ACTIVE',
     };
     const employee: WorkspaceInfo = {
       type: 'vendor',
@@ -93,6 +94,7 @@ describe('Sprint 13 - web navigation model', () => {
       role: 'BRANCH_EMPLOYEE',
       branch_id: BRANCH,
       branch_name: 'الفرع الرئيسي',
+      status: 'ACTIVE',
     };
 
     it('customer shops; owner lands on the store dashboard; employee lands on their own branch orders only', () => {
@@ -136,6 +138,7 @@ describe('Sprint 13 - web navigation model', () => {
         `/vendor/${VENDOR}/offers`,
         `/vendor/${VENDOR}/match-review`,
         `/vendor/${VENDOR}/branches`,
+        `/vendor/${VENDOR}/staff`,
         `/vendor/${VENDOR}/delivery-zones`,
         `/vendor/${VENDOR}/delivery-windows`,
         `/vendor/${VENDOR}/orders`,

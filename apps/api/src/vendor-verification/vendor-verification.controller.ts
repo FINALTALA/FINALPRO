@@ -15,6 +15,7 @@ import { Request } from 'express';
 import { AuditLogService } from '../audit/audit-log.service';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { PlatformRole } from '../../generated/prisma/client';
+import { BlockWhenBranchArchived } from '../auth/branch-archived.guard';
 import { PlatformRoleGuard } from '../auth/platform-role.guard';
 import { RequirePlatformRole } from '../auth/platform-role.decorator';
 import {
@@ -23,6 +24,7 @@ import {
 } from '../auth/session-auth.guard';
 import { VendorMembershipGuard } from '../auth/vendor-membership.guard';
 import { RequireVendorRole } from '../auth/vendor-role.decorator';
+import { lockBranchOperationalStatus } from '../common/branch-operational-lock.util';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
@@ -106,6 +108,7 @@ export class VendorVerificationController {
   @Post('verification-evidence')
   @UseGuards(VendorMembershipGuard)
   @RequireVendorRole('OWNER')
+  @BlockWhenBranchArchived()
   @UseInterceptors(IdempotencyInterceptor)
   async submitEvidence(
     @Param('vendorId') vendorId: string,
@@ -132,6 +135,17 @@ export class VendorVerificationController {
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      // Sprint 18b: the branch-operational-status advisory lock is
+      // taken FIRST (before the vendor row lock below) - this is the
+      // global fixed order every lock in this codebase now follows
+      // (see branch-operational-lock.util.ts's own comment). This is
+      // the REAL guarantee against a concurrently-committing archive()
+      // (which takes this same lock) - not just a pre-transaction
+      // read, which a review-round finding showed was not enough: a
+      // request already past BranchArchivedGuard could otherwise still
+      // write evidence for a branch archived a moment earlier.
+      await lockBranchOperationalStatus(tx, vendorId, branchId);
+
       // Same vendor-row lock as the decision endpoint below - a
       // concurrent decision (which also locks this vendor) must not
       // interleave with the checks or the APPLIED -> UNDER_REVIEW
@@ -141,10 +155,19 @@ export class VendorVerificationController {
       // Both reads are fresh, taken under the lock - the vendor's
       // status and this branch's own decision can both have changed
       // since the pre-transaction reads above (a concurrent decision).
+      // Sprint 18b: ACTIVE joins APPLIED/UNDER_REVIEW - a branch added
+      // after the vendor's own onboarding closed (addBranch()) submits
+      // evidence the exact same way; the APPLIED -> UNDER_REVIEW
+      // transition below is untouched (its own condition only ever
+      // fires when vendor.status === 'APPLIED', never true for ACTIVE).
       const vendor = await tx.vendor.findUniqueOrThrow({
         where: { id: vendorId },
       });
-      if (vendor.status !== 'APPLIED' && vendor.status !== 'UNDER_REVIEW') {
+      if (
+        vendor.status !== 'APPLIED' &&
+        vendor.status !== 'UNDER_REVIEW' &&
+        vendor.status !== 'ACTIVE'
+      ) {
         throw new ConflictException({
           code: 'VENDOR_NOT_REVIEWABLE',
           message:
@@ -155,6 +178,14 @@ export class VendorVerificationController {
       const freshBranch = await tx.storeBranch.findUniqueOrThrow({
         where: { id: branchId },
       });
+      // Sprint 18b: the real guarantee against a concurrent archive -
+      // see this method's own lock comment above.
+      if (freshBranch.archivedAt !== null) {
+        throw new ConflictException({
+          code: 'BRANCH_ARCHIVED',
+          message: 'This branch is archived and cannot accept new evidence',
+        });
+      }
       if (
         freshBranch.verificationStatus !== 'PENDING' &&
         freshBranch.verificationStatus !== 'RESUBMISSION_REQUESTED'
@@ -275,8 +306,10 @@ export class VendorVerificationController {
         where: { id: vendorId },
         select: { status: true },
       });
+      // Sprint 18b: ACTIVE joins UNDER_REVIEW - a branch added after
+      // onboarding closed (addBranch()) is reviewed the same way.
       if (
-        vendor.status !== 'UNDER_REVIEW' ||
+        (vendor.status !== 'UNDER_REVIEW' && vendor.status !== 'ACTIVE') ||
         branch.verificationStatus !== 'PENDING' ||
         branch.evidenceRevision < 1 ||
         branch.lat === null ||
@@ -343,6 +376,7 @@ export class VendorVerificationController {
     PlatformRole.VERIFICATION_REVIEWER,
     PlatformRole.PLATFORM_ADMIN,
   )
+  @BlockWhenBranchArchived()
   @UseInterceptors(IdempotencyInterceptor)
   async decide(
     @Param('vendorId') vendorId: string,
@@ -383,6 +417,18 @@ export class VendorVerificationController {
       // as still-pending before either commits, so neither promotes
       // the vendor even though both approvals together should have).
       // Different vendors never contend for this lock.
+      //
+      // Sprint 18b: the branch-operational-status advisory lock is
+      // taken FIRST, before this vendor row lock - the global fixed
+      // order (see branch-operational-lock.util.ts). The real
+      // guarantee against a concurrently-committing archive() (which
+      // takes this same lock on this same branch) - a review-round
+      // finding showed BranchArchivedGuard's own pre-transaction check
+      // alone is not enough for this endpoint specifically, since an
+      // unresolved pending-evidence decision left behind by a race
+      // would be a genuinely worse inconsistency than an ordinary
+      // operational write slipping through.
+      await lockBranchOperationalStatus(tx, vendorId, branchId);
       await tx.$queryRaw`SELECT id FROM vendors WHERE id = ${vendorId} FOR UPDATE`;
 
       // Sprint 16 (D4): first check, under the vendor lock - see
@@ -394,10 +440,12 @@ export class VendorVerificationController {
       // vendor's review state and this branch's own evidence/status
       // can both have changed since the pre-transaction reads above
       // (another decision, or a concurrent resubmission).
+      // Sprint 18b: ACTIVE joins UNDER_REVIEW - see the vendorNextStatus
+      // block below for why this never touches vendor.status either way.
       const vendor = await tx.vendor.findUniqueOrThrow({
         where: { id: vendorId },
       });
-      if (vendor.status !== 'UNDER_REVIEW') {
+      if (vendor.status !== 'UNDER_REVIEW' && vendor.status !== 'ACTIVE') {
         throw new ConflictException({
           code: 'VENDOR_NOT_UNDER_REVIEW',
           message:
@@ -408,6 +456,14 @@ export class VendorVerificationController {
       const freshBranch = await tx.storeBranch.findUniqueOrThrow({
         where: { id: branchId },
       });
+      // Sprint 18b: the real guarantee against a concurrent archive -
+      // see this method's own lock comment above.
+      if (freshBranch.archivedAt !== null) {
+        throw new ConflictException({
+          code: 'BRANCH_ARCHIVED',
+          message: 'This branch is archived and its evidence cannot be decided',
+        });
+      }
       if (freshBranch.verificationStatus !== 'PENDING') {
         throw new ConflictException({
           code: 'BRANCH_NOT_PENDING',
@@ -465,7 +521,9 @@ export class VendorVerificationController {
         },
       });
 
-      // FR-VEND-008 lifecycle mapping for a branch decision:
+      // FR-VEND-008 lifecycle mapping for a branch decision - ONLY
+      // while the vendor is still UNDER_REVIEW (its original
+      // onboarding cycle):
       //  - approve, and no physical branch is left pending -> vendor
       //    UNDER_REVIEW -> APPROVED.
       //  - reject -> vendor UNDER_REVIEW -> REJECTED unconditionally
@@ -477,21 +535,36 @@ export class VendorVerificationController {
       //  - request_resubmission -> no vendor transition; the vendor
       //    stays UNDER_REVIEW and can resubmit evidence for this
       //    branch (verification-evidence resets it to PENDING).
+      //
+      // Sprint 18b (critical review-round fix): when vendor.status is
+      // ACTIVE (a branch added via addBranch() long after onboarding
+      // closed), vendorNextStatus must stay null for EVERY decision,
+      // in BOTH directions. The original code only guarded the
+      // approve-side implicitly (it happened to require UNDER_REVIEW
+      // nowhere) - approving a late branch on an ACTIVE vendor would
+      // have incorrectly reset it to APPROVED, and rejecting one would
+      // have incorrectly reset it all the way to REJECTED (a closed,
+      // terminal state) - either one a real regression of an active,
+      // subscribed vendor over one single branch's own decision. Only
+      // this one branch's own verificationStatus ever changes here for
+      // an ACTIVE vendor.
       let vendorNextStatus: 'APPROVED' | 'REJECTED' | null = null;
-      if (dto.decision === 'approve') {
-        const pendingPhysical = await tx.storeBranch.findFirst({
-          where: {
-            vendorId,
-            isPhysical: true,
-            verificationStatus: { not: 'APPROVED' },
-          },
-          select: { id: true },
-        });
-        if (!pendingPhysical) {
-          vendorNextStatus = 'APPROVED';
+      if (vendor.status === 'UNDER_REVIEW') {
+        if (dto.decision === 'approve') {
+          const pendingPhysical = await tx.storeBranch.findFirst({
+            where: {
+              vendorId,
+              isPhysical: true,
+              verificationStatus: { not: 'APPROVED' },
+            },
+            select: { id: true },
+          });
+          if (!pendingPhysical) {
+            vendorNextStatus = 'APPROVED';
+          }
+        } else if (dto.decision === 'reject') {
+          vendorNextStatus = 'REJECTED';
         }
-      } else if (dto.decision === 'reject') {
-        vendorNextStatus = 'REJECTED';
       }
 
       if (vendorNextStatus) {
