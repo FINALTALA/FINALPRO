@@ -106,9 +106,10 @@ describe('Sprint 19 - legacy Outbox row migration (DEAD_LETTER backfill, e2e)', 
 
   it('moves a legacy FAILED vendor.suspended row (no recipient_user_id) to DEAD_LETTER too - not just PENDING ones', async () => {
     const row = (
-      await db.query(`SELECT status, "lastError" FROM outbox_events WHERE id = $1`, [
-        legacyVendorSuspendedId,
-      ])
+      await db.query(
+        `SELECT status, "lastError" FROM outbox_events WHERE id = $1`,
+        [legacyVendorSuspendedId],
+      )
     ).rows[0];
     expect(row).toMatchObject({
       status: 'DEAD_LETTER',
@@ -118,27 +119,30 @@ describe('Sprint 19 - legacy Outbox row migration (DEAD_LETTER backfill, e2e)', 
 
   it('leaves a fresh-style row (same eventType, but carrying recipient_user_id) untouched and PENDING', async () => {
     const row = (
-      await db.query(`SELECT status, "lastError" FROM outbox_events WHERE id = $1`, [
-        freshStockMovementId,
-      ])
+      await db.query(
+        `SELECT status, "lastError" FROM outbox_events WHERE id = $1`,
+        [freshStockMovementId],
+      )
     ).rows[0];
     expect(row).toMatchObject({ status: 'PENDING', lastError: null });
   });
 
   it('leaves an unrelated eventType (never missing a recipient to begin with) completely untouched', async () => {
     const row = (
-      await db.query(`SELECT status, "lastError" FROM outbox_events WHERE id = $1`, [
-        unrelatedEventTypeId,
-      ])
+      await db.query(
+        `SELECT status, "lastError" FROM outbox_events WHERE id = $1`,
+        [unrelatedEventTypeId],
+      )
     ).rows[0];
     expect(row).toMatchObject({ status: 'PENDING', lastError: null });
   });
 
   it('never touches an already-PUBLISHED row, even for one of the three affected event types', async () => {
     const row = (
-      await db.query(`SELECT status, "lastError" FROM outbox_events WHERE id = $1`, [
-        alreadyPublishedId,
-      ])
+      await db.query(
+        `SELECT status, "lastError" FROM outbox_events WHERE id = $1`,
+        [alreadyPublishedId],
+      )
     ).rows[0];
     expect(row).toMatchObject({ status: 'PUBLISHED', lastError: null });
   });
