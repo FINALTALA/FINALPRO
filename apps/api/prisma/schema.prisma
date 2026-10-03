@@ -722,10 +722,13 @@ model StoreBranch {
 /// checkout/reserve - only BranchClosure gates new reservations; this
 /// table only ever backs a display ("open now"/"closed"). At most one
 /// row per (branch, day) this version - no split-shift/overnight-
-/// spanning hours without an explicit new decision (see the CHECK
-/// constraint, hand-written in this model's migration since Prisma's
-/// DSL can't express it: openMinute >= 0 AND openMinute < closeMinute
-/// AND closeMinute <= 1440). A day with no row is closed that day.
+/// spanning hours without an explicit new decision (see the two CHECK
+/// constraints, hand-written in this model's migration since Prisma's
+/// DSL can't express them: openMinute >= 0 AND openMinute < closeMinute
+/// AND closeMinute <= 1440; dayOfWeek >= 0 AND dayOfWeek <= 6 - the DTO
+/// already validates this range, but a direct DB write must not be
+/// able to create an unrepresentable day). A day with no row is closed
+/// that day.
 model BranchOperatingHours {
   id          String      @id @default(uuid())
   vendorId    String

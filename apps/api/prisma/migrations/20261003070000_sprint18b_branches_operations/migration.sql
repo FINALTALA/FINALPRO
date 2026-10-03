@@ -46,6 +46,9 @@ CREATE TABLE "branch_operating_hours" (
 ALTER TABLE "branch_operating_hours" ADD CONSTRAINT "branch_operating_hours_minute_range"
   CHECK ("openMinute" >= 0 AND "openMinute" < "closeMinute" AND "closeMinute" <= 1440);
 
+ALTER TABLE "branch_operating_hours" ADD CONSTRAINT "branch_operating_hours_day_of_week_range"
+  CHECK ("dayOfWeek" >= 0 AND "dayOfWeek" <= 6);
+
 CREATE UNIQUE INDEX "branch_operating_hours_vendorId_branchId_dayOfWeek_key" ON "branch_operating_hours"("vendorId", "branchId", "dayOfWeek");
 CREATE INDEX "branch_operating_hours_vendorId_branchId_idx" ON "branch_operating_hours"("vendorId", "branchId");
 
