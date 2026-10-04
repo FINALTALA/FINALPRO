@@ -12,6 +12,7 @@ import {
 } from '../../generated/prisma/client';
 import { PeriodicTask } from '../common/periodic-task.util';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationChannelService } from './notification-channel.service';
 
 const MAX_ATTEMPTS = 5;
 const BASE_DELAY_SECONDS = 30;
@@ -19,6 +20,24 @@ const MAX_DELAY_SECONDS = 3600;
 const LEASE_SECONDS = 120;
 const DISPATCH_INTERVAL_MS = 3000;
 const FOLLOWER_BATCH_SIZE = 200;
+// Review-round fix: a follower-fanout row used to drain every batch in
+// one process() call, which could monopolize the relay for as long as
+// that row had targets left - a normal event enqueued meanwhile would
+// not be touched until the whole fan-out finished. Now exactly one
+// batch is processed per claim; if more targets remain, the row is
+// released back to PENDING with its availableAt pushed this many
+// seconds out, so it is simply not eligible for the next several
+// claim() calls and whatever else is actually oldest-and-eligible
+// (a normal event, in particular) gets picked instead.
+const FOLLOWER_YIELD_SECONDS = 2;
+
+interface NotifyItem {
+  recipientUserId: string;
+  type: NotificationType;
+  targetType: NotificationTargetType;
+  targetId: string;
+  data: Record<string, unknown>;
+}
 
 function backoffSeconds(attemptCount: number): number {
   return Math.min(MAX_DELAY_SECONDS, BASE_DELAY_SECONDS * 2 ** attemptCount);
@@ -136,11 +155,13 @@ function buildSafeData(
 /**
  * Sprint 19: the relay half of ADR-006's transactional outbox - see
  * OutboxEvent's own schema.prisma comment for the full two-phase
- * claim/process state machine this implements exactly. No external
- * channel call happens anywhere in this file - "dispatched" means "a
- * Notification row was durably created", nothing else (NotificationChannelService
- * is called separately, after this service's own transaction commits,
- * best-effort, never gating PUBLISHED/FAILED).
+ * claim/process state machine this implements exactly. "Dispatched"
+ * means "a Notification row was durably created" - that commit is what
+ * PUBLISHED/FAILED/DEAD_LETTER are about, and NotificationChannelService
+ * never gates any of it. It IS called, but only after the transaction
+ * that created the Notification row(s) has already committed, and
+ * strictly best-effort (see notifyBestEffort below): its failure, or
+ * never getting called at all, has no effect on delivery guarantees.
  */
 @Injectable()
 export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
@@ -151,7 +172,10 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
     (err) => this.logger.error('OutboxRelayService tick failed', err as Error),
   );
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly channel: NotificationChannelService,
+  ) {}
 
   onModuleInit() {
     this.task.start();
@@ -161,10 +185,16 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
     this.task.stop();
   }
 
-  /** Claims and fully processes (including a multi-batch follower drain)
-   * at most one outbox row. Returns whether it did any work at all -
-   * tests drain a backlog deterministically with `while (await
-   * relay.dispatchOnce()) {}` instead of waiting on the real timer. */
+  /** Claims and processes at most one outbox row, doing at most one
+   * unit of work on it (a normal single-recipient dispatch, which is
+   * always everything that row needs - or exactly one
+   * FOLLOWER_BATCH_SIZE-sized batch of a follower fan-out, which may
+   * leave more targets for a later call). Returns whether it did any
+   * work at all - tests drain a backlog deterministically with `while
+   * (await relay.dispatchOnce()) {}` instead of waiting on the real
+   * timer; a large follower fan-out now takes several dispatchOnce()
+   * calls to fully drain rather than one, by design (see
+   * FOLLOWER_YIELD_SECONDS). */
   async dispatchOnce(): Promise<boolean> {
     const claimed = await this.claim();
     if (!claimed) return false;
@@ -220,82 +250,118 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async process(id: string, lockToken: string): Promise<void> {
-    for (;;) {
-      const outcome = await this.prisma.$transaction(async (tx) => {
-        const rows = await tx.$queryRaw<
-          {
-            status: string;
-            lockToken: string | null;
-            eventType: string;
-            payload: Prisma.JsonValue;
-            attemptCount: number;
-          }[]
-        >`SELECT status, "lockToken", "eventType", payload, "attemptCount" FROM outbox_events WHERE id = ${id} FOR UPDATE`;
-        const row = rows[0];
-        // Not ours any more (a later worker already reclaimed - and
-        // maybe even finished - this row while we were stalled past
-        // our own lease). Do nothing at all: no Notification, no
-        // status write, nothing - exactly the review-round requirement.
-        if (
-          !row ||
-          row.status !== 'PROCESSING' ||
-          row.lockToken !== lockToken
-        ) {
-          return 'aborted' as const;
-        }
+    const notifyItems: NotifyItem[] = [];
+    await this.prisma.$transaction(async (tx) => {
+      const rows = await tx.$queryRaw<
+        {
+          status: string;
+          lockToken: string | null;
+          eventType: string;
+          payload: Prisma.JsonValue;
+          attemptCount: number;
+        }[]
+      >`SELECT status, "lockToken", "eventType", payload, "attemptCount" FROM outbox_events WHERE id = ${id} FOR UPDATE`;
+      const row = rows[0];
+      // Not ours any more (a later worker already reclaimed - and
+      // maybe even finished - this row while we were stalled past our
+      // own lease). Do nothing at all: no Notification, no status
+      // write, nothing - exactly the review-round requirement.
+      if (!row || row.status !== 'PROCESSING' || row.lockToken !== lockToken) {
+        return;
+      }
 
-        try {
-          const fullyDone = await this.dispatchByEventType(
-            tx,
-            id,
-            row.eventType,
-            row.payload as Record<string, unknown>,
-          );
-          if (fullyDone) {
-            await tx.$executeRaw`UPDATE outbox_events SET status = 'PUBLISHED', "publishedAt" = now() WHERE id = ${id} AND "lockToken" = ${lockToken}`;
-            return 'done' as const;
-          }
-          // A follower-fanout row with more targets left to drain -
-          // this is progress, not a failure: refresh the lease and
-          // loop again immediately, in a fresh short transaction, same
-          // lockToken, WITHOUT touching attemptCount (only a genuine
-          // new claim - after a real stall/crash - does that).
-          await tx.$executeRaw`UPDATE outbox_events SET "lockedAt" = now() WHERE id = ${id} AND "lockToken" = ${lockToken}`;
-          return 'continue' as const;
-        } catch (err) {
-          // Caught, not re-thrown: the failure-state UPDATE below must
-          // itself survive and COMMIT, which re-throwing would undo
-          // (rollback would erase both this write AND any partial
-          // progress already made this attempt - e.g. some, but not
-          // all, Notification rows in a batch - that a retry should be
-          // able to build on via the unique-constraint-as-checkpoint).
-          const message =
-            err instanceof Error ? err.message.slice(0, 500) : String(err);
-          await tx.$executeRaw`
-            UPDATE outbox_events
-            SET status = CASE WHEN "attemptCount" >= ${MAX_ATTEMPTS} THEN 'DEAD_LETTER'::"OutboxEventStatus" ELSE 'FAILED'::"OutboxEventStatus" END,
-                "availableAt" = now() + make_interval(secs => ${backoffSeconds(row.attemptCount)}),
-                "lastError" = ${message}
-            WHERE id = ${id} AND "lockToken" = ${lockToken}
-          `;
-          return 'failed' as const;
+      try {
+        const fullyDone = await this.dispatchByEventType(
+          tx,
+          id,
+          row.eventType,
+          row.payload as Record<string, unknown>,
+          notifyItems,
+        );
+        if (fullyDone) {
+          await tx.$executeRaw`UPDATE outbox_events SET status = 'PUBLISHED', "publishedAt" = now() WHERE id = ${id} AND "lockToken" = ${lockToken}`;
+          return;
         }
-      });
-      if (outcome !== 'continue') return;
+        // A follower-fanout row with more targets left to drain. This
+        // is progress, not a failure - but it is also a full batch's
+        // worth of real work, so instead of looping internally (which
+        // would let one huge fan-out monopolize the relay, see
+        // FOLLOWER_YIELD_SECONDS's own comment), release the row back
+        // to PENDING with a short cooldown and let the next claim()
+        // decide fairly what to work on next, possibly a different
+        // row. attemptCount is decremented by exactly the amount the
+        // next claim() is about to re-add, so this voluntary yield
+        // never erodes the attempt budget the way a real stall/crash
+        // correctly does - a multi-batch drain can take arbitrarily
+        // many yields without ever approaching MAX_ATTEMPTS on its
+        // own.
+        // clock_timestamp(), not now(): now() is frozen at this
+        // transaction's START, which for a follower batch can be a full
+        // FOLLOWER_BATCH_SIZE's worth of sequential SAVEPOINT round-trips
+        // earlier than this actual statement - anchoring the cooldown to
+        // now() would silently eat however long that batch just took
+        // out of the intended FOLLOWER_YIELD_SECONDS margin.
+        await tx.$executeRaw`
+          UPDATE outbox_events
+          SET status = 'PENDING',
+              "lockedAt" = NULL,
+              "lockToken" = NULL,
+              "attemptCount" = GREATEST("attemptCount" - 1, 0),
+              "availableAt" = clock_timestamp() + make_interval(secs => ${FOLLOWER_YIELD_SECONDS})
+          WHERE id = ${id} AND "lockToken" = ${lockToken}
+        `;
+      } catch (err) {
+        // Caught, not re-thrown: the failure-state UPDATE below must
+        // itself survive and COMMIT, which re-throwing would undo
+        // (rollback would erase both this write AND any partial
+        // progress already made this attempt - e.g. some, but not
+        // all, Notification rows in a batch - that a retry should be
+        // able to build on via the unique-constraint-as-checkpoint).
+        const message =
+          err instanceof Error ? err.message.slice(0, 500) : String(err);
+        await tx.$executeRaw`
+          UPDATE outbox_events
+          SET status = CASE WHEN "attemptCount" >= ${MAX_ATTEMPTS} THEN 'DEAD_LETTER'::"OutboxEventStatus" ELSE 'FAILED'::"OutboxEventStatus" END,
+              "availableAt" = clock_timestamp() + make_interval(secs => ${backoffSeconds(row.attemptCount)}),
+              "lastError" = ${message}
+          WHERE id = ${id} AND "lockToken" = ${lockToken}
+        `;
+      }
+    });
+
+    // Best-effort, after commit, never gating anything above - each
+    // item here is a Notification row that is already durably saved
+    // regardless of what notifyBestEffort does with it.
+    for (const item of notifyItems) {
+      await this.notifyBestEffort(item);
+    }
+  }
+
+  private async notifyBestEffort(item: NotifyItem): Promise<void> {
+    try {
+      await this.channel.notify(
+        item.recipientUserId,
+        `type=${item.type} target=${item.targetType}:${item.targetId} data=${JSON.stringify(item.data)}`,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `NotificationChannelService.notify failed for recipient ${item.recipientUserId}`,
+        err as Error,
+      );
     }
   }
 
   /** Returns whether this outbox row is now fully dispatched (true for
    * every "normal" single-recipient event type, since those are always
    * done in one call; for a follower-fanout type, only once every
-   * OutboxDeliveryTarget row has been drained, possibly across many
-   * calls to this same method over several `process()` loop
-   * iterations). */
+   * OutboxDeliveryTarget row has been drained, which may take several
+   * separate `process()` invocations - see FOLLOWER_YIELD_SECONDS). */
   private async dispatchByEventType(
     tx: Prisma.TransactionClient,
     outboxEventId: string,
     eventType: string,
     payload: Record<string, unknown>,
+    notifyItems: NotifyItem[],
   ): Promise<boolean> {
     const followerMapping = FOLLOWER_EVENT_TYPE_MAP[eventType];
     if (followerMapping) {
@@ -305,6 +371,7 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
         eventType,
         followerMapping,
         payload,
+        notifyItems,
       );
     }
 
@@ -322,17 +389,29 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
         `OutboxRelayService: missing recipient_user_id for eventType "${eventType}" (outbox event ${outboxEventId})`,
       );
     }
-    await this.createNotification(
+    const targetType = mapping.targetType;
+    const targetId = String(payload[mapping.targetIdField] ?? '');
+    const data = buildSafeData(eventType, payload);
+    const created = await this.createNotification(
       tx,
       outboxEventId,
       recipientUserId,
       mapping.type,
-      mapping.targetType,
-      String(payload[mapping.targetIdField] ?? ''),
-      buildSafeData(eventType, payload),
+      targetType,
+      targetId,
+      data,
       typeof payload.vendor_id === 'string' ? payload.vendor_id : null,
       typeof payload.branch_id === 'string' ? payload.branch_id : null,
     );
+    if (created) {
+      notifyItems.push({
+        recipientUserId,
+        type: mapping.type,
+        targetType,
+        targetId,
+        data,
+      });
+    }
     return true;
   }
 
@@ -342,6 +421,7 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
     eventType: string,
     mapping: { type: NotificationType; targetIdField: string },
     payload: Record<string, unknown>,
+    notifyItems: NotifyItem[],
   ): Promise<boolean> {
     const targets = await tx.$queryRaw<
       { id: string; recipientUserId: string }[]
@@ -357,7 +437,7 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
       typeof payload.vendor_id === 'string' ? payload.vendor_id : null;
     const safeData = buildSafeData(eventType, payload);
     for (const target of targets) {
-      await this.createNotification(
+      const created = await this.createNotification(
         tx,
         outboxEventId,
         target.recipientUserId,
@@ -368,6 +448,15 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
         vendorId,
         null,
       );
+      if (created) {
+        notifyItems.push({
+          recipientUserId: target.recipientUserId,
+          type: mapping.type,
+          targetType: 'OFFER',
+          targetId,
+          data: safeData,
+        });
+      }
       await tx.$executeRaw`UPDATE outbox_delivery_targets SET "processedAt" = now() WHERE id = ${target.id}`;
     }
     const remaining = await tx.$queryRaw<{ count: bigint }[]>`
@@ -377,6 +466,10 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
     return Number(remaining[0].count) === 0;
   }
 
+  /** Returns whether a NEW Notification row was actually inserted
+   * (false for an idempotent retry that hit the unique constraint) -
+   * the caller only queues a best-effort channel notify for a genuine
+   * new delivery, never for a replay of one that already happened. */
   private async createNotification(
     tx: Prisma.TransactionClient,
     outboxEventId: string,
@@ -387,7 +480,7 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
     data: Record<string, unknown>,
     vendorId: string | null,
     branchId: string | null,
-  ): Promise<void> {
+  ): Promise<boolean> {
     // A unique-constraint hit here is EXPECTED (an idempotent retry
     // re-creating a Notification that already exists) - but Postgres
     // marks the WHOLE transaction aborted the instant any statement
@@ -413,6 +506,7 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
         },
       });
       await tx.$executeRaw`RELEASE SAVEPOINT create_notification`;
+      return true;
     } catch (err) {
       await tx.$executeRaw`ROLLBACK TO SAVEPOINT create_notification`;
       // Already created by an earlier attempt on this same outbox
@@ -420,6 +514,7 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
       // PUBLISHED) - idempotent no-op, exactly the guarantee the
       // unique constraint exists to provide.
       if (!isUniqueViolation(err)) throw err;
+      return false;
     }
   }
 }

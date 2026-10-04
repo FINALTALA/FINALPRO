@@ -951,6 +951,7 @@ model OutboxEvent {
 
   notifications  Notification[]
   deliveryTargets OutboxDeliveryTarget[]
+  discountActivationNotices DiscountActivationNotice[]
 
   @@index([status, availableAt])
   @@map("outbox_events")
@@ -1057,11 +1058,12 @@ model OutboxDeliveryTarget {
 /// offerVariantId alone so a LATER reschedule (a new discountStartAt)
 /// is correctly treated as a new, separately-notifiable instance.
 model DiscountActivationNotice {
-  id              String   @id @default(uuid())
+  id              String      @id @default(uuid())
   offerVariantId  String
   discountStartAt DateTime
   outboxEventId   String
-  createdAt       DateTime @default(now())
+  outboxEvent     OutboxEvent @relation(fields: [outboxEventId], references: [id])
+  createdAt       DateTime    @default(now())
 
   @@unique([offerVariantId, discountStartAt])
   @@map("discount_activation_notices")

@@ -1,6 +1,7 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ThrottlerStorage } from '@nestjs/throttler';
+import { randomUUID } from 'crypto';
 import * as request from 'supertest';
 import { AppModule } from './../src/app.module';
 import { SmsService } from './../src/auth/sms.service';
@@ -1104,6 +1105,199 @@ describe('Sprint 19 - notification relay, sweeps, API (e2e)', () => {
         .set('Authorization', `Bearer ${ownerToken}`)
         .expect(200);
       expect(unreadAfter.body.unread_count).toBe(0);
+    });
+  });
+
+  // ============================================================
+  // 11. Follower fan-out fairness (review-round fix): a huge
+  // fan-out must not monopolize the relay against a normal event.
+  // ============================================================
+  describe('follower fan-out fairness', () => {
+    it('a normal event enqueued after a huge follower fan-out is delivered before the fan-out finishes draining every batch', async () => {
+      const { owner, vendorId, branchId } = await setupActiveVendor();
+      const admin = await signupWithPlatformRole('PLATFORM_ADMIN');
+
+      // More than one FOLLOWER_BATCH_SIZE (200) worth of followers,
+      // created directly (not via the real signup/OTP flow - these
+      // never need to log in, only to exist as real `users` rows the
+      // Notification FK can point to, same shortcut the small
+      // 5-follower test above already uses, just at bulk scale).
+      const bulkFollowerCount = 250;
+      const followerUsersData = Array.from({ length: bulkFollowerCount }).map(
+        () => ({
+          id: randomUUID(),
+          phone: uniquePhone(),
+          passwordHash: 'unused-bulk-follower-fixture',
+        }),
+      );
+      await prisma.user.createMany({ data: followerUsersData });
+      await prisma.storeFollow.createMany({
+        data: followerUsersData.map((u) => ({ userId: u.id, vendorId })),
+      });
+
+      const offer = await prisma.vendorOffer.create({
+        data: {
+          vendorId,
+          titleAr: 'منتج جديد',
+          titleEn: 'New product',
+          status: 'DRAFT',
+          brandId: (
+            await prisma.brand.findFirstOrThrow({
+              where: { isNoBrandSentinel: true },
+            })
+          ).id,
+        },
+      });
+      const variant = await prisma.offerVariant.create({
+        data: {
+          vendorId,
+          vendorOfferId: offer.id,
+          sellerSku: unique('sku'),
+          basePrice: 50,
+          storeInventoryBarcode: unique('barcode'),
+        },
+      });
+      await prisma.offerVariantMedia.create({
+        data: {
+          vendorId,
+          offerVariantId: variant.id,
+          url: 'https://example.com/photo.jpg',
+          kind: 'PRIMARY',
+          mediaType: 'IMAGE',
+        },
+      });
+      await prisma.branchStock.create({
+        data: { vendorId, branchId, offerVariantId: variant.id, quantity: 10 },
+      });
+
+      // Publish first (older createdAt) - the row with 250 targets,
+      // needing 2 batches (200 + 50) to fully drain.
+      await request(app.getHttpServer())
+        .patch(`/api/v1/vendors/${vendorId}/offers/${offer.id}/status`)
+        .set('Authorization', `Bearer ${owner}`)
+        .send({ status: 'ACTIVE' })
+        .expect((r) => expect([200, 201]).toContain(r.status));
+      const followerEvent = await prisma.outboxEvent.findFirstOrThrow({
+        where: {
+          eventType: 'offer.published_for_followers',
+          payload: { path: ['offer_id'], equals: offer.id },
+        },
+      });
+
+      // Enqueued second (later createdAt) - a single-recipient event
+      // that should never have to wait behind the fan-out above.
+      await request(app.getHttpServer())
+        .post(`/api/v1/admin/vendors/${vendorId}/suspend`)
+        .set('Authorization', `Bearer ${admin.token}`)
+        .set('Idempotency-Key', unique('suspend'))
+        .send({
+          reason_code: 'POLICY_VIOLATION',
+          reason: 'Policy violation reported by customers',
+        })
+        .expect(201);
+
+      async function processedTargetCount(): Promise<number> {
+        const rows = await prisma.$queryRaw<{ count: bigint }[]>`
+          SELECT count(*)::bigint AS count FROM outbox_delivery_targets
+          WHERE "outboxEventId" = ${followerEvent.id} AND "processedAt" IS NOT NULL
+        `;
+        return Number(rows[0].count);
+      }
+
+      // Drive the relay until exactly the first FOLLOWER_BATCH_SIZE
+      // (200) targets are processed - the fan-out's own first and only
+      // batch before it must yield (250 > 200). This file's own
+      // database is shared with every other parallel e2e spec file, so
+      // this cannot assume any particular dispatchOnce() call landed
+      // on this row - only that it eventually does.
+      await dispatchUntil(async () => (await processedTargetCount()) === 200);
+      const afterFirstBatch = await prisma.outboxEvent.findUniqueOrThrow({
+        where: { id: followerEvent.id },
+      });
+      const normalEventRow = await prisma.outboxEvent.findFirstOrThrow({
+        where: {
+          eventType: 'vendor.suspended',
+          payload: { path: ['vendor_id'], equals: vendorId },
+        },
+      });
+      // The actual fairness mechanism, proved directly from DB state
+      // rather than by racing dispatchOnce() calls against however much
+      // unrelated backlog other parallel test files happen to have
+      // queued at this exact moment (which a wall-clock race would be
+      // vulnerable to): right after yielding, the fan-out row is PENDING
+      // but excluded from the claim pool for FOLLOWER_YIELD_SECONDS,
+      // while the normal event - enqueued AFTER it, so plain
+      // oldest-first ordering alone would otherwise still favor the
+      // fan-out row - is immediately eligible. For this whole window,
+      // the normal event is the ONLY claimable row between the two,
+      // which is exactly what lets it jump ahead of a fan-out that is
+      // nowhere near finished draining.
+      expect(afterFirstBatch.status).toBe('PENDING');
+      expect(afterFirstBatch.lockToken).toBeNull();
+      expect(afterFirstBatch.availableAt.getTime()).toBeGreaterThan(Date.now());
+      expect(normalEventRow.status).toBe('PENDING');
+      expect(normalEventRow.availableAt.getTime()).toBeLessThanOrEqual(
+        Date.now(),
+      );
+
+      // End-to-end confirmation that the normal event does in fact get
+      // delivered (not just theoretically eligible).
+      await dispatchUntil(async () => {
+        const n = await prisma.notification.findFirst({
+          where: { type: 'VENDOR_SUSPENDED', targetId: vendorId },
+        });
+        return n !== null;
+      });
+
+      // Now let everything finish and verify full, exactly-once
+      // delivery to every one of the 250 followers. Not drainRelay() -
+      // the fan-out row's own cooldown (FOLLOWER_YIELD_SECONDS) can
+      // make the whole queue look briefly empty to a worker that only
+      // retries a few times on empty; dispatchUntil's own empty-retry
+      // budget needs raising to comfortably outlast that cooldown.
+      await dispatchUntil(
+        async () => {
+          const row = await prisma.outboxEvent.findUnique({
+            where: { id: followerEvent.id },
+          });
+          return row?.status === 'PUBLISHED';
+        },
+        5000,
+        80, // 80 * 50ms = 4s, safely past FOLLOWER_YIELD_SECONDS's 2s
+      );
+      const finalFollowerEvent = await prisma.outboxEvent.findUniqueOrThrow({
+        where: { id: followerEvent.id },
+      });
+      expect(finalFollowerEvent.status).toBe('PUBLISHED');
+      // The voluntary yield between batch 1 and batch 2 decremented
+      // attemptCount by exactly what the next claim() re-added - a
+      // legitimate multi-batch drain stays at 1, nowhere near
+      // MAX_ATTEMPTS, no matter how many batches it took.
+      expect(finalFollowerEvent.attemptCount).toBe(1);
+
+      const notifications = await prisma.notification.findMany({
+        where: {
+          type: 'FOLLOWED_STORE_NEW_PRODUCT',
+          outboxEventId: followerEvent.id,
+        },
+      });
+      expect(notifications).toHaveLength(bulkFollowerCount);
+      const notifiedIds = notifications.map((n) => n.recipientUserId).sort();
+      expect(notifiedIds).toEqual(followerUsersData.map((u) => u.id).sort());
+    });
+  });
+
+  // ============================================================
+  // 12. DiscountActivationNotice foreign key integrity
+  // ============================================================
+  describe('DiscountActivationNotice foreign key integrity', () => {
+    it('rejects an outboxEventId that does not reference a real outbox_events row, at the database level', async () => {
+      await expect(
+        prisma.$executeRaw`
+          INSERT INTO discount_activation_notices (id, "offerVariantId", "discountStartAt", "outboxEventId")
+          VALUES (${randomUUID()}, ${unique('ov')}, now(), ${'nonexistent-outbox-event-id'})
+        `,
+      ).rejects.toThrow(/discount_activation_notices_outboxEventId_fkey/);
     });
   });
 });
