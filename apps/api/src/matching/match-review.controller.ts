@@ -145,6 +145,8 @@ function queueCandidateDto(c: {
     structuralAttributes: Prisma.JsonValue;
     canonicalProduct: { modelName: string; brand: { name: string } };
   };
+  source?: string;
+  _count?: { matchReports: number };
 }) {
   return {
     id: c.id,
@@ -163,6 +165,14 @@ function queueCandidateDto(c: {
     canonical_model_name: c.canonicalVariant.canonicalProduct.modelName,
     canonical_brand_name: c.canonicalVariant.canonicalProduct.brand.name,
     canonical_structural_attributes: c.canonicalVariant.structuralAttributes,
+    // Sprint 17b (FR-MATCH-005): a customer-reported candidate re-enters
+    // this same PENDING queue - source distinguishes "normal non-exact
+    // review" from "a confirmed exact-identifier match someone flagged
+    // as wrong". report_count is an AGGREGATE only - never note
+    // content, never reporter identity (MatchReport's own sensitivity
+    // rule).
+    source: c.source ?? 'NON_EXACT_SCORE',
+    report_count: c._count?.matchReports ?? 0,
   };
 }
 
@@ -465,6 +475,7 @@ export class MatchReviewController {
         canonicalVariant: {
           include: { canonicalProduct: { include: { brand: true } } },
         },
+        _count: { select: { matchReports: true } },
       },
     });
 

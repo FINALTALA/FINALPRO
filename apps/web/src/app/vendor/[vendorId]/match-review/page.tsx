@@ -24,6 +24,12 @@ interface QueueCandidateDto {
   canonical_model_name: string;
   canonical_brand_name: string;
   canonical_structural_attributes: Record<string, unknown>;
+  // Sprint 17b: where this candidate came from, and how many customers
+  // have since reported the resulting match as wrong. No note content
+  // or reporter identity is ever included here, by design - only the
+  // count.
+  source: "NON_EXACT_SCORE" | "EXACT_IDENTIFIER";
+  report_count: number;
 }
 
 interface QueuePageDto {
@@ -157,6 +163,14 @@ export default function MatchReviewQueuePage() {
                       </span>
                     </div>
                     <span className="badge">درجة التطابق: {(c.score * 100).toFixed(0)}٪</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    {c.source === "EXACT_IDENTIFIER" && <span className="badge badge-active">تطابق دقيق</span>}
+                    {c.report_count > 0 && (
+                      <span className="badge" style={{ color: "var(--color-danger)" }}>
+                        ⚠ {c.report_count} {c.report_count === 1 ? "بلاغ" : "بلاغات"} من العملاء
+                      </span>
+                    )}
                   </div>
                   <p className="muted" style={{ margin: "4px 0" }}>
                     مرشّح: {c.canonical_brand_name} — {c.canonical_model_name}

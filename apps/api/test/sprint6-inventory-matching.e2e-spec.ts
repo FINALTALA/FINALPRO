@@ -266,7 +266,15 @@ describe('Sprint 6 - branch inventory, stock movements, media, non-exact match r
         brand_id: brand.id,
         category_id: category.id,
         model_name: modelName,
-        status: 'PUBLISHED',
+        // Sprint 17b: several of this file's own tests deliberately
+        // call this helper with similar-looking model names (to
+        // exercise non-exact matching itself) - now a legitimate
+        // pg_trgm duplicate match (FR-CAT-009), not a bug in that new
+        // check. `status` is no longer accepted (CreateCanonicalProductDto,
+        // Sprint 17b review-round fix) - every product is created at
+        // DRAFT regardless; nothing in this file's own tests depends
+        // on PUBLISHED specifically (matching doesn't filter by status).
+        confirm_despite_duplicate_warning: true,
       })
       .expect(201);
     const variantRes = await request(app.getHttpServer())

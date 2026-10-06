@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
+import SafeImage from "@/components/SafeImage";
 import StoreCircle from "@/components/StoreCircle";
 import { EmptyState, ErrorBanner, SkeletonGrid } from "@/components/States";
 import { ApiError, apiFetch, newIdempotencyKey } from "@/lib/api";
@@ -67,6 +68,15 @@ export default function StoreProductPage() {
   const [adding, setAdding] = useState(false);
   const [added, setAdded] = useState(false);
   const [cartError, setCartError] = useState<string | null>(null);
+  // Sprint 17b: lets a signed-in customer flag a wrong product match on
+  // the variant they're actually looking at (the same variant id the
+  // add-to-cart flow above already uses) - no note content or reporter
+  // identity ever surfaces anywhere except here, by design.
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportNote, setReportNote] = useState("");
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportDone, setReportDone] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
 
   const data = offer.data;
   const variant = data ? (data.variants.find((v) => v.id === selected) ?? data.variants[0]) : null;
@@ -94,6 +104,25 @@ export default function StoreProductPage() {
       setCartError(err instanceof ApiError ? err.message : "تعذّرت الإضافة للسلة");
     } finally {
       setAdding(false);
+    }
+  }
+
+  async function submitMatchReport() {
+    if (!variant) return;
+    setReportBusy(true);
+    setReportError(null);
+    try {
+      await apiFetch("/me/match-reports", {
+        method: "POST",
+        body: { offer_variant_id: variant.id, note: reportNote.trim() || undefined },
+      });
+      setReportOpen(false);
+      setReportNote("");
+      setReportDone(true);
+    } catch (err) {
+      setReportError(err instanceof ApiError ? err.message : "تعذّر إرسال البلاغ");
+    } finally {
+      setReportBusy(false);
     }
   }
 
@@ -128,8 +157,7 @@ export default function StoreProductPage() {
         <div>
           <div className="product-gallery-main">
             {images.length > 0 ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={images[imageIndex] ?? images[0]} alt={data.title_ar} />
+              <SafeImage src={images[imageIndex] ?? images[0]} alt={data.title_ar} />
             ) : (
               <span className="product-card-noimage">لا توجد صورة لهذا المنتج</span>
             )}
@@ -143,8 +171,7 @@ export default function StoreProductPage() {
                   onClick={() => setImageIndex(i)}
                   aria-label={`صورة ${i + 1}`}
                 >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={src} alt="" />
+                  <SafeImage src={src} alt={`${data.title_ar} - صورة مصغّرة ${i + 1}`} />
                 </button>
               ))}
             </div>
@@ -216,6 +243,55 @@ export default function StoreProductPage() {
               </Link>
             )}
           </div>
+
+          {variant.canonical_product_id && (
+            <div style={{ marginTop: 14 }}>
+              {reportDone ? (
+                <p className="muted" role="status">تم استلام بلاغك، شكراً</p>
+              ) : reportOpen ? (
+                <div className="field" style={{ maxWidth: 420 }}>
+                  <label htmlFor="match-report-note">ما الخطأ في هذا التطابق؟ (اختياري)</label>
+                  <textarea
+                    id="match-report-note"
+                    rows={3}
+                    value={reportNote}
+                    disabled={reportBusy}
+                    onChange={(e) => setReportNote(e.target.value)}
+                  />
+                  {reportError && <ErrorBanner message={reportError} />}
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button className="button-link" disabled={reportBusy} onClick={submitMatchReport}>
+                      {reportBusy ? "جارٍ الإرسال..." : "إرسال البلاغ"}
+                    </button>
+                    <button
+                      className="button-link"
+                      disabled={reportBusy}
+                      onClick={() => {
+                        setReportOpen(false);
+                        setReportError(null);
+                      }}
+                    >
+                      إلغاء
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  className="button-link"
+                  style={{ fontSize: 13 }}
+                  onClick={() => {
+                    if (!token) {
+                      router.push(`/login?next=${encodeURIComponent(pathname)}`);
+                      return;
+                    }
+                    setReportOpen(true);
+                  }}
+                >
+                  الإبلاغ عن تطابق غير صحيح
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

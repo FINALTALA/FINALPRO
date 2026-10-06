@@ -69,6 +69,7 @@ model User {
   priceChangesMade             PriceHistory[]
   importBatchesCreated         ImportBatch[]
   notifications                Notification[]
+  matchReports                 MatchReport[]
 
   @@map("users")
 }
@@ -169,15 +170,15 @@ enum OtpPurpose {
 /// needs to survive as long as its own 15-minute Redis TTL already
 /// bounds it to. See PhoneVerificationService's recovery-index methods.
 model OtpCode {
-  id            String     @id @default(uuid())
-  phone         String
-  purpose       OtpPurpose
-  codeHash      String
-  expiresAt     DateTime
-  consumedAt    DateTime?
-  consumedByKey String?
-  attemptCount  Int        @default(0)
-  createdAt     DateTime   @default(now())
+  id             String     @id @default(uuid())
+  phone          String
+  purpose        OtpPurpose
+  codeHash       String
+  expiresAt      DateTime
+  consumedAt     DateTime?
+  consumedByKey  String?
+  attemptCount   Int        @default(0)
+  createdAt      DateTime   @default(now())
   /// checkCode() tie-break fix: a DB-generated, monotonically
   /// increasing sequence, independent of wall-clock time - the
   /// definitive answer to "which of two OTP rows for the same
@@ -191,7 +192,7 @@ model OtpCode {
   /// row's own backfilled value is NOT a record of its true original
   /// issuance order - see this migration's own comment for why that
   /// is never relied upon.
-  issuedSequence Int       @default(autoincrement())
+  issuedSequence Int        @default(autoincrement())
 
   @@index([phone, purpose, consumedAt, createdAt, issuedSequence])
   @@map("otp_codes")
@@ -595,12 +596,12 @@ model VendorDeliveryZone {
 /// direct write. VendorMembershipGuard reads this alongside role on
 /// every vendor-scoped route to decide access (see its own doc comment).
 model VendorUser {
-  id       String         @id @default(uuid())
+  id       String           @id @default(uuid())
   userId   String
-  user     User           @relation(fields: [userId], references: [id])
+  user     User             @relation(fields: [userId], references: [id])
   vendorId String
-  vendor   Vendor         @relation(fields: [vendorId], references: [id])
-  role     VendorUserRole @default(OWNER)
+  vendor   Vendor           @relation(fields: [vendorId], references: [id])
+  role     VendorUserRole   @default(OWNER)
   /// Sprint 18b (G-IN-05): SUSPENDED is meaningful only for
   /// role=BRANCH_EMPLOYEE - enforced by a hand-written CHECK constraint
   /// in this model's migration (`status != 'SUSPENDED' OR role =
@@ -620,7 +621,7 @@ model VendorUser {
   /// more than one FK); MATCH SIMPLE means this constraint is simply
   /// not checked when branchId is null (OWNER rows), matching this
   /// table's own role/branchId CHECK constraint exactly.
-  branch   StoreBranch?   @relation(fields: [vendorId, branchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  branch   StoreBranch?     @relation(fields: [vendorId, branchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
 
   @@unique([userId, vendorId])
   @@index([branchId])
@@ -774,8 +775,8 @@ model BranchClosure {
   /// constraint below needs a real tstzrange, not an implicit cast
   /// from a naive timestamp whose meaning would depend on the
   /// session's own TimeZone setting.
-  startsAt  DateTime @db.Timestamptz(3)
-  endsAt    DateTime @db.Timestamptz(3)
+  startsAt  DateTime    @db.Timestamptz(3)
+  endsAt    DateTime    @db.Timestamptz(3)
   /// Optional note on why the branch closed - trimmed, blank-after-trim
   /// rejected if sent at all, length-capped (ConfirmPhysicalCountDto.note's
   /// own established validation pattern).
@@ -949,8 +950,8 @@ model OutboxEvent {
   attemptCount Int               @default(0)
   lastError    String?
 
-  notifications  Notification[]
-  deliveryTargets OutboxDeliveryTarget[]
+  notifications             Notification[]
+  deliveryTargets           OutboxDeliveryTarget[]
   discountActivationNotices DiscountActivationNotice[]
 
   @@index([status, availableAt])
@@ -1121,21 +1122,37 @@ model IdempotencyKey {
 // ProductMedia, OfferBranchInventory, PriceHistory, ProductMatch
 // (BL-MATCH-003, queued/human-reviewed matches - this sprint only ships
 // the exact-match auto-link path, BL-MATCH-002), ImportJob/ImportRow,
-// FxRate. CanonicalProduct.product_type/warranty/tags are BL-CAT-003
-// (Should/stretch) and are also deliberately omitted.
+// FxRate.
+//
+// Sprint 17b: CanonicalProduct.productType/warranty/tags/SEO (BL-CAT-003)
+// and restriction/merge-split are now built (see each field's own
+// comment below). AttributeDefinition/AttributeOption are explicitly
+// STILL not built - BL-CAT-004 stays Should/Full-MVP, past the FYP line
+// per the sprint plan's own sizing; structuralAttributes' free-form JSON
+// remains the only FYP-tier mechanism (BL-CAT-004b).
 // ---------------------------------------------------------------------
 
 /// Part 3, G.3 (FR-CAT-001): hierarchical category/subcategory tree,
 /// AR/EN labels on every node. Self-referencing parentId; null means a
 /// root category.
 model Category {
-  id        String     @id @default(uuid())
-  nameAr    String
-  nameEn    String
-  parentId  String?
-  parent    Category?  @relation("CategoryTree", fields: [parentId], references: [id])
-  children  Category[] @relation("CategoryTree")
-  createdAt DateTime   @default(now())
+  id                String     @id @default(uuid())
+  nameAr            String
+  nameEn            String
+  parentId          String?
+  parent            Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children          Category[] @relation("CategoryTree")
+  createdAt         DateTime   @default(now())
+  /// Sprint 17b (FR-CAT-006): forward-looking only - blocks a NEW
+  /// CanonicalProduct from being created under this category, and
+  /// blocks a CanonicalProduct (in this category, or anywhere) from
+  /// newly publishing while its own category is restricted. Never
+  /// hides or unpublishes anything already live - see
+  /// CategoriesController's own restrict()/unrestrict() comment for
+  /// the full, explicitly-confirmed behavior. reason required 10-1000
+  /// chars when isRestricted is set, PLATFORM_ADMIN-visible only.
+  isRestricted      Boolean    @default(false)
+  restrictionReason String?
 
   canonicalProducts CanonicalProduct[]
 
@@ -1185,6 +1202,24 @@ enum CanonicalProductStatus {
   PENDING_REVIEW
   PUBLISHED
   ARCHIVED
+  /// Sprint 17b (FR-MATCH-006): terminal, like ARCHIVED - set only by a
+  /// successful merge (this product was the LOSER), never a normal
+  /// lifecycle transition. See CanonicalProductsController.merge() and
+  /// the state-machine's own comment for why this is excluded from the
+  /// ordinary transition table entirely (merge is a distinct operation
+  /// with its own validation, not a transition a PATCH-status caller
+  /// can ever request directly).
+  MERGED
+}
+
+/// Sprint 17b (FR-CAT-012, N.2's "never match a bundle against an
+/// individual component" rule). A property of the CanonicalProduct
+/// itself, never inherited from Category - a single category can
+/// legitimately contain both bundles and individual items.
+enum ProductType {
+  PHYSICAL
+  BUNDLE
+  SERVICE
 }
 
 /// Part 3, G.3 / FR-MATCH-008: level 1 of the four-level model - model
@@ -1198,13 +1233,13 @@ enum CanonicalProductStatus {
 /// review (FR-CAT-009), not a DB constraint, since model names alone
 /// aren't always unique across categories.
 model CanonicalProduct {
-  id              String                 @id @default(uuid())
-  brandId         String
-  brand           Brand                  @relation(fields: [brandId], references: [id])
-  categoryId      String
-  category        Category               @relation(fields: [categoryId], references: [id])
-  modelName       String
-  status          CanonicalProductStatus @default(DRAFT)
+  id                String                 @id @default(uuid())
+  brandId           String
+  brand             Brand                  @relation(fields: [brandId], references: [id])
+  categoryId        String
+  category          Category               @relation(fields: [categoryId], references: [id])
+  modelName         String
+  status            CanonicalProductStatus @default(DRAFT)
   /// Sprint 7 (RB-MATCH-003, approved-product-decisions-2026-09.md
   /// Sec 3.2): "The first confirmed matched offer supplies a
   /// provisional canonical name." Deliberately separate from
@@ -1220,9 +1255,41 @@ model CanonicalProduct {
   /// and MatchReviewController.decide(). Changed only through
   /// CanonicalNameChangeRequest's admin-approval flow afterward, never
   /// silently by a later confirmation.
-  canonicalNameAr String?
-  canonicalNameEn String?
-  createdAt       DateTime               @default(now())
+  canonicalNameAr   String?
+  canonicalNameEn   String?
+  /// Sprint 17b (BL-CAT-003, FR-CAT-012): the bundle-vs-individual
+  /// classification N.2's auto-block rule (never match a BUNDLE against
+  /// a component) depends on. Defaults PHYSICAL - every pre-existing
+  /// row is honestly a physical good (nothing in this codebase before
+  /// this sprint could even represent a bundle), not a guess.
+  productType       ProductType            @default(PHYSICAL)
+  /// Sprint 17b (FR-CAT-010). Free text - no structured warranty-term
+  /// model exists (BL-CAT-003, Should/stretch scope only covers the
+  /// field's existence, not a full terms engine).
+  warrantyPeriod    String?
+  warrantyType      String?
+  /// Sprint 17b (FR-CAT-011): admin-curated, free-form - distinct from
+  /// the structured category/attribute taxonomy (FR-CAT-003, not built
+  /// this sprint either).
+  tags              String[]               @default([])
+  /// Sprint 17b (FR-CAT-007).
+  seoTitleAr        String?
+  seoTitleEn        String?
+  seoDescriptionAr  String?
+  seoDescriptionEn  String?
+  /// Sprint 17b (FR-CAT-006) - see Category.isRestricted's own comment;
+  /// identical forward-looking-only semantics, applied at the product
+  /// level instead of/in addition to the category level.
+  isRestricted      Boolean                @default(false)
+  restrictionReason String?
+  /// Sprint 17b (FR-MATCH-006): set only on the LOSING product of a
+  /// merge, pointing at the survivor - "redirect, never orphaned" (L-24).
+  /// The row itself is kept forever, never deleted, so an old id lookup
+  /// still resolves and reports where it went.
+  mergedIntoId      String?
+  mergedInto        CanonicalProduct?      @relation("CanonicalProductMerge", fields: [mergedIntoId], references: [id])
+  mergedFrom        CanonicalProduct[]     @relation("CanonicalProductMerge")
+  createdAt         DateTime               @default(now())
 
   variants           CanonicalProductVariant[]
   vendorOffers       VendorOffer[]
@@ -1230,6 +1297,7 @@ model CanonicalProduct {
 
   @@index([brandId])
   @@index([categoryId])
+  @@index([mergedIntoId])
   @@map("canonical_products")
 }
 
@@ -1281,15 +1349,15 @@ model CanonicalNameChangeRequest {
 /// within one product), and BL-MATCH-002's exact-match auto-link needs
 /// a clean global index to query against.
 model CanonicalProductVariant {
-  id                     String           @id @default(uuid())
+  id                     String                    @id @default(uuid())
   canonicalProductId     String
-  canonicalProduct       CanonicalProduct @relation(fields: [canonicalProductId], references: [id])
+  canonicalProduct       CanonicalProduct          @relation(fields: [canonicalProductId], references: [id])
   /// JSON: storage/color/size etc., only for dimensions the manufacturer
   /// treats as a distinct model/MPN (FR-MATCH-008). Free-shape by design
   /// - Sprint 3 does not build AttributeDefinition/AttributeOption.
   structuralAttributes   Json
   mpn                    String?
-  gtin                   String?          @unique
+  gtin                   String?                   @unique
   /// Sprint 5 (RB-INV-001, PDR-018): the internal, platform-wide,
   /// permanently-stable identifier for this matched product variant -
   /// distinct from gtin/mpn (external, manufacturer-issued, optional)
@@ -1303,14 +1371,22 @@ model CanonicalProductVariant {
   /// shared canonical row, never on any one vendor's OfferVariant.
   /// Never returned by any public endpoint - CanonicalProductsController's
   /// variantToDto() deliberately omits it; do not add it there.
-  platformProductBarcode String           @unique
-  createdAt              DateTime         @default(now())
+  platformProductBarcode String                    @unique
+  /// Sprint 17b (FR-MATCH-006), same redirect semantics as
+  /// CanonicalProduct.mergedIntoId - set only on a variant that was
+  /// paired away during a merge, pointing at its surviving counterpart.
+  /// Row kept forever, never deleted.
+  mergedIntoVariantId    String?
+  mergedIntoVariant      CanonicalProductVariant?  @relation("CanonicalProductVariantMerge", fields: [mergedIntoVariantId], references: [id])
+  mergedFromVariants     CanonicalProductVariant[] @relation("CanonicalProductVariantMerge")
+  createdAt              DateTime                  @default(now())
 
   confirmedOfferVariants OfferVariant[]         @relation("ConfirmedMatch")
   proposedOfferVariants  OfferVariant[]         @relation("ProposedMatch")
   matchReviewCandidates  MatchReviewCandidate[]
 
   @@unique([canonicalProductId, mpn])
+  @@index([mergedIntoVariantId])
   @@map("canonical_product_variants")
 }
 
@@ -1752,20 +1828,20 @@ model VendorSubscription {
 /// endpoint, since an explicit COUNT_CORRECTION movement from zero
 /// already covers that case without a second write path.
 model BranchStock {
-  id               String       @id @default(uuid())
-  vendorId         String
-  vendor           Vendor       @relation(fields: [vendorId], references: [id])
-  branchId         String
+  id                   String       @id @default(uuid())
+  vendorId             String
+  vendor               Vendor       @relation(fields: [vendorId], references: [id])
+  branchId             String
   /// Composite FK (vendorId, branchId) -> StoreBranch(vendorId, id) -
   /// same cross-vendor-integrity reasoning as VendorUser/StaffInvite's
   /// own composite FKs to StoreBranch (Sprint 4): a plain branchId ->
   /// StoreBranch.id FK would only prove the branch exists somewhere,
   /// not that it belongs to this same vendorId.
-  branch           StoreBranch  @relation(fields: [vendorId, branchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
-  offerVariantId   String
+  branch               StoreBranch  @relation(fields: [vendorId, branchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  offerVariantId       String
   /// Composite FK (vendorId, offerVariantId) -> OfferVariant(vendorId,
   /// id) - same reasoning, against OfferVariant's own @@unique([vendorId, id]).
-  offerVariant     OfferVariant @relation(fields: [vendorId, offerVariantId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  offerVariant         OfferVariant @relation(fields: [vendorId, offerVariantId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
   /// Never written directly - see this model's own comment. A DB-level
   /// CHECK (quantity >= 0), hand-written in this model's migration (not
   /// representable in Prisma's schema DSL, same already-established
@@ -1774,7 +1850,7 @@ model BranchStock {
   /// atomic conditional UPDATE in InventoryController's movement
   /// endpoint (RB-INV-005), which never even attempts a write that
   /// would violate it.
-  quantity         Int          @default(0)
+  quantity             Int          @default(0)
   /// Sprint 10 (RB-ORD-002, additive): units currently held by a live
   /// (unexpired, unconsumed) CheckoutReservationItem - NOT yet actually
   /// sold, but not free for a NEW reservation either. `quantity -
@@ -1794,14 +1870,14 @@ model BranchStock {
   /// 0` conditional-UPDATE shape (true for both a decrement, where this
   /// is the actual reservation-respecting guard, and an increase, where
   /// it is always trivially satisfied - restocking is never blocked).
-  reservedQuantity Int          @default(0)
+  reservedQuantity     Int          @default(0)
   /// Sprint 18a (FR-INV-007, product decision): the owner's own
   /// per-(branch, variant) low-stock threshold. 0 (the default) means
   /// "no alert" - deliberately not "alert at zero", which a bare
   /// `available <= threshold` would wrongly do (every row starts at
   /// 0/0). Checked as `threshold > 0 AND available <= threshold`,
   /// never bare `<=`.
-  safetyStockThreshold Int       @default(0)
+  safetyStockThreshold Int          @default(0)
   /// Sprint 18a (FR-INV-006/NFR-STALE-001, product decision): the last
   /// time a human actually verified this row against the physical
   /// shelf - either a confirm-count call (quantity happened to already
@@ -1814,8 +1890,8 @@ model BranchStock {
   /// migration - no backfill) means "never physically confirmed",
   /// itself `is_stale` by definition, not an absent/assumed fact.
   lastPhysicalCountAt  DateTime?
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
 
   @@unique([branchId, offerVariantId])
   @@index([vendorId])
@@ -1960,15 +2036,54 @@ model MatchReviewCandidate {
   /// method's own comment for the exact formula.
   score              Float
   status             MatchReviewStatus       @default(PENDING)
+  /// Sprint 17b (FR-MATCH-005 Option A): distinguishes a row the
+  /// non-exact scorer created from one a customer's exact-identifier
+  /// report synthesized on the fly (score hardcoded 1.0, never scored).
+  /// Kept as an explicit field rather than inferred from score===1.0 -
+  /// the 0.5/0.5 formula could in principle also land on exactly 1.0,
+  /// however unlikely, and this must never be ambiguous.
+  source             MatchCandidateSource    @default(NON_EXACT_SCORE)
   createdAt          DateTime                @default(now())
   decidedAt          DateTime?
+
+  matchReports MatchReport[]
 
   /// Re-running search for the same offer variant against the same
   /// canonical variant refreshes this row (score/status) rather than
   /// creating a duplicate - see MatchingService.searchNonExactCandidates().
+  /// Sprint 17b reuses this SAME constraint for the exact-identifier
+  /// report path (MatchReportsService) - one candidate row per pair,
+  /// regardless of which path created it.
   @@unique([offerVariantId, canonicalVariantId])
   @@index([vendorId, status])
   @@map("match_review_candidates")
+}
+
+enum MatchCandidateSource {
+  NON_EXACT_SCORE
+  EXACT_IDENTIFIER
+}
+
+/// Sprint 17b (FR-MATCH-005): one row per (candidate, reporting
+/// customer) - never loses a second/third customer's report the way a
+/// single reportedByUserId field on MatchReviewCandidate would. note is
+/// free text and is NEVER surfaced to the owner (same sensitivity class
+/// as every other free-text field in this codebase that stays
+/// platform/reporter-only) - the owner's queue sees only an aggregate
+/// count, via this relation's own length, never note content or
+/// reporterUserId.
+model MatchReport {
+  id             String               @id @default(uuid())
+  candidateId    String
+  candidate      MatchReviewCandidate @relation(fields: [candidateId], references: [id])
+  reporterUserId String
+  reporter       User                 @relation(fields: [reporterUserId], references: [id])
+  note           String?
+  createdAt      DateTime             @default(now())
+
+  @@unique([candidateId, reporterUserId])
+  @@index([candidateId])
+  @@map("match_reports")
 }
 
 /// Sprint 8 (RB-STOREF-004/RB-COMP-001, PDR-013): "Public discovery has

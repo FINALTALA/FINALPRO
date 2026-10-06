@@ -178,6 +178,24 @@ export function adminTiles(role: PlatformRoleName): HubTile[] {
         title: "طلبات تغيير الاسم",
         description: "طلبات تغيير أسماء المنتجات الأساسية",
       },
+      // Sprint 17b: the platform catalog - categories/brands/canonical
+      // products - PLATFORM_ADMIN only (a reviewer has no catalog-edit
+      // role per Part 1's role table).
+      {
+        href: "/admin/categories",
+        title: "التصنيفات",
+        description: "شجرة تصنيفات المنتجات، إنشاؤها وتقييدها وحذفها",
+      },
+      {
+        href: "/admin/brands",
+        title: "العلامات التجارية",
+        description: "قائمة العلامات التجارية وإضافتها",
+      },
+      {
+        href: "/admin/canonical-products",
+        title: "المنتجات المرجعية",
+        description: "حالات المنتجات المرجعية، متغيّراتها، دمجها وتقسيمها",
+      },
     );
   }
   return tiles;

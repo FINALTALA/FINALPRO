@@ -231,7 +231,13 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
         brand_id: brand.id,
         category_id: category.id,
         model_name: modelName,
-        status: 'PUBLISHED',
+        // Sprint 17b: same fix as sprint5/sprint6's own identical
+        // helper - a caller-supplied modelName can legitimately repeat/
+        // resemble another call's within this file, now a real pg_trgm
+        // match (FR-CAT-009). `status` is no longer accepted
+        // (Sprint 17b review-round fix) - every product is created at
+        // DRAFT; nothing here depends on PUBLISHED specifically.
+        confirm_despite_duplicate_warning: true,
       })
       .expect(201);
     const variantRes = await request(app.getHttpServer())

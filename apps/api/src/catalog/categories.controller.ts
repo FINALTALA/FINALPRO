@@ -27,7 +27,9 @@ import {
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
+import { findSimilarCategories } from './duplicate-check.util';
 import { CreateCategoryDto } from './dto/create-category.dto';
+import { RestrictCategoryDto } from './dto/restrict-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 
 // FR-CAT-001 / BL-CAT-001: catalog admin manages a hierarchical
@@ -48,12 +50,18 @@ export class CategoriesController {
     nameAr: string;
     nameEn: string;
     parentId: string | null;
+    isRestricted: boolean;
   }) {
     return {
       id: category.id,
       name_ar: category.nameAr,
       name_en: category.nameEn,
       parent_id: category.parentId,
+      // Sprint 17b (FR-CAT-006): the flag itself is not sensitive (it
+      // only ever blocks NEW actions, never hides anything) - the
+      // reason text is the admin-only part, returned only by
+      // restrict()/unrestrict() themselves, never here.
+      is_restricted: category.isRestricted,
     };
   }
 
@@ -101,6 +109,27 @@ export class CategoriesController {
         throw new NotFoundException({
           code: 'PARENT_CATEGORY_NOT_FOUND',
           message: 'parent_id does not reference an existing category',
+        });
+      }
+    }
+
+    if (!dto.confirm_despite_duplicate_warning) {
+      const similar = await findSimilarCategories(
+        this.prisma,
+        dto.name_ar,
+        dto.name_en,
+      );
+      if (similar.length > 0) {
+        throw new ConflictException({
+          code: 'POSSIBLE_DUPLICATE',
+          message:
+            'A similarly-named category already exists - resubmit with confirm_despite_duplicate_warning to proceed anyway',
+          details: similar.map((s) => ({
+            id: s.id,
+            name_ar: s.name_ar,
+            name_en: s.name_en,
+            similarity: s.similarity,
+          })),
         });
       }
     }
@@ -303,5 +332,78 @@ export class CategoriesController {
       entityId: id,
       beforeState: this.toDto(existing),
     });
+  }
+
+  // Sprint 17b (FR-CAT-006): forward-looking only - see the schema's
+  // own isRestricted comment for the full, explicitly-confirmed
+  // behavior (blocks new CanonicalProduct creation under this category
+  // and new publish, never hides anything already live). reason is
+  // PLATFORM_ADMIN-visible only - returned here (the admin who just set
+  // it), never from the public toDto().
+  @Post(':id/restrict')
+  @HttpCode(200)
+  @UseGuards(SessionAuthGuard, PlatformRoleGuard)
+  @RequirePlatformRole(PlatformRole.PLATFORM_ADMIN)
+  @UseInterceptors(IdempotencyInterceptor)
+  async restrict(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: RestrictCategoryDto,
+    @Req() req: Request,
+  ) {
+    const existing = await this.prisma.category.findUnique({ where: { id } });
+    if (!existing) {
+      throw new NotFoundException({
+        code: 'CATEGORY_NOT_FOUND',
+        message: 'Category not found',
+      });
+    }
+    const category = await this.prisma.category.update({
+      where: { id },
+      data: { isRestricted: true, restrictionReason: dto.reason },
+    });
+    await this.auditLog.record({
+      actorId: user.id,
+      correlationId: req.correlationId,
+      action: 'category.restricted',
+      entityType: 'Category',
+      entityId: id,
+      beforeState: { is_restricted: existing.isRestricted },
+      afterState: { is_restricted: true, reason: dto.reason },
+    });
+    return { ...this.toDto(category), restriction_reason: dto.reason };
+  }
+
+  @Post(':id/unrestrict')
+  @HttpCode(200)
+  @UseGuards(SessionAuthGuard, PlatformRoleGuard)
+  @RequirePlatformRole(PlatformRole.PLATFORM_ADMIN)
+  @UseInterceptors(IdempotencyInterceptor)
+  async unrestrict(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Req() req: Request,
+  ) {
+    const existing = await this.prisma.category.findUnique({ where: { id } });
+    if (!existing) {
+      throw new NotFoundException({
+        code: 'CATEGORY_NOT_FOUND',
+        message: 'Category not found',
+      });
+    }
+    const category = await this.prisma.category.update({
+      where: { id },
+      data: { isRestricted: false, restrictionReason: null },
+    });
+    await this.auditLog.record({
+      actorId: user.id,
+      correlationId: req.correlationId,
+      action: 'category.unrestricted',
+      entityType: 'Category',
+      entityId: id,
+      beforeState: { is_restricted: existing.isRestricted },
+      afterState: { is_restricted: false },
+    });
+    return this.toDto(category);
   }
 }

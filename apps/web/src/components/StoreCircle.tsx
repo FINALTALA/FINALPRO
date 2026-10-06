@@ -1,4 +1,5 @@
 import Link from "next/link";
+import SafeImage from "./SafeImage";
 
 // A round store logo (real logoUrl, else the store's first letter) that
 // optionally links to a specific store view.
@@ -14,8 +15,7 @@ export default function StoreCircle({
   size?: number;
 }) {
   const inner = logoUrl ? (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img src={logoUrl} alt={name} className="store-logo-img" />
+    <SafeImage src={logoUrl} alt={name} className="store-logo-img" />
   ) : (
     <span className="store-logo-placeholder">{name.slice(0, 1)}</span>
   );
