@@ -257,7 +257,12 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         brand_id: brand.id,
         category_id: category.id,
         model_name: modelName,
-        status: 'PUBLISHED',
+        // Sprint 17b: same fix as sprint5/6/7's own identical helper -
+        // a caller-supplied modelName can legitimately repeat/resemble
+        // another call's within this file, now a real pg_trgm match
+        // (FR-CAT-009). `status` is no longer accepted (Sprint 17b
+        // review-round fix) - every product is created at DRAFT.
+        confirm_despite_duplicate_warning: true,
       })
       .expect(201);
     const variantRes = await request(app.getHttpServer())

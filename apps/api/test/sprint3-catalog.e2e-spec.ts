@@ -103,7 +103,16 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
       .post('/api/v1/categories')
       .set('Authorization', `Bearer ${adminToken}`)
       .set('Idempotency-Key', unique('cat'))
-      .send({ name_ar: `تصنيف ${nameEn}`, name_en: nameEn })
+      .send({
+        name_ar: `تصنيف ${nameEn}`,
+        name_en: nameEn,
+        // Sprint 17b: this helper's unique()-generated names can
+        // legitimately resemble another call's closely enough to trip
+        // the new pg_trgm duplicate check (FR-CAT-009) - this file
+        // isn't testing that feature, so always proceed past the
+        // warning.
+        confirm_despite_duplicate_warning: true,
+      })
       .expect(201);
     return res.body.id;
   }
@@ -232,7 +241,12 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .post('/api/v1/canonical-products')
         .set('Authorization', `Bearer ${admin}`)
         .set('Idempotency-Key', unique('cp'))
-        .send({ brand_id: brandId, category_id: categoryId, model_name: 'X1' })
+        .send({
+          brand_id: brandId,
+          category_id: categoryId,
+          model_name: 'X1',
+          confirm_despite_duplicate_warning: true,
+        })
         .expect(201);
 
       await request(app.getHttpServer())
@@ -367,6 +381,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
           brand_id: brandId,
           category_id: categoryId,
           model_name: 'Model X',
+          confirm_despite_duplicate_warning: true,
         })
         .expect(201);
       expect(product.body.status).toBe('DRAFT');
@@ -396,13 +411,23 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .post('/api/v1/canonical-products')
         .set('Authorization', `Bearer ${admin}`)
         .set('Idempotency-Key', unique('cp1'))
-        .send({ brand_id: brandId, category_id: categoryId, model_name: 'M1' })
+        .send({
+          brand_id: brandId,
+          category_id: categoryId,
+          model_name: 'M1',
+          confirm_despite_duplicate_warning: true,
+        })
         .expect(201);
       const p2 = await request(app.getHttpServer())
         .post('/api/v1/canonical-products')
         .set('Authorization', `Bearer ${admin}`)
         .set('Idempotency-Key', unique('cp2'))
-        .send({ brand_id: brandId, category_id: categoryId, model_name: 'M2' })
+        .send({
+          brand_id: brandId,
+          category_id: categoryId,
+          model_name: 'M2',
+          confirm_despite_duplicate_warning: true,
+        })
         .expect(201);
 
       const gtin = unique('gtin')
@@ -1120,6 +1145,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
           brand_id: brandId,
           category_id: categoryId,
           model_name: 'Match Model',
+          confirm_despite_duplicate_warning: true,
         })
         .expect(201);
       const gtin = unique('gtin')
@@ -1210,6 +1236,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
           brand_id: brandId,
           category_id: categoryId,
           model_name: 'Reject Model',
+          confirm_despite_duplicate_warning: true,
         })
         .expect(201);
       const gtin = unique('gtin-reject')
@@ -1368,6 +1395,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
               brand_id: brandId,
               category_id: categoryId,
               model_name: `Race Model ${label}`,
+              confirm_despite_duplicate_warning: true,
             })
             .expect(201),
         ),

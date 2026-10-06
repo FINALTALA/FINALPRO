@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import SafeImage from "@/components/SafeImage";
 import { ErrorBanner } from "@/components/States";
 import { apiFetch, ApiError, newIdempotencyKey } from "@/lib/api";
 import { getSessionToken } from "@/lib/session";
@@ -727,8 +728,11 @@ function MediaRow({
   return (
     <div style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "8px 0", borderBottom: "1px solid #eee" }}>
       {media.media_type === "IMAGE" ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={media.url} alt={altEn || "media"} style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 6 }} />
+        <SafeImage
+          src={media.url}
+          alt={altEn || altAr || "صورة من وسائط هذا المتغيّر"}
+          style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 6 }}
+        />
       ) : (
         <div style={{ width: 64, height: 64, background: "#eee", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center" }}>
           فيديو

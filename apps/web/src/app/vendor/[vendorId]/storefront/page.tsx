@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import SafeImage from "@/components/SafeImage";
 import { apiFetch, ApiError, newIdempotencyKey } from "@/lib/api";
 import { clearSession, getSessionToken } from "@/lib/session";
 
@@ -240,8 +241,7 @@ export default function StorefrontSettingsPage() {
             }}
           />
           {form.logo_url ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={form.logo_url} alt="معاينة الشعار" className="preview-logo" />
+            <SafeImage src={form.logo_url} alt="معاينة الشعار" className="preview-logo" />
           ) : (
             <div className="preview-logo" />
           )}

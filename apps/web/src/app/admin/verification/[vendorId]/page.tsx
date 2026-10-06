@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
+import SafeImage from "@/components/SafeImage";
 import { EmptyState, ErrorBanner } from "@/components/States";
 import { ApiError, apiFetch, newIdempotencyKey } from "@/lib/api";
 import {
@@ -241,8 +242,7 @@ function ReviewInner() {
               <dt className="muted">صورة واجهة الفرع</dt>
               <dd style={{ margin: 0 }}>
                 {isHttpUrl(shownPhoto) ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
+                  <SafeImage
                     src={shownPhoto}
                     alt="صورة واجهة الفرع المقدَّمة"
                     referrerPolicy="no-referrer"

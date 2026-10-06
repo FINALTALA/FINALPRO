@@ -38,6 +38,22 @@ export const KIND_LABEL: Record<string, string> = {
   WAREHOUSE: "دليل مستودع",
 };
 
+// Sprint 17b: the platform catalog admin pages (categories/brands/
+// canonical products).
+export const CANONICAL_PRODUCT_STATUS_LABEL: Record<string, string> = {
+  DRAFT: "مسودة",
+  PENDING_REVIEW: "قيد المراجعة",
+  PUBLISHED: "منشور",
+  ARCHIVED: "مؤرشف",
+  MERGED: "مدمج",
+};
+
+export const PRODUCT_TYPE_LABEL: Record<string, string> = {
+  PHYSICAL: "فعلي",
+  BUNDLE: "مجموعة",
+  SERVICE: "خدمة",
+};
+
 export function formatDateTime(iso: string | null): string {
   if (!iso) return "-";
   const d = new Date(iso);
@@ -68,6 +84,23 @@ const ERROR_MESSAGES: Record<string, string> = {
   VENDOR_NOT_ACTIVE: "لا يمكن تعليق إلا متجر نشط.",
   VENDOR_NOT_SUSPENDED: "هذا المتجر ليس معلَّقاً.",
   FORBIDDEN: "لا تملكين صلاحية لهذا الإجراء.",
+  // Sprint 17b: catalog admin (categories/brands/canonical products).
+  CATEGORY_NOT_FOUND: "التصنيف غير موجود.",
+  PARENT_CATEGORY_NOT_FOUND: "التصنيف الأب غير موجود.",
+  CATEGORY_CYCLE: "لا يمكن اختيار هذا التصنيف الأب (يسبب حلقة في شجرة التصنيفات).",
+  CATEGORY_IN_USE: "لا يمكن حذف هذا التصنيف لوجود منتجات مرجعية تابعة له.",
+  BRAND_NOT_FOUND: "العلامة التجارية غير موجودة.",
+  BRAND_ALREADY_EXISTS: "توجد علامة تجارية بهذا الاسم.",
+  BRAND_SENTINEL_IMMUTABLE: "لا يمكن حذف هذه العلامة التجارية (سجلّ أساسي في النظام).",
+  BRAND_IN_USE: "لا يمكن حذف هذه العلامة التجارية لوجود منتجات مرتبطة بها.",
+  CANONICAL_PRODUCT_NOT_FOUND: "المنتج المرجعي غير موجود.",
+  CATEGORY_RESTRICTED: "هذا التصنيف مقيَّد، ولا يمكن إنشاء منتج مرجعي تحته.",
+  VARIANT_IDENTIFIER_ALREADY_EXISTS: "يوجد متغيّر آخر بنفس المعرّف (MPN/GTIN).",
+  INVALID_STATUS_TRANSITION: "لا يمكن الانتقال إلى هذه الحالة من حالة المنتج الحالية.",
+  MERGE_VARIANT_UNMATCHED: "تعذّر الدمج: بعض متغيّرات هذا المنتج لا تقابلها متغيّرات في المنتج الناجي.",
+  SPLIT_WOULD_SPAN_VENDOR_OFFER: "تعذّر التقسيم: أحد عروض المتاجر مرتبط بمتغيّرات ستُقسَّم بين منتجين مختلفين.",
+  SPLIT_REQUIRES_AT_LEAST_ONE_VARIANT: "اختاري متغيّراً واحداً على الأقل للتقسيم.",
+  SPLIT_CANNOT_MOVE_ALL_VARIANTS: "لا يمكن نقل كل المتغيّرات؛ يجب أن يبقى للمنتج الأصلي متغيّر واحد على الأقل.",
 };
 
 /** Turns an API failure into the Arabic message shown to the user. */

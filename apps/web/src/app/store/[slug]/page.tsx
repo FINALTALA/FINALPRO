@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 import { ShareIcon } from "@/components/Icons";
+import SafeImage from "@/components/SafeImage";
 import { EmptyState, ErrorBanner, SkeletonGrid } from "@/components/States";
 import { ApiError, apiFetch } from "@/lib/api";
 import { AVAILABILITY_LABEL, Availability } from "@/lib/types";
@@ -47,8 +48,7 @@ function OfferCard({ slug, offer }: { slug: string; offer: OfferSummaryDto }) {
     <Link href={`/store/${slug}/products/${offer.id}`} className="product-card">
       <div className="product-card-media">
         {offer.image_url ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={offer.image_url} alt={offer.title_ar} loading="lazy" />
+          <SafeImage src={offer.image_url} alt={offer.title_ar} loading="lazy" />
         ) : (
           <span className="product-card-noimage">لا توجد صورة</span>
         )}
@@ -175,8 +175,7 @@ export default function StorefrontPage() {
         />
         <div className="storefront-header">
           {s.logo_url ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={s.logo_url} alt={s.display_name} className="storefront-logo" />
+            <SafeImage src={s.logo_url} alt={s.display_name} className="storefront-logo" />
           ) : (
             <div className="storefront-logo storefront-logo-placeholder">{s.display_name.slice(0, 1)}</div>
           )}

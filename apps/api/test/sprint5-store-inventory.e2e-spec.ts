@@ -205,7 +205,14 @@ describe('Sprint 5 - store type/warehouse/pickup points, delivery zones, barcode
         brand_id: brand.id,
         category_id: category.id,
         model_name: 'Model X',
-        status: 'PUBLISHED',
+        // Sprint 17b: this helper's own literal 'Model X' repeats
+        // across every call in this file - now a guaranteed pg_trgm
+        // duplicate match (FR-CAT-009) against an earlier call's own
+        // product, not a bug in that new check. `status` is no longer
+        // accepted (CreateCanonicalProductDto, Sprint 17b review-round
+        // fix) - every product is created at DRAFT regardless; this
+        // file's own tests never depend on PUBLISHED specifically.
+        confirm_despite_duplicate_warning: true,
       })
       .expect(201);
 

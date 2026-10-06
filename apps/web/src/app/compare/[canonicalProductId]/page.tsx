@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
+import SafeImage from "@/components/SafeImage";
 import StoreCircle from "@/components/StoreCircle";
 import { EmptyState, ErrorBanner, SkeletonGrid } from "@/components/States";
 import { AVAILABILITY_LABEL, Availability } from "@/lib/types";
@@ -96,8 +97,7 @@ export default function ComparisonPage() {
       <div className="wide-shell">
         <div className="compare-header">
           {image ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={image} alt={data.canonical_name_ar} className="compare-thumb" />
+            <SafeImage src={image} alt={data.canonical_name_ar} className="compare-thumb" />
           ) : null}
           <div>
             <h1 className="page-title">{data.canonical_name_ar}</h1>
@@ -155,8 +155,7 @@ export default function ComparisonPage() {
                   <Link href={href} style={{ display: "flex", gap: 10, alignItems: "center", textDecoration: "none", color: "inherit" }}>
                     <span className="store-circle">
                       {offer.logo_url ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={offer.logo_url} alt={offer.display_name} />
+                        <SafeImage src={offer.logo_url} alt={offer.display_name} />
                       ) : (
                         offer.display_name.slice(0, 1)
                       )}

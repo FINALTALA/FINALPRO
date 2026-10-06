@@ -1,4 +1,5 @@
 import Link from "next/link";
+import SafeImage from "./SafeImage";
 import StoreCircle from "./StoreCircle";
 import { AVAILABILITY_LABEL, ComparisonCardDto } from "@/lib/types";
 
@@ -17,8 +18,7 @@ export default function ProductCard({ card }: { card: ComparisonCardDto }) {
     <article className="product-card" data-testid="product-card">
       <Link href={offerHref} className="product-card-media" aria-label={card.canonical_name_ar}>
         {card.image_url ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={card.image_url} alt={card.canonical_name_ar} loading="lazy" />
+          <SafeImage src={card.image_url} alt={card.canonical_name_ar} loading="lazy" />
         ) : (
           <span className="product-card-noimage">لا توجد صورة</span>
         )}

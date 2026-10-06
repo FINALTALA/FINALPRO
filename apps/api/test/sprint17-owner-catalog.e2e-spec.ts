@@ -379,7 +379,12 @@ describe('Sprint 17 - owner catalog (pricing, PDR-036 templates, brand, media, i
         brand_id: brand.id,
         category_id: category.id,
         model_name: unique('Model'),
-        status: 'PUBLISHED',
+        // Sprint 17b: unique()'s own timestamp+counter scheme can
+        // still trip pg_trgm's similarity threshold (FR-CAT-009)
+        // against another call in this same run - confirmed, not just
+        // theoretical (see sprint5/6/7's own identical fix). `status`
+        // is no longer accepted (Sprint 17b review-round fix).
+        confirm_despite_duplicate_warning: true,
       })
       .expect(201);
     const variantRes = await request(app.getHttpServer())
@@ -982,7 +987,9 @@ describe('Sprint 17 - owner catalog (pricing, PDR-036 templates, brand, media, i
           brand_id: brand.id,
           category_id: category.id,
           model_name: modelName,
-          status: 'PUBLISHED',
+          // Sprint 17b: see the earlier createCanonicalVariant() helper's
+          // own comment in this file.
+          confirm_despite_duplicate_warning: true,
         })
         .expect(201);
       // searchNonExactCandidates() scores CanonicalProductVariant rows,

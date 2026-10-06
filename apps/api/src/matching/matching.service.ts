@@ -175,6 +175,20 @@ export class MatchingService {
       where: { id: offerVariantId },
       include: { vendorOffer: { include: { brand: true } } },
     });
+
+    // Sprint 17b, Guard A (N.2: "a used/refurbished offer... must never
+    // be allowed to inflate a match score"): non-NEW condition gets
+    // zero candidates generated, full stop - independent of the scoring
+    // formula entirely, not a score penalty. Falls through to the
+    // existing manual/unmatched path (FR-MATCH-009); a reviewer must
+    // search and assign by hand. Deliberately does not touch any
+    // pre-existing candidate rows from an earlier search while the
+    // variant was still NEW - this guard only stops NEW candidate
+    // generation, it is not a retroactive cleanup.
+    if (variant.condition !== 'NEW') {
+      return [];
+    }
+
     // Sprint 17 (item 1 of the final review round): brand name,
     // colour/size, and the four PDR-036 template attribute VALUES now
     // feed the text signal - editing them and re-running search is
@@ -206,7 +220,25 @@ export class MatchingService {
       ...templateValues,
     ].join(' ');
 
+    // Sprint 17b, Guard B (N.2: "a bundle... never matched against a
+    // component, no matter how high the title-similarity score"):
+    // BUNDLE-type canonical products are excluded from candidate
+    // generation entirely, before scoring - a vendor offer can only
+    // ever be linked to one by manual admin assignment. Guard C
+    // (FR-CAT-006, forward-looking restriction): a restricted product,
+    // or one whose category is restricted, is excluded from NEW
+    // candidate generation the same way - existing confirmed links are
+    // never touched by this (see CanonicalProductsController.restrict()'s
+    // own comment), this only stops a NEW vendor offer from getting
+    // newly linked to it.
     const canonicalVariants = await client.canonicalProductVariant.findMany({
+      where: {
+        canonicalProduct: {
+          productType: { not: 'BUNDLE' },
+          isRestricted: false,
+          category: { isRestricted: false },
+        },
+      },
       include: { canonicalProduct: { include: { brand: true } } },
     });
 

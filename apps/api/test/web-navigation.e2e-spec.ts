@@ -182,10 +182,16 @@ describe('Sprint 13 - web navigation model', () => {
       expect(adminTiles('VERIFICATION_REVIEWER').map((t) => t.href)).toEqual([
         '/admin/verification',
       ]);
+      // Sprint 17b: adminTiles() grew three more PLATFORM_ADMIN-only
+      // tiles (the platform catalog - categories/brands/canonical
+      // products) - this assertion is updated to match, not relaxed.
       expect(adminTiles('PLATFORM_ADMIN').map((t) => t.href)).toEqual([
         '/admin/verification',
         '/admin/vendors',
         '/admin/name-change-requests',
+        '/admin/categories',
+        '/admin/brands',
+        '/admin/canonical-products',
       ]);
     });
 

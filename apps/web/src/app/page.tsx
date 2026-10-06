@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import ProductCard from "@/components/ProductCard";
+import SafeImage from "@/components/SafeImage";
 import { EmptyState, ErrorBanner, SkeletonGrid } from "@/components/States";
 import { useFetch } from "@/lib/useFetch";
 import { CardsPageDto, SEGMENTS, StoreSummaryDto } from "@/lib/types";
@@ -79,8 +80,7 @@ export default function Home() {
                 <Link key={s.slug} href={`/store/${s.slug}`} className="follow-item">
                   <div className="follow-item-circle">
                     {s.logo_url ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={s.logo_url} alt={s.display_name} />
+                      <SafeImage src={s.logo_url} alt={s.display_name} />
                     ) : (
                       <span>{s.display_name.slice(0, 1)}</span>
                     )}
