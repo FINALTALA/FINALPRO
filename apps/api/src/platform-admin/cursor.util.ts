@@ -44,7 +44,12 @@ export const isIsoDateString = (v: unknown): boolean =>
 export const isUuidLike = (v: unknown): boolean =>
   typeof v === 'string' && /^[0-9a-fA-F-]{36}$/.test(v);
 
-export function parseLimit(raw: string | undefined): number {
+// Sprint 19: `max` is an explicit parameter, not a hard-coded 50 - the
+// notification list endpoint (SRS-H1-10: "default 20, max 100") passes
+// 100; every pre-existing caller omits it and keeps the original
+// default-50 ceiling unchanged, so no existing endpoint's documented
+// limit silently changes.
+export function parseLimit(raw: string | undefined, max = 50): number {
   if (raw === undefined || raw === '') return 20;
   if (!/^\d+$/.test(raw)) {
     throw new BadRequestException({
@@ -53,10 +58,10 @@ export function parseLimit(raw: string | undefined): number {
     });
   }
   const n = Number(raw);
-  if (n < 1 || n > 50) {
+  if (n < 1 || n > max) {
     throw new BadRequestException({
       code: 'INVALID_LIMIT',
-      message: 'limit must be between 1 and 50',
+      message: `limit must be between 1 and ${max}`,
     });
   }
   return n;

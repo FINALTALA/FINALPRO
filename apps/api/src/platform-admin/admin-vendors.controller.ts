@@ -278,18 +278,30 @@ export class AdminVendorsController {
         },
         tx,
       );
-      await this.outbox.enqueue(
-        {
-          eventType: 'vendor.suspended',
-          payload: {
-            vendor_id: vendorId,
-            suspension_id: suspension.id,
-            reason_code: suspension.reasonCode,
-            occurred_at: suspension.suspendedAt.toISOString(),
+      // Sprint 19 (review-round): recipient snapshotted HERE, inside
+      // this same transaction - one outbox row per CURRENT owner,
+      // never resolved later at relay time. reason_code only (the
+      // free-text reason stays out of the payload exactly as it
+      // already was before this sprint).
+      const ownersToNotify = await tx.vendorUser.findMany({
+        where: { vendorId, role: 'OWNER' },
+        select: { userId: true },
+      });
+      for (const owner of ownersToNotify) {
+        await this.outbox.enqueue(
+          {
+            eventType: 'vendor.suspended',
+            payload: {
+              vendor_id: vendorId,
+              suspension_id: suspension.id,
+              reason_code: suspension.reasonCode,
+              occurred_at: suspension.suspendedAt.toISOString(),
+              recipient_user_id: owner.userId,
+            },
           },
-        },
-        tx,
-      );
+          tx,
+        );
+      }
 
       const body = suspensionDto(suspension);
       await this.idempotencyCompletion.complete(
@@ -361,17 +373,26 @@ export class AdminVendorsController {
         },
         tx,
       );
-      await this.outbox.enqueue(
-        {
-          eventType: 'vendor.reactivated',
-          payload: {
-            vendor_id: vendorId,
-            suspension_id: closed.id,
-            occurred_at: closed.reactivatedAt!.toISOString(),
+      // Sprint 19 (review-round): same recipient-snapshot treatment as
+      // suspend() above.
+      const ownersToNotify = await tx.vendorUser.findMany({
+        where: { vendorId, role: 'OWNER' },
+        select: { userId: true },
+      });
+      for (const owner of ownersToNotify) {
+        await this.outbox.enqueue(
+          {
+            eventType: 'vendor.reactivated',
+            payload: {
+              vendor_id: vendorId,
+              suspension_id: closed.id,
+              occurred_at: closed.reactivatedAt!.toISOString(),
+              recipient_user_id: owner.userId,
+            },
           },
-        },
-        tx,
-      );
+          tx,
+        );
+      }
 
       const body = suspensionDto(closed);
       await this.idempotencyCompletion.complete(

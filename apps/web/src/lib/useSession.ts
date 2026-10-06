@@ -98,3 +98,36 @@ export function useCartCount(token: string | null, refreshKey: string): number {
 
   return token && state.key === key ? state.count : 0;
 }
+
+/** Sprint 19: unread count for the bell icon (0 when signed out).
+ * Polls on the same "refetch when refreshKey changes" model as
+ * useCartCount - here refreshKey is the pathname, so leaving any page
+ * (in particular /notifications itself, after marking things read)
+ * refreshes the badge. */
+export function useUnreadNotificationCount(
+  token: string | null,
+  refreshKey: string,
+): number {
+  const [state, setState] = useState<{ key: string; count: number }>({
+    key: "",
+    count: 0,
+  });
+  const key = `${token ?? ""}|${refreshKey}`;
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    apiFetch<{ unread_count: number }>("/me/notifications/unread-count")
+      .then((res) => {
+        if (!cancelled) setState({ key, count: res.unread_count });
+      })
+      .catch(() => {
+        if (!cancelled) setState({ key, count: 0 });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, key]);
+
+  return token && state.key === key ? state.count : 0;
+}

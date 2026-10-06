@@ -63,6 +63,12 @@ export const SearchIcon = () => (
     <path d="m16 16 4.5 4.5" />
   </Icon>
 );
+export const BellIcon = () => (
+  <Icon>
+    <path d="M6 10.5a6 6 0 1 1 12 0c0 3 1 4.8 1.8 5.8H4.2C5 15.3 6 13.5 6 10.5z" />
+    <path d="M10 19a2 2 0 0 0 4 0" />
+  </Icon>
+);
 export const ShareIcon = () => (
   <Icon>
     <circle cx="6" cy="12" r="2.2" />

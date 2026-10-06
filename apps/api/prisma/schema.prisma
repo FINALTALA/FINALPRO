@@ -68,6 +68,7 @@ model User {
   storeFollows                 StoreFollow[]
   priceChangesMade             PriceHistory[]
   importBatchesCreated         ImportBatch[]
+  notifications                Notification[]
 
   @@map("users")
 }
@@ -871,30 +872,201 @@ model AuditLog {
   @@map("audit_logs")
 }
 
+/// Sprint 19: PENDING/FAILED are both claimable (the relay's claim
+/// query selects WHERE status IN ('PENDING','FAILED')) - PENDING means
+/// "never attempted yet", FAILED means "attempted at least once,
+/// waiting out its backoff in availableAt". PROCESSING means a worker
+/// currently holds the row's lockToken - see OutboxEvent's own comment
+/// for the full two-phase claim/process state machine. DEAD_LETTER is
+/// terminal: attemptCount reached the configured maximum, never
+/// reclaimed automatically again, visible only via the admin
+/// dead-letter endpoint (SRS-H1-08).
 enum OutboxEventStatus {
   PENDING
+  PROCESSING
   PUBLISHED
   FAILED
+  DEAD_LETTER
 }
 
 /// The transactional outbox (ADR-006, Part 3 G.3): written in the same
 /// Postgres transaction as the business write it accompanies - e.g.
-/// checkout's CustomerOrder/VendorSuborder creation. A separate relay
-/// worker (Part 6, M.4) polls Pending rows and publishes each to BullMQ,
-/// marking it Published only on confirmed delivery. This is what makes
-/// the checkout->notification/payment pipeline durable even if Redis is
-/// briefly unavailable at the moment of commit.
+/// checkout's CustomerOrder/VendorSuborder creation.
+///
+/// Sprint 19: a real relay (OutboxRelayService) now reads this table,
+/// in two separate, short-lived transactions per row - never one long
+/// transaction spanning both claim and processing, since a crash
+/// between them must leave durable evidence (a persisted PROCESSING
+/// row with its own lockToken/lockedAt), not an in-memory lock that
+/// simply vanishes:
+///   1) CLAIM: `SELECT ... FOR UPDATE SKIP LOCKED LIMIT 1` over every
+///      row that is (PENDING/FAILED AND availableAt <= now()) OR (a
+///      PROCESSING row whose lockedAt is older than the lease timeout
+///      - a worker that crashed after claiming it), THEN
+///      `UPDATE SET status='PROCESSING', lockedAt=now(),
+///      lockToken=<new uuid>, attemptCount=attemptCount+1` - the
+///      attempt counter increments HERE, at claim time, exactly once
+///      per claim regardless of whether processing ever even starts -
+///      not in the failure branch below, which would let a worker that
+///      always crashes immediately after claiming (never reaching the
+///      failure-handling code) retry forever without ever reaching
+///      DEAD_LETTER.
+///   2) PROCESS (separate transaction, started by re-locking the row
+///      and verifying status='PROCESSING' AND lockToken=<mine> BEFORE
+///      doing any work - a worker whose lease already expired and was
+///      reclaimed by someone else must do nothing at all, not even
+///      create a Notification): resolve the already-snapshotted
+///      recipient(s) from payload, create Notification row(s), then
+///      `UPDATE ... SET status='PUBLISHED' WHERE id=:id AND
+///      lockToken=:mine`. On failure: `UPDATE ... SET status = CASE
+///      WHEN attemptCount >= MAX_ATTEMPTS THEN 'DEAD_LETTER' ELSE
+///      'FAILED' END, availableAt = now() + backoff(attemptCount),
+///      lastError=:message WHERE id=:id AND lockToken=:mine` -
+///      attemptCount is READ here (already incremented at claim time),
+///      never incremented a second time.
+/// No external channel (SMS-sandbox log, etc.) is ever called inside
+/// either transaction - delivery success/failure in this codebase
+/// means "a Notification row was durably created", nothing else.
 model OutboxEvent {
   id           String            @id @default(uuid())
   eventType    String
   payload      Json
   status       OutboxEventStatus @default(PENDING)
   createdAt    DateTime          @default(now())
+  /// Not claimable before this instant - set to now() on insert, and
+  /// bumped forward by backoff() after each failed processing attempt.
+  availableAt  DateTime          @default(now())
+  /// When the current PROCESSING lease (if any) was taken - a row
+  /// whose lockedAt is older than the lease timeout is treated as
+  /// abandoned and reclaimed by the next claim query.
+  lockedAt     DateTime?
+  /// A fresh random value per claim - the single thing that lets the
+  /// processing transaction tell "I still own this row" apart from "a
+  /// later worker already reclaimed and possibly finished it while I
+  /// was stalled" (see this model's own top comment).
+  lockToken    String?
   publishedAt  DateTime?
   attemptCount Int               @default(0)
+  lastError    String?
 
-  @@index([status, createdAt])
+  notifications  Notification[]
+  deliveryTargets OutboxDeliveryTarget[]
+  discountActivationNotices DiscountActivationNotice[]
+
+  @@index([status, availableAt])
   @@map("outbox_events")
+}
+
+/// Sprint 19 (FR-NOTIF-008, G-NO-02): the one in-app notification
+/// surface this codebase has. Deliberately carries no free-text from
+/// any source payload (not StockMovement.reasonNote, not
+/// BranchOrder.notReceivedReason) - only safe, structural fields in
+/// `data` (see OutboxRelayService's own per-eventType mapping). The
+/// frontend owns all presentation text (the same convention this
+/// codebase already uses everywhere else for Arabic labels - e.g.
+/// branches/page.tsx's VERIFICATION_LABEL - not a server-rendered
+/// i18n layer), keyed off `type` + `data`.
+///
+/// `targetType`/`targetId` are plain IDs, not a pre-built route path -
+/// durable even if a route's literal URL shape changes later.
+/// `vendorId`/`branchId` are advisory routing hints only (no FK, no
+/// cascade) - never used for authorization; every deep-linked target
+/// endpoint re-checks access on its own exactly as it always has.
+model Notification {
+  id              String                 @id @default(uuid())
+  recipientUserId String
+  recipient       User                   @relation(fields: [recipientUserId], references: [id])
+  outboxEventId   String
+  outboxEvent     OutboxEvent            @relation(fields: [outboxEventId], references: [id])
+  type            NotificationType
+  data            Json
+  targetType      NotificationTargetType
+  targetId        String
+  vendorId        String?
+  branchId        String?
+  readAt          DateTime?
+  createdAt       DateTime               @default(now())
+
+  /// The one hard guarantee against a double-delivered notification: a
+  /// retried processing attempt (crash after creating this row, before
+  /// marking the outbox row PUBLISHED) hits this constraint and is
+  /// treated as an already-successful no-op, not an error.
+  @@unique([outboxEventId, recipientUserId])
+  @@index([recipientUserId, readAt, createdAt])
+  @@map("notifications")
+}
+
+enum NotificationType {
+  STOCK_ADJUSTMENT
+  DELIVERY_CONFIRM_REQUESTED
+  NOT_RECEIVED_REPORTED
+  ORDER_AUTO_CONFIRMED
+  DELIVERY_CONFIRM_REMINDER
+  VENDOR_SUSPENDED
+  VENDOR_REACTIVATED
+  NEW_ORDER_FOR_EMPLOYEE
+  LOW_STOCK_AFTER_RESERVE
+  FOLLOWED_STORE_NEW_PRODUCT
+  FOLLOWED_STORE_DISCOUNT
+}
+
+enum NotificationTargetType {
+  BRANCH_ORDER
+  STOCK
+  VENDOR
+  OFFER
+}
+
+/// Sprint 19 (§8 plan): bounded fan-out for an outbox event with
+/// possibly many recipients (today: only the two FOLLOWED_STORE_*
+/// types, over StoreFollow). The recipient SET is snapshotted into
+/// this table atomically (one INSERT...SELECT, in the same transaction
+/// as the OutboxEvent it belongs to) at the moment the event occurs -
+/// never re-queried from StoreFollow later, so a follower who joins
+/// afterward never receives it and a follower present at that instant
+/// is never missed, no matter how many relay batches it takes to drain.
+/// The relay processes a bounded batch of unprocessed rows per claim
+/// cycle (FOR UPDATE SKIP LOCKED) rather than all of them at once, and
+/// only marks the parent OutboxEvent PUBLISHED once none remain.
+model OutboxDeliveryTarget {
+  id              String      @id @default(uuid())
+  outboxEventId   String
+  outboxEvent     OutboxEvent @relation(fields: [outboxEventId], references: [id])
+  recipientUserId String
+  processedAt     DateTime?
+  createdAt       DateTime    @default(now())
+
+  @@unique([outboxEventId, recipientUserId])
+  @@index([outboxEventId, processedAt])
+  @@map("outbox_delivery_targets")
+}
+
+/// Sprint 19 (§6c/§8 plan, FR-FAV-005 E.0): the durable, DB-enforced
+/// dedup key for a SCHEDULED discount's activation notification - a
+/// discount whose discountStartAt lies in the future writes no
+/// notification at save time (effective-price.util.ts's own
+/// computeEffectivePrice() proves it is not active yet); exactly one
+/// notification must fire the moment DiscountActivationSweepService
+/// later observes discountStartAt <= now(), no matter how many sweep
+/// ticks pass afterward while it stays active. The unique constraint
+/// IS the lock: a sweep tick attempts one INSERT per candidate variant
+/// inside the same transaction that creates the OutboxEvent/delivery
+/// targets; a unique-violation means another tick (or an earlier run
+/// of this same tick, re-entrant) already claimed this exact discount
+/// instance, and the whole transaction is simply abandoned with no
+/// side effect. Keyed on (offerVariantId, discountStartAt) rather than
+/// offerVariantId alone so a LATER reschedule (a new discountStartAt)
+/// is correctly treated as a new, separately-notifiable instance.
+model DiscountActivationNotice {
+  id              String      @id @default(uuid())
+  offerVariantId  String
+  discountStartAt DateTime
+  outboxEventId   String
+  outboxEvent     OutboxEvent @relation(fields: [outboxEventId], references: [id])
+  createdAt       DateTime    @default(now())
+
+  @@unique([offerVariantId, discountStartAt])
+  @@map("discount_activation_notices")
 }
 
 enum IdempotencyKeyStatus {
@@ -1220,6 +1392,12 @@ model VendorOffer {
   /// restore() (which also resets status to DRAFT).
   archivedAt         DateTime?
   createdAt          DateTime                  @default(now())
+  /// Sprint 19 (FR-FAV-005 E.0): set once, the first time this offer
+  /// ever transitions DRAFT->ACTIVE (updateStatus()) - never cleared,
+  /// never reset by a later ACTIVE<->INACTIVE toggle. The only signal
+  /// "new product" follower-notification dispatch uses to fire exactly
+  /// once per offer, ever.
+  firstPublishedAt   DateTime?
 
   variants                OfferVariant[]
   importIdentifierRecords ImportIdentifierRecord[]

@@ -7,6 +7,27 @@
 **Scope:** the full SRS, Parts 0–9. Every `FR-*` ID in [SRS Part 2](srs/02-functional-requirements.md) (244 rows, including the E.0 September amendment), every `PDR-*` ID in [`approved-product-decisions-2026-09.md`](approved-product-decisions-2026-09.md) (36 rows, including the 2026-09-26 PDR-035/036 amendment), every `BR-*` (34) and `NFR-*` (32) in Part 3/4, and every remaining requirement, decision, screen, failure scenario, backlog item and state-machine transition in Parts 0, 1, and 3–9 — covered in the appendix starting at §6, with each ID-range explicitly expanded (no row stands for more than one ID; see §0 for the two narrow, explicitly-justified exceptions — the `O.1`/`O.2` test-level classification and the `BO`/module-matrix/recommendations rollup — neither of which carries an independent DONE/PARTIAL/MISSING status of its own).
 **Update rule:** this file is reviewed again after every sprint. Each review edits it in place under a new dated version note, rather than creating a new file, so it stays the one living record.
 
+## v10 — S19-notification-relay applied (documentation only), 2026-10-05
+
+`S19-notification-relay` (branch `feat/sprint-19-notification-relay`) is the first real read-side of the Outbox: since Sprint 3, `OutboxEvent` rows were written and never consumed. This pass closes that half — a claim/lease relay with retry/backoff/dead-letter, a real `Notification` model and in-app inbox, and delivery wired into the event types that already existed plus three new triggers (new order for employee, low stock after reserve, followed-store fan-out). **This update is documentation only — no code, migration, or commit beyond this file is authorised or implied by it.** Per explicit product-owner instruction: no row here claims real external delivery — `NotificationChannelService` is still a fallback-log-only service mirroring `SmsService`'s own OPEN-004 contract; no SMS/WhatsApp/email/push provider exists. Any requirement that specifically needs a real external channel stays exactly PARTIAL or MISSING, unchanged. `BR-020` and `BDR-004` are left completely untouched, per the original S19 plan's own explicit decision (the three specific "independently-tracked" notifications they each name still have no approved source defining what they are) and per this pass's own instruction not to change either without a new product decision.
+
+Status changes, verified directly against the actual merged code (`outbox-relay.service.ts`, `notification-channel.service.ts`, `fulfilment-sweep.service.ts`, `discount-activation-sweep.service.ts`, `me.controller.ts`'s `/me/notifications*` routes, `AppShell.tsx`'s bell icon, `/notifications` page) and the dedicated e2e suite (`sprint19-notification-relay.e2e-spec.ts`, 23 tests):
+
+- `FR-NOTIF-008 (E.0)` ❌→✅, `FR-VPORTAL-011` ❌→✅: a real `Notification` model and in-app inbox — `GET /me/notifications` (cursor + `unread_only`), `/me/notifications/unread-count`, idempotent `POST .../read` (BOLA-safe: another user's id 404s, not 403), a bell icon with an unread badge in `AppShell`, and a real `/notifications` page with per-type deep links. `Notification.data` is whitelist-only (never raw payload/free text), proven by a dedicated test.
+- `FR-NOTIF-004` ❌→🟡 (not ✅ — see below), `SRS-H1-08` ❌→🟡, `SRS-P-12` ❌→🟡: the full claim/lease state machine — `attemptCount`/`lastError` recorded per row, exponential backoff, `DEAD_LETTER` after `MAX_ATTEMPTS=5` — is built and precisely tested (attempt-count progression asserted step by step). Stays PARTIAL, not DONE, under this file's own DONE rule (§1: a UI route reachable from navigation, not just an API): `GET /admin/outbox/dead-letter` exists and is `PLATFORM_ADMIN`-gated, but there is no dedicated admin page to browse it yet.
+- `SRS-P-10` ❌→🟡: `PeriodicTask`, the first real background-scheduling primitive in this codebase, now exists — used by the relay and by `FulfilmentSweepService`/`DiscountActivationSweepService`. It does not yet cover price staleness, FX, subscription, or webhook reconciliation (the requirement's other named jobs).
+- `SRS-P-07` stays ❌ MISSING, note updated only: a real queue now exists, but no error-rate/queue-depth alerting was built — the requirement is specifically about alerts, which remain entirely absent.
+- `PDR-026` 🟡→✅, `BR-034` 🟡→✅: the 48-hour reminder and 72-hour auto-confirm are no longer "only computed when something happens to read the order" — `FulfilmentSweepService` runs genuinely periodically (every minute) and the resulting notification is now really delivered to the customer's inbox, not just an outbox row.
+- `SRS-K1A-04` 🟡→✅: "أتابعه" now fires real, separate notifications for a followed store's new product and new discount (`FOLLOWED_STORE_NEW_PRODUCT`/`FOLLOWED_STORE_DISCOUNT`, fair batch-bounded fan-out — a large follower set no longer monopolizes the relay against an unrelated event, see the Sprint 19 commit's own review-round fix).
+- `FR-FAV-005 (E.0)` stays 🟡 PARTIAL, note updated: the separate-notifications clause is now built (same mechanism as `SRS-K1A-04`); the page's own "dim inactive stores instead of hiding them" clause is untouched, unrelated to this sprint.
+- `FR-INV-010 (E.0)` stays 🟡 PARTIAL, note updated: the owner's manual-deduction notification is now really delivered (not just an outbox row) — but it does **not** show which employee made the change (`buildSafeData`'s whitelist deliberately excludes `actor_id`, the same free-text/PII-avoidance discipline every other notification type follows), so the requirement's literal "بهوية الموظف" is still not met.
+- `FR-ORD-004`, `FR-FUL-003`, `FR-NOTIF-001` stay 🟡 PARTIAL, notes updated: delivery is now real for the event types that already existed (new-order-for-employee, delivery-confirm-requested/-rerequested, not-received-reported, auto-confirm, reminder), but not every BranchOrder transition enqueues an event at all (start-preparation/mark-sent still don't — an unrelated, separate gap), and SMS/email remain fallback-log only.
+- `PDR-021`, `BR-031` stay ✅ DONE, notes updated only for precision: both were already marked DONE on the strength of the Outbox *pattern* existing (ADR-006); now the notification these decisions require is actually delivered, not just written to an unread table.
+- `SRS-G0-08`, `SRS-H3A-08`, `SRS-G3-08`, `L-16`: each bundles a `Notification`-shaped sub-clause alongside unrelated, still entirely-unbuilt items (`ReturnPolicy`/`ReturnRequest`/`Review`, `SupportTicket`, a specific technical-failure notification type respectively). Each moves from ❌ MISSING to 🟡 PARTIAL with its note narrowed to exactly what's resolved vs. still missing — none reaches DONE, since the bundled remainder is untouched by this sprint.
+- `FR-NOTIF-002`, `FR-NOTIF-003`, `FR-VPORTAL-009`, `BR-020` (explicitly, per instruction): **unchanged.** OTP/order-confirmation SMS is still log-only (OPEN-004 still open); AR/EN templates still don't exist (the frontend remains Arabic-only, no language-based selection); vendor notification *preferences* (as opposed to delivery itself) were not built; `BR-020`'s three independently-tracked notifications still have no approved definition.
+- `G-NO-01`, `G-NO-02`, `G-NO-03` (§4) closed — each now carries a "(مبنية الآن — S19)" note and moves to "غير مجدول", matching this document's own established convention for a resolved capability gap, with the narrower remaining FR-level nuances (admin UI page, employee identity, dimming) spelled out inline rather than silently dropped. `G-NO-04` (AR/EN templates + real SMS/OPEN-004) is **not** resolved and stays exactly as it was.
+- Totals (§2): FR DONE 53→**55**, PARTIAL 67→**68**, MISSING 83→**80** (net: `FR-NOTIF-008`/`FR-VPORTAL-011` MISSING→DONE, `FR-NOTIF-004` MISSING→PARTIAL). PDR DONE 13→**14**, PARTIAL 15→**14** (`PDR-026` PARTIAL→DONE). §6's own BR recount: DONE 10→**11**, PARTIAL 10→**9** (`BR-034`). §5's roadmap S19 row: re-derived directly from every row actually tagged `S19` (18 rows, not the pre-existing, already-stale "10" — see that row's own note for exactly which rows were never reconciled into it by `v8`/`v9`). As with every prior narrowly-scoped pass here (`v7`'s and `v8`'s own precedent), this pass does **not** attempt to reconcile the separate, already-flagged `v8` delta or the frozen `§16`/`§17` grand-total tables (still at their `v4.1`/`v5` state) — both remain explicitly out of this pass's scope.
+
 ## v9 — S18b-branches-operations applied, 2026-10-03
 
 `S18b-branches-operations` (branch `feat/sprint-18b-branches-operations`) is the second, final half of the approved Sprint 18 split (`S18a` — inventory/barcode — was the first half, applied in v8 above). Migration-additive only (`VendorUser.status`, `StoreBranch.archivedAt`, new `BranchOperatingHours`/`BranchClosure` tables — the latter the only `timestamptz` columns in the schema, with a GiST exclusion constraint making an overlapping closure for the same branch impossible at the database level). Updated here per the DONE rule in §1 (a real, reachable UI, not just an API):
@@ -123,15 +144,15 @@ The v4 pass above referenced PDR-035/PDR-036 inline on `FR-VEND-002`/`FR-VEND-01
 
 ## 2. Summary
 
-**Updated 2026-09-26 (v4)** — 18 FR-* rows moved from MISSING/PARTIAL to DEFERRED per the new §6 addition; see "v4 decisions applied" above. **Updated again 2026-09-26 (v4.1)** — PDR-035 and PDR-036 added as their own rows (both 🟡 PARTIAL: the decision is approved and documented, but the code for either — warehouse-evidence submission/review, and the category templates/model validation/UI — is not built yet). **Updated 2026-09-27 (v6)** — Sprint 17 implemented: 13 FR rows and 1 PDR row (PDR-036) moved PARTIAL/MISSING → DONE; 1 FR row (FR-IMPORT-004) moved MISSING → PARTIAL; several more stayed PARTIAL with their notes updated to reflect exactly what's now built vs. still missing. See "v6 — Sprint 17" above for the full per-ID list. **Updated 2026-09-29 (v7)** — `S17-owner-matching-ui` (branch `feat/sprint-17-owner-matching-ui`, a small owner-facing follow-up to Sprint 17 - a UI layer plus a few small, additive API extensions, not UI-only; not the `S17b` platform-catalog-administration item below, which this pass does not touch): `FR-MATCH-003` PARTIAL → DONE. See "v7 — S17-owner-matching-ui" above for the full per-ID list. **Flagged, not silently fixed:** this table was never updated for `v8` (`S18a-inventory-barcode`) — its own changelog note above states FR DONE moving 52→58, but this table still read 52 until now. `v9` (`S18b-branches-operations`) below applies only its own single verified row (`FR-VEND-006` PARTIAL→DONE) on top of this table's own pre-existing figures (52→**53**, 68→**67**), the same narrow scope as every other version note here — it does **not** attempt to also reconcile `v8`'s unapplied +6/−3/−3 delta, which is outside this pass's scope and is left for a future pass to pick up (matching `v7`'s own precedent of flagging rather than silently fixing the separate "grand total by source" table's drift below).
+**Updated 2026-09-26 (v4)** — 18 FR-* rows moved from MISSING/PARTIAL to DEFERRED per the new §6 addition; see "v4 decisions applied" above. **Updated again 2026-09-26 (v4.1)** — PDR-035 and PDR-036 added as their own rows (both 🟡 PARTIAL: the decision is approved and documented, but the code for either — warehouse-evidence submission/review, and the category templates/model validation/UI — is not built yet). **Updated 2026-09-27 (v6)** — Sprint 17 implemented: 13 FR rows and 1 PDR row (PDR-036) moved PARTIAL/MISSING → DONE; 1 FR row (FR-IMPORT-004) moved MISSING → PARTIAL; several more stayed PARTIAL with their notes updated to reflect exactly what's now built vs. still missing. See "v6 — Sprint 17" above for the full per-ID list. **Updated 2026-09-29 (v7)** — `S17-owner-matching-ui` (branch `feat/sprint-17-owner-matching-ui`, a small owner-facing follow-up to Sprint 17 - a UI layer plus a few small, additive API extensions, not UI-only; not the `S17b` platform-catalog-administration item below, which this pass does not touch): `FR-MATCH-003` PARTIAL → DONE. See "v7 — S17-owner-matching-ui" above for the full per-ID list. **Flagged, not silently fixed:** this table was never updated for `v8` (`S18a-inventory-barcode`) — its own changelog note above states FR DONE moving 52→58, but this table still read 52 until now. `v9` (`S18b-branches-operations`) applied only its own single verified row (`FR-VEND-006` PARTIAL→DONE) on top of this table's own pre-existing figures (52→53, 68→67), the same narrow scope as every other version note here — it did **not** attempt to also reconcile `v8`'s unapplied +6/−3/−3 delta, which stays outside every pass's scope here and is left for a future pass to pick up (matching `v7`'s own precedent of flagging rather than silently fixing the separate "grand total by source" table's drift below). **Updated 2026-10-05 (v10, documentation only)** — `S19-notification-relay`: 3 FR rows moved MISSING→DONE/PARTIAL (`FR-NOTIF-008`, `FR-VPORTAL-011` → ✅ DONE; `FR-NOTIF-004` → 🟡 PARTIAL) and 1 PDR row moved PARTIAL→DONE (`PDR-026`); several more FR/PDR rows stayed exactly PARTIAL with notes updated to say precisely what's now delivered for real vs. still only a fallback log (see "v10" above). This pass's own figures are applied directly on top of v9's own pre-existing 53/67 FR baseline — it does **not** separately re-verify or fix `v8`'s own still-unreconciled delta noted just above.
 
 | | DONE | PARTIAL | MISSING | DEFERRED | SUPERSEDED |
 |---|---|---|---|---|---|
-| FR (244) | 53 | 67 | 83 | 27 | 14 |
-| PDR (36) | 13 | 15 | 8 | 0 | 0 |
-| **Total** | **66** | **82** | **91** | **27** | **14** |
+| FR (244) | 55 | 68 | 80 | 27 | 14 |
+| PDR (36) | 14 | 14 | 8 | 0 | 0 |
+| **Total** | **69** | **82** | **88** | **27** | **14** |
 
-(v1→v3: unchanged, only sprint reassignment. v4: 17 rows MISSING→DEFERRED and 1 row (`FR-FUL-007`) PARTIAL→DEFERRED, all within the FR module. v4.1: PDR-035/036 added, both PARTIAL. v7: FR-MATCH-003 PARTIAL→DONE. Total row count unchanged at 280 = 244+36.)
+(v1→v3: unchanged, only sprint reassignment. v4: 17 rows MISSING→DEFERRED and 1 row (`FR-FUL-007`) PARTIAL→DEFERRED, all within the FR module. v4.1: PDR-035/036 added, both PARTIAL. v7: FR-MATCH-003 PARTIAL→DONE. v10: FR DONE +2, PARTIAL +1, MISSING −3; PDR DONE +1, PARTIAL −1. Total row count unchanged at 280 = 244+36.)
 
 ## 3. The ID table
 
@@ -160,7 +181,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-PRICE-009 (E.0) | سعر أساسي لكل variant؛ خصم نسبي واحد بتاريخين؛ للمالك | basePrice + salePrice المطلق (متبادلان استبعادياً) + discountPercent/discountStartAt/discountEndAt (S17)، مع فحوص DB CHECK والتحقق التطبيقي | OWNER | نموذج إنشاء/تعديل المتغيّر (S17) | S3,S17 | ✅ DONE | - |
 | FR-INV-008 (E.0) | مخزون لكل فرع وvariant؛ Available/Low/Sold out؛ الحد الأقصى عند الـcheckout؛ بلا نقل | BranchStock، bucketForStock، cart max_quantity | عام/session | البطاقات، /cart، /checkout | S6,S8,S14 | ✅ DONE | - |
 | FR-INV-009 (E.0) | بيع فعلي: مسح، لون/مقاس، كمية، خصم ذري، تدقيق | reason=SALE (خصم فقط)؛ GET stock/lookup?barcode= يحلّ الباركود إلى صف BranchStock الفعلي بهذا الفرع؛ الخصم ذري (نفس آلية createMovement القائمة)؛ AuditLog لكل حركة (S18a) | موظف الفرع | صفحة مخزون الفرع: بحث بالباركود + نموذج حركة SALE (S18a) | S6,S18a | ✅ DONE | - |
-| FR-INV-010 (E.0) | خصم يدوي بسبب + إشعار فوري للمالك بهوية الموظف والفرع | StockMovement(reason,note)؛ صف outbox فقط — لا تسليم حقيقي بعد (G-NO-03) | OWNER/موظف | صفحة مخزون الفرع: نموذج الحركة بسبب وملاحظة (S18a) | S6,S18a | 🟡 PARTIAL | S19 |
+| FR-INV-010 (E.0) | خصم يدوي بسبب + إشعار فوري للمالك بهوية الموظف والفرع | StockMovement(reason,note)؛ إشعار حقيقي الآن يصل لصندوق المالك (Notification، relay S19) فوراً تقريباً (كل 3 ثوانٍ)؛ الفرع متاح (vendorId/branchId على الإشعار)؛ **لا تُعرض هوية الموظف نفسه** في الإشعار — buildSafeData لا ينسخ actor_id عمداً (قائمة بيضاء، لا نص حر) | OWNER/موظف | صفحة مخزون الفرع: نموذج الحركة بسبب وملاحظة (S18a)؛ صندوق الإشعارات /notifications (S19) | S6,S18a,S19 | 🟡 PARTIAL | S19 |
 | FR-CART-017 (E.0) | اختيار صريح؛ مجموعات فرع واحد؛ وإلا مجموعات منفصلة | CartItem، checkout-grouping | session | /cart، /checkout | S10,S14 | ✅ DONE | - |
 | FR-CART-018 (E.0) | اقتراح **أقرب** فرع؛ العميل يختار غيره؛ موعد من 3 أيام | التجميع يختار فرعاً افتراضياً ثابتاً موثّقاً، ليس الأقرب (لا مصدر مسافة)؛ كل الفروع المؤهلة تُعرض؛ اختيار الفرع والموعد يعملان — بديل مقصود عن nearest، وليس فجوة تنفيذية؛ انظر PDR-023 | session | /checkout | S10,S14 | 🟡 PARTIAL | — (قرار جديد) |
 | FR-ORD-009 (E.0) | CustomerOrder + BranchOrders، لكلٍّ تنفيذه ورسومه ودفعه وموعده | CustomerOrder، BranchOrder | session | /orders | S9,S10,S11 | ✅ DONE | - |
@@ -170,8 +191,8 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-RET-008 (E.0) | سياسة إرجاع، لقطة عند الشراء، تغيير كل 6 أشهر | لا | - | لا | لا | ❌ MISSING | S21 |
 | FR-RET-009 (E.0) | كود 6 أرقام صالح 7 أيام؛ كل الفروع تقبل | لا | - | لا | لا | ❌ MISSING | S21 |
 | FR-REV-008 (E.0) | مراجعات منتج ومتجر لمشترٍ موثّق، غير قابلة للتعديل | لا | - | لا | لا | ❌ MISSING | S23 |
-| FR-FAV-005 (E.0) | صفحة أتابعه؛ إشعارات منفصلة لمنتج/خصم جديد؛ تعتيم غير النشط | StoreFollow، following API؛ لا إشعارات؛ غير النشط يُخفى ولا يُعتّم | session | /following | S13 | 🟡 PARTIAL | S19 |
-| FR-NOTIF-008 (E.0) | مركز إشعارات: مقروء/غير مقروء، روابط عميقة | صفوف OutboxEvent فقط؛ لا Notification model | - | لا | لا | ❌ MISSING | S19 |
+| FR-FAV-005 (E.0) | صفحة أتابعه؛ إشعارات منفصلة لمنتج/خصم جديد؛ تعتيم غير النشط | StoreFollow، following API؛ **إشعارات منفصلة لمنتج جديد وخصم جديد مبنيتان الآن فعلياً** (FOLLOWED_STORE_NEW_PRODUCT/FOLLOWED_STORE_DISCOUNT، fan-out عادل لكل متابع عبر الـrelay، S19)؛ غير النشط ما زال يُخفى لا يُعتّم (لم يتغيّر) | session | /following، /notifications (S19) | S13,S19 | 🟡 PARTIAL | S19 |
+| FR-NOTIF-008 (E.0) | مركز إشعارات: مقروء/غير مقروء، روابط عميقة | **`Notification` model مبني بالكامل** (S19): `GET /me/notifications` (cursor + unread_only)، `/me/notifications/unread-count`، `POST .../read` (idempotent، آمن من BOLA — صف مستخدم آخر 404 لا 403)؛ بيانات الإشعار قائمة بيضاء فقط، لا نص حر إطلاقاً | session | أيقونة جرس + شارة غير مقروء في AppShell، صفحة /notifications (مقروء/غير مقروء، روابط عميقة لكل نوع — نوعا متابعة المتجر يُعاد توجيههما لصفحة "أتابعه" لا لصفحة المنتج تحديداً، لا slug مخزَّن على الإشعار) | S19 | ✅ DONE | - |
 | FR-VPORTAL-007 (E.0) | المالك: عمليات وتحليلات المتجر؛ الموظف: مخزون وطلبات فرعه فقط | VendorMembershipGuard وعزل الفرع؛ لا تحليلات ولا واجهة مخزون للموظف | OWNER/موظف | مركز /vendor/:id، طلبات الفرع | S4,S9,NAV | 🟡 PARTIAL | S18 |
 
 ### E.1 — الهوية
@@ -334,7 +355,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-ORD-001 | CustomerOrder + suborders | استُبدل بـFR-ORD-009 (E.0) | - | - | - | ↪ SUPERSEDED | - |
 | FR-ORD-002 | دورة حياة مستقلة | استُبدل بـFR-ORD-009 (E.0) | - | - | - | ↪ SUPERSEDED | - |
 | FR-ORD-003 | رفض فرع لا يلغي أشقاءه | الطلبات الفرعية مستقلة؛ لا إجراء رفض/إلغاء | موظف/OWNER | صفحة طلبات الفرع | S9,S11 | 🟡 PARTIAL | S20a |
-| FR-ORD-004 | كل انتقال منسوب ومُشعَر ومدقَّق | AuditLog نعم؛ الإشعار صف outbox فقط | - | لا | S11 | 🟡 PARTIAL | S19 |
+| FR-ORD-004 | كل انتقال منسوب ومُشعَر ومدقَّق | AuditLog نعم لكل انتقال؛ الإشعار أصبح حقيقياً الآن للانتقالات التي كانت أصلاً تُنشئ outbox (طلب جديد للموظف، طلب تأكيد التسليم وإعادة الطلب، بلاغ عدم استلام، تأكيد تلقائي 72 ساعة، تذكير 48 ساعة — S19 relay)؛ **ليس كل انتقال يُطلق إشعاراً** — بدء التحضير وSent مثلاً لا يُنشئان أي حدث outbox إطلاقاً، فجوة منفصلة غير مرتبطة بالـrelay | - | /notifications (S19) | S11,S19 | 🟡 PARTIAL | S19 |
 | FR-ORD-005 | جدول زمني موحد للطلب | قائمة BranchOrder؛ لا جدول للأب | session | /orders | S11 | 🟡 PARTIAL | S20a |
 | FR-ORD-006 | الإلغاء بحسب الحالة | مخطط الحالات فقط؛ لا endpoint ولا واجهة | - | لا | S9 | 🟡 PARTIAL | S20a |
 | FR-ORD-007 | إجراءات بحسب الدور، مع إلغاء بعد الشحن | العزل بحسب الدور مكتمل؛ الإلغاء غير موجود | OWNER/موظف | صفحة طلبات الفرع | S9,S11 | 🟡 PARTIAL | S20a |
@@ -358,7 +379,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 |---|---|---|---|---|---|---|---|
 | FR-FUL-001 | تنفيذ على مستوى البائع عند الـcheckout | استُبدل بـFR-ORD-009 (E.0) | - | - | - | ↪ SUPERSEDED | - |
 | FR-FUL-002 | التوصيل عبر آلة حالة مع سائق | استُبدل بـFR-FUL-009 (E.0) وPDR-006 | - | - | - | ↪ SUPERSEDED | - |
-| FR-FUL-003 | تأكيد الطلب يطلق تنبيه المتجر + رسالتين | صفوف outbox فقط؛ لا relay ولا SMS | - | لا | S10 | 🟡 PARTIAL | S19 |
+| FR-FUL-003 | تأكيد الطلب يطلق تنبيه المتجر + رسالتين | تنبيه الموظف (لا المالك) أصبح حقيقياً داخل التطبيق الآن (NEW_ORDER_FOR_EMPLOYEE، S19 relay)؛ لا رسائل SMS/خارجية للعميل بعد — NotificationChannelService ما زال fallback log فقط، نفس عقد OPEN-004/SmsService، بلا مزوّد حقيقي | - | /notifications للموظف (S19) | S10,S19 | 🟡 PARTIAL | S19 |
 | FR-FUL-004 | أهلية منطقة التوصيل | مناطق على مستوى المتجر (PDR-022) + فحص منطقة العنوان | session | /checkout، /vendor/:id/delivery-zones | S9,S10 | ✅ DONE | - |
 | FR-FUL-005 | رسوم التوصيل بحسب المنطقة | VendorDeliveryZone.fee | session | /checkout | S10 | ✅ DONE | - |
 | FR-FUL-006 | معالجة فشل التوصيل | لا | - | لا | لا | ❌ MISSING | S20a |
@@ -401,10 +422,10 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-FAV-004 | تنبيه عودة المخزون | لا | - | لا | لا | ❌ MISSING | S24 |
 | FR-FAV-005 (E.16) | تفضيلات وتكرار الإشعارات | لا | - | لا | لا | ❌ MISSING | S24 |
 | FR-FAV-006 | تنبيه عرض جديد | لا | - | لا | لا | ❌ MISSING | S24 |
-| FR-NOTIF-001 | SMS وemail وin-app بتتبع لكل قناة | OutboxEvent فقط | - | لا | لا | 🟡 PARTIAL | S19 |
+| FR-NOTIF-001 | SMS وemail وin-app بتتبع لكل قناة | **in-app أصبح حقيقياً وموثوقاً الآن** (Notification model + relay بإعادة محاولة S19)؛ SMS/email ما زالا بلا مزوّد حقيقي (NotificationChannelService fallback log فقط، OPEN-004)؛ لا سجل نجاح/فشل لكل قناة على حدة | - | /notifications (in-app فقط) | S19 | 🟡 PARTIAL | S19 |
 | FR-NOTIF-002 | SMS للـOTP وتأكيد الطلب | OTP مسجَّل في اللوغ (OPEN-004) | - | OTP في /register | AUTH | 🟡 PARTIAL | S19 |
 | FR-NOTIF-003 | قوالب AR/EN بحسب لغة المستلم | لا | - | لا | لا | ❌ MISSING | S19 |
-| FR-NOTIF-004 | إعادة محاولة وسجل محاولات | لا (لا relay) | - | لا | لا | ❌ MISSING | S19 |
+| FR-NOTIF-004 | إعادة محاولة وسجل محاولات | **مبني الآن بالكامل**: claim/lease، إعادة محاولة بـexponential backoff، `attemptCount`/`lastError` محفوظان لكل صف، DEAD_LETTER بعد 5 محاولات (S19، مختبر بدقة — تصاعد المحاولات والـbackoff مؤكَّدان سطراً بسطر) | PLATFORM_ADMIN لقائمة dead-letter | **لا صفحة واجهة مخصصة** — `GET /admin/outbox/dead-letter` API فقط | S19 | 🟡 PARTIAL | S19 |
 | FR-NOTIF-005 | عدم كشف الهاتف الخام إلا بحسب تصميم الطلب | الموظف يرى الاسم والهاتف والكود فقط | موظف الفرع | صفحة طلبات الفرع | S10,S11 | ✅ DONE | - |
 | FR-NOTIF-006 | WhatsApp خارج النطاق | لم يُبنَ | n/a | n/a | n/a | ✅ DONE | - |
 
@@ -434,7 +455,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-VPORTAL-008 | بيانات اعتماد التكامل | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
 | FR-VPORTAL-009 | إعدادات المتجر: ساعات وإغلاقات ومناطق وتفضيلات إشعار | مناطق ونوافذ وواجهة المتجر؛ ساعات عمل وإغلاقات مؤقتة موجودة الآن (S18b)؛ لا تفضيلات إشعار | OWNER | /vendor/:id/delivery-zones، /storefront، /vendor/:id/branches/:branchId/hours | S9,S18b | 🟡 PARTIAL | S19 |
 | FR-VPORTAL-010 | شاشة تسويات (Phase 2) | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
-| FR-VPORTAL-011 | عرض إشعارات البائع | لا | - | لا | لا | ❌ MISSING | S19 |
+| FR-VPORTAL-011 | عرض إشعارات البائع | نفس صندوق /me/notifications المشترك (Notification model + relay، S19) يعرض أنواع البائع (تعليق المتجر، طلب جديد للموظف، مخزون منخفض، خصم يدوي) لحساب البائع نفسه — ليست لوحة خاصة بالبائع، لكنها تعرض إشعاراته فعلاً | session (OWNER/EMP) | أيقونة الجرس + /notifications | S19 | ✅ DONE | - |
 | FR-CMS-001 | أقسام الرئيسية والبانرات | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
 | FR-CMS-002 | حملات وSEO AR/EN | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
 | FR-CMS-003 | وسم الإعلان | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
@@ -470,12 +491,12 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | PDR-018 | باركود لكل منتج؛ داخلي قابل للطباعة؛ فريد للمتجر | storeInventoryBarcode فريد (@@unique([vendorId, storeInventoryBarcode]))؛ ملصق Code128 وطباعة (S18a) | OWNER | صفحة مخزون الفرع (S18a) | S6,S18a | ✅ DONE | - |
 | PDR-019 | نفس الباركود + لون/مقاس جديد إضافة؛ 3 تعارضات للمراجعة | منطق تعارض الاستيراد؛ دون تغيير منذ S7 | OWNER | عدد التعارضات في تقرير الاستيراد (S17)؛ لا حلّ لكل تعارض | S7,S17 | 🟡 PARTIAL | S17 |
 | PDR-020 | مخزون لكل فرع؛ بيع فعلي بالمسح؛ بلا نقل | BranchStock، movements؛ reason=SALE + stock/lookup بالباركود = بيع فعلي بالمسح (S18a)؛ لا نقل بين الفروع (بالتصميم) | موظف الفرع | صفحة مخزون الفرع: بحث بالباركود + تسجيل SALE (S18a) | S6,S18a | ✅ DONE | - |
-| PDR-021 | خصم يدوي بسبب وإشعار المالك | السبب مطلوب؛ الإشعار outbox فقط (ADR-006، نفس نمط كل الإشعارات الحالية) | OWNER/موظف | صفحة مخزون الفرع: نموذج الحركة (سبب + ملاحظة) (S18a) | S6,S18a | ✅ DONE | - |
+| PDR-021 | خصم يدوي بسبب وإشعار المالك | السبب مطلوب؛ **الإشعار يصل الآن فعلياً** لصندوق إشعارات المالك (Notification، relay S19) — لم يعد outbox فقط | OWNER/موظف | صفحة مخزون الفرع: نموذج الحركة (سبب + ملاحظة) (S18a)؛ /notifications (S19) | S6,S18a,S19 | ✅ DONE | - |
 | PDR-022 | إعدادات الفرع؛ رسوم إقليمية للمتجر؛ تعطيل المناطق | VendorDeliveryZone، DeliveryWindow | OWNER | /vendor/:id/delivery-zones، /delivery-windows | S9 | ✅ DONE | - |
 | PDR-023 | أقرب فرع مؤهل؛ اختيار العميل؛ تقويم 3 أيام | فرع افتراضي ثابت موثّق (لا مصدر مسافة)؛ كل الفروع المؤهلة تُعرض؛ الاختيار والموعد يعملان — **بديل مقصود عن nearest، وليس فجوة تنفيذية** | session | /checkout | S10,S14 | 🟡 PARTIAL — بديل مقصود، ليس فجوة | — (قرار جديد) |
 | PDR-024 | تقاويم الفروع وسعة واستثناءات وحماية المحجوز | DeliveryWindow + الحمايات | OWNER | /vendor/:id/branches/:b/delivery-windows | S9 | ✅ DONE | - |
 | PDR-025 | تذكير التحضير قبل 6 ساعات؛ استرداد/موعد جديد عند التأخر | حالة REFUNDED بلا مُطلِق | - | لا | لا | ❌ MISSING | S20a |
-| PDR-026 | Sent/Delivered وتأكيد العميل؛ تذكير 48 ساعة وتأكيد تلقائي 72 | الإجراءات + reconciliation عند القراءة؛ التذكيرات outbox فقط | موظف/session | صفحة الفرع، /orders | S11 | 🟡 PARTIAL | S19 |
+| PDR-026 | Sent/Delivered وتأكيد العميل؛ تذكير 48 ساعة وتأكيد تلقائي 72 | الإجراءات اليدوية DONE منذ S11؛ **التذكير والتأكيد التلقائي أصبحا فحصاً دورياً حقيقياً الآن** (`FulfilmentSweepService`، كل دقيقة، لا "عند القراءة" فقط) والإشعار يصل فعلياً لصندوق العميل (relay S19) | موظف/session | صفحة الفرع، /orders، /notifications (S19) | S11,S19 | ✅ DONE | - |
 | PDR-027 | سياسة فشل التوصيل | لا | - | لا | لا | ❌ MISSING | S20a |
 | PDR-028 | إلغاء صنف/طلب قبل Sent وقواعد الرسوم | مخطط الحالات فقط | - | لا | S9 | ❌ MISSING | S20a |
 | PDR-029 | عناوين: خريطة وافتراضي وحفظ صريح؛ تغيير قبل التحضير | إنشاء/عرض فقط؛ **GPS يملأ lat/lng فقط (لا مزوّد خريطة خارجي، قرار معتمد)**، لا default، لا تعديل/حذف، لا تغيير العنوان قبل التحضير | session | /account، /checkout | S14 | 🟡 PARTIAL — بسبب default/تعديل/حذف/تغيير قبل التحضير، وليس الخريطة | S22 |
@@ -529,9 +550,9 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 ### Notifications
 | Gap | القدرة | يغطي | Sprint |
 |---|---|---|---|
-| G-NO-01 | relay موثوق للـoutbox مع إعادة المحاولة والسجل | FR-NOTIF-001/004 | S19 |
-| G-NO-02 | نموذج Notification ومركز إشعارات صغير بروابط عميقة | FR-NOTIF-008، FR-VPORTAL-011 | S19 |
-| G-NO-03 | ربط أحداث المخزون والمتابعة والتذكيرات الأساسية | FR-INV-010، FR-FAV-005، PDR-026 | S19 |
+| G-NO-01 | relay موثوق للـoutbox مع إعادة المحاولة والسجل (مبني الآن — S19؛ لا صفحة أدمن مخصصة لقائمة dead-letter، API فقط) | FR-NOTIF-001/004 | غير مجدول |
+| G-NO-02 | نموذج Notification ومركز إشعارات صغير بروابط عميقة (مبني الآن — S19) | FR-NOTIF-008، FR-VPORTAL-011 | غير مجدول |
+| G-NO-03 | ربط أحداث المخزون والمتابعة والتذكيرات الأساسية (مبني الآن — S19؛ تبقى فجوتان أضيق: هوية الموظف في إشعار المخزون، وتعتيم غير النشط في صفحة أتابعه) | FR-INV-010، FR-FAV-005، PDR-026 | غير مجدول |
 | G-NO-04 | قوالب AR/EN وSMS (OPEN-004) | FR-NOTIF-002/003، FR-FUL-003 | S19 |
 
 ### Account
@@ -558,7 +579,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | S17b | كتالوج المنصة: تصنيفات وعلامات ومنتجات أساسية وقوالب وتطابق ودمج/فصل | 13 | S16، S17 | ~~OPEN-013~~ **محسوم للفئات الحالية (PDR-036)** — أي فئة غير ملابس/إكسسوار مستقبلية تحتاج قرار قالب خاص بها |
 | S18 | عمليات المخزون: صفحة المخزون، البيع بالمسح، الملصق، الفروع/الساعات، نقل الموظف | 16 | S15، S17 | لا شيء جديد؛ تأكيد شكل الباركود المطبوع |
 | S18b | جودة البحث والاكتشاف: تطبيع عربي، اقتراحات، باركود، ترتيب | 19 | S17 (المشاهدات والأسعار) | وزن الترتيب 40/30/30. **"أقرب فرع" ليس ضمن هذا السبرنت** — انظر الصف المنفصل أدناه |
-| S19 | إشعارات: تصميم الـrelay ثم relay وإشعارات داخل التطبيق لأحداث الطلب الأساسية | 10 | لا شيء تقني؛ يفضَّل بعد S17/S18 لأحداثها | OPEN-004 (SMS: يبقى المسجَّل fallback)؛ قائمة أحداث "action-required" |
+| S19 | إشعارات: تصميم الـrelay ثم relay وإشعارات داخل التطبيق لأحداث الطلب الأساسية | **18 — منفَّذ جزئياً** (معاد اشتقاقه مباشرة من صفوف الملف يحمل `S19` في عمود Sprint وحالته 🟡 PARTIAL أو ❌ MISSING بعد تطبيق v10 = 18 صفاً بالضبط، بنفس منهج صفّ S17 في `v7` أعلاه. **الرقم "10" السابق كان غير محدَّث أصلاً** قبل هذا التحديث — عدة صفوف (`FR-INV-010`، `FR-VPORTAL-009`) أُعيد تعيينها لـ`S19` في `v8`/`v9` دون تحديث هذا العدّاد حينها؛ لم يُحاول هذا التمرير أيضاً مطابقة بقية أعمدة الـ"#" في هذا الجدول — نفس نطاق `v7` الضيّق لكل تمريرة) | لا شيء تقني؛ يفضَّل بعد S17/S18 لأحداثها | OPEN-004 (SMS: يبقى المسجَّل fallback — ما زال مفتوحاً، `G-NO-04` لم يُبنَ) |
 | **S20a** | **استثناءات التنفيذ والإلغاء والاسترداد**: تأخر التحضير، فشل التوصيل، إلغاء صنف/طلب، استرداد، توزيع الدفع، سجل COD، جدول الطلب، تقارير الأداء (VPORTAL-004) | 15 | S19 | OPEN-009 (الرسوم/الضريبة تؤثر على الاسترداد)؛ قواعد رسوم الإلغاء (PDR-028) |
 | **S20b** | **إضافات checkout**: الشروط، ملاحظة العميل/المتجر، الحد الأدنى للطلب، رسوم/ضريبة الدفع النهائي، كتالوج تعارض التنفيذ | 6 | S20a (نفس مسار الدفع، تسلسل بعده تجنباً لتضارب تعديلين متزامنين على checkout) | OPEN-009 (الضريبة/الرسوم)؛ نص الشروط النهائي |
 | S21 | المرتجعات: سياسة المتجر، طلب، كود، استرداد، استلام المرتجعات | 12 | S20a (الاسترداد) | OPEN-009 |
@@ -640,12 +661,12 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | BR-028 | checkout واحد ينتج CustomerOrder أب وBranchOrder واحد أو أكثر، كل BranchOrder بطريقة تنفيذ/رسم/دفع/موعد/دورة حياة خاصة به | BranchOrder | session | /orders | S9,S10 | ✅ DONE | - |
 | BR-029 | العميل يختار سطور السلة صراحة؛ النظام يقترح فقط فروعاً تحوي كل المتغيرات المختارة، ويقترح الأقرب لكن العميل يختار فرعاً أبعد مؤهلاً | الاختيار الصريح ومجموعة الفروع المؤهلة DONE؛ "الأقرب" بديل حتمي موثّق لا مسافة حقيقية | session | /checkout | S10,S14 | 🟡 PARTIAL | — (قرار جديد) |
 | BR-030 | باركود المخزون فريد وscanner-facing؛ الباركود المشترك داخلي لا يُستبدل أبداً؛ بيع/تخفيض لا يمكن أن ينزل المخزون تحت الصفر | فصل الباركودين DONE؛ واجهة بحث بالباركود (scanner-facing) موجودة الآن (S18a)؛ منع النزول تحت الصفر DONE (خصم ذري) | OWNER | صفحة مخزون الفرع: حقل البحث بالباركود (S18a) | S6,S18a | ✅ DONE | - |
-| BR-031 | خصم يدوي غير بيعي له سبب دائماً ويُشعِر المالك؛ لا نقل مخزون بين الفروع في المرحلة الأولى | السبب مفروض؛ لا نقل مبني (متوافق مع القرار)؛ الإشعار outbox فقط | OWNER/EMP | صفحة مخزون الفرع: نموذج الحركة (S18a) | S6,S18a | ✅ DONE | - |
+| BR-031 | خصم يدوي غير بيعي له سبب دائماً ويُشعِر المالك؛ لا نقل مخزون بين الفروع في المرحلة الأولى | السبب مفروض؛ لا نقل مبني (متوافق مع القرار)؛ **الإشعار يصل فعلياً الآن** لصندوق المالك (relay S19)، لم يعد outbox فقط | OWNER/EMP | صفحة مخزون الفرع: نموذج الحركة (S18a)؛ /notifications (S19) | S6,S18a,S19 | ✅ DONE | - |
 | BR-032 | التوفر العام مشتق من مجموع مخزون الفروع المؤهلة لكن يُعرض فقط Available/Low/Sold out؛ الكمية الحقيقية خاصة إلا حد أقصى عند تحقق السلة | البطاقات العامة تستخدم المجموع (bucketForStock) كما هو منصوص؛ حد السلة الأقصى أصبح عمداً لكل فرع مفرد (إصلاح مراجعة Sprint 14) بما يطابق أن checkout لا يقسّم سطراً على فرعين | public/session | البطاقات، /cart | S8,S14 | ✅ DONE | - |
 | BR-033 | سياسة إرجاع المتجر ورسومه تُلقَط لحظة الشراء؛ تتغير كل 6 أشهر فقط؛ قبول موحّد عبر كل الفروع/نقاط الاستلام | لا | - | لا | لا | ❌ MISSING | S21 |
-| BR-034 | التوصيل يديره موظفو الفرع؛ تأكيد العميل يُطلب بعد تحديث الموظف؛ تذكير 48 ساعة وتأكيد تلقائي 72؛ لا هوية سائق ولا نزاع داخل المنصة | الإجراءات اليدوية DONE؛ التذكير/التأكيد التلقائي غير مجدوَل (يُحسب فقط عند القراءة) | EMP/session | صفحة الفرع،/orders | S11 | 🟡 PARTIAL | S19 |
+| BR-034 | التوصيل يديره موظفو الفرع؛ تأكيد العميل يُطلب بعد تحديث الموظف؛ تذكير 48 ساعة وتأكيد تلقائي 72؛ لا هوية سائق ولا نزاع داخل المنصة | الإجراءات اليدوية DONE؛ **التذكير والتأكيد التلقائي أصبحا مجدوَلين فعلياً الآن** (`FulfilmentSweepService` دوري، لا عند القراءة فقط — S19) | EMP/session | صفحة الفرع،/orders، /notifications (S19) | S11,S19 | ✅ DONE | - |
 
-**عدّاد BR:** 34 صفاً (BR-001..034)، منها 2 SUPERSEDED (021، 024). أُعيد فرز الـ32 الحيّة مباشرة من الجدول أعلاه بعد S18a (لا تقدير): DONE=10 (002، 005، 006، 010، 015، 027، 028، 030، 031، 032)، PARTIAL=10 (001، 007، 009، 014، 020، 022، 023، 026، 029، 034)، MISSING=12 (003، 004، 008، 011، 012، 013، 016، 017، 018، 019، 025، 033). المجموع 10+10+12+2=34. (قبل S18a: DONE=7، PARTIAL=13 — BR-005/030/031 انتقلت PARTIAL←DONE. النسخة v2 كانت ذكرت 8/17/7 خطأً؛ صُحِّحت في v3/§16.)
+**عدّاد BR:** 34 صفاً (BR-001..034)، منها 2 SUPERSEDED (021، 024). أُعيد فرز الـ32 الحيّة مباشرة من الجدول أعلاه بعد S19 (لا تقدير): DONE=11 (002، 005، 006، 010، 015، 027، 028، 030، 031، 032، 034)، PARTIAL=9 (001، 007، 009، 014، 020، 022، 023، 026، 029)، MISSING=12 (003، 004، 008، 011، 012، 013، 016، 017، 018، 019، 025، 033). المجموع 11+9+12+2=34. (قبل S19: DONE=10، PARTIAL=10 — BR-034 انتقلت PARTIAL←DONE. قبل S18a: DONE=7، PARTIAL=13 — BR-005/030/031 انتقلت PARTIAL←DONE. النسخة v2 كانت ذكرت 8/17/7 خطأً؛ صُحِّحت في v3/§16.)
 
 ## §7 — `NFR-*` Non-functional requirements (Part 4, Section I)
 
@@ -699,7 +720,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | SRS-G0-05 | المخزون: OfferBranchInventory (= BranchStock فعلياً) لفرع فعلي/مستودع فقط؛ InventoryMovement بكل الأسباب المذكورة؛ لا نوع نقل | BranchStock+StockMovement موجودان؛ أسباب الحركة تغطي DAMAGE/LOSS/COUNT_CORRECTION/SALE الآن (S18a)، لا "استرجاع مرتجع" ولا "استيراد/إضافة" كأسباب حركة منفصلة | 🟡 PARTIAL | S18 |
 | SRS-G0-06 | السلة والطلب: Cart لعميل موثّق فقط، CartItem بلا فرع/تنفيذ عند الإضافة؛ CustomerOrder له BranchOrder واحد أو أكثر | مطابق تماماً | ✅ DONE | - |
 | SRS-G0-07 | التنفيذ والدفع: Fulfillment واحد لكل BranchOrder بلا سائق؛ دفع sandbox واحد يغطي عدة BranchOrders بتخصيص عبر branch_order_id | لا كيان Fulfillment منفصل (مدموج داخل BranchOrder، وهذا يحقق نفس الغرض عملياً)؛ PaymentTransaction واحد + BranchOrder.paymentTransactionId كإحالة (يحقق التخصيص فعلياً) | ✅ DONE | - |
-| SRS-G0-08 | الجدولة والإرجاع: DeliverySlot لفرع مالك مخزون؛ ReturnPolicy مُلقَطة على BranchOrder/Item؛ Notification بحالة قراءة ورابط عميق؛ Review لمنتج/متجر فقط، غير قابل للتعديل | DeliveryWindow/Exception DONE؛ ReturnPolicy/ReturnRequest/Notification/Review كلها غير موجودة | 🟡 PARTIAL (نصفه DONE، نصفه MISSING بالكامل) | S17/S19/S21/S23 |
+| SRS-G0-08 | الجدولة والإرجاع: DeliverySlot لفرع مالك مخزون؛ ReturnPolicy مُلقَطة على BranchOrder/Item؛ Notification بحالة قراءة ورابط عميق؛ Review لمنتج/متجر فقط، غير قابل للتعديل | DeliveryWindow/Exception DONE؛ **`Notification` بحالة قراءة ورابط عميق مبني الآن بالكامل (S19)**؛ ReturnPolicy/ReturnRequest/Review ما زالت غير موجودة إطلاقاً | 🟡 PARTIAL (ثلاثة أرباعه DONE الآن، ReturnPolicy/ReturnRequest/Review فقط ما زال MISSING بالكامل) | S17/S19/S21/S23 |
 
 ### G.3 — كيانات مقابل Prisma الفعلي (الكيانات غير المذكورة في G.0 فقط؛ ما ذُكر أعلاه لا يتكرر)
 
@@ -712,7 +733,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | SRS-G3-05 | `Payment`/`PaymentAllocation`/`PaymentTransactionAllocation`/`WebhookInbox` (نموذج دفع متعدد المراحل مع تسوية) | فقط `PaymentTransaction` بحالتين (SUCCEEDED/FAILED)، بلا بوابة حقيقية ولا webhook inbox (PDR-005 بسّط النموذج عمداً) | ✅ DONE (تبسيط sandbox متعمد، ليس فجوة) | - |
 | SRS-G3-06 | `VendorSettlement`/`Promotion`/`Coupon` (Phase 2 بحسب الـSRS) | غير موجودة | ❌ MISSING | قرار-نطاق |
 | SRS-G3-07 | `Review`/`ReturnRequest`/`Refund`/`Dispute` | غير موجودة (متوافق مع FR-REV-*/FR-RET-* MISSING أعلاه) | ❌ MISSING | S21/S23 |
-| SRS-G3-08 | `Notification`/`SupportTicket` | غير موجودتين (متوافق مع FR-NOTIF-008/FR-SUP-* أعلاه) | ❌ MISSING | S19/قرار-نطاق |
+| SRS-G3-08 | `Notification`/`SupportTicket` | **`Notification` مبني بالكامل الآن** (S19، يتبع FR-NOTIF-008 الذي أصبح ✅)؛ `SupportTicket` ما زال غير موجود إطلاقاً | 🟡 PARTIAL | S19/قرار-نطاق |
 | SRS-G3-09 | `PriceHistory` | موجود (متوافق مع FR-PRICE-002، S17): سجلّ إضافة فقط، صف واحد لكل تغيير سعر حقيقي، تعبئة أولية MIGRATED_BASELINE لكل متغيّر سابق | ✅ DONE | - |
 | SRS-G3-10 | ثابتان معماريان: لا `vendor_id` على `CanonicalProduct`/`CanonicalProductVariant` أبداً؛ كل جدول مملوك للبائع يحمل `vendor_id` إلزامياً | مطابق تماماً في السكيما الفعلية (تحقّقت من `CanonicalProduct`/`CanonicalProductVariant`/`OfferVariant`) | ✅ DONE | - |
 
@@ -729,7 +750,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | SRS-H1-05 | تقييد معدل لكل جهة فاعلة، أشد على OTP/بحث | `@nestjs/throttler` عام + `@Throttle` على OTP/login؛ لا تقييد أشد خاص بالبحث موجود | 🟡 PARTIAL | S18b |
 | SRS-H1-06 | توقيع HMAC-SHA256 صادر لأي webhook من المنصة | لا webhooks صادرة من المنصة أصلاً (لا تكامل خارجي حقيقي) | ❌ MISSING | قرار-نطاق |
 | SRS-H1-07 | توقيع وارد مُتحقَّق منه لبوابة الدفع/التوصيل (معلّق على OPEN-001) | لا بوابة حقيقية؛ sandbox فقط | ❌ MISSING | قرار-نطاق |
-| SRS-H1-08 | إعادة محاولة exponential backoff + dead-letter queue مرئية للأدمن | لا queue/worker خلفي موجود إطلاقاً (لا BullMQ، لا outbox relay) | ❌ MISSING | S19 |
+| SRS-H1-08 | إعادة محاولة exponential backoff + dead-letter queue مرئية للأدمن | **exponential backoff وDEAD_LETTER مبنيان ومختبران بالكامل** (outbox relay، S19)؛ "مرئية للأدمن" عبر API فقط (`GET /admin/outbox/dead-letter`، PLATFORM_ADMIN) — لا صفحة واجهة مخصصة بعد | 🟡 PARTIAL | S19 |
 | SRS-H1-09 | مراقبة تكامل خارجي: معدل نجاح/زمن/آخر فشل في لوحة الأدمن | لا لوحة، لا تكامل خارجي حقيقي | ❌ MISSING | S25 |
 | SRS-H1-10 | ترقيم صفحات بـcursor، حد افتراضي 20، أقصى 100 | الترقيم الفعلي `take`/`limit` بسيط (offset-style عبر معاملات بسيطة)، ليس cursor-based | 🟡 PARTIAL | S18b |
 
@@ -750,7 +771,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | SRS-H3A-05 | Checkout: quote بلا تعديل، ثم إنشاء ذري | `POST /checkout/quote`, `/reserve`, `/confirm` — يطابق المعنى وإن كان بثلاث خطوات لا خطوتين | ✅ DONE | - |
 | SRS-H3A-06 | طلبات الفرع: GET orders، PATCH actions (بدء تحضير، رجوع، إلغاء صنف، إعادة محاولة توصيل، موافقة استرداد) | البدء/الإرسال/التسليم/الاستلام موجودة؛ **الرجوع، إلغاء الصنف، إعادة محاولة التوصيل، موافقة الاسترداد غير موجودة** | 🟡 PARTIAL | S20a |
 | SRS-H3A-07 | التقويم/العناوين: فترات، إعادة جدولة، تعديل عنوان قبل التحضير فقط | فترات التوصيل CRUD موجودة؛ **لا إعادة جدولة، لا تعديل عنوان لطلب قائم** | 🟡 PARTIAL | S20a/S22 |
-| SRS-H3A-08 | المرتجعات/المراجعات/التنبيهات: طلب إرجاع، قرار، مراجعة، إشعارات بحالة قراءة | لا شيء من هذا موجود | ❌ MISSING | S19/S21/S23 |
+| SRS-H3A-08 | المرتجعات/المراجعات/التنبيهات: طلب إرجاع، قرار، مراجعة، إشعارات بحالة قراءة | **إشعارات بحالة قراءة مبنية الآن بالكامل** (S19)؛ طلب الإرجاع والقرار والمراجعة ما زالت غير موجودة إطلاقاً | 🟡 PARTIAL (ربعه عن الإشعارات DONE، الباقي MISSING بالكامل) | S19/S21/S23 |
 
 ## §10 — Part 5: تجربة المستخدم وحالات الفشل
 
@@ -761,7 +782,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | SRS-K1A-01 | الصفحة الرئيسية وصفحات القطاع (All/Women/Men/Kids/Accessories) | موجودة (S13)؛ فلاتر اللون/المقاس/التوفر/الحالة/الخصم غير كاملة | 🟡 PARTIAL | S18b |
 | SRS-K1A-02 | البطاقة العالمية وعرض المقارنة | موجودة، بلا تقييم/مسافة لكسر التعادل | 🟡 PARTIAL | S18b |
 | SRS-K1A-03 | صفحة المتجر العامة | موجودة كاملة تقريباً (S7/S13) | ✅ DONE | - |
-| SRS-K1A-04 | أتابعه | موجودة (S13)، بلا إشعارات منفصلة | 🟡 PARTIAL | S19 |
+| SRS-K1A-04 | أتابعه | موجودة (S13)؛ **الإشعارات المنفصلة مبنية الآن** (منتج/خصم جديد، S19) | ✅ DONE | - |
 | SRS-K1A-05 | تفاصيل عرض المتجر | موجودة | ✅ DONE | - |
 | SRS-K1A-06 | السلة والـcheckout | موجودة ومختبرة جيداً (S10/S14) | ✅ DONE | - |
 | SRS-K1A-07 | طلبات العميل | موجودة، بلا جدول زمني موحّد وبلا إلغاء/إرجاع | 🟡 PARTIAL | S20a |
@@ -798,7 +819,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | L-13 | رفض جزئي في طلب متعدد البائعين | لا آلية رفض؛ لا تجميع "PartiallyCancelled" على مستوى CustomerOrder | ❌ MISSING | S20a |
 | L-14 | دفع نجح والطلب فشل | rollback الذري يمنع الحالة أصلاً في التصميم الحالي؛ لا job تسوية منفصل مطلوب لأن السيناريو لا يحدث بنفس الشكل القديم | ✅ DONE (بالتصميم) | - |
 | L-15 | طلب أُنشئ والدفع فشل | مغطى تماماً: PAYMENT_FAILED يتراجع بالكامل، الحجز يبقى حياً للمحاولة مجدداً | ✅ DONE | - |
-| L-16 | إشعار فشل | لا نموذج Notification أصلاً لتسجيل الفشل | ❌ MISSING | S19 |
+| L-16 | إشعار فشل | **نموذج Notification مبني بالكامل الآن** (S19) ويمكن أن يحمل أي نوع إشعار مستقبلاً، لكن لا نوع "فشل" تقني محدد (دفع/webhook) مبني فعلياً بعد — الأنواع الإحدى عشر المبنية كلها إيجابية التدفق (طلب جديد، تذكير، تفعيل خصم...)، لا فشل | 🟡 PARTIAL | S19 |
 | L-17 | webhook مكرر | لا webhooks واردة أصلاً | ❌ MISSING | قرار-نطاق |
 | L-18 | تكرار إرسال checkout | idempotency key يعيد نفس الطلب | ✅ DONE | - |
 | L-19 | استرداد جزئي | لا استرداد مبني | ❌ MISSING | S21 |
@@ -880,12 +901,12 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | SRS-P-04 | Feature flags | لا يوجد (FR-ADMIN-004 MISSING) | ❌ MISSING | S25 |
 | SRS-P-05 | إدارة أسرار عبر مخزن مُدار | ملف `.env` محلي غير مُدار؛ لا مخزن أسرار سحابي | ❌ MISSING | قرار-نطاق |
 | SRS-P-06 | مراقبة/لوغ/تتبع (Sentry، correlation ID) | correlation ID DONE في كل مكان؛ Sentry مُهيَّأ اختيارياً (`if SENTRY_DSN`) لكن غير مفعَّل فعلياً في dev | 🟡 PARTIAL | قرار-نطاق |
-| SRS-P-07 | تنبيهات على معدل الأخطاء وعمق الطابور | لا queue خلفي أصلاً | ❌ MISSING | S19 |
+| SRS-P-07 | تنبيهات على معدل الأخطاء وعمق الطابور | **طابور حقيقي أصبح موجوداً الآن** (outbox relay، S19) لكن لا تنبيهات على معدل الأخطاء أو عمق الطابور — لا مراقبة/alerting مبني إطلاقاً | ❌ MISSING | S19 |
 | SRS-P-08 | نسخ احتياطي كل ساعة | لا | ❌ MISSING | قرار-نطاق |
 | SRS-P-09 | خطة تعافي من كوارث | لا | ❌ MISSING | قرار-نطاق |
-| SRS-P-10 | مهام مجدولة (تقادم، FX، اشتراك، تسوية webhook) | لا scheduler/worker خلفي إطلاقاً في هذا المستودع | ❌ MISSING | S19 |
+| SRS-P-10 | مهام مجدولة (تقادم، FX، اشتراك، تسوية webhook) | **آلية مهام مجدولة حقيقية أصبحت موجودة لأول مرة في هذا المستودع** (`PeriodicTask`، S19) — تُستخدم لـrelay الإشعارات وsweep التذكيرات والخصومات المجدولة فقط؛ تقادم الأسعار وFX والاشتراك وتسوية webhook لم تُبنَ بعد بهذه الآلية | 🟡 PARTIAL | S19 |
 | SRS-P-11 | إعادة فهرسة بحث | غير منطبق حالياً (لا Meilisearch)، ولا حتى Postgres FTS حقيقي مستخدَم | ❌ MISSING | S18b |
-| SRS-P-12 | معالجة jobs فاشلة (dead-letter) | لا queue خلفي | ❌ MISSING | S19 |
+| SRS-P-12 | معالجة jobs فاشلة (dead-letter) | **dead-letter خاص بـoutbox مبني ومختبر الآن** (S19) — ليس نظام طابور jobs عاماً (لا BullMQ، لا نوع job آخر يستخدمه) | 🟡 PARTIAL | S19 |
 | SRS-P-13 | إعادة تشغيل webhook | لا webhooks واردة | ❌ MISSING | قرار-نطاق |
 | SRS-P-14 | أدلة تشغيل للحالات الحرجة | لا يوجد | ❌ MISSING | قرار-نطاق |
 | SRS-P-15 | تصحيح بيانات عبر إجراء مدقَّق لا تعديل مباشر | لا واجهة تصحيح بيانات إدارية؛ أي تصحيح فعلي يتم عبر سكربتات/قاعدة مباشرة (خارج AuditLog) | ❌ MISSING | S25 |

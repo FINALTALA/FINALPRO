@@ -40,6 +40,7 @@ import {
 } from '../common/availability.util';
 import { CanonicalNamingService } from '../matching/canonical-naming.service';
 import { MatchingService } from '../matching/matching.service';
+import { OutboxEventService } from '../outbox/outbox-event.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SubscriptionGateService } from '../subscriptions/subscription-gate.service';
 import {
@@ -108,7 +109,38 @@ export class VendorOffersController {
     private readonly canonicalNaming: CanonicalNamingService,
     private readonly idempotencyCompletion: IdempotencyCompletionService,
     private readonly subscriptionGate: SubscriptionGateService,
+    private readonly outbox: OutboxEventService,
   ) {}
+
+  // Sprint 19 (FR-FAV-005 E.0, review-round): one OutboxEvent + its
+  // StoreFollow snapshot, atomically, in the SAME transaction as the
+  // real change it announces - never a per-follower enqueue loop (a
+  // store with many followers would mean many outbox rows for one
+  // real event; see OutboxDeliveryTarget's own schema.prisma comment).
+  // `payload` shape must match OutboxRelayService's/
+  // DiscountActivationSweepService's own expectations for the given
+  // eventType exactly (see FOLLOWER_EVENT_TYPE_MAP there) - this is
+  // the SAME 'offer.discount_activated_for_followers' eventType the
+  // sweep service also enqueues for the scheduled-discount case, so
+  // both call sites must agree on payload shape.
+  private async enqueueFollowerNotification(
+    tx: Prisma.TransactionClient,
+    eventType:
+      | 'offer.published_for_followers'
+      | 'offer.discount_activated_for_followers',
+    vendorId: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    const outboxEvent = await this.outbox.enqueue(
+      { eventType, payload: { vendor_id: vendorId, ...payload } },
+      tx,
+    );
+    await tx.$executeRaw`
+      INSERT INTO outbox_delivery_targets (id, "outboxEventId", "recipientUserId")
+      SELECT gen_random_uuid()::text, ${outboxEvent.id}, "userId"
+      FROM store_follows WHERE "vendorId" = ${vendorId}
+    `;
+  }
 
   private offerToDto(offer: {
     id: string;
@@ -702,13 +734,21 @@ export class VendorOffersController {
         });
       }
 
+      // Sprint 19 (FR-FAV-005 E.0): true only the very first time this
+      // offer ever reaches ACTIVE - never on a later ACTIVE<->INACTIVE
+      // toggle (firstPublishedAt is set once below and never cleared).
+      let isFirstPublish = false;
       if (dto.status === 'ACTIVE') {
         await this.assertPublishGate(tx, vendorId, offer);
+        isFirstPublish = offer.firstPublishedAt === null;
       }
 
       const updated = await tx.vendorOffer.update({
         where: { id: offerId },
-        data: { status: dto.status },
+        data: {
+          status: dto.status,
+          ...(isFirstPublish ? { firstPublishedAt: new Date() } : {}),
+        },
       });
       await this.auditLog.record(
         {
@@ -722,6 +762,14 @@ export class VendorOffersController {
         },
         tx,
       );
+      if (isFirstPublish) {
+        await this.enqueueFollowerNotification(
+          tx,
+          'offer.published_for_followers',
+          vendorId,
+          { offer_id: offerId },
+        );
+      }
       return this.offerToDto(updated);
     });
   }
@@ -1264,6 +1312,27 @@ export class VendorOffersController {
           (nextDiscountEndAt?.getTime() ?? null);
       if (priceChanged) {
         const now = new Date();
+        // Sprint 19 (FR-FAV-005 E.0, review-round): a genuine
+        // IMMEDIATE discount only - computeEffectivePrice(..., now)
+        // reflects a future-dated discountStartAt as "not active yet"
+        // (effective-price.util.ts's own documented contract), so this
+        // naturally does NOT fire for a scheduled-for-later discount;
+        // DiscountActivationSweepService.sweepOnce() is the only thing
+        // that notifies for that case, at the moment it actually
+        // starts, never here. Comparing effective prices (not raw
+        // config fields) at the SAME instant `now` is what makes both
+        // the salePrice path and the discountPercent path handled
+        // uniformly by one check.
+        const oldEffective = computeEffectivePrice(variant, now);
+        const newEffective = computeEffectivePrice(updated, now);
+        if (newEffective < oldEffective) {
+          await this.enqueueFollowerNotification(
+            tx,
+            'offer.discount_activated_for_followers',
+            vendorId,
+            { offer_variant_id: variantId },
+          );
+        }
         await tx.priceHistory.create({
           data: {
             vendorId,
@@ -1273,7 +1342,7 @@ export class VendorOffersController {
             discountPercent: updated.discountPercent,
             discountStartAt: updated.discountStartAt,
             discountEndAt: updated.discountEndAt,
-            effectivePriceAtChange: computeEffectivePrice(updated, now),
+            effectivePriceAtChange: newEffective,
             reason: 'MANUAL_EDIT',
             changedBy: user.id,
             changedAt: now,

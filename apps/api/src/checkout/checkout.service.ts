@@ -18,6 +18,7 @@ import {
   FulfilmentMethod,
   Prisma,
 } from '../../generated/prisma/client';
+import { OutboxEventService } from '../outbox/outbox-event.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TERMINAL_BRANCH_ORDER_STATUSES } from '../orders/branch-order-state-machine';
 import { lockDeliveryWindowRow } from '../delivery-windows/delivery-window-locking.util';
@@ -151,6 +152,7 @@ export class CheckoutService {
     private readonly sandboxPayment: SandboxPaymentService,
     private readonly subscriptionGate: SubscriptionGateService,
     private readonly idempotencyCompletion: IdempotencyCompletionService,
+    private readonly outbox: OutboxEventService,
   ) {}
 
   // ============================================================
@@ -709,6 +711,24 @@ export class CheckoutService {
             data: { reservedQuantity: { increment: item.quantity } },
           });
           stock.reservedQuantity += item.quantity;
+          // Sprint 19 (approved decision 3.4: "Any reserve that leaves
+          // only 1-3 stock notifies owner and branch employee").
+          // Stateless by design, no new column: fires only on the
+          // CROSSING into the low band (available was > 3 before this
+          // increment, 1-3 after it) - never again while it stays low,
+          // and correctly fires again after a restock-then-redrop,
+          // since "before" is re-evaluated fresh every single reserve()
+          // call against the row's current state under its own lock.
+          const afterReserve = available - item.quantity;
+          if (available > 3 && afterReserve >= 1 && afterReserve <= 3) {
+            await this.enqueueLowStockNotification(
+              tx,
+              g.vendorId,
+              g.branchId,
+              item.offerVariantId,
+              afterReserve,
+            );
+          }
           await tx.checkoutReservationItem.create({
             data: {
               reservationId: reservation.id,
@@ -1339,6 +1359,12 @@ export class CheckoutService {
           },
           tx,
         );
+        await this.enqueueNewOrderForEmployeeNotification(
+          tx,
+          vendorId,
+          branchId,
+          branchOrder.id,
+        );
 
         createdBranchOrders.push({
           id: branchOrder.id,
@@ -1413,6 +1439,77 @@ export class CheckoutService {
    * transaction (the BranchOrders/stock decrements already written for
    * OTHER branches in this same checkout must survive).
    */
+  // Sprint 19: recipient snapshot taken HERE, inside the SAME
+  // transaction reserve() already holds the stock row lock under -
+  // never resolved later at relay time. Owner(s) AND the branch's
+  // active employee(s), per the approved decision's own wording
+  // (deliberately different from stock_movement's owner-only
+  // recipients above).
+  private async enqueueLowStockNotification(
+    tx: Prisma.TransactionClient,
+    vendorId: string,
+    branchId: string,
+    offerVariantId: string,
+    remainingQuantity: number,
+  ): Promise<void> {
+    const recipients = await tx.vendorUser.findMany({
+      where: {
+        vendorId,
+        OR: [
+          { role: 'OWNER' },
+          { role: 'BRANCH_EMPLOYEE', branchId, status: 'ACTIVE' },
+        ],
+      },
+      select: { userId: true },
+    });
+    for (const recipient of recipients) {
+      await this.outbox.enqueue(
+        {
+          eventType: 'checkout.low_stock_after_reserve',
+          payload: {
+            vendor_id: vendorId,
+            branch_id: branchId,
+            offer_variant_id: offerVariantId,
+            remaining_quantity: remainingQuantity,
+            recipient_user_id: recipient.userId,
+          },
+        },
+        tx,
+      );
+    }
+  }
+
+  // Sprint 19 (approved decision 3.5: "Employee gets immediate
+  // new-order notification; owner receives exceptions, not every
+  // order" - the employee ONLY, deliberately unlike every other
+  // owner-directed event above). Recipient snapshot taken HERE, same
+  // transaction as the BranchOrder itself.
+  private async enqueueNewOrderForEmployeeNotification(
+    tx: Prisma.TransactionClient,
+    vendorId: string,
+    branchId: string,
+    branchOrderId: string,
+  ): Promise<void> {
+    const employees = await tx.vendorUser.findMany({
+      where: { vendorId, branchId, role: 'BRANCH_EMPLOYEE', status: 'ACTIVE' },
+      select: { userId: true },
+    });
+    for (const employee of employees) {
+      await this.outbox.enqueue(
+        {
+          eventType: 'branch_order.new_order_for_employee',
+          payload: {
+            vendor_id: vendorId,
+            branch_id: branchId,
+            branch_order_id: branchOrderId,
+            recipient_user_id: employee.userId,
+          },
+        },
+        tx,
+      );
+    }
+  }
+
   private async createPickupBranchOrderWithRetry(
     tx: Prisma.TransactionClient,
     baseData: Prisma.BranchOrderUncheckedCreateInput,
