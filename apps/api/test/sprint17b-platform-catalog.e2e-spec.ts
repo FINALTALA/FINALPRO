@@ -8,6 +8,8 @@ import { HttpExceptionFilter } from './../src/common/filters/http-exception.filt
 import { PrismaService } from './../src/prisma/prisma.service';
 import { createUniquePhone } from './helpers/e2e-phone-lanes';
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 class FakeSmsService {
   sent: { phone: string; code: string; expiresAt: Date }[] = [];
   async sendOtp(phone: string, code: string, expiresAt: Date) {
@@ -77,6 +79,22 @@ describe('Sprint 17b - platform catalog administration (e2e)', () => {
   afterEach(async () => {
     await app.close();
   });
+
+  /** A transaction is genuinely waiting on a `canonical_products ...
+   * FOR UPDATE` lock right now - confirms merge()/split() is really
+   * blocked behind a concurrent holder's lock, not just slow. */
+  async function someoneWaitsOnCanonicalProductLock(): Promise<boolean> {
+    for (let i = 0; i < 100; i++) {
+      const rows = await prisma.$queryRaw<{ n: bigint }[]>`
+        SELECT count(*)::bigint AS n FROM pg_stat_activity
+         WHERE datname = current_database()
+           AND wait_event_type = 'Lock'
+           AND query ILIKE '%FROM canonical_products%FOR UPDATE%'`;
+      if (Number(rows[0].n) > 0) return true;
+      await sleep(100);
+    }
+    return false;
+  }
 
   async function signup(phone: string, password: string): Promise<string> {
     await request(app.getHttpServer())
@@ -1095,6 +1113,91 @@ describe('Sprint 17b - platform catalog administration (e2e)', () => {
       });
       expect(reports).toHaveLength(1);
     });
+
+    it('review-round fix: a same-customer duplicate report submitted AFTER the owner already decided the candidate never reopens it - no status change, no duplicate requeue/audit', async () => {
+      const admin = await signupWithPlatformRole('PLATFORM_ADMIN');
+      const brand = await createBrand(admin, { name: unique('NoReopenBrand') });
+      const category = await createCategory(admin);
+      const product = await createCanonicalProduct(
+        admin,
+        brand.id,
+        category.id,
+      );
+      const variant = await addVariant(admin, product.id, {});
+      const gtin = uniqueGtin();
+      await prisma.canonicalProductVariant.update({
+        where: { id: variant.id },
+        data: { gtin },
+      });
+
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const vendorId = await createVendor(owner);
+      await activateVendor(owner, vendorId);
+      const { offerId, variantId } = await confirmExactMatch(
+        owner,
+        vendorId,
+        variant.id,
+        gtin,
+      );
+
+      const customer = await createCustomer();
+      const first = await request(app.getHttpServer())
+        .post('/api/v1/me/match-reports')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('report'))
+        .send({ offer_variant_id: variantId })
+        .expect(201);
+      const candidateId = first.body.candidate_id as string;
+
+      // Owner decides (rejects the report, keeping the link as-is).
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/offers/${offerId}/variants/${variantId}/match-review/candidates/${candidateId}/decision`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('decide'))
+        .send({ decision: 'reject' })
+        .expect(200);
+
+      const afterDecision = await prisma.matchReviewCandidate.findUniqueOrThrow(
+        { where: { id: candidateId } },
+      );
+      expect(afterDecision.status).toBe('REJECTED');
+      const auditCountBefore = await prisma.auditLog.count({
+        where: { entityType: 'MatchReviewCandidate', entityId: candidateId },
+      });
+
+      // Same customer, same candidate, a FRESH idempotency key - a
+      // genuinely new HTTP request, but the SAME reporter re-reporting
+      // the SAME candidate must still be a pure no-op at the business
+      // level, even though the candidate was decided in between.
+      const second = await request(app.getHttpServer())
+        .post('/api/v1/me/match-reports')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('report-again'))
+        .send({ offer_variant_id: variantId });
+      expect([200, 201]).toContain(second.status);
+      expect(second.body.id).toBe(first.body.id);
+      expect(second.body.candidate_id).toBe(candidateId);
+
+      const candidateAfterSecondReport =
+        await prisma.matchReviewCandidate.findUniqueOrThrow({
+          where: { id: candidateId },
+        });
+      // Never reopened - the bug this fixes would have flipped this
+      // back to PENDING purely because the same reporter resubmitted.
+      expect(candidateAfterSecondReport.status).toBe('REJECTED');
+
+      const reports = await prisma.matchReport.findMany({
+        where: { candidateId },
+      });
+      expect(reports).toHaveLength(1);
+
+      const auditCountAfter = await prisma.auditLog.count({
+        where: { entityType: 'MatchReviewCandidate', entityId: candidateId },
+      });
+      expect(auditCountAfter).toBe(auditCountBefore);
+    });
   });
 
   // ============================================================
@@ -1404,6 +1507,115 @@ describe('Sprint 17b - platform catalog administration (e2e)', () => {
         );
       }
       void survivorVariant;
+    }, 30000);
+
+    it("barrier (review-round fix): a concurrent lock-holder commits a brand-new VendorOffer link while merge is genuinely blocked waiting on the same loser lock - merge's discovery runs only after that commit and correctly repoints the new VendorOffer, never leaving it pointing at the now-MERGED loser", async () => {
+      const admin = await signupWithPlatformRole('PLATFORM_ADMIN');
+      const { survivor, loser } = await mergeSetup(admin);
+      const survivorVariant = await addVariant(admin, survivor.id, {
+        colour: 'barrier',
+      });
+      const loserVariant = await addVariant(admin, loser.id, {
+        colour: 'barrier',
+      });
+
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const vendorId = await createVendor(owner);
+      await activateVendor(owner, vendorId);
+      // Genuinely unmatched at this point - this is the offer whose
+      // first-ever match a concurrent decide()/confirmMatch()-style
+      // writer will establish WHILE merge is blocked waiting on the
+      // loser's CanonicalProduct lock.
+      const { variantId } = await createOfferVariant(owner, vendorId);
+
+      // Stand-in for a concurrent decide()/confirmMatch() confirmation
+      // that reaches the SAME lock first: locks the loser's
+      // CanonicalProduct row (the exact row merge() also needs) and
+      // performs the SAME real writes that path makes -
+      // offerVariant.canonicalVariantId and vendorOffer.canonicalProductId
+      // - inside its own transaction, held open under full test
+      // control (an explicit, generous timeout, never subject to any
+      // production endpoint's default 5s Prisma transaction ceiling -
+      // routing this through the real HTTP decide() endpoint instead
+      // made this test flaky under full-suite load: decide()'s own
+      // multi-step approve transaction, plus this test's own
+      // verification steps, could together exceed that unconfigured
+      // 5s default and have Prisma silently abort it mid-pause).
+      //
+      // A SEPARATE PrismaClient, not the app's own `prisma` - holding
+      // this open on the app's shared connection pool starved merge()'s
+      // own request of a pool slot to even ATTEMPT its lock (a self-
+      // inflicted client-side deadlock not visible in pg_stat_activity
+      // at all, since merge() would never even reach Postgres).
+      const holderPrisma = new PrismaService();
+      await holderPrisma.$connect();
+      try {
+        let holderReady!: () => void;
+        const holderReadyP = new Promise<void>((r) => (holderReady = r));
+        let releaseHolder!: () => void;
+        const releaseHolderP = new Promise<void>((r) => (releaseHolder = r));
+        const holderDone = holderPrisma.$transaction(
+          async (tx) => {
+            await tx.$queryRaw`SELECT id FROM canonical_products WHERE id = ${loser.id} FOR UPDATE`;
+            await tx.offerVariant.update({
+              where: { id: variantId },
+              data: { canonicalVariantId: loserVariant.id },
+            });
+            const ov = await tx.offerVariant.findUniqueOrThrow({
+              where: { id: variantId },
+            });
+            await tx.vendorOffer.update({
+              where: { id: ov.vendorOfferId },
+              data: { canonicalProductId: loser.id },
+            });
+            holderReady();
+            await releaseHolderP;
+          },
+          { timeout: 20_000, maxWait: 20_000 },
+        );
+        // The holder's writes are done, the loser's CanonicalProduct
+        // row is locked, but nothing has committed yet.
+        await holderReadyP;
+
+        const mergeReq = request(app.getHttpServer())
+          .post(`/api/v1/canonical-products/${loser.id}/merge`)
+          .set('Authorization', `Bearer ${admin}`)
+          .set('Idempotency-Key', unique('merge'))
+          .send({ into_canonical_product_id: survivor.id });
+        // supertest/superagent's Test object is a thenable that only
+        // actually dispatches the request once something invokes
+        // .then()/.end() on it - constructing it alone does nothing.
+        // Wrapping it in a real Promise right away fires it
+        // immediately, while mergeP stays awaitable later.
+        const mergeP = Promise.resolve(mergeReq);
+
+        expect(await someoneWaitsOnCanonicalProductLock()).toBe(true);
+
+        releaseHolder();
+        await holderDone;
+        const mergeRes = await mergeP;
+        expect(mergeRes.status).toBe(200);
+
+        // The offer the holder matched WHILE merge was blocked must
+        // have been swept into merge's post-lock discovery and
+        // correctly repointed to the survivor - with the old pre-lock-
+        // discovery bug, this VendorOffer would never have been in the
+        // stale vendorOfferIdsPre list and would have been left
+        // pointing at the now-MERGED (dead) loser forever.
+        const offerVariantFresh = await prisma.offerVariant.findUniqueOrThrow({
+          where: { id: variantId },
+        });
+        expect(offerVariantFresh.canonicalVariantId).toBe(survivorVariant.id);
+        const vendorOfferFresh = await prisma.vendorOffer.findUniqueOrThrow({
+          where: { id: offerVariantFresh.vendorOfferId },
+        });
+        expect(vendorOfferFresh.canonicalProductId).toBe(survivor.id);
+        expect(mergeRes.body.repointed_vendor_offer_ids).toContain(
+          vendorOfferFresh.id,
+        );
+      } finally {
+        await holderPrisma.$disconnect();
+      }
     }, 30000);
   });
 

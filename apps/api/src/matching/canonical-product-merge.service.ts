@@ -30,11 +30,25 @@ interface NewProductInput {
  * real, effective order already in production is CanonicalProduct ->
  * VendorOffer -> OfferVariant. This service's own additional
  * CanonicalProductVariant lock goes last, since nothing else ever locks
- * it at all. Every lock is acquired via a non-authoritative discovery
- * read first (which ids to lock), then re-validated fresh once every
- * lock is actually held - the same "non-authoritative pre-transaction
- * lookup... re-validated fresh under lock" pattern decide()/
- * confirmMatch() already use for their own single-product case.
+ * it at all.
+ *
+ * Review-round fix: CanonicalProduct is locked FIRST, before ANY
+ * discovery - never the other way around. Both merge() and split()
+ * used to discover their affected variants/offers/vendor-offers BEFORE
+ * taking any lock at all, then lock only that pre-lock snapshot of ids.
+ * Since decide()/confirmMatch() also lock CanonicalProduct before
+ * touching this graph, a decide() that started and committed entirely
+ * within the gap between that snapshot and the eventual
+ * CanonicalProduct lock could link a brand-new VendorOffer into the
+ * product graph that the snapshot never saw - that VendorOffer would
+ * then never get repointed, leaving its canonicalProductId pointing at
+ * a now-MERGED (or now-split-away) product forever. Locking
+ * CanonicalProduct first closes this: every subsequent discovery read
+ * in this file happens only after that lock is held, by which point
+ * nothing else can add, move, or repoint anything in this graph until
+ * the transaction ends, so there is exactly one discovery pass per
+ * call, never a stale pre-lock list reused for a write, audit, or
+ * response.
  */
 @Injectable()
 export class CanonicalProductMergeService {
@@ -62,49 +76,36 @@ export class CanonicalProductMergeService {
       });
     }
 
-    // --- Discovery (non-authoritative) ---
-    const [survivorPre, loserPre] = await Promise.all([
-      tx.canonicalProduct.findUnique({ where: { id: survivorId } }),
-      tx.canonicalProduct.findUnique({ where: { id: loserId } }),
-    ]);
-    if (!survivorPre || !loserPre) {
+    // --- Review-round fix: lock CanonicalProduct(s) FIRST, fixed id
+    // order, BEFORE any discovery at all. decide()/confirmMatch() - the
+    // only two existing writers of canonicalVariantId/canonicalProductId
+    // - both lock CanonicalProduct before touching anything else (see
+    // this service's own top comment), so once both locks below are
+    // held, nothing else can add, move, or repoint a variant/offer into
+    // or out of either product's graph until this transaction ends.
+    // Discovering variants/offers/vendor-offers only AFTER this point
+    // (not before) is what makes that discovery the true, complete
+    // picture rather than a snapshot a concurrent decide() can race and
+    // go stale behind - see the previous version's history for the bug
+    // this replaced (a stale pre-lock vendorOfferIds list could miss a
+    // VendorOffer decide() linked in the gap between discovery and
+    // lock, leaving it pointing at the now-MERGED loser forever).
+    for (const id of [survivorId, loserId].sort()) {
+      await tx.$queryRaw`SELECT id FROM canonical_products WHERE id = ${id} FOR UPDATE`;
+    }
+
+    const survivor = await tx.canonicalProduct.findUnique({
+      where: { id: survivorId },
+    });
+    const loser = await tx.canonicalProduct.findUnique({
+      where: { id: loserId },
+    });
+    if (!survivor || !loser) {
       throw new NotFoundException({
         code: 'CANONICAL_PRODUCT_NOT_FOUND',
         message: 'survivor or loser canonical product not found',
       });
     }
-    const variantsPre = await tx.canonicalProductVariant.findMany({
-      where: { canonicalProductId: { in: [survivorId, loserId] } },
-    });
-    const variantIdsPre = variantsPre.map((v) => v.id);
-    const offerVariantsPre = await tx.offerVariant.findMany({
-      where: { canonicalVariantId: { in: variantIdsPre } },
-    });
-    const vendorOfferIdsPre = [
-      ...new Set(offerVariantsPre.map((ov) => ov.vendorOfferId)),
-    ];
-
-    // --- Lock, fixed order, discovery-derived id sets ---
-    for (const id of [survivorId, loserId].sort()) {
-      await tx.$queryRaw`SELECT id FROM canonical_products WHERE id = ${id} FOR UPDATE`;
-    }
-    for (const id of vendorOfferIdsPre.sort()) {
-      await tx.$queryRaw`SELECT id FROM vendor_offers WHERE id = ${id} FOR UPDATE`;
-    }
-    for (const id of offerVariantsPre.map((ov) => ov.id).sort()) {
-      await tx.$queryRaw`SELECT id FROM offer_variants WHERE id = ${id} FOR UPDATE`;
-    }
-    for (const id of variantIdsPre.sort()) {
-      await tx.$queryRaw`SELECT id FROM canonical_product_variants WHERE id = ${id} FOR UPDATE`;
-    }
-
-    // --- Re-validate fresh, under lock ---
-    const survivor = await tx.canonicalProduct.findUniqueOrThrow({
-      where: { id: survivorId },
-    });
-    const loser = await tx.canonicalProduct.findUniqueOrThrow({
-      where: { id: loserId },
-    });
     if (survivor.status === 'MERGED') {
       throw new ConflictException({
         code: 'SURVIVOR_ALREADY_MERGED',
@@ -118,9 +119,32 @@ export class CanonicalProductMergeService {
       });
     }
 
-    const loserVariants = await tx.canonicalProductVariant.findMany({
-      where: { canonicalProductId: loserId },
+    // --- Discovery, only now safe (see comment above) ---
+    const variants = await tx.canonicalProductVariant.findMany({
+      where: { canonicalProductId: { in: [survivorId, loserId] } },
     });
+    const variantIds = variants.map((v) => v.id);
+    const offerVariants = await tx.offerVariant.findMany({
+      where: { canonicalVariantId: { in: variantIds } },
+    });
+    const vendorOfferIds = [
+      ...new Set(offerVariants.map((ov) => ov.vendorOfferId)),
+    ];
+
+    // --- Lock the freshly-discovered sets, fixed order ---
+    for (const id of vendorOfferIds.sort()) {
+      await tx.$queryRaw`SELECT id FROM vendor_offers WHERE id = ${id} FOR UPDATE`;
+    }
+    for (const id of offerVariants.map((ov) => ov.id).sort()) {
+      await tx.$queryRaw`SELECT id FROM offer_variants WHERE id = ${id} FOR UPDATE`;
+    }
+    for (const id of variantIds.sort()) {
+      await tx.$queryRaw`SELECT id FROM canonical_product_variants WHERE id = ${id} FOR UPDATE`;
+    }
+
+    const loserVariants = variants.filter(
+      (v) => v.canonicalProductId === loserId,
+    );
 
     // --- Deterministic 1:1 pairing - canonical JSONB equality done IN
     // POSTGRES, never JS deep-equal (key order/whitespace/number-
@@ -193,7 +217,7 @@ export class CanonicalProductMergeService {
     // here was, before this merge, entirely on the loser, entirely on
     // the survivor (a no-op update), or had no canonical link at all
     // (not discovered here to begin with).
-    for (const vendorOfferId of vendorOfferIdsPre) {
+    for (const vendorOfferId of vendorOfferIds) {
       await tx.vendorOffer.update({
         where: { id: vendorOfferId },
         data: { canonicalProductId: survivorId },
@@ -214,7 +238,7 @@ export class CanonicalProductMergeService {
         afterState: {
           survivor_id: survivorId,
           merged_variant_pairs: mergedVariantPairs,
-          repointed_vendor_offer_ids: vendorOfferIdsPre,
+          repointed_vendor_offer_ids: vendorOfferIds,
         },
       },
       tx,
@@ -224,7 +248,7 @@ export class CanonicalProductMergeService {
       survivorId,
       loserId,
       mergedVariantPairs,
-      repointedVendorOfferIds: vendorOfferIdsPre,
+      repointedVendorOfferIds: vendorOfferIds,
     };
   }
 
@@ -247,82 +271,70 @@ export class CanonicalProductMergeService {
       });
     }
 
-    // --- Discovery ---
-    const sourcePre = await tx.canonicalProduct.findUnique({
+    // --- Review-round fix: lock CanonicalProduct FIRST, before any
+    // discovery at all - see merge()'s own comment above for why this
+    // is what makes the discovery below the true, complete picture
+    // rather than a snapshot a concurrent decide() can race and go
+    // stale behind. ---
+    await tx.$queryRaw`SELECT id FROM canonical_products WHERE id = ${sourceProductId} FOR UPDATE`;
+
+    const source = await tx.canonicalProduct.findUnique({
       where: { id: sourceProductId },
     });
-    if (!sourcePre) {
+    if (!source) {
       throw new NotFoundException({
         code: 'CANONICAL_PRODUCT_NOT_FOUND',
         message: 'Source canonical product not found',
       });
     }
-    const allVariantsPre = await tx.canonicalProductVariant.findMany({
-      where: { canonicalProductId: sourceProductId },
-    });
-    const allVariantIdsPre = new Set(allVariantsPre.map((v) => v.id));
-    if (!variantIds.every((id) => allVariantIdsPre.has(id))) {
-      throw new BadRequestException({
-        code: 'SPLIT_VARIANT_NOT_IN_SOURCE',
-        message: 'Every selected variant must belong to the source product',
-      });
-    }
-    if (variantIds.length === allVariantIdsPre.size) {
-      throw new BadRequestException({
-        code: 'SPLIT_CANNOT_MOVE_ALL_VARIANTS',
-        message:
-          'A split must leave at least one variant behind - moving all of them is a rename, not a split',
-      });
-    }
-    const affectedOfferVariantsPre = await tx.offerVariant.findMany({
-      where: { canonicalVariantId: { in: [...allVariantIdsPre] } },
-    });
-    const affectedVendorOfferIdsPre = [
-      ...new Set(affectedOfferVariantsPre.map((ov) => ov.vendorOfferId)),
-    ];
-
-    // --- Lock, fixed order ---
-    await tx.$queryRaw`SELECT id FROM canonical_products WHERE id = ${sourceProductId} FOR UPDATE`;
-    for (const id of affectedVendorOfferIdsPre.sort()) {
-      await tx.$queryRaw`SELECT id FROM vendor_offers WHERE id = ${id} FOR UPDATE`;
-    }
-    for (const id of affectedOfferVariantsPre.map((ov) => ov.id).sort()) {
-      await tx.$queryRaw`SELECT id FROM offer_variants WHERE id = ${id} FOR UPDATE`;
-    }
-    for (const id of [...allVariantIdsPre].sort()) {
-      await tx.$queryRaw`SELECT id FROM canonical_product_variants WHERE id = ${id} FOR UPDATE`;
-    }
-
-    // --- Re-validate fresh, under lock ---
-    const source = await tx.canonicalProduct.findUniqueOrThrow({
-      where: { id: sourceProductId },
-    });
     if (source.status === 'MERGED') {
       throw new ConflictException({
         code: 'SOURCE_ALREADY_MERGED',
         message: 'This product is already merged away and cannot be split',
       });
     }
-    const allVariantsFresh = await tx.canonicalProductVariant.findMany({
+
+    // --- Discovery, only now safe (see comment above) ---
+    const allVariants = await tx.canonicalProductVariant.findMany({
       where: { canonicalProductId: sourceProductId },
     });
-    const allVariantIdsFresh = new Set(allVariantsFresh.map((v) => v.id));
-    if (!variantIds.every((id) => allVariantIdsFresh.has(id))) {
-      throw new ConflictException({
-        code: 'SPLIT_VARIANT_STATE_CHANGED',
-        message:
-          'One or more selected variants changed state (e.g. moved by a concurrent merge) - re-fetch and retry',
+    const allVariantIds = new Set(allVariants.map((v) => v.id));
+    if (!variantIds.every((id) => allVariantIds.has(id))) {
+      throw new BadRequestException({
+        code: 'SPLIT_VARIANT_NOT_IN_SOURCE',
+        message: 'Every selected variant must belong to the source product',
       });
     }
-
-    // --- Review-round fix: re-run the span check under lock, against
-    // freshly-read data, not the pre-lock discovery read. ---
-    const selectedSet = new Set(variantIds);
-    const affectedOfferVariantsFresh = await tx.offerVariant.findMany({
-      where: { canonicalVariantId: { in: [...allVariantIdsFresh] } },
+    if (variantIds.length === allVariantIds.size) {
+      throw new BadRequestException({
+        code: 'SPLIT_CANNOT_MOVE_ALL_VARIANTS',
+        message:
+          'A split must leave at least one variant behind - moving all of them is a rename, not a split',
+      });
+    }
+    const affectedOfferVariants = await tx.offerVariant.findMany({
+      where: { canonicalVariantId: { in: [...allVariantIds] } },
     });
+    const affectedVendorOfferIds = [
+      ...new Set(affectedOfferVariants.map((ov) => ov.vendorOfferId)),
+    ];
+
+    // --- Lock the freshly-discovered sets, fixed order ---
+    for (const id of affectedVendorOfferIds.sort()) {
+      await tx.$queryRaw`SELECT id FROM vendor_offers WHERE id = ${id} FOR UPDATE`;
+    }
+    for (const id of affectedOfferVariants.map((ov) => ov.id).sort()) {
+      await tx.$queryRaw`SELECT id FROM offer_variants WHERE id = ${id} FOR UPDATE`;
+    }
+    for (const id of [...allVariantIds].sort()) {
+      await tx.$queryRaw`SELECT id FROM canonical_product_variants WHERE id = ${id} FOR UPDATE`;
+    }
+
+    // --- Span check: would this split leave a VendorOffer with
+    // variants selected to move AND variants staying behind? ---
+    const selectedSet = new Set(variantIds);
     const bucketsByVendorOffer = new Map<string, Set<'moving' | 'staying'>>();
-    for (const ov of affectedOfferVariantsFresh) {
+    for (const ov of affectedOfferVariants) {
       if (!ov.canonicalVariantId) continue;
       const bucket = selectedSet.has(ov.canonicalVariantId)
         ? 'moving'
@@ -376,7 +388,7 @@ export class CanonicalProductMergeService {
         action: 'canonical_product.split',
         entityType: 'CanonicalProduct',
         entityId: sourceProductId,
-        beforeState: { source_variant_count: allVariantsFresh.length },
+        beforeState: { source_variant_count: allVariants.length },
         afterState: {
           new_product_id: created.id,
           moved_variant_ids: variantIds,

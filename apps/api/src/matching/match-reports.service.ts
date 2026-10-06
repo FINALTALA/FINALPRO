@@ -107,12 +107,7 @@ export class MatchReportsService {
 
       let candidateId: string;
       if (existing) {
-        candidateId = await this.lockAndRequeueIfNeeded(
-          tx,
-          existing.id,
-          userId,
-          correlationId,
-        );
+        candidateId = existing.id;
       } else {
         // No MatchReviewCandidate has ever existed for this pair - only
         // valid if the link came from the exact-identifier path (a
@@ -135,26 +130,60 @@ export class MatchReportsService {
         );
       }
 
-      const reportId = await this.createReportIdempotent(
+      const reportId = await this.lockCreateReportAndMaybeRequeue(
         tx,
         candidateId,
         userId,
         note,
+        correlationId,
       );
       return { id: reportId, candidate_id: candidateId };
     });
   }
 
-  /** Locks the candidate row, and - only if this is the first report
-   * since it was last decided (i.e. it is not already PENDING) -
-   * requeues it. Returns the candidate id for convenience. */
-  private async lockAndRequeueIfNeeded(
+  /**
+   * Review-round fix: the candidate must be locked and this reporter's
+   * own MatchReport row created (or found, if a duplicate) BEFORE any
+   * decision is made about requeuing - and that decision must use the
+   * explicit created/duplicate outcome, never "does a candidate row for
+   * this pair exist". A same-reporter duplicate (even one submitted
+   * after the candidate was later decided, via a fresh idempotency key)
+   * must never reopen the queue or write a second audit entry, and
+   * requeuing itself only ever happens for the single, literal
+   * first-ever MatchReport recorded against this candidate - every
+   * later report (same or different reporter) only ever grows the
+   * aggregate count the owner sees, never re-triggers a review-state
+   * change. Locking the candidate FOR UPDATE first (before the report
+   * insert) serializes two concurrent first-ever reports from different
+   * reporters on the same candidate, so only one of them ever observes
+   * reportCount === 1 and requeues/audits.
+   */
+  private async lockCreateReportAndMaybeRequeue(
     tx: Prisma.TransactionClient,
     candidateId: string,
-    userId: string,
+    reporterUserId: string,
+    note: string | undefined,
     correlationId: string,
   ): Promise<string> {
     await tx.$queryRaw`SELECT id FROM match_review_candidates WHERE id = ${candidateId} FOR UPDATE`;
+
+    const { reportId, created } = await this.createReportIdempotent(
+      tx,
+      candidateId,
+      reporterUserId,
+      note,
+    );
+    if (!created) {
+      return reportId;
+    }
+
+    const reportCount = await tx.matchReport.count({
+      where: { candidateId },
+    });
+    if (reportCount !== 1) {
+      return reportId;
+    }
+
     const locked = await tx.matchReviewCandidate.findUniqueOrThrow({
       where: { id: candidateId },
     });
@@ -165,7 +194,7 @@ export class MatchReportsService {
       });
       await this.auditLog.record(
         {
-          actorId: userId,
+          actorId: reporterUserId,
           correlationId,
           action: 'match_review_candidate.requeued_from_report',
           entityType: 'MatchReviewCandidate',
@@ -176,7 +205,7 @@ export class MatchReportsService {
         tx,
       );
     }
-    return candidateId;
+    return reportId;
   }
 
   /** Atomic get-or-create reusing the table's own existing
@@ -221,8 +250,9 @@ export class MatchReportsService {
       await tx.$executeRaw`ROLLBACK TO SAVEPOINT create_exact_candidate`;
       if (!isUniqueViolation(err)) throw err;
       // Lost the race to another concurrent report on the same pair -
-      // the winner's row now exists; lock and reuse it exactly like the
-      // "existing" branch above.
+      // just return the winner's id; the caller (report()) always
+      // funnels every path through lockCreateReportAndMaybeRequeue()
+      // afterward, so there is nothing further to do here.
       const race = await tx.matchReviewCandidate.findUniqueOrThrow({
         where: {
           offerVariantId_canonicalVariantId: {
@@ -231,27 +261,29 @@ export class MatchReportsService {
           },
         },
       });
-      return this.lockAndRequeueIfNeeded(tx, race.id, userId, correlationId);
+      return race.id;
     }
   }
 
   /** SAVEPOINT-protected idempotent create against
    * @@unique([candidateId, reporterUserId]) - a second report from the
    * same customer on the same candidate is a benign no-op, never a
-   * duplicate row, never a raw 500. */
+   * duplicate row, never a raw 500. `created` tells the caller which
+   * outcome occurred, explicitly - never inferred from whether a
+   * candidate row pre-existed. */
   private async createReportIdempotent(
     tx: Prisma.TransactionClient,
     candidateId: string,
     reporterUserId: string,
     note: string | undefined,
-  ): Promise<string> {
+  ): Promise<{ reportId: string; created: boolean }> {
     await tx.$executeRaw`SAVEPOINT create_report`;
     try {
       const report = await tx.matchReport.create({
         data: { candidateId, reporterUserId, note },
       });
       await tx.$executeRaw`RELEASE SAVEPOINT create_report`;
-      return report.id;
+      return { reportId: report.id, created: true };
     } catch (err) {
       await tx.$executeRaw`ROLLBACK TO SAVEPOINT create_report`;
       if (!isUniqueViolation(err)) throw err;
@@ -260,7 +292,7 @@ export class MatchReportsService {
           candidateId_reporterUserId: { candidateId, reporterUserId },
         },
       });
-      return existingReport.id;
+      return { reportId: existingReport.id, created: false };
     }
   }
 }
