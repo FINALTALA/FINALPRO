@@ -15,7 +15,13 @@ import { VerificationQueueController } from './verification-queue.controller';
 // codebase - BranchOrderCancellationService is only resolvable if
 // this module imports the module that exports it.
 @Module({
-  imports: [AuditModule, AuthModule, IdempotencyModule, OrdersModule, OutboxModule],
+  imports: [
+    AuditModule,
+    AuthModule,
+    IdempotencyModule,
+    OrdersModule,
+    OutboxModule,
+  ],
   controllers: [
     VerificationQueueController,
     AdminVendorsController,

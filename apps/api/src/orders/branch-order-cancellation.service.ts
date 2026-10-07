@@ -1,4 +1,8 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import Decimal from 'decimal.js';
 import {
   BranchOrderRefundInitiator,
@@ -105,7 +109,14 @@ export class BranchOrderCancellationService {
     return this.finalizeCancelledItems(
       tx,
       order,
-      [{ id: item.id, offerVariantId: item.offerVariantId, quantity: item.quantity, unitPrice: item.unitPrice }],
+      [
+        {
+          id: item.id,
+          offerVariantId: item.offerVariantId,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+        },
+      ],
       BranchOrderRefundReason.ITEM_CANCELLED,
       initiatedBy,
       actorId,
@@ -274,7 +285,8 @@ export class BranchOrderCancellationService {
     if (order.paymentMethod !== 'ONLINE') {
       throw new ConflictException({
         code: 'REFUND_NOT_APPLICABLE_FOR_COD',
-        message: 'A COD order was never charged online - there is nothing to refund',
+        message:
+          'A COD order was never charged online - there is nothing to refund',
       });
     }
     const existingRefunds = await tx.branchOrderRefund.findMany({

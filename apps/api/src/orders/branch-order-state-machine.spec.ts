@@ -293,9 +293,9 @@ describe('branch-order-state-machine', () => {
       expect(
         canTransition('REFUND_REQUESTED', 'REFUNDED', 'DELIVERY', 'ONLINE', 2),
       ).toBe(true);
-      expect(allowedNextStates('REFUND_REQUESTED', 'DELIVERY', 'ONLINE', 2)).toEqual(
-        ['REFUNDED'],
-      );
+      expect(
+        allowedNextStates('REFUND_REQUESTED', 'DELIVERY', 'ONLINE', 2),
+      ).toEqual(['REFUNDED']);
     });
 
     it('PICKUP never reaches DELIVERY_FAILED/REFUND_REQUESTED at all (delivery-failure is a DELIVERY-only concept)', () => {
@@ -322,9 +322,9 @@ describe('branch-order-state-machine', () => {
         'REFUND_REQUESTED',
       ];
       for (const to of illegal) {
-        expect(canTransition('DELIVERY_FAILED', to, 'DELIVERY', 'ONLINE', 1)).toBe(
-          false,
-        );
+        expect(
+          canTransition('DELIVERY_FAILED', to, 'DELIVERY', 'ONLINE', 1),
+        ).toBe(false);
       }
     });
 
@@ -339,9 +339,9 @@ describe('branch-order-state-machine', () => {
         'CANCELLED',
       ];
       for (const to of illegal) {
-        expect(canTransition('DELIVERY_FAILED', to, 'DELIVERY', 'ONLINE', 2)).toBe(
-          false,
-        );
+        expect(
+          canTransition('DELIVERY_FAILED', to, 'DELIVERY', 'ONLINE', 2),
+        ).toBe(false);
       }
     });
 

@@ -57,10 +57,7 @@ export function computeAmountDue(
 /** Sum of every BranchOrderRefund.amount already recorded for this BranchOrder. */
 export function computeAmountRefunded(refunds: MoneyRefundInput[]): Decimal {
   return roundIls(
-    refunds.reduce(
-      (sum, r) => sum.plus(toDecimal(r.amount)),
-      new Decimal(0),
-    ),
+    refunds.reduce((sum, r) => sum.plus(toDecimal(r.amount)), new Decimal(0)),
   );
 }
 

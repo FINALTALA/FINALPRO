@@ -1,4 +1,8 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import { lockDeliveryWindowRow } from '../delivery-windows/delivery-window-locking.util';
 import { BranchOrderService } from './branch-order.service';
@@ -109,7 +113,10 @@ export class BranchOrderRescheduleService {
 
     const exception = await tx.deliveryWindowException.findUnique({
       where: {
-        windowId_exceptionDate: { windowId: newWindowId, exceptionDate: scheduledDate },
+        windowId_exceptionDate: {
+          windowId: newWindowId,
+          exceptionDate: scheduledDate,
+        },
       },
     });
     if (exception?.isClosed) {

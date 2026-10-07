@@ -179,8 +179,7 @@ export class FulfilmentExceptionSweepService
     const alreadySent =
       order.prepReminderSentForWindowId === order.deliveryWindowId &&
       order.prepReminderSentForDate !== null &&
-      order.prepReminderSentForDate.getTime() ===
-        order.scheduledDate.getTime();
+      order.prepReminderSentForDate.getTime() === order.scheduledDate.getTime();
     if (alreadySent) {
       return false;
     }
@@ -192,11 +191,17 @@ export class FulfilmentExceptionSweepService
         prepReminderSentForDate: order.scheduledDate,
       },
     });
-    await this.notifyBranch(tx, order.vendorId, order.branchId, 'branch_order.prep_reminder', {
-      branch_order_id: branchOrderId,
-      vendor_id: order.vendorId,
-      branch_id: order.branchId,
-    });
+    await this.notifyBranch(
+      tx,
+      order.vendorId,
+      order.branchId,
+      'branch_order.prep_reminder',
+      {
+        branch_order_id: branchOrderId,
+        vendor_id: order.vendorId,
+        branch_id: order.branchId,
+      },
+    );
     return true;
   }
 
@@ -268,9 +273,7 @@ export class FulfilmentExceptionSweepService
    * which performs the full item/stock/refund-ledger-safe close-out and
    * returns the real terminal status. */
   private async sweepTimeouts(): Promise<number> {
-    const slotMissedCandidates = await this.prisma.$queryRaw<
-      { id: string }[]
-    >`
+    const slotMissedCandidates = await this.prisma.$queryRaw<{ id: string }[]>`
       SELECT id FROM branch_orders
       WHERE status IN ('PLACED', 'PREPARING')
         AND "slotMissedAt" IS NOT NULL
@@ -293,10 +296,7 @@ export class FulfilmentExceptionSweepService
     let count = 0;
     for (const { id } of slotMissedCandidates) {
       const resolved = await this.prisma.$transaction((tx) =>
-        this.resolveTimeoutOnce(tx, id, 'SLOT_MISSED', [
-          'PLACED',
-          'PREPARING',
-        ]),
+        this.resolveTimeoutOnce(tx, id, 'SLOT_MISSED', ['PLACED', 'PREPARING']),
       );
       if (resolved) count += 1;
     }

@@ -103,9 +103,7 @@ export class AdminBranchOrdersController {
   ) {
     const result = await this.prisma.$transaction(async (tx) => {
       const order = await this.lockBranchOrder(tx, branchOrderId);
-      if (
-        (TERMINAL_BRANCH_ORDER_STATUSES as string[]).includes(order.status)
-      ) {
+      if ((TERMINAL_BRANCH_ORDER_STATUSES as string[]).includes(order.status)) {
         throw new NotFoundException({
           code: 'BRANCH_ORDER_ALREADY_TERMINAL',
           message: 'This branch order has already reached a terminal state',
@@ -155,13 +153,21 @@ export class AdminBranchOrdersController {
         dto.reason,
         req.correlationId,
       );
-      await this.notifyCustomer(tx, branchOrderId, 'branch_order.refund_approved', {
-        branch_order_id: branchOrderId,
-        vendor_id: order.vendorId,
-        branch_id: order.branchId,
-      });
+      await this.notifyCustomer(
+        tx,
+        branchOrderId,
+        'branch_order.refund_approved',
+        {
+          branch_order_id: branchOrderId,
+          vendor_id: order.vendorId,
+          branch_id: order.branchId,
+        },
+      );
       return r;
     });
-    return { id: branchOrderId, refunded_amount: result.refundedAmount.toNumber() };
+    return {
+      id: branchOrderId,
+      refunded_amount: result.refundedAmount.toNumber(),
+    };
   }
 }

@@ -67,7 +67,9 @@ type OrderRow = Prisma.BranchOrderGetPayload<{ include: typeof ORDER_INCLUDE }>;
 
 function orderDto(o: OrderRow) {
   const amountRefunded = computeAmountRefunded(o.refunds);
-  const hasDeliveryFeeRefund = o.refunds.some((r) => r.reason === 'DELIVERY_FEE');
+  const hasDeliveryFeeRefund = o.refunds.some(
+    (r) => r.reason === 'DELIVERY_FEE',
+  );
   return {
     id: o.id,
     vendor_id: o.vendorId,
@@ -106,7 +108,8 @@ function orderDto(o: OrderRow) {
             o.deliveryFee,
           ).toNumber()
         : null,
-    amount_refunded: o.paymentMethod === 'ONLINE' ? amountRefunded.toNumber() : null,
+    amount_refunded:
+      o.paymentMethod === 'ONLINE' ? amountRefunded.toNumber() : null,
     amount_refundable_remaining:
       o.paymentMethod === 'ONLINE'
         ? computeRemainingRefundable(o.total, o.refunds).toNumber()
@@ -417,12 +420,18 @@ export class CustomerOrdersController {
         dto.reason ?? null,
         req.correlationId,
       );
-      await this.notifyBranch(tx, locked.vendorId, locked.branchId, 'branch_order.cancelled', {
-        branch_order_id: branchOrderId,
-        vendor_id: locked.vendorId,
-        branch_id: locked.branchId,
-        item_id: null,
-      });
+      await this.notifyBranch(
+        tx,
+        locked.vendorId,
+        locked.branchId,
+        'branch_order.cancelled',
+        {
+          branch_order_id: branchOrderId,
+          vendor_id: locked.vendorId,
+          branch_id: locked.branchId,
+          item_id: null,
+        },
+      );
       return r;
     });
     return {
@@ -462,12 +471,18 @@ export class CustomerOrdersController {
         dto.reason ?? null,
         req.correlationId,
       );
-      await this.notifyBranch(tx, locked.vendorId, locked.branchId, 'branch_order.cancelled', {
-        branch_order_id: branchOrderId,
-        vendor_id: locked.vendorId,
-        branch_id: locked.branchId,
-        item_id: itemId,
-      });
+      await this.notifyBranch(
+        tx,
+        locked.vendorId,
+        locked.branchId,
+        'branch_order.cancelled',
+        {
+          branch_order_id: branchOrderId,
+          vendor_id: locked.vendorId,
+          branch_id: locked.branchId,
+          item_id: itemId,
+        },
+      );
       return r;
     });
     return {
@@ -493,15 +508,13 @@ export class CustomerOrdersController {
   ) {
     const customerId = await this.requireCustomerId(user);
     const result = await this.prisma.$transaction(async (tx) => {
-      const locked = await this.lockAndRequireOwnStatus(tx, customerId, branchOrderId, [
-        'PLACED',
-        'PREPARING',
-        'DELIVERY_FAILED',
-      ]);
-      if (
-        locked.status !== 'DELIVERY_FAILED' &&
-        locked.slotMissedAt === null
-      ) {
+      const locked = await this.lockAndRequireOwnStatus(
+        tx,
+        customerId,
+        branchOrderId,
+        ['PLACED', 'PREPARING', 'DELIVERY_FAILED'],
+      );
+      if (locked.status !== 'DELIVERY_FAILED' && locked.slotMissedAt === null) {
         throw new ConflictException({
           code: 'RESCHEDULE_NOT_APPLICABLE',
           message: 'This order is not currently eligible for rescheduling',
@@ -557,10 +570,16 @@ export class CustomerOrdersController {
   ) {
     const customerId = await this.requireCustomerId(user);
     await this.prisma.$transaction(async (tx) => {
-      const locked = await this.lockAndRequireOwnStatus(tx, customerId, branchOrderId, [
-        'DELIVERY_FAILED',
-      ]);
-      if (locked.paymentMethod !== 'ONLINE' || locked.deliveryAttemptCount < 2) {
+      const locked = await this.lockAndRequireOwnStatus(
+        tx,
+        customerId,
+        branchOrderId,
+        ['DELIVERY_FAILED'],
+      );
+      if (
+        locked.paymentMethod !== 'ONLINE' ||
+        locked.deliveryAttemptCount < 2
+      ) {
         throw new ConflictException({
           code: 'REFUND_REQUEST_NOT_APPLICABLE',
           message:

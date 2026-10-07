@@ -61,7 +61,9 @@ interface BranchOrderRow {
 // employeeOrderDto below - not part of the agreed minimal employee
 // surface.
 function ownerOrderDto(o: BranchOrderRow) {
-  const hasDeliveryFeeRefund = o.refunds.some((r) => r.reason === 'DELIVERY_FEE');
+  const hasDeliveryFeeRefund = o.refunds.some(
+    (r) => r.reason === 'DELIVERY_FEE',
+  );
   return {
     id: o.id,
     status: o.status,
@@ -134,7 +136,9 @@ function ownerOrderDto(o: BranchOrderRow) {
 // only money figure exposed here, same minimal-surface principle as
 // before, just updated for what this sprint's own actions need.
 function employeeOrderDto(o: BranchOrderRow) {
-  const hasDeliveryFeeRefund = o.refunds.some((r) => r.reason === 'DELIVERY_FEE');
+  const hasDeliveryFeeRefund = o.refunds.some(
+    (r) => r.reason === 'DELIVERY_FEE',
+  );
   return {
     id: o.id,
     status: o.status,
@@ -367,7 +371,9 @@ export class BranchOrdersStaffController {
     const order = await tx.branchOrder.findUniqueOrThrow({
       where: { id: branchOrderId },
       include: {
-        items: { select: { unitPrice: true, quantity: true, cancelledAt: true } },
+        items: {
+          select: { unitPrice: true, quantity: true, cancelledAt: true },
+        },
       },
     });
     if (order.paymentMethod !== 'COD') {

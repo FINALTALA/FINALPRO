@@ -195,7 +195,10 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
       .expect(200);
   }
 
-  async function createAddress(token: string, zone = 'WEST_BANK'): Promise<string> {
+  async function createAddress(
+    token: string,
+    zone = 'WEST_BANK',
+  ): Promise<string> {
     const res = await request(app.getHttpServer())
       .post('/api/v1/customers/me/addresses')
       .set('Authorization', `Bearer ${token}`)
@@ -335,14 +338,6 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
       .set('Idempotency-Key', unique('admin-action'))
       .send(body);
 
-  async function getOrder(customer: string, branchOrderId: string) {
-    const list = await request(app.getHttpServer())
-      .get('/api/v1/customers/me/orders')
-      .set('Authorization', `Bearer ${customer}`)
-      .expect(200);
-    return list.body.find((o: { id: string }) => o.id === branchOrderId);
-  }
-
   // ============================================================
   // PDR-028: cancellation - whole order vs single item, COD vs ONLINE
   // ============================================================
@@ -361,9 +356,11 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
         'COD',
       );
 
-      const res = await customerAction(customer, branchOrderId, 'cancel').expect(
-        201,
-      );
+      const res = await customerAction(
+        customer,
+        branchOrderId,
+        'cancel',
+      ).expect(201);
       expect(res.body.order_closed).toBe(true);
       expect(res.body.refunded_amount).toBe(0);
 
@@ -413,9 +410,11 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
         'ONLINE',
       );
 
-      const res = await customerAction(customer, branchOrderId, 'cancel').expect(
-        201,
-      );
+      const res = await customerAction(
+        customer,
+        branchOrderId,
+        'cancel',
+      ).expect(201);
       expect(res.body.order_closed).toBe(true);
       expect(res.body.refunded_amount).toBe(30); // 20 item + 10 delivery fee
 
@@ -487,9 +486,9 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
       // 2 items + exactly 1 delivery fee (not 2 - only charged once at
       // the moment the LAST item closes the order).
       expect(refunds).toHaveLength(3);
-      expect(
-        refunds.filter((r) => r.reason === 'DELIVERY_FEE'),
-      ).toHaveLength(1);
+      expect(refunds.filter((r) => r.reason === 'DELIVERY_FEE')).toHaveLength(
+        1,
+      );
     });
 
     it('staff cancel while PREPARING requires a reason; while PLACED it does not', async () => {
@@ -846,15 +845,25 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
 
       const [resA, resB] = await Promise.all([
         request(app.getHttpServer())
-          .post(`/api/v1/customers/me/orders/${orderA.branchOrderId}/reschedule`)
+          .post(
+            `/api/v1/customers/me/orders/${orderA.branchOrderId}/reschedule`,
+          )
           .set('Authorization', `Bearer ${customerA}`)
           .set('Idempotency-Key', unique('reschedule-race'))
-          .send({ delivery_window_id: targetWindowId, scheduled_date: targetDate }),
+          .send({
+            delivery_window_id: targetWindowId,
+            scheduled_date: targetDate,
+          }),
         request(app.getHttpServer())
-          .post(`/api/v1/customers/me/orders/${orderB.branchOrderId}/reschedule`)
+          .post(
+            `/api/v1/customers/me/orders/${orderB.branchOrderId}/reschedule`,
+          )
           .set('Authorization', `Bearer ${customerB}`)
           .set('Idempotency-Key', unique('reschedule-race'))
-          .send({ delivery_window_id: targetWindowId, scheduled_date: targetDate }),
+          .send({
+            delivery_window_id: targetWindowId,
+            scheduled_date: targetDate,
+          }),
       ]);
 
       const statuses = [resA.status, resB.status].sort();
@@ -944,10 +953,15 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
         '18:00',
         5,
       );
-      const resched = await customerAction(customer, branchOrderId, 'reschedule', {
-        delivery_window_id: newWindowId,
-        scheduled_date: nextDateForDayOfWeek(2),
-      });
+      const resched = await customerAction(
+        customer,
+        branchOrderId,
+        'reschedule',
+        {
+          delivery_window_id: newWindowId,
+          scheduled_date: nextDateForDayOfWeek(2),
+        },
+      );
       expect(resched.status).toBe(201);
       order = await prisma.branchOrder.findUniqueOrThrow({
         where: { id: branchOrderId },
@@ -1085,7 +1099,12 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
         where: { branchOrderId },
       });
       expect(refunds).toHaveLength(2);
-      expect(refunds.every((r) => r.reason === 'DELIVERY_FAILED_TWICE' || r.reason === 'DELIVERY_FEE')).toBe(true);
+      expect(
+        refunds.every(
+          (r) =>
+            r.reason === 'DELIVERY_FAILED_TWICE' || r.reason === 'DELIVERY_FEE',
+        ),
+      ).toBe(true);
     });
 
     it('rejects a refund request before count reaches 2, and for a COD order', async () => {
@@ -1111,7 +1130,11 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
         'mark-delivery-failed',
       ).expect(201); // count = 1
 
-      const tooEarly = await customerAction(customer, branchOrderId, 'request-refund');
+      const tooEarly = await customerAction(
+        customer,
+        branchOrderId,
+        'request-refund',
+      );
       expect(tooEarly.status).toBe(409);
       expect(tooEarly.body.error.code).toBe('REFUND_REQUEST_NOT_APPLICABLE');
     });
@@ -1142,9 +1165,13 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
         branchOrderId,
         'start-preparation',
       ).expect(201);
-      await staffAction(owner, vendorId, branchId, branchOrderId, 'mark-sent').expect(
-        201,
-      );
+      await staffAction(
+        owner,
+        vendorId,
+        branchId,
+        branchOrderId,
+        'mark-sent',
+      ).expect(201);
 
       const key = unique('mark-delivered');
       const first = await request(app.getHttpServer())
@@ -1205,9 +1232,14 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
       );
       const admin = await platformAdmin();
 
-      const codRes = await adminAction(admin, codOrder.branchOrderId, 'cancel', {
-        reason: REASON,
-      });
+      const codRes = await adminAction(
+        admin,
+        codOrder.branchOrderId,
+        'cancel',
+        {
+          reason: REASON,
+        },
+      );
       expect(codRes.status).toBe(201);
       expect(codRes.body.refunded_amount).toBe(0);
       const codFinal = await prisma.branchOrder.findUniqueOrThrow({
@@ -1261,9 +1293,14 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
       );
       const admin = await platformAdmin();
 
-      const codRefund = await adminAction(admin, codOrder.branchOrderId, 'refund', {
-        reason: REASON,
-      });
+      const codRefund = await adminAction(
+        admin,
+        codOrder.branchOrderId,
+        'refund',
+        {
+          reason: REASON,
+        },
+      );
       expect(codRefund.status).toBe(409);
       expect(codRefund.body.error.code).toBe('REFUND_NOT_APPLICABLE_FOR_COD');
       expect(
@@ -1282,9 +1319,14 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
       expect(onlineRefund.body.refunded_amount).toBe(30);
 
       // Fully refunded now - a second manual refund finds nothing left.
-      const again = await adminAction(admin, onlineOrder.branchOrderId, 'refund', {
-        reason: REASON,
-      });
+      const again = await adminAction(
+        admin,
+        onlineOrder.branchOrderId,
+        'refund',
+        {
+          reason: REASON,
+        },
+      );
       expect(again.status).toBe(409);
       expect(again.body.error.code).toBe('NOTHING_LEFT_TO_REFUND');
     });
@@ -1431,9 +1473,13 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
         branchOrderId,
         'start-preparation',
       ).expect(201);
-      await staffAction(owner, vendorId, branchId, branchOrderId, 'mark-sent').expect(
-        201,
-      );
+      await staffAction(
+        owner,
+        vendorId,
+        branchId,
+        branchOrderId,
+        'mark-sent',
+      ).expect(201);
       await staffAction(
         owner,
         vendorId,
