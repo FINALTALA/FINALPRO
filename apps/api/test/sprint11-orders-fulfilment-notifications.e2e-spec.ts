@@ -333,6 +333,11 @@ describe('Sprint 11 - Orders UI, fulfilment loop, notification dispatch (e2e)', 
     return { branchOrderId: confirmed.body.branch_orders[0].id };
   }
 
+  // Sprint 20a (review-round requirement): mark-delivered/pickup-
+  // handover now require an Idempotency-Key header (financial COD-
+  // recording writes) - every call through this shared helper sends a
+  // fresh one, not just those two, since an extra header is harmless
+  // for an action that doesn't require it.
   const staffAction = (
     token: string,
     vendorId: string,
@@ -346,6 +351,7 @@ describe('Sprint 11 - Orders UI, fulfilment loop, notification dispatch (e2e)', 
         `/api/v1/vendors/${vendorId}/branches/${branchId}/orders/${branchOrderId}/${action}`,
       )
       .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', unique('staff-action'))
       .send(body);
 
   // ============================================================
@@ -1020,20 +1026,28 @@ describe('Sprint 11 - Orders UI, fulfilment loop, notification dispatch (e2e)', 
         .expect(200);
       expect(employeeList.body[0]).not.toHaveProperty('address');
       expect(employeeList.body[0]).not.toHaveProperty('total');
-      expect(employeeList.body[0]).not.toHaveProperty('payment_method');
       expect(employeeList.body[0]).not.toHaveProperty('created_at');
       // id/status/fulfilment_method/has_open_not_received_report are
       // legitimately present for the employee now - see
-      // employeeOrderDto's own comment.
+      // employeeOrderDto's own comment. Sprint 20a (review-round
+      // requirement): payment_method/amount_due/cod_collected_amount
+      // are ALSO now legitimately present - COD collection (folded
+      // into mark-delivered/pickup-handover) cannot function without
+      // the employee knowing it IS a COD order and exactly how much to
+      // collect - see employeeOrderDto's own updated comment. `total`
+      // itself (the original, pre-cancellation value) stays excluded.
       expect(Object.keys(employeeList.body[0]).sort()).toEqual(
         [
           'id',
           'status',
           'fulfilment_method',
+          'payment_method',
           'customer_name',
           'customer_phone',
           'pickup_code',
           'has_open_not_received_report',
+          'amount_due',
+          'cod_collected_amount',
         ].sort(),
       );
     });

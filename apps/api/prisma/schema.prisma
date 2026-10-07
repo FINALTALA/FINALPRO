@@ -1009,6 +1009,25 @@ enum NotificationType {
   LOW_STOCK_AFTER_RESERVE
   FOLLOWED_STORE_NEW_PRODUCT
   FOLLOWED_STORE_DISCOUNT
+  /// Sprint 20a (PDR-025): 6h-before-slot prep reminder.
+  PREP_REMINDER
+  /// Sprint 20a (PDR-025): slot reached, order still unprepared.
+  SLOT_MISSED
+  /// Sprint 20a (PDR-028): a BranchOrder or one of its items was
+  /// cancelled.
+  ORDER_CANCELLED
+  /// Sprint 20a (PDR-025/027): a new delivery slot was chosen.
+  ORDER_RESCHEDULED
+  /// Sprint 20a (PDR-027): a delivery attempt failed.
+  DELIVERY_FAILED
+  /// Sprint 20a (PDR-027): customer requested a refund after a second
+  /// failed delivery attempt - notifies staff/owner, approval needed.
+  REFUND_REQUESTED
+  /// Sprint 20a (PDR-027): staff approved a requested refund.
+  REFUND_APPROVED
+  /// Sprint 20a (PDR-025/027): a refund fired automatically (no human
+  /// approval step).
+  REFUND_AUTOMATIC
 }
 
 enum NotificationTargetType {
@@ -2268,13 +2287,31 @@ enum BranchOrderStatus {
   /// transition graph, not just convention).
   CANCELLED
   /// PDR-025's unprepared-at-slot auto-refund path for an ONLINE
-  /// BranchOrder - the state exists so the graph is complete, but
-  /// nothing triggers it automatically yet (no scheduled-job
-  /// infrastructure exists in this codebase, the same honestly-
-  /// documented gap as every other "would need a cron worker" feature
-  /// here) - reachable only via an explicit, manual transition call
-  /// until a future sprint wires the real trigger.
+  /// BranchOrder, and PDR-027's final outcomes. Sprint 20a: now
+  /// actually reachable - FulfilmentSweepService's own missed-slot/
+  /// delivery-failure sweeps (PDR-025/027), the cancellation endpoints
+  /// (PDR-028), and the admin force-cancel/refund paths all transition
+  /// here for real.
   REFUNDED
+  /// Sprint 20a (PDR-027): staff marked a SENT DELIVERY order as a
+  /// failed attempt. Non-terminal - deliberately excluded from
+  /// TERMINAL_BRANCH_ORDER_STATUSES (the order is still "active" for
+  /// every other guard, e.g. DeliveryWindow's edit-block check). See
+  /// branch-order-state-machine.ts's own comment for the full
+  /// attempt-count-gated graph out of this state (reschedule back to
+  /// SENT on attempt 1 only; COD finalizes straight to CANCELLED on
+  /// attempt 2's own mark-delivery-failed call, never resting here at
+  /// attempt 2; ONLINE rests here at attempt 2, awaiting the
+  /// customer's own refund request).
+  DELIVERY_FAILED
+  /// Sprint 20a (PDR-027): ONLINE only, reached from DELIVERY_FAILED at
+  /// deliveryAttemptCount=2 by the customer's own explicit refund
+  /// request - never automatic (contrast REFUNDED's other entry
+  /// points, which ARE automatic/direct). Non-terminal (still "active"
+  /// until a staff member approves). No rejection path exists this
+  /// sprint - approval is the only transition out, a known, documented
+  /// gap (PDR-027 names an approval step but never a rejection one).
+  REFUND_REQUESTED
 }
 
 /// PDR-004: "all selected items ... travel together." Composite FKs on
@@ -2384,7 +2421,53 @@ model BranchOrder {
   /// reason"). Null exactly when notReceivedReportedAt is null.
   notReceivedReason     String?
 
-  items BranchOrderItem[]
+  /// Sprint 20a (PDR-027): how many delivery attempts have failed -
+  /// starts at 0, incremented ONLY by the SENT->DELIVERY_FAILED
+  /// transition itself (never by anything else). 1 still permits one
+  /// customer reschedule back to SENT; 2 closes rescheduling entirely
+  /// (COD finalizes straight to CANCELLED in the same call that raises
+  /// the count to 2; ONLINE rests at DELIVERY_FAILED awaiting the
+  /// customer's own refund request). See branch-order-state-machine.ts.
+  deliveryAttemptCount  Int       @default(0)
+  /// Sprint 20a (PDR-027): set the moment this order FIRST enters
+  /// DELIVERY_FAILED (attempt 1), cleared back to null on a successful
+  /// reschedule. Starts the 48h "no reschedule" clock the sweep polls -
+  /// same lazy-reconciliation pattern as confirmReminderSentAt/
+  /// deliveredAt, not a real scheduled job.
+  deliveryFailedAt      DateTime?
+  /// Sprint 20a (PDR-025): set the moment the sweep first detects this
+  /// order still PLACED/PREPARING past its slot's start time, cleared
+  /// back to null on a successful reschedule. Starts the 48h
+  /// "no reschedule" clock (COD cancels, ONLINE auto-refunds).
+  slotMissedAt          DateTime?
+  /// Sprint 20a: dedupe key for the 6-hour pre-slot prep reminder,
+  /// deliberately the (window, date) pair this reminder was LAST sent
+  /// for - not a bare boolean/timestamp - so a reschedule to a new slot
+  /// correctly re-arms the reminder for the NEW slot (comparing against
+  /// the order's CURRENT deliveryWindowId/scheduledDate, which a stale
+  /// single boolean could never distinguish from the old slot).
+  prepReminderSentForWindowId String?
+  prepReminderSentForDate     DateTime? @db.Date
+  /// Sprint 20a (FR-PAY-001/FR-FUL-012): recorded ONLY as part of the
+  /// SAME transaction as a successful mark-delivered/pickup-handover
+  /// for a COD order - the server-computed amount actually due at that
+  /// moment (original total minus any already-cancelled items/
+  /// delivery fee), never the original `total` and never a staff-
+  /// entered figure. Null for ONLINE orders and for any COD order not
+  /// yet delivered/picked-up.
+  codCollectedAmount    Decimal?  @db.Decimal(10, 2)
+  codCollectedAt        DateTime?
+  /// Sprint 20a (PDR-028): the whole-order cancellation's own reason -
+  /// mandatory when staff cancels (after prep, before Sent), optional/
+  /// null for a customer's own pre-prep self-service cancellation. A
+  /// single BranchOrderItem's own cancellation reason lives on that
+  /// item instead (see BranchOrderItem.cancelledReason) - this field is
+  /// set only when the WHOLE order (or its last active item) is what
+  /// closes out.
+  cancellationReason    String?
+
+  items  BranchOrderItem[]
+  refunds BranchOrderRefund[]
 
   /// Backs BranchOrderItem's own composite FK (vendorId,
   /// branchOrderId) -> (vendorId, id).
@@ -2410,9 +2493,113 @@ model BranchOrderItem {
   /// re-read live, so a later price change never rewrites history.
   unitPrice      Decimal      @db.Decimal(10, 2)
   createdAt      DateTime     @default(now())
+  /// Sprint 20a (PDR-028): null = still active. Set once, under this
+  /// row's own lock, by whichever cancellation call (customer item-
+  /// cancel, staff item-cancel, or a whole-order/last-item cancel
+  /// looping over every still-active item) gets there first - a second
+  /// attempt on an already-cancelled item is rejected outright, never
+  /// re-cancelled or re-refunded (see BranchOrderRefund's own
+  /// @@unique(branchOrderItemId), which gives this the same guarantee
+  /// one layer down at the DB level too). Cancelling by full line
+  /// quantity only this sprint - no partial-quantity cancellation (a
+  /// deliberate, documented scope decision, not an oversight).
+  cancelledAt    DateTime?
+  /// Mandatory when STAFF cancels this item (after prep, before Sent),
+  /// optional/null for a customer's own pre-prep self-service
+  /// cancellation - same convention as BranchOrder.cancellationReason.
+  cancelledReason String?
+
+  refund BranchOrderRefund?
 
   @@index([branchOrderId])
   @@map("branch_order_items")
+}
+
+enum BranchOrderRefundReason {
+  /// PDR-025: unprepared when the slot was reached, then 48h with no
+  /// customer reschedule.
+  SLOT_MISSED
+  /// PDR-027: the FIRST failed delivery attempt, then 48h with no
+  /// customer reschedule - resolved automatically, same shape as
+  /// SLOT_MISSED's own timeout but kept as its own value for honest
+  /// audit/reporting (this is NOT a second failed attempt).
+  DELIVERY_FAILURE_TIMEOUT
+  /// PDR-027: an ACTUAL second failed delivery attempt, followed by
+  /// the customer's own explicit refund request and staff approval
+  /// (REFUND_REQUESTED -> REFUNDED) - never automatic. COD never
+  /// reaches this reason at all - it finalizes to CANCELLED on the
+  /// second attempt itself, without a refund row, since nothing was
+  /// ever charged.
+  DELIVERY_FAILED_TWICE
+  /// PDR-028: a single item cancelled (individually, or as part of a
+  /// whole-order/last-item cancellation looping over every active
+  /// item).
+  ITEM_CANCELLED
+  /// PDR-028: the delivery fee, refunded only when the LAST active
+  /// item is the one being cancelled - at most one such row per
+  /// BranchOrder (enforced by a partial unique index in migration SQL,
+  /// not representable in Prisma's schema DSL - see that migration's
+  /// own comment).
+  DELIVERY_FEE
+  /// A platform-admin manual refund NOT tied to cancelling any item or
+  /// changing BranchOrder.status at all (e.g. correcting a dispute) -
+  /// ONLINE only, capped at the remaining refundable amount, never a
+  /// manually-entered figure. See the admin refund endpoint's own
+  /// comment.
+  PLATFORM_ADMIN_MANUAL
+}
+
+enum BranchOrderRefundInitiator {
+  /// A sweep-driven automatic refund (PDR-025/027's own 48h timeouts) -
+  /// no human actor; approvedByUserId stays null.
+  SYSTEM
+  /// A customer's own cancellation action (pre-prep item/order cancel).
+  CUSTOMER_REQUEST
+  /// Staff/owner cancellation (post-prep, before Sent) or a staff
+  /// approval of a REFUND_REQUESTED order.
+  STAFF
+  /// A platform-admin forced-cancel or manual-refund override.
+  PLATFORM_ADMIN
+}
+
+/// Sprint 20a (FR-PAY-004): the refund ledger - PaymentTransaction
+/// itself stays immutable/untouched (it may cover several BranchOrders
+/// per PDR-005, so it can never be the thing a single BranchOrder's
+/// refund mutates). Every row here is scoped to exactly one
+/// BranchOrder, optionally to exactly one of its items (null = the
+/// delivery-fee row, which is not tied to any single item). The two
+/// partial/plain unique constraints below are what make "never refund
+/// the same thing twice" a DB-level guarantee, not just application
+/// discipline - see each constraint's own comment.
+model BranchOrderRefund {
+  id                   String                     @id @default(uuid())
+  branchOrderId        String
+  branchOrder          BranchOrder                @relation(fields: [branchOrderId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  /// null = this row is the DELIVERY_FEE refund (or, in principle, a
+  /// whole-order row not tied to one item - in practice every non-fee
+  /// refund this sprint IS item-scoped, since "cancel the whole order"
+  /// is implemented as "cancel every active item" - see
+  /// CanonicalProductMergeService-style comment convention: no lump
+  /// "remainder" row ever exists).
+  branchOrderItemId    String?                    @unique
+  branchOrderItem      BranchOrderItem?            @relation(fields: [branchOrderItemId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  /// Snapshotted from BranchOrder.paymentTransactionId at refund time -
+  /// always non-null in practice (a refund only ever exists for an
+  /// ONLINE BranchOrder, which always has one), kept nullable only
+  /// because the FK itself is nullable on BranchOrder.
+  paymentTransactionId String?
+  paymentTransaction   PaymentTransaction?        @relation(fields: [paymentTransactionId], references: [id])
+  amount               Decimal                    @db.Decimal(10, 2)
+  reason               BranchOrderRefundReason
+  initiatedBy          BranchOrderRefundInitiator
+  /// Null for a SYSTEM-initiated (automatic) refund; set for a
+  /// STAFF/PLATFORM_ADMIN-approved one.
+  approvedByUserId     String?
+  createdAt            DateTime                   @default(now())
+
+  @@index([branchOrderId])
+  @@index([paymentTransactionId])
+  @@map("branch_order_refunds")
 }
 
 // ============================================================
@@ -2581,6 +2768,7 @@ model PaymentTransaction {
   createdAt        DateTime                 @default(now())
 
   branchOrders BranchOrder[]
+  refunds      BranchOrderRefund[]
 
   @@index([customerOrderId])
   @@map("payment_transactions")

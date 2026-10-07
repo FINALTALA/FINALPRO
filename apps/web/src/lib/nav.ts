@@ -196,6 +196,14 @@ export function adminTiles(role: PlatformRoleName): HubTile[] {
         title: "المنتجات المرجعية",
         description: "حالات المنتجات المرجعية، متغيّراتها، دمجها وتقسيمها",
       },
+      // Sprint 20a (BR-019): the admin's break-glass override on a
+      // single BranchOrder - PLATFORM_ADMIN only, same reasoning as
+      // every other admin-only tile above.
+      {
+        href: "/admin/branch-orders",
+        title: "إلغاء/استرداد الطلبات",
+        description: "إلغاء قسري أو استرداد يدوي لطلب فرع محدد",
+      },
     );
   }
   return tiles;

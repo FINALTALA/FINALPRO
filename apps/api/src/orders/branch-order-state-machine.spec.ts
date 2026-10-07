@@ -1,4 +1,8 @@
-import { allowedNextStates, canTransition } from './branch-order-state-machine';
+import {
+  allowedNextStates,
+  canTransition,
+  isTerminalBranchOrderStatus,
+} from './branch-order-state-machine';
 
 describe('branch-order-state-machine', () => {
   describe('the happy path for DELIVERY', () => {
@@ -168,5 +172,195 @@ describe('branch-order-state-machine', () => {
     expect(canTransition('PLACED', 'COMPLETED', 'DELIVERY', 'ONLINE')).toBe(
       false,
     );
+  });
+
+  // Sprint 20a (PDR-027): delivery-failure attempt-count boundaries.
+  describe('PDR-027: delivery failure and the deliveryAttemptCount axis', () => {
+    it('attempt 1 (count=0): SENT->DELIVERY_FAILED is legal for ONLINE and COD alike', () => {
+      expect(
+        canTransition('SENT', 'DELIVERY_FAILED', 'DELIVERY', 'ONLINE', 0),
+      ).toBe(true);
+      expect(
+        canTransition('SENT', 'DELIVERY_FAILED', 'DELIVERY', 'COD', 0),
+      ).toBe(true);
+    });
+
+    it('attempt 1 failure does NOT allow SENT->CANCELLED directly for COD (that only opens at count>=1)', () => {
+      expect(canTransition('SENT', 'CANCELLED', 'DELIVERY', 'COD', 0)).toBe(
+        false,
+      );
+    });
+
+    it('reschedule DELIVERY_FAILED(count=1)->SENT is legal for both payment methods', () => {
+      expect(
+        canTransition('DELIVERY_FAILED', 'SENT', 'DELIVERY', 'ONLINE', 1),
+      ).toBe(true);
+      expect(
+        canTransition('DELIVERY_FAILED', 'SENT', 'DELIVERY', 'COD', 1),
+      ).toBe(true);
+    });
+
+    it('exact boundary: 0 -> 1 (SENT->DELIVERY_FAILED) -> SENT (reschedule, count still 1) -> 2 (second failure)', () => {
+      // Starting count 0, first failure is legal.
+      expect(
+        canTransition('SENT', 'DELIVERY_FAILED', 'DELIVERY', 'ONLINE', 0),
+      ).toBe(true);
+      // Now at DELIVERY_FAILED with count=1 (incremented by the
+      // transition above) - reschedule back to SENT is legal.
+      expect(
+        canTransition('DELIVERY_FAILED', 'SENT', 'DELIVERY', 'ONLINE', 1),
+      ).toBe(true);
+      // Back at SENT, count is STILL 1 (rescheduling never resets or
+      // further increments it) - the second failure is now legal and
+      // must land on DELIVERY_FAILED again for ONLINE.
+      expect(
+        canTransition('SENT', 'DELIVERY_FAILED', 'DELIVERY', 'ONLINE', 1),
+      ).toBe(true);
+      // ...but for COD, that same second failure (count=1) must skip
+      // DELIVERY_FAILED and go straight to CANCELLED instead.
+      expect(canTransition('SENT', 'CANCELLED', 'DELIVERY', 'COD', 1)).toBe(
+        true,
+      );
+      expect(
+        canTransition('SENT', 'DELIVERY_FAILED', 'DELIVERY', 'COD', 1),
+      ).toBe(false);
+    });
+
+    it('once count reaches 2, DELIVERY_FAILED can no longer reschedule back to SENT for either payment method', () => {
+      expect(
+        canTransition('DELIVERY_FAILED', 'SENT', 'DELIVERY', 'ONLINE', 2),
+      ).toBe(false);
+      expect(
+        canTransition('DELIVERY_FAILED', 'SENT', 'DELIVERY', 'COD', 2),
+      ).toBe(false);
+    });
+
+    it('COD never rests at DELIVERY_FAILED(count>=2) - it is cancelled directly by the SENT->CANCELLED transition, so DELIVERY_FAILED has no COD exit left at count=2', () => {
+      expect(
+        canTransition('DELIVERY_FAILED', 'CANCELLED', 'DELIVERY', 'COD', 2),
+      ).toBe(false);
+    });
+
+    it('ONLINE at DELIVERY_FAILED(count=1) can auto-refund or auto-cancel-equivalent via the 48h sweep path (REFUNDED only, never CANCELLED for ONLINE)', () => {
+      expect(
+        canTransition('DELIVERY_FAILED', 'REFUNDED', 'DELIVERY', 'ONLINE', 1),
+      ).toBe(true);
+      expect(
+        canTransition('DELIVERY_FAILED', 'CANCELLED', 'DELIVERY', 'ONLINE', 1),
+      ).toBe(false);
+    });
+
+    it('COD at DELIVERY_FAILED(count=1) can only auto-cancel via the 48h sweep path (CANCELLED only, never REFUNDED - nothing was charged)', () => {
+      expect(
+        canTransition('DELIVERY_FAILED', 'CANCELLED', 'DELIVERY', 'COD', 1),
+      ).toBe(true);
+      expect(
+        canTransition('DELIVERY_FAILED', 'REFUNDED', 'DELIVERY', 'COD', 1),
+      ).toBe(false);
+    });
+
+    it('REFUND_REQUESTED only opens from DELIVERY_FAILED at count>=2, ONLINE only', () => {
+      expect(
+        canTransition(
+          'DELIVERY_FAILED',
+          'REFUND_REQUESTED',
+          'DELIVERY',
+          'ONLINE',
+          2,
+        ),
+      ).toBe(true);
+      expect(
+        canTransition(
+          'DELIVERY_FAILED',
+          'REFUND_REQUESTED',
+          'DELIVERY',
+          'ONLINE',
+          1,
+        ),
+      ).toBe(false);
+      expect(
+        canTransition(
+          'DELIVERY_FAILED',
+          'REFUND_REQUESTED',
+          'DELIVERY',
+          'COD',
+          2,
+        ),
+      ).toBe(false);
+    });
+
+    it('REFUND_REQUESTED->REFUNDED is the only legal exit, and only staff/owner approval reaches it (never automatic)', () => {
+      expect(
+        canTransition('REFUND_REQUESTED', 'REFUNDED', 'DELIVERY', 'ONLINE', 2),
+      ).toBe(true);
+      expect(allowedNextStates('REFUND_REQUESTED', 'DELIVERY', 'ONLINE', 2)).toEqual(
+        ['REFUNDED'],
+      );
+    });
+
+    it('PICKUP never reaches DELIVERY_FAILED/REFUND_REQUESTED at all (delivery-failure is a DELIVERY-only concept)', () => {
+      expect(
+        canTransition('SENT', 'DELIVERY_FAILED', 'PICKUP', 'ONLINE', 0),
+      ).toBe(false);
+      expect(
+        allowedNextStates('DELIVERY_FAILED', 'PICKUP', 'ONLINE', 1),
+      ).toEqual([]);
+    });
+
+    it('DELIVERY_FAILED and REFUND_REQUESTED are correctly NON-terminal', () => {
+      expect(isTerminalBranchOrderStatus('DELIVERY_FAILED')).toBe(false);
+      expect(isTerminalBranchOrderStatus('REFUND_REQUESTED')).toBe(false);
+    });
+
+    it('every other target is illegal from DELIVERY_FAILED at count=1 (exhaustive, not representative) - SENT is the one legal exit, tested separately above', () => {
+      const illegal: Array<Parameters<typeof canTransition>[1]> = [
+        'PLACED',
+        'PREPARING',
+        'PICKED_UP',
+        'DELIVERED',
+        'COMPLETED',
+        'REFUND_REQUESTED',
+      ];
+      for (const to of illegal) {
+        expect(canTransition('DELIVERY_FAILED', to, 'DELIVERY', 'ONLINE', 1)).toBe(
+          false,
+        );
+      }
+    });
+
+    it('every other target is illegal from DELIVERY_FAILED at count=2 (exhaustive, not representative)', () => {
+      const illegal: Array<Parameters<typeof canTransition>[1]> = [
+        'PLACED',
+        'PREPARING',
+        'SENT',
+        'PICKED_UP',
+        'DELIVERED',
+        'COMPLETED',
+        'CANCELLED',
+      ];
+      for (const to of illegal) {
+        expect(canTransition('DELIVERY_FAILED', to, 'DELIVERY', 'ONLINE', 2)).toBe(
+          false,
+        );
+      }
+    });
+
+    it('every other target is illegal from REFUND_REQUESTED (exhaustive, not representative)', () => {
+      const illegal: Array<Parameters<typeof canTransition>[1]> = [
+        'PLACED',
+        'PREPARING',
+        'SENT',
+        'PICKED_UP',
+        'DELIVERED',
+        'COMPLETED',
+        'CANCELLED',
+        'DELIVERY_FAILED',
+      ];
+      for (const to of illegal) {
+        expect(
+          canTransition('REFUND_REQUESTED', to, 'DELIVERY', 'ONLINE', 2),
+        ).toBe(false);
+      }
+    });
   });
 });

@@ -101,6 +101,11 @@ const ERROR_MESSAGES: Record<string, string> = {
   SPLIT_WOULD_SPAN_VENDOR_OFFER: "تعذّر التقسيم: أحد عروض المتاجر مرتبط بمتغيّرات ستُقسَّم بين منتجين مختلفين.",
   SPLIT_REQUIRES_AT_LEAST_ONE_VARIANT: "اختاري متغيّراً واحداً على الأقل للتقسيم.",
   SPLIT_CANNOT_MOVE_ALL_VARIANTS: "لا يمكن نقل كل المتغيّرات؛ يجب أن يبقى للمنتج الأصلي متغيّر واحد على الأقل.",
+  // Sprint 20a: platform-admin branch-order overrides.
+  BRANCH_ORDER_NOT_FOUND: "لم يُعثر على طلب بهذا المعرّف.",
+  BRANCH_ORDER_ALREADY_TERMINAL: "هذا الطلب وصل بالفعل إلى حالة نهائية.",
+  REFUND_NOT_APPLICABLE_FOR_COD: "الطلب دفع عند الاستلام - لا يوجد مبلغ إلكتروني لاسترداده.",
+  NOTHING_LEFT_TO_REFUND: "تم استرداد كامل مبلغ هذا الطلب مسبقاً.",
 };
 
 /** Turns an API failure into the Arabic message shown to the user. */

@@ -13,9 +13,14 @@ import {
  * the full citation). Pure and DB-free by design, so it can be
  * exhaustively unit-tested without a database - see
  * branch-order.service.ts for the guarded, transactional wrapper that
- * actually applies a transition to a real row (nothing calls that
- * service yet either - no HTTP endpoint exists this sprint; checkout/
- * fulfilment actions that will call it are Sprint 10-11).
+ * actually applies a transition to a real row.
+ *
+ * Sprint 20a (PDR-027): extends the graph with DELIVERY_FAILED/
+ * REFUND_REQUESTED and a new, optional `deliveryAttemptCount` axis
+ * (defaulting to 0, so every pre-Sprint-20a rule/call site is
+ * unaffected) - see canTransition()'s own comment for exactly what
+ * value to pass and TransitionRule's own comment for how the min/max
+ * bounds read it.
  */
 interface TransitionRule {
   to: BranchOrderStatus;
@@ -29,6 +34,17 @@ interface TransitionRule {
    * CANCELLED, never REFUNDED.
    */
   paymentMethod: BranchOrderPaymentMethod | null;
+  /**
+   * Sprint 20a (PDR-027): undefined = legal regardless of the CURRENT
+   * deliveryAttemptCount (read BEFORE this transition is applied - the
+   * count that incrementing SENT->DELIVERY_FAILED is about to raise by
+   * one, not the value after). minDeliveryAttemptCount/
+   * maxDeliveryAttemptCount bound which attempt this rule applies to -
+   * see this file's own top comment for the exact attempt-by-attempt
+   * table these encode.
+   */
+  minDeliveryAttemptCount?: number;
+  maxDeliveryAttemptCount?: number;
 }
 
 const TRANSITIONS: Record<BranchOrderStatus, TransitionRule[]> = {
@@ -57,10 +73,40 @@ const TRANSITIONS: Record<BranchOrderStatus, TransitionRule[]> = {
     { to: 'REFUNDED', fulfilmentMethod: null, paymentMethod: 'ONLINE' },
   ],
   // PDR-028: "once Sent, neither side self-cancels in-app" - SENT
-  // deliberately has no CANCELLED/REFUNDED entry below, enforced by the
-  // graph itself, not just left to convention.
+  // deliberately has no plain CANCELLED/REFUNDED entry for a
+  // successful delivery; the only way out besides DELIVERED is a
+  // reported delivery FAILURE (PDR-027), handled below.
   SENT: [
     { to: 'DELIVERED', fulfilmentMethod: 'DELIVERY', paymentMethod: null },
+    // PDR-027, attempt 1 (current count is 0): any payment method
+    // rests at DELIVERY_FAILED - COD only diverges starting at
+    // attempt 2.
+    {
+      to: 'DELIVERY_FAILED',
+      fulfilmentMethod: 'DELIVERY',
+      paymentMethod: null,
+      maxDeliveryAttemptCount: 0,
+    },
+    // PDR-027, attempt 2+ (current count >= 1), ONLINE only: rests at
+    // DELIVERY_FAILED again, awaiting the customer's own refund
+    // request once count reaches 2 (see DELIVERY_FAILED's own rules
+    // below - REFUND_REQUESTED only opens at count>=2).
+    {
+      to: 'DELIVERY_FAILED',
+      fulfilmentMethod: 'DELIVERY',
+      paymentMethod: 'ONLINE',
+      minDeliveryAttemptCount: 1,
+    },
+    // PDR-027, attempt 2, COD only: skips DELIVERY_FAILED entirely -
+    // one atomic write finalizes count->2 and status->CANCELLED
+    // together (nothing was ever charged, so there is nothing to
+    // refund and nothing to wait on).
+    {
+      to: 'CANCELLED',
+      fulfilmentMethod: 'DELIVERY',
+      paymentMethod: 'COD',
+      minDeliveryAttemptCount: 1,
+    },
   ],
   // PDR-026: customer confirms, or the (not-yet-built, Sprint 11) 72h
   // auto-confirm fires.
@@ -73,6 +119,55 @@ const TRANSITIONS: Record<BranchOrderStatus, TransitionRule[]> = {
   // than needing its own separate confirm state.
   PICKED_UP: [
     { to: 'COMPLETED', fulfilmentMethod: 'PICKUP', paymentMethod: null },
+  ],
+  // Sprint 20a (PDR-027): reached only from SENT (never COD at
+  // count>=1, which finalizes straight to CANCELLED above). Which
+  // exits are legal depends entirely on the CURRENT count (read before
+  // any of these fire):
+  //  - count=1 (the first failure): reschedule back to SENT, or the
+  //    sweep's own 48h-no-reschedule timeout (COD cancels, ONLINE
+  //    auto-refunds directly - no REFUND_REQUESTED stop for a timeout,
+  //    only for an ACTUAL second failed attempt).
+  //  - count>=2 (ONLINE only - COD never reaches DELIVERY_FAILED at
+  //    this count): rescheduling is closed for good; only the
+  //    customer's own explicit refund request remains.
+  DELIVERY_FAILED: [
+    {
+      to: 'SENT',
+      fulfilmentMethod: 'DELIVERY',
+      paymentMethod: null,
+      maxDeliveryAttemptCount: 1,
+    },
+    {
+      to: 'CANCELLED',
+      fulfilmentMethod: 'DELIVERY',
+      paymentMethod: 'COD',
+      maxDeliveryAttemptCount: 1,
+    },
+    {
+      to: 'REFUNDED',
+      fulfilmentMethod: 'DELIVERY',
+      paymentMethod: 'ONLINE',
+      maxDeliveryAttemptCount: 1,
+    },
+    {
+      to: 'REFUND_REQUESTED',
+      fulfilmentMethod: 'DELIVERY',
+      paymentMethod: 'ONLINE',
+      minDeliveryAttemptCount: 2,
+    },
+  ],
+  // Sprint 20a (PDR-027): staff/owner approval is the only way out -
+  // no rejection path exists this sprint (a known, documented gap, not
+  // an oversight - PDR-027 names an approval step but never names a
+  // rejection one).
+  REFUND_REQUESTED: [
+    {
+      to: 'REFUNDED',
+      fulfilmentMethod: 'DELIVERY',
+      paymentMethod: 'ONLINE',
+      minDeliveryAttemptCount: 2,
+    },
   ],
   COMPLETED: [],
   CANCELLED: [],
@@ -101,18 +196,48 @@ export function isTerminalBranchOrderStatus(
   );
 }
 
+/**
+ * Sprint 20a: `deliveryAttemptCount` defaults to 0 - every rule written
+ * before this sprint has neither min/max bound, so passing (or
+ * omitting) 0 reproduces the exact pre-Sprint-20a behavior unchanged
+ * for every existing call site/test. Only the new SENT/
+ * DELIVERY_FAILED/REFUND_REQUESTED rules above actually read this
+ * value - it is the count BEFORE the transition under consideration
+ * would apply, never the value after.
+ */
+function attemptCountMatches(
+  rule: TransitionRule,
+  deliveryAttemptCount: number,
+): boolean {
+  if (
+    rule.minDeliveryAttemptCount !== undefined &&
+    deliveryAttemptCount < rule.minDeliveryAttemptCount
+  ) {
+    return false;
+  }
+  if (
+    rule.maxDeliveryAttemptCount !== undefined &&
+    deliveryAttemptCount > rule.maxDeliveryAttemptCount
+  ) {
+    return false;
+  }
+  return true;
+}
+
 export function canTransition(
   from: BranchOrderStatus,
   to: BranchOrderStatus,
   fulfilmentMethod: FulfilmentMethod,
   paymentMethod: BranchOrderPaymentMethod,
+  deliveryAttemptCount = 0,
 ): boolean {
   return TRANSITIONS[from].some(
     (rule) =>
       rule.to === to &&
       (rule.fulfilmentMethod === null ||
         rule.fulfilmentMethod === fulfilmentMethod) &&
-      (rule.paymentMethod === null || rule.paymentMethod === paymentMethod),
+      (rule.paymentMethod === null || rule.paymentMethod === paymentMethod) &&
+      attemptCountMatches(rule, deliveryAttemptCount),
   );
 }
 
@@ -120,13 +245,15 @@ export function allowedNextStates(
   from: BranchOrderStatus,
   fulfilmentMethod: FulfilmentMethod,
   paymentMethod: BranchOrderPaymentMethod,
+  deliveryAttemptCount = 0,
 ): BranchOrderStatus[] {
   return TRANSITIONS[from]
     .filter(
       (rule) =>
         (rule.fulfilmentMethod === null ||
           rule.fulfilmentMethod === fulfilmentMethod) &&
-        (rule.paymentMethod === null || rule.paymentMethod === paymentMethod),
+        (rule.paymentMethod === null || rule.paymentMethod === paymentMethod) &&
+        attemptCountMatches(rule, deliveryAttemptCount),
     )
     .map((rule) => rule.to);
 }

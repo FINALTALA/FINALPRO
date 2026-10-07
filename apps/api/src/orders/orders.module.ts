@@ -2,9 +2,12 @@ import { Module } from '@nestjs/common';
 import { AuditModule } from '../audit/audit.module';
 import { AuthModule } from '../auth/auth.module';
 import { OutboxModule } from '../outbox/outbox.module';
+import { BranchOrderCancellationService } from './branch-order-cancellation.service';
+import { BranchOrderRescheduleService } from './branch-order-reschedule.service';
 import { BranchOrderService } from './branch-order.service';
 import { BranchOrdersStaffController } from './branch-orders-staff.controller';
 import { CustomerOrdersController } from './customer-orders.controller';
+import { FulfilmentExceptionSweepService } from './fulfilment-exception-sweep.service';
 import { FulfilmentReconciliationService } from './fulfilment-reconciliation.service';
 import { FulfilmentSweepService } from './fulfilment-sweep.service';
 
@@ -29,13 +32,19 @@ import { FulfilmentSweepService } from './fulfilment-sweep.service';
   controllers: [BranchOrdersStaffController, CustomerOrdersController],
   providers: [
     BranchOrderService,
+    BranchOrderCancellationService,
+    BranchOrderRescheduleService,
     FulfilmentReconciliationService,
     FulfilmentSweepService,
+    FulfilmentExceptionSweepService,
   ],
   exports: [
     BranchOrderService,
+    BranchOrderCancellationService,
+    BranchOrderRescheduleService,
     FulfilmentReconciliationService,
     FulfilmentSweepService,
+    FulfilmentExceptionSweepService,
   ],
 })
 export class OrdersModule {}

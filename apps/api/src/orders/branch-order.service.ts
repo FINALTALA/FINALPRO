@@ -52,8 +52,9 @@ export class BranchOrderService {
         status: BranchOrderStatus;
         fulfilmentMethod: string;
         paymentMethod: string;
+        deliveryAttemptCount: number;
       }[]
-    >`SELECT id, status, "fulfilmentMethod", "paymentMethod" FROM branch_orders WHERE id = ${branchOrderId} FOR UPDATE`;
+    >`SELECT id, status, "fulfilmentMethod", "paymentMethod", "deliveryAttemptCount" FROM branch_orders WHERE id = ${branchOrderId} FOR UPDATE`;
     const current = rows[0];
     if (!current) {
       throw new NotFoundException({
@@ -67,6 +68,7 @@ export class BranchOrderService {
         to,
         current.fulfilmentMethod as Parameters<typeof canTransition>[2],
         current.paymentMethod as Parameters<typeof canTransition>[3],
+        current.deliveryAttemptCount,
       )
     ) {
       throw new ConflictException({
