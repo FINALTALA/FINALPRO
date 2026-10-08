@@ -8,8 +8,10 @@ import {
   Post,
   Req,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { Request } from 'express';
+import { Prisma } from '../../generated/prisma/client';
 import { AuditLogService } from '../audit/audit-log.service';
 import { CurrentUser } from '../auth/current-user.decorator';
 import {
@@ -18,10 +20,15 @@ import {
 } from '../auth/session-auth.guard';
 import { VendorMembershipGuard } from '../auth/vendor-membership.guard';
 import { RequireVendorRole } from '../auth/vendor-role.decorator';
+import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { OutboxEventService } from '../outbox/outbox-event.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { BranchOrderCancellationService } from './branch-order-cancellation.service';
+import { computeAmountDue } from './branch-order-money.util';
 import { BranchOrderService } from './branch-order.service';
+import { MarkDeliveryFailedDto } from './dto/mark-delivery-failed.dto';
 import { PickupHandoverDto } from './dto/pickup-handover.dto';
+import { StaffCancelBranchOrderDto } from './dto/staff-cancel-branch-order.dto';
 import { FulfilmentReconciliationService } from './fulfilment-reconciliation.service';
 
 interface BranchOrderRow {
@@ -30,11 +37,17 @@ interface BranchOrderRow {
   fulfilmentMethod: string;
   paymentMethod: string;
   total: unknown;
+  deliveryFee: unknown;
   createdAt: Date;
   pickupCode: string | null;
   deliveredAt: Date | null;
   notReceivedReportedAt: Date | null;
   notReceivedReason: string | null;
+  cancellationReason: string | null;
+  codCollectedAmount: unknown;
+  codCollectedAt: Date | null;
+  items: { unitPrice: unknown; quantity: number; cancelledAt: Date | null }[];
+  refunds: { amount: unknown; reason: string }[];
   customerOrder: {
     customer: { displayName: string | null; user: { phone: string } };
   };
@@ -48,6 +61,9 @@ interface BranchOrderRow {
 // employeeOrderDto below - not part of the agreed minimal employee
 // surface.
 function ownerOrderDto(o: BranchOrderRow) {
+  const hasDeliveryFeeRefund = o.refunds.some(
+    (r) => r.reason === 'DELIVERY_FEE',
+  );
   return {
     id: o.id,
     status: o.status,
@@ -61,6 +77,19 @@ function ownerOrderDto(o: BranchOrderRow) {
     delivered_at: o.deliveredAt?.toISOString() ?? null,
     not_received_reported_at: o.notReceivedReportedAt?.toISOString() ?? null,
     not_received_reason: o.notReceivedReason,
+    cancellation_reason: o.cancellationReason,
+    cod_collected_amount:
+      o.codCollectedAmount !== null ? Number(o.codCollectedAmount) : null,
+    cod_collected_at: o.codCollectedAt?.toISOString() ?? null,
+    amount_due:
+      o.paymentMethod === 'COD'
+        ? computeAmountDue(
+            o.total,
+            o.items,
+            hasDeliveryFeeRefund,
+            o.deliveryFee,
+          ).toNumber()
+        : null,
   };
 }
 
@@ -97,15 +126,39 @@ function ownerOrderDto(o: BranchOrderRow) {
 // the minimum operational signal to gate that button correctly - a
 // plain boolean, never the report's timestamp or reason text, which
 // stay owner-only (not_received_reported_at/not_received_reason above).
+// Sprint 20a (review-round requirement): `payment_method` and
+// `amount_due` are added here too - excluding `total`/`payment_method`
+// made sense when nothing in the employee's own action set needed
+// them, but COD collection (now folded into mark-delivered/pickup-
+// handover) genuinely cannot happen without the employee knowing it IS
+// a COD order and exactly how much to collect. `total` itself (the
+// ORIGINAL, pre-cancellation value) stays excluded - amount_due is the
+// only money figure exposed here, same minimal-surface principle as
+// before, just updated for what this sprint's own actions need.
 function employeeOrderDto(o: BranchOrderRow) {
+  const hasDeliveryFeeRefund = o.refunds.some(
+    (r) => r.reason === 'DELIVERY_FEE',
+  );
   return {
     id: o.id,
     status: o.status,
     fulfilment_method: o.fulfilmentMethod,
+    payment_method: o.paymentMethod,
     customer_name: o.customerOrder.customer.displayName,
     customer_phone: o.customerOrder.customer.user.phone,
     pickup_code: o.fulfilmentMethod === 'PICKUP' ? o.pickupCode : null,
     has_open_not_received_report: o.notReceivedReportedAt !== null,
+    amount_due:
+      o.paymentMethod === 'COD'
+        ? computeAmountDue(
+            o.total,
+            o.items,
+            hasDeliveryFeeRefund,
+            o.deliveryFee,
+          ).toNumber()
+        : null,
+    cod_collected_amount:
+      o.codCollectedAmount !== null ? Number(o.codCollectedAmount) : null,
   };
 }
 
@@ -117,6 +170,8 @@ const ORDER_INCLUDE = {
       },
     },
   },
+  items: { select: { unitPrice: true, quantity: true, cancelledAt: true } },
+  refunds: { select: { amount: true, reason: true } },
 } as const;
 
 // Sprint 10 (RB-ORD-004, PDR-009): a minimal, READ-ONLY order list for
@@ -142,6 +197,7 @@ export class BranchOrdersStaffController {
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
     private readonly branchOrderService: BranchOrderService,
+    private readonly cancellation: BranchOrderCancellationService,
     private readonly reconciliation: FulfilmentReconciliationService,
     private readonly outbox: OutboxEventService,
   ) {}
@@ -300,12 +356,53 @@ export class BranchOrdersStaffController {
     return { id: updated.id, status: updated.status };
   }
 
+  /**
+   * Sprint 20a (FR-PAY-001/FR-FUL-012, review-round requirement): for
+   * a COD order, computes the real amount still due (original total
+   * minus any already-cancelled items/delivery fee) and returns the
+   * extraData to merge into the SAME atomic transition() write that
+   * marks DELIVERED/COMPLETED - never a separate write, never a
+   * staff-entered figure. Returns {} for ONLINE (nothing to collect).
+   */
+  private async computeCodCollectionExtraData(
+    tx: Prisma.TransactionClient,
+    branchOrderId: string,
+  ): Promise<Record<string, unknown>> {
+    const order = await tx.branchOrder.findUniqueOrThrow({
+      where: { id: branchOrderId },
+      include: {
+        items: {
+          select: { unitPrice: true, quantity: true, cancelledAt: true },
+        },
+      },
+    });
+    if (order.paymentMethod !== 'COD') {
+      return {};
+    }
+    const amountDue = computeAmountDue(
+      order.total,
+      order.items,
+      false,
+      order.deliveryFee,
+    );
+    return {
+      codCollectedAmount: amountDue.toFixed(2),
+      codCollectedAt: new Date(),
+    };
+  }
+
   // PDR-026: "and Delivered when informed of arrival." Sets
   // deliveredAt atomically with the status write (see
   // BranchOrderService.transition's own extraData param) - this is
   // what starts the 48h-reminder/72h-auto-confirm clock and, in turn,
   // enqueues the customer's own "please confirm receipt" notification.
+  // Sprint 20a: also records the COD collection (if applicable) in the
+  // SAME atomic write - see computeCodCollectionExtraData's own
+  // comment. Idempotency-Key required (review-round requirement: COD
+  // recording is a financial write, never safe to leave un-guarded
+  // against a network retry).
   @Post('branches/:branchId/orders/:branchOrderId/mark-delivered')
+  @UseInterceptors(IdempotencyInterceptor)
   async markDelivered(
     @Param('vendorId') vendorId: string,
     @Param('branchId') branchId: string,
@@ -320,13 +417,14 @@ export class BranchOrdersStaffController {
     );
     const deliveredAt = new Date();
     const updated = await this.prisma.$transaction(async (tx) => {
+      const codData = await this.computeCodCollectionExtraData(tx, id);
       const result = await this.branchOrderService.transition(
         tx,
         id,
         'DELIVERED',
         user.id,
         req.correlationId,
-        { deliveredAt },
+        { deliveredAt, ...codData },
       );
       const order = await tx.branchOrder.findUniqueOrThrow({
         where: { id },
@@ -364,6 +462,7 @@ export class BranchOrdersStaffController {
   // comment already documented as "handover IS confirmation," so both
   // transitions happen together, atomically, in one request.
   @Post('branches/:branchId/orders/:branchOrderId/pickup-handover')
+  @UseInterceptors(IdempotencyInterceptor)
   async pickupHandover(
     @Param('vendorId') vendorId: string,
     @Param('branchId') branchId: string,
@@ -391,12 +490,14 @@ export class BranchOrdersStaffController {
           message: 'The pickup code does not match this order',
         });
       }
+      const codData = await this.computeCodCollectionExtraData(tx, id);
       await this.branchOrderService.transition(
         tx,
         id,
         'PICKED_UP',
         user.id,
         req.correlationId,
+        codData,
       );
       return this.branchOrderService.transition(
         tx,
@@ -492,5 +593,300 @@ export class BranchOrdersStaffController {
 
       return { id, restarted_at: restartedAt.toISOString() };
     });
+  }
+
+  /** Customer of this BranchOrder, as a notification recipient - the
+   * staff-side half of this sprint's recipient table (cancellation,
+   * delivery-failed, refund-approved events). */
+  private async notifyCustomer(
+    tx: Prisma.TransactionClient,
+    branchOrderId: string,
+    eventType: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    const order = await tx.branchOrder.findUniqueOrThrow({
+      where: { id: branchOrderId },
+      include: {
+        customerOrder: { include: { customer: { select: { userId: true } } } },
+      },
+    });
+    await this.outbox.enqueue(
+      {
+        eventType,
+        payload: {
+          ...payload,
+          recipient_user_id: order.customerOrder.customer.userId,
+        },
+      },
+      tx,
+    );
+  }
+
+  /** Shared lock+branch-ownership+status-eligibility check for every
+   * staff write endpoint below. */
+  private async lockAndRequireStatus(
+    tx: Prisma.TransactionClient,
+    vendorId: string,
+    branchId: string,
+    branchOrderId: string,
+    allowedStatuses: string[],
+  ) {
+    await tx.$queryRaw`SELECT id FROM branch_orders WHERE id = ${branchOrderId} FOR UPDATE`;
+    const order = await tx.branchOrder.findUnique({
+      where: { id: branchOrderId },
+    });
+    if (!order || order.vendorId !== vendorId || order.branchId !== branchId) {
+      throw new NotFoundException({
+        code: 'BRANCH_ORDER_NOT_FOUND',
+        message: 'Branch order not found for this branch',
+      });
+    }
+    if (!allowedStatuses.includes(order.status)) {
+      throw new ConflictException({
+        code: 'INVALID_BRANCH_ORDER_TRANSITION',
+        message: `This action is not available while the order is ${order.status}`,
+      });
+    }
+    return order;
+  }
+
+  // PDR-028: staff/owner cancellation - PLACED (same as the
+  // customer's own window, so a staff member can act on a customer's
+  // behalf after a phone call) or PREPARING (after prep, before Sent
+  // - reason mandatory here, the auditable record of the required
+  // external contact). Whole order: every still-active item + the
+  // delivery fee, in one atomic finalize.
+  @Post('branches/:branchId/orders/:branchOrderId/cancel')
+  @UseInterceptors(IdempotencyInterceptor)
+  async cancelOrder(
+    @Param('vendorId') vendorId: string,
+    @Param('branchId') branchId: string,
+    @Param('branchOrderId') branchOrderId: string,
+    @Body() dto: StaffCancelBranchOrderDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
+  ) {
+    const result = await this.prisma.$transaction(async (tx) => {
+      const order = await this.lockAndRequireStatus(
+        tx,
+        vendorId,
+        branchId,
+        branchOrderId,
+        ['PLACED', 'PREPARING'],
+      );
+      this.requireReasonIfPreparing(order.status, dto.reason);
+      const r = await this.cancellation.cancelWholeOrder(
+        tx,
+        order,
+        user.id,
+        'STAFF',
+        dto.reason ?? null,
+        req.correlationId,
+      );
+      await this.notifyCustomer(tx, branchOrderId, 'branch_order.cancelled', {
+        branch_order_id: branchOrderId,
+        vendor_id: vendorId,
+        branch_id: branchId,
+        item_id: null,
+      });
+      return r;
+    });
+    return {
+      id: branchOrderId,
+      order_closed: result.orderClosed,
+      refunded_amount: result.refundedAmount.toNumber(),
+    };
+  }
+
+  // PDR-028: staff/owner cancellation of a SINGLE item - same
+  // PLACED/PREPARING window and reason rule as the whole-order action
+  // above.
+  @Post('branches/:branchId/orders/:branchOrderId/items/:itemId/cancel')
+  @UseInterceptors(IdempotencyInterceptor)
+  async cancelItem(
+    @Param('vendorId') vendorId: string,
+    @Param('branchId') branchId: string,
+    @Param('branchOrderId') branchOrderId: string,
+    @Param('itemId') itemId: string,
+    @Body() dto: StaffCancelBranchOrderDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
+  ) {
+    const result = await this.prisma.$transaction(async (tx) => {
+      const order = await this.lockAndRequireStatus(
+        tx,
+        vendorId,
+        branchId,
+        branchOrderId,
+        ['PLACED', 'PREPARING'],
+      );
+      this.requireReasonIfPreparing(order.status, dto.reason);
+      const r = await this.cancellation.cancelSingleItem(
+        tx,
+        order,
+        itemId,
+        user.id,
+        'STAFF',
+        dto.reason ?? null,
+        req.correlationId,
+      );
+      await this.notifyCustomer(tx, branchOrderId, 'branch_order.cancelled', {
+        branch_order_id: branchOrderId,
+        vendor_id: vendorId,
+        branch_id: branchId,
+        item_id: itemId,
+      });
+      return r;
+    });
+    return {
+      id: branchOrderId,
+      item_id: itemId,
+      order_closed: result.orderClosed,
+      refunded_amount: result.refundedAmount.toNumber(),
+    };
+  }
+
+  /** PDR-028: "after preparation ... staff may cancel ... after
+   * external contact" - the reason is this cancellation's own
+   * auditable record of that contact, so it is mandatory once
+   * preparation has started, optional (matching the customer's own
+   * window) while still PLACED. */
+  private requireReasonIfPreparing(
+    status: string,
+    reason: string | undefined,
+  ): void {
+    if (status === 'PREPARING' && (!reason || reason.trim().length < 10)) {
+      throw new ConflictException({
+        code: 'CANCELLATION_REASON_REQUIRED',
+        message:
+          'A reason (10-1000 characters) is required to cancel an order that has already started preparation',
+      });
+    }
+  }
+
+  // PDR-027: staff reports a failed delivery attempt. First failure:
+  // rests at DELIVERY_FAILED (reschedulable by the customer). Second
+  // failure: COD finalizes straight to CANCELLED in this same call;
+  // ONLINE rests at DELIVERY_FAILED again, awaiting the customer's own
+  // refund request.
+  @Post('branches/:branchId/orders/:branchOrderId/mark-delivery-failed')
+  @UseInterceptors(IdempotencyInterceptor)
+  async markDeliveryFailed(
+    @Param('vendorId') vendorId: string,
+    @Param('branchId') branchId: string,
+    @Param('branchOrderId') branchOrderId: string,
+    @Body() dto: MarkDeliveryFailedDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
+  ) {
+    const outcome = await this.prisma.$transaction(async (tx) => {
+      const order = await this.lockAndRequireStatus(
+        tx,
+        vendorId,
+        branchId,
+        branchOrderId,
+        ['SENT'],
+      );
+      if (order.fulfilmentMethod !== 'DELIVERY') {
+        throw new ConflictException({
+          code: 'DELIVERY_FAILURE_NOT_APPLICABLE',
+          message: 'Only a DELIVERY order can have a failed delivery attempt',
+        });
+      }
+      const isSecondFailure = order.deliveryAttemptCount >= 1;
+
+      let status: string;
+      if (isSecondFailure && order.paymentMethod === 'COD') {
+        // COD, second failure: finalizes straight to CANCELLED -
+        // every still-active item cancelled and its stock released
+        // (no refund row - nothing was ever charged), via the SAME
+        // cancellation primitive every other closing action uses, not
+        // a bare status write.
+        await this.cancellation.finalizeCodSecondDeliveryFailure(
+          tx,
+          order,
+          user.id,
+          req.correlationId,
+        );
+        status = 'CANCELLED';
+      } else {
+        // First failure (any payment method), or second failure
+        // ONLINE (rests here awaiting the customer's own refund
+        // request) - a plain status+counter write, no item/stock
+        // change yet.
+        const result = await this.branchOrderService.transition(
+          tx,
+          branchOrderId,
+          'DELIVERY_FAILED',
+          user.id,
+          req.correlationId,
+          {
+            deliveryAttemptCount: { increment: 1 },
+            deliveryFailedAt: new Date(),
+            ...(dto.reason !== undefined
+              ? { cancellationReason: dto.reason }
+              : {}),
+          },
+        );
+        status = result.status;
+      }
+      await this.notifyCustomer(
+        tx,
+        branchOrderId,
+        'branch_order.delivery_failed',
+        {
+          branch_order_id: branchOrderId,
+          vendor_id: vendorId,
+          branch_id: branchId,
+        },
+      );
+      return status;
+    });
+    return { id: branchOrderId, status: outcome };
+  }
+
+  // PDR-027: staff/owner approves a REFUND_REQUESTED order - every
+  // still-active item + the delivery fee refunded in one atomic
+  // finalize, same as any other full-order resolution.
+  @Post('branches/:branchId/orders/:branchOrderId/approve-refund')
+  @UseInterceptors(IdempotencyInterceptor)
+  async approveRefund(
+    @Param('vendorId') vendorId: string,
+    @Param('branchId') branchId: string,
+    @Param('branchOrderId') branchOrderId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
+  ) {
+    const result = await this.prisma.$transaction(async (tx) => {
+      const order = await this.lockAndRequireStatus(
+        tx,
+        vendorId,
+        branchId,
+        branchOrderId,
+        ['REFUND_REQUESTED'],
+      );
+      const r = await this.cancellation.approveRequestedRefund(
+        tx,
+        order,
+        user.id,
+        req.correlationId,
+      );
+      await this.notifyCustomer(
+        tx,
+        branchOrderId,
+        'branch_order.refund_approved',
+        {
+          branch_order_id: branchOrderId,
+          vendor_id: vendorId,
+          branch_id: branchId,
+        },
+      );
+      return r;
+    });
+    return {
+      id: branchOrderId,
+      order_closed: result.orderClosed,
+      refunded_amount: result.refundedAmount.toNumber(),
+    };
   }
 }

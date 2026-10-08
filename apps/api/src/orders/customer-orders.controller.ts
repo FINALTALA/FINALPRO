@@ -8,6 +8,7 @@ import {
   Post,
   Req,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { Request } from 'express';
 import { Prisma } from '../../generated/prisma/client';
@@ -17,10 +18,20 @@ import {
   AuthenticatedUser,
   SessionAuthGuard,
 } from '../auth/session-auth.guard';
+import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
 import { OutboxEventService } from '../outbox/outbox-event.service';
+import { BranchOrderCancellationService } from './branch-order-cancellation.service';
+import {
+  computeAmountDue,
+  computeAmountRefunded,
+  computeRemainingRefundable,
+} from './branch-order-money.util';
+import { BranchOrderRescheduleService } from './branch-order-reschedule.service';
 import { BranchOrderService } from './branch-order.service';
+import { CancelBranchOrderDto } from './dto/cancel-branch-order.dto';
 import { ReportNotReceivedDto } from './dto/report-not-received.dto';
+import { RescheduleBranchOrderDto } from './dto/reschedule-branch-order.dto';
 import { FulfilmentReconciliationService } from './fulfilment-reconciliation.service';
 
 function minutesToTime(minutes: number): string {
@@ -49,11 +60,16 @@ const ORDER_INCLUDE = {
       },
     },
   },
+  refunds: true,
 } as const;
 
 type OrderRow = Prisma.BranchOrderGetPayload<{ include: typeof ORDER_INCLUDE }>;
 
 function orderDto(o: OrderRow) {
+  const amountRefunded = computeAmountRefunded(o.refunds);
+  const hasDeliveryFeeRefund = o.refunds.some(
+    (r) => r.reason === 'DELIVERY_FEE',
+  );
   return {
     id: o.id,
     vendor_id: o.vendorId,
@@ -64,17 +80,46 @@ function orderDto(o: OrderRow) {
     status: o.status,
     fulfilment_method: o.fulfilmentMethod,
     payment_method: o.paymentMethod,
+    delivery_attempt_count: o.deliveryAttemptCount,
     items: o.items.map((i) => ({
+      id: i.id,
       offer_variant_id: i.offerVariantId,
       title_ar: i.offerVariant.vendorOffer.titleAr,
       title_en: i.offerVariant.vendorOffer.titleEn,
       seller_sku: i.offerVariant.sellerSku,
       quantity: i.quantity,
       unit_price: Number(i.unitPrice),
+      cancelled_at: i.cancelledAt?.toISOString() ?? null,
     })),
+    // Sprint 20a (review-round requirement): subtotal/delivery_fee/
+    // total are ALWAYS the original, immutable values - never
+    // recomputed after a cancellation. amount_due/amount_refunded/
+    // amount_refundable_remaining are computed fresh on every read
+    // instead (branch-order-money.util.ts).
     subtotal: Number(o.subtotal),
     delivery_fee: o.deliveryFee !== null ? Number(o.deliveryFee) : null,
     total: Number(o.total),
+    amount_due:
+      o.paymentMethod === 'COD'
+        ? computeAmountDue(
+            o.total,
+            o.items,
+            hasDeliveryFeeRefund,
+            o.deliveryFee,
+          ).toNumber()
+        : null,
+    amount_refunded:
+      o.paymentMethod === 'ONLINE' ? amountRefunded.toNumber() : null,
+    amount_refundable_remaining:
+      o.paymentMethod === 'ONLINE'
+        ? computeRemainingRefundable(o.total, o.refunds).toNumber()
+        : null,
+    cancellation_reason: o.cancellationReason,
+    delivery_failed_at: o.deliveryFailedAt?.toISOString() ?? null,
+    slot_missed_at: o.slotMissedAt?.toISOString() ?? null,
+    cod_collected_amount:
+      o.codCollectedAmount !== null ? Number(o.codCollectedAmount) : null,
+    cod_collected_at: o.codCollectedAt?.toISOString() ?? null,
     scheduled_date: o.scheduledDate
       ? o.scheduledDate.toISOString().slice(0, 10)
       : null,
@@ -125,6 +170,8 @@ export class CustomerOrdersController {
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
     private readonly branchOrderService: BranchOrderService,
+    private readonly cancellation: BranchOrderCancellationService,
+    private readonly reschedule: BranchOrderRescheduleService,
     private readonly reconciliation: FulfilmentReconciliationService,
     private readonly outbox: OutboxEventService,
   ) {}
@@ -316,5 +363,278 @@ export class CustomerOrdersController {
 
       return { reported_at: reportedAt.toISOString(), already_reported: false };
     });
+  }
+
+  /** Branch employees (ACTIVE, this branch) + every OWNER of the
+   * vendor - the "branch" half of this sprint's recipient table
+   * (cancellation/reschedule/refund-requested events). */
+  private async notifyBranch(
+    tx: Prisma.TransactionClient,
+    vendorId: string,
+    branchId: string,
+    eventType: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    const recipients = await tx.vendorUser.findMany({
+      where: {
+        vendorId,
+        status: 'ACTIVE',
+        OR: [{ role: 'OWNER' }, { role: 'BRANCH_EMPLOYEE', branchId }],
+      },
+      select: { userId: true },
+    });
+    for (const r of recipients) {
+      await this.outbox.enqueue(
+        { eventType, payload: { ...payload, recipient_user_id: r.userId } },
+        tx,
+      );
+    }
+  }
+
+  // PDR-028: the customer's own pre-prep self-service cancellation -
+  // the WHOLE order (every still-active item + the delivery fee, in
+  // one atomic finalize - see BranchOrderCancellationService's own
+  // top comment). PLACED only - once preparation starts, only staff
+  // can cancel (see BranchOrdersStaffController).
+  @Post(':branchOrderId/cancel')
+  @UseInterceptors(IdempotencyInterceptor)
+  async cancelOrder(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('branchOrderId') branchOrderId: string,
+    @Body() dto: CancelBranchOrderDto,
+    @Req() req: Request,
+  ) {
+    const customerId = await this.requireCustomerId(user);
+    const result = await this.prisma.$transaction(async (tx) => {
+      const locked = await this.lockAndRequireOwnStatus(
+        tx,
+        customerId,
+        branchOrderId,
+        ['PLACED'],
+      );
+      const r = await this.cancellation.cancelWholeOrder(
+        tx,
+        locked,
+        user.id,
+        'CUSTOMER_REQUEST',
+        dto.reason ?? null,
+        req.correlationId,
+      );
+      await this.notifyBranch(
+        tx,
+        locked.vendorId,
+        locked.branchId,
+        'branch_order.cancelled',
+        {
+          branch_order_id: branchOrderId,
+          vendor_id: locked.vendorId,
+          branch_id: locked.branchId,
+          item_id: null,
+        },
+      );
+      return r;
+    });
+    return {
+      id: branchOrderId,
+      order_closed: result.orderClosed,
+      refunded_amount: result.refundedAmount.toNumber(),
+    };
+  }
+
+  // PDR-028: the customer's own pre-prep cancellation of a SINGLE
+  // item. If other items remain active, the order itself is
+  // untouched; if this was the last one, the whole order closes (see
+  // BranchOrderCancellationService.cancelSingleItem's own comment).
+  @Post(':branchOrderId/items/:itemId/cancel')
+  @UseInterceptors(IdempotencyInterceptor)
+  async cancelItem(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('branchOrderId') branchOrderId: string,
+    @Param('itemId') itemId: string,
+    @Body() dto: CancelBranchOrderDto,
+    @Req() req: Request,
+  ) {
+    const customerId = await this.requireCustomerId(user);
+    const result = await this.prisma.$transaction(async (tx) => {
+      const locked = await this.lockAndRequireOwnStatus(
+        tx,
+        customerId,
+        branchOrderId,
+        ['PLACED'],
+      );
+      const r = await this.cancellation.cancelSingleItem(
+        tx,
+        locked,
+        itemId,
+        user.id,
+        'CUSTOMER_REQUEST',
+        dto.reason ?? null,
+        req.correlationId,
+      );
+      await this.notifyBranch(
+        tx,
+        locked.vendorId,
+        locked.branchId,
+        'branch_order.cancelled',
+        {
+          branch_order_id: branchOrderId,
+          vendor_id: locked.vendorId,
+          branch_id: locked.branchId,
+          item_id: itemId,
+        },
+      );
+      return r;
+    });
+    return {
+      id: branchOrderId,
+      item_id: itemId,
+      order_closed: result.orderClosed,
+      refunded_amount: result.refundedAmount.toNumber(),
+    };
+  }
+
+  // PDR-025/027: the customer's own reschedule, usable in both
+  // triggers - a PLACED/PREPARING order past its slot deadline
+  // (slotMissedAt set), or a DELIVERY_FAILED order at its first
+  // (only) reschedulable attempt. See BranchOrderRescheduleService's
+  // own comment for the full lock/capacity mechanics.
+  @Post(':branchOrderId/reschedule')
+  @UseInterceptors(IdempotencyInterceptor)
+  async rescheduleOrder(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('branchOrderId') branchOrderId: string,
+    @Body() dto: RescheduleBranchOrderDto,
+    @Req() req: Request,
+  ) {
+    const customerId = await this.requireCustomerId(user);
+    const result = await this.prisma.$transaction(async (tx) => {
+      const locked = await this.lockAndRequireOwnStatus(
+        tx,
+        customerId,
+        branchOrderId,
+        ['PLACED', 'PREPARING', 'DELIVERY_FAILED'],
+      );
+      if (locked.status !== 'DELIVERY_FAILED' && locked.slotMissedAt === null) {
+        throw new ConflictException({
+          code: 'RESCHEDULE_NOT_APPLICABLE',
+          message: 'This order is not currently eligible for rescheduling',
+        });
+      }
+      if (
+        locked.status === 'DELIVERY_FAILED' &&
+        locked.deliveryAttemptCount >= 2
+      ) {
+        throw new ConflictException({
+          code: 'RESCHEDULE_WINDOW_CLOSED',
+          message:
+            'Rescheduling is no longer available after a second failed delivery attempt',
+        });
+      }
+      const outcome = await this.reschedule.reschedule(
+        tx,
+        locked,
+        dto.delivery_window_id,
+        dto.scheduled_date,
+        user.id,
+        req.correlationId,
+      );
+      await this.notifyBranch(
+        tx,
+        locked.vendorId,
+        locked.branchId,
+        'branch_order.rescheduled',
+        {
+          branch_order_id: branchOrderId,
+          vendor_id: locked.vendorId,
+          branch_id: locked.branchId,
+        },
+      );
+      return outcome;
+    });
+    return {
+      id: branchOrderId,
+      delivery_window_id: result.deliveryWindowId,
+      scheduled_date: result.scheduledDate.toISOString().slice(0, 10),
+    };
+  }
+
+  // PDR-027: after a second failed delivery attempt (ONLINE only),
+  // the customer may request a refund - staff/owner approval is the
+  // only way out from here (see BranchOrdersStaffController.approveRefund).
+  @Post(':branchOrderId/request-refund')
+  @UseInterceptors(IdempotencyInterceptor)
+  async requestRefund(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('branchOrderId') branchOrderId: string,
+    @Req() req: Request,
+  ) {
+    const customerId = await this.requireCustomerId(user);
+    await this.prisma.$transaction(async (tx) => {
+      const locked = await this.lockAndRequireOwnStatus(
+        tx,
+        customerId,
+        branchOrderId,
+        ['DELIVERY_FAILED'],
+      );
+      if (
+        locked.paymentMethod !== 'ONLINE' ||
+        locked.deliveryAttemptCount < 2
+      ) {
+        throw new ConflictException({
+          code: 'REFUND_REQUEST_NOT_APPLICABLE',
+          message:
+            'A refund request is only available for an ONLINE order after a second failed delivery attempt',
+        });
+      }
+      await this.branchOrderService.transition(
+        tx,
+        branchOrderId,
+        'REFUND_REQUESTED',
+        user.id,
+        req.correlationId,
+      );
+      await this.notifyBranch(
+        tx,
+        locked.vendorId,
+        locked.branchId,
+        'branch_order.refund_requested',
+        {
+          branch_order_id: branchOrderId,
+          vendor_id: locked.vendorId,
+          branch_id: locked.branchId,
+        },
+      );
+    });
+    return { id: branchOrderId, status: 'REFUND_REQUESTED' };
+  }
+
+  /** Shared lock+ownership+status-eligibility check for every write
+   * endpoint above - 404 on a non-owned order (BOLA convention), 409
+   * INVALID_BRANCH_ORDER_TRANSITION-shaped on an ineligible status
+   * (never a silent no-op). */
+  private async lockAndRequireOwnStatus(
+    tx: Prisma.TransactionClient,
+    customerId: string,
+    branchOrderId: string,
+    allowedStatuses: string[],
+  ) {
+    await tx.$queryRaw`SELECT id FROM branch_orders WHERE id = ${branchOrderId} FOR UPDATE`;
+    const order = await tx.branchOrder.findUnique({
+      where: { id: branchOrderId },
+      include: { customerOrder: { select: { customerId: true } } },
+    });
+    if (!order || order.customerOrder.customerId !== customerId) {
+      throw new NotFoundException({
+        code: 'BRANCH_ORDER_NOT_FOUND',
+        message: 'Branch order not found',
+      });
+    }
+    if (!allowedStatuses.includes(order.status)) {
+      throw new ConflictException({
+        code: 'INVALID_BRANCH_ORDER_TRANSITION',
+        message: `This action is not available while the order is ${order.status}`,
+      });
+    }
+    return order;
   }
 }

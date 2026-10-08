@@ -3,15 +3,17 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { apiFetch, ApiError } from "@/lib/api";
+import { apiFetch, ApiError, newIdempotencyKey } from "@/lib/api";
 import { clearSession, getSessionToken } from "@/lib/session";
 
 interface OrderItem {
+  id: string;
   offer_variant_id: string;
   title_ar: string;
   title_en: string;
   quantity: number;
   unit_price: number;
+  cancelled_at: string | null;
 }
 
 interface DeliveryWindowInfo {
@@ -40,10 +42,19 @@ interface OrderDto {
   status: string;
   fulfilment_method: string;
   payment_method: string;
+  delivery_attempt_count: number;
   items: OrderItem[];
   subtotal: number;
   delivery_fee: number | null;
   total: number;
+  amount_due: number | null;
+  amount_refunded: number | null;
+  amount_refundable_remaining: number | null;
+  cancellation_reason: string | null;
+  delivery_failed_at: string | null;
+  slot_missed_at: string | null;
+  cod_collected_amount: number | null;
+  cod_collected_at: string | null;
   scheduled_date: string | null;
   delivery_window: DeliveryWindowInfo | null;
   address: AddressInfo | null;
@@ -64,6 +75,8 @@ const STATUS_LABELS: Record<string, string> = {
   COMPLETED: "مكتمل",
   CANCELLED: "ملغى",
   REFUNDED: "مسترد",
+  DELIVERY_FAILED: "تعذّر التوصيل",
+  REFUND_REQUESTED: "طلب استرداد - بانتظار المتجر",
 };
 
 const DAY_LABELS = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
@@ -78,6 +91,9 @@ export default function OrdersPage() {
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [reportDrafts, setReportDrafts] = useState<Record<string, string>>({});
+  const [rescheduleDrafts, setRescheduleDrafts] = useState<
+    Record<string, { windowId: string; date: string }>
+  >({});
 
   function load() {
     apiFetch<OrderDto[]>("/customers/me/orders")
@@ -137,6 +153,82 @@ export default function OrdersPage() {
     }
   }
 
+  // Sprint 20a (PDR-028/025/027): cancel/cancel-item/reschedule/
+  // request-refund all require an Idempotency-Key (financial/capacity-
+  // locking writes) - every call below sends a fresh one.
+  async function cancelWholeOrder(orderId: string) {
+    setBusyId(orderId);
+    setError(null);
+    try {
+      await apiFetch(`/customers/me/orders/${orderId}/cancel`, {
+        method: "POST",
+        idempotencyKey: newIdempotencyKey("customer-cancel"),
+      });
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "تعذّر إلغاء الطلب");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function cancelItem(orderId: string, itemId: string) {
+    setBusyId(orderId);
+    setError(null);
+    try {
+      await apiFetch(`/customers/me/orders/${orderId}/items/${itemId}/cancel`, {
+        method: "POST",
+        idempotencyKey: newIdempotencyKey("customer-cancel-item"),
+      });
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "تعذّر إلغاء هذا المنتج");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function rescheduleOrder(orderId: string) {
+    const draft = rescheduleDrafts[orderId];
+    if (!draft?.windowId.trim() || !draft?.date.trim()) {
+      setError("يرجى إدخال رقم نافذة التوصيل والتاريخ الجديدين");
+      return;
+    }
+    setBusyId(orderId);
+    setError(null);
+    try {
+      await apiFetch(`/customers/me/orders/${orderId}/reschedule`, {
+        method: "POST",
+        body: {
+          delivery_window_id: draft.windowId.trim(),
+          scheduled_date: draft.date.trim(),
+        },
+        idempotencyKey: newIdempotencyKey("customer-reschedule"),
+      });
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "تعذّر تحديد موعد جديد");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function requestRefund(orderId: string) {
+    setBusyId(orderId);
+    setError(null);
+    try {
+      await apiFetch(`/customers/me/orders/${orderId}/request-refund`, {
+        method: "POST",
+        idempotencyKey: newIdempotencyKey("customer-request-refund"),
+      });
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "تعذّر إرسال طلب الاسترداد");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   if (error && !orders) {
     return (
       <div className="page-shell">
@@ -179,8 +271,24 @@ export default function OrdersPage() {
 
               <div style={{ marginTop: 10 }}>
                 {o.items.map((it) => (
-                  <div key={it.offer_variant_id} className="muted">
-                    {it.title_ar} × {it.quantity} — {it.unit_price} ₪
+                  <div
+                    key={it.id}
+                    className="muted"
+                    style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}
+                  >
+                    <span style={{ textDecoration: it.cancelled_at ? "line-through" : "none" }}>
+                      {it.title_ar} × {it.quantity} — {it.unit_price} ₪
+                      {it.cancelled_at ? " (أُلغي)" : ""}
+                    </span>
+                    {o.status === "PLACED" && !it.cancelled_at && o.items.length > 1 && (
+                      <button
+                        className="button-link"
+                        disabled={busyId === o.id}
+                        onClick={() => cancelItem(o.id, it.id)}
+                      >
+                        إلغاء هذا المنتج
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -216,6 +324,99 @@ export default function OrdersPage() {
                 </span>
                 <span className="product-card-price">{o.total} ₪</span>
               </div>
+              {o.payment_method === "COD" && o.amount_due !== null && (
+                <div className="muted">المبلغ المطلوب تحصيله عند الاستلام: {o.amount_due} ₪</div>
+              )}
+              {o.payment_method === "ONLINE" && (o.amount_refunded ?? 0) > 0 && (
+                <div className="muted">
+                  تم استرداد {o.amount_refunded} ₪
+                  {o.amount_refundable_remaining ? ` — المتبقي ${o.amount_refundable_remaining} ₪` : ""}
+                </div>
+              )}
+              {o.cancellation_reason && (
+                <div className="muted">سبب الإلغاء: {o.cancellation_reason}</div>
+              )}
+
+              {o.status === "DELIVERY_FAILED" && (
+                <div className="error-banner" style={{ marginTop: 10 }}>
+                  تعذّر توصيل الطلب (محاولة {o.delivery_attempt_count}).
+                  {o.delivery_attempt_count < 2
+                    ? " يمكنك تحديد موعد جديد خلال 48 ساعة، وإلا سيُلغى/يُسترد تلقائياً."
+                    : o.payment_method === "ONLINE"
+                      ? " يمكنك الآن طلب استرداد المبلغ."
+                      : ""}
+                </div>
+              )}
+
+              {o.status === "PLACED" && (
+                <div style={{ marginTop: 12 }}>
+                  <button
+                    className="button button-secondary"
+                    disabled={busyId === o.id}
+                    onClick={() => cancelWholeOrder(o.id)}
+                  >
+                    إلغاء الطلب
+                  </button>
+                </div>
+              )}
+
+              {((o.slot_missed_at && (o.status === "PLACED" || o.status === "PREPARING")) ||
+                (o.status === "DELIVERY_FAILED" && o.delivery_attempt_count < 2)) && (
+                <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div className="muted">تحديد موعد توصيل جديد:</div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <input
+                      placeholder="رقم نافذة التوصيل"
+                      style={{ flex: 1 }}
+                      value={rescheduleDrafts[o.id]?.windowId ?? ""}
+                      onChange={(e) =>
+                        setRescheduleDrafts((prev) => ({
+                          ...prev,
+                          [o.id]: { ...(prev[o.id] ?? { windowId: "", date: "" }), windowId: e.target.value },
+                        }))
+                      }
+                    />
+                    <input
+                      placeholder="YYYY-MM-DD"
+                      style={{ flex: 1 }}
+                      value={rescheduleDrafts[o.id]?.date ?? ""}
+                      onChange={(e) =>
+                        setRescheduleDrafts((prev) => ({
+                          ...prev,
+                          [o.id]: { ...(prev[o.id] ?? { windowId: "", date: "" }), date: e.target.value },
+                        }))
+                      }
+                    />
+                    <button
+                      className="button"
+                      disabled={busyId === o.id}
+                      onClick={() => rescheduleOrder(o.id)}
+                    >
+                      تأكيد الموعد الجديد
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {o.status === "DELIVERY_FAILED" &&
+                o.delivery_attempt_count >= 2 &&
+                o.payment_method === "ONLINE" && (
+                  <div style={{ marginTop: 12 }}>
+                    <button
+                      className="button"
+                      disabled={busyId === o.id}
+                      onClick={() => requestRefund(o.id)}
+                    >
+                      طلب استرداد المبلغ
+                    </button>
+                  </div>
+                )}
+
+              {o.status === "REFUND_REQUESTED" && (
+                <div className="muted" style={{ marginTop: 10 }}>
+                  تم إرسال طلب الاسترداد، بانتظار موافقة المتجر.
+                </div>
+              )}
 
               {awaitingConfirm && !hasOpenReport && (
                 <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>

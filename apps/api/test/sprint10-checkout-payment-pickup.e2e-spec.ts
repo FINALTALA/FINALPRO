@@ -1389,10 +1389,11 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       expect(list.body[0]).not.toHaveProperty('address');
       expect(list.body[0]).not.toHaveProperty('customer_address');
       // Codex review round 2 (fix #6): the employee DTO must be
-      // genuinely minimal - total, payment_method, and created_at are
-      // all owner-only fields, never exposed to a BRANCH_EMPLOYEE.
+      // genuinely minimal - total and created_at are owner-only
+      // fields, never exposed to a BRANCH_EMPLOYEE. Sprint 20a
+      // (review-round requirement): payment_method is no longer in
+      // that list - see the assertion below's own updated comment.
       expect(list.body[0]).not.toHaveProperty('total');
-      expect(list.body[0]).not.toHaveProperty('payment_method');
       expect(list.body[0]).not.toHaveProperty('created_at');
       // Sprint 11 (RB-FUL-002, PDR-009): `id`, `status`, and
       // `fulfilment_method` are back - round 4 (this same file, its
@@ -1406,16 +1407,24 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       // has_open_not_received_report (Codex review on commit f940a80):
       // the minimal operational signal for gating the employee's own
       // "re-request confirmation" button - never the report's
-      // timestamp or reason text, which stay owner-only.
+      // timestamp or reason text, which stay owner-only. Sprint 20a
+      // (review-round requirement): payment_method/amount_due/
+      // cod_collected_amount are now ALSO present - COD collection
+      // (folded into mark-delivered/pickup-handover) cannot function
+      // without the employee knowing it IS a COD order and exactly
+      // how much to collect - see employeeOrderDto's own comment.
       expect(Object.keys(list.body[0]).sort()).toEqual(
         [
           'id',
           'status',
           'fulfilment_method',
+          'payment_method',
           'customer_name',
           'customer_phone',
           'pickup_code',
           'has_open_not_received_report',
+          'amount_due',
+          'cod_collected_amount',
         ].sort(),
       );
 

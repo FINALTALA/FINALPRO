@@ -114,6 +114,59 @@ const EVENT_TYPE_MAP: Record<string, EventMapping> = {
     targetType: 'STOCK',
     targetIdField: 'offer_variant_id',
   },
+  // Sprint 20a (PDR-025/027/028): fulfilment exceptions/cancellation/
+  // refund. 'branch_order.cancelled' covers every cancellation trigger
+  // (customer, staff, admin forced, or an automatic 48h timeout that
+  // resolves to CANCELLED for a COD order) - the customer/branch-facing
+  // message is the same regardless of who/what initiated it.
+  'branch_order.cancelled': {
+    type: 'ORDER_CANCELLED',
+    targetType: 'BRANCH_ORDER',
+    targetIdField: 'branch_order_id',
+  },
+  'branch_order.rescheduled': {
+    type: 'ORDER_RESCHEDULED',
+    targetType: 'BRANCH_ORDER',
+    targetIdField: 'branch_order_id',
+  },
+  'branch_order.delivery_failed': {
+    type: 'DELIVERY_FAILED',
+    targetType: 'BRANCH_ORDER',
+    targetIdField: 'branch_order_id',
+  },
+  'branch_order.refund_requested': {
+    type: 'REFUND_REQUESTED',
+    targetType: 'BRANCH_ORDER',
+    targetIdField: 'branch_order_id',
+  },
+  // The staff-approved REFUND_REQUESTED->REFUNDED resolution - a
+  // human-approved refund decision from the customer's own point of
+  // view. (Review-round fix, 2026-10-08: the PLATFORM_ADMIN manual
+  // refund this event type also used to cover was removed from S20a
+  // entirely - see admin-branch-orders.controller.ts's own comment.)
+  'branch_order.refund_approved': {
+    type: 'REFUND_APPROVED',
+    targetType: 'BRANCH_ORDER',
+    targetIdField: 'branch_order_id',
+  },
+  // The sweep's own PDR-025/027 48h-timeout outcome when it resolves to
+  // REFUNDED (ONLINE) - no human approved this one, so it gets its own
+  // type rather than reusing REFUND_APPROVED.
+  'branch_order.refund_automatic': {
+    type: 'REFUND_AUTOMATIC',
+    targetType: 'BRANCH_ORDER',
+    targetIdField: 'branch_order_id',
+  },
+  'branch_order.slot_missed': {
+    type: 'SLOT_MISSED',
+    targetType: 'BRANCH_ORDER',
+    targetIdField: 'branch_order_id',
+  },
+  'branch_order.prep_reminder': {
+    type: 'PREP_REMINDER',
+    targetType: 'BRANCH_ORDER',
+    targetIdField: 'branch_order_id',
+  },
 };
 
 const FOLLOWER_EVENT_TYPE_MAP: Record<

@@ -66,6 +66,15 @@ export const SUSPENDED_ALLOW_ROUTES: readonly string[] = [
   'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/mark-delivered',
   'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/pickup-handover',
   'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/rerequest-confirmation',
+  // Sprint 20a: cancellation/refund/delivery-failure resolution on an
+  // EXISTING order is still "in-flight order fulfilment" (L-23) -
+  // resolving an order a suspended store already took is never new
+  // footprint, the same reasoning as every other fulfilment action
+  // above.
+  'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/cancel',
+  'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/items/:itemId/cancel',
+  'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/mark-delivery-failed',
+  'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/approve-refund',
   // Reads.
   'GET vendors/:vendorId',
   'GET vendors/:vendorId/branches',

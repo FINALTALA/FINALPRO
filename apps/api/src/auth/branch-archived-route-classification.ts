@@ -64,6 +64,12 @@ export const BRANCH_ARCHIVED_ALLOW_ROUTES: readonly string[] = [
   'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/mark-delivered',
   'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/pickup-handover',
   'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/rerequest-confirmation',
+  // Sprint 20a: same "let an existing order finish" reasoning as the
+  // fulfilment actions above.
+  'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/cancel',
+  'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/items/:itemId/cancel',
+  'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/mark-delivery-failed',
+  'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/approve-refund',
   'GET vendors/:vendorId/branches/:branchId/verification-evidence',
   'GET vendors/:vendorId/branches/:branchId/delivery-windows',
   'GET vendors/:vendorId/branches/:branchId/operating-hours',

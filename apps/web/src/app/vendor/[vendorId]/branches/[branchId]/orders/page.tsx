@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { apiFetch, ApiError } from "@/lib/api";
+import { apiFetch, ApiError, newIdempotencyKey } from "@/lib/api";
 import { clearSession, getSessionToken } from "@/lib/session";
 
 // Sprint 10 (RB-ORD-004, PDR-009): a branch employee's view of this
@@ -35,6 +35,13 @@ interface OrderRow {
   total?: number;
   not_received_reported_at?: string | null;
   has_open_not_received_report?: boolean;
+  // Sprint 20a (PDR-025/027/028): amount_due/cod_collected_amount are
+  // present for BOTH owner and employee (COD collection needs both to
+  // act); cancellation_reason is owner-only, matching the server's own
+  // minimal-employee-surface convention.
+  amount_due?: number | null;
+  cod_collected_amount?: number | null;
+  cancellation_reason?: string | null;
 }
 
 function openReportFor(o: OrderRow): boolean {
@@ -50,6 +57,8 @@ const STATUS_LABELS: Record<string, string> = {
   COMPLETED: "مكتمل",
   CANCELLED: "ملغى",
   REFUNDED: "مسترد",
+  DELIVERY_FAILED: "فشل التوصيل",
+  REFUND_REQUESTED: "بانتظار اعتماد الاسترداد",
 };
 
 // A branch employee's view of their OWN branch's orders only -
@@ -75,6 +84,7 @@ export default function BranchOrdersPage() {
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [pickupCodeDrafts, setPickupCodeDrafts] = useState<Record<string, string>>({});
+  const [reasonDrafts, setReasonDrafts] = useState<Record<string, string>>({});
 
   function load() {
     apiFetch<OrderRow[]>(
@@ -100,13 +110,21 @@ export default function BranchOrdersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.vendorId, params.branchId, router]);
 
+  // Sprint 20a: mark-delivered/pickup-handover now require an
+  // Idempotency-Key header (financial COD-collection writes) - every
+  // action below sends one, not just the new ones, since a missing
+  // header 400s unconditionally on an endpoint that requires it.
   async function runAction(orderId: string, action: string, body?: Record<string, unknown>) {
     setBusyId(orderId);
     setError(null);
     try {
       await apiFetch(
         `/vendors/${params.vendorId}/branches/${params.branchId}/orders/${orderId}/${action}`,
-        { method: "POST", body: body ?? {} },
+        {
+          method: "POST",
+          body: body ?? {},
+          idempotencyKey: newIdempotencyKey(`staff-${action}`),
+        },
       );
       load();
     } catch (err) {
@@ -114,6 +132,15 @@ export default function BranchOrdersPage() {
     } finally {
       setBusyId(null);
     }
+  }
+
+  function cancelOrder(o: OrderRow) {
+    const reason = (reasonDrafts[o.id] ?? "").trim();
+    if (o.status === "PREPARING" && reason.length < 10) {
+      setError("يلزم إدخال سبب الإلغاء (10 أحرف على الأقل) بعد بدء التجهيز");
+      return;
+    }
+    runAction(o.id, "cancel", reason ? { reason } : {});
   }
 
   if (error && !orders) {
@@ -159,6 +186,15 @@ export default function BranchOrdersPage() {
             {o.pickup_code && (
               <div style={{ fontWeight: 600, marginTop: 4 }}>رمز الاستلام: {o.pickup_code}</div>
             )}
+            {o.amount_due != null && (
+              <div className="muted">المبلغ المطلوب تحصيله (عند الاستلام): {o.amount_due} ₪</div>
+            )}
+            {o.cod_collected_amount != null && (
+              <div className="muted">تم تحصيل: {o.cod_collected_amount} ₪</div>
+            )}
+            {o.cancellation_reason && (
+              <div className="muted">سبب الإلغاء: {o.cancellation_reason}</div>
+            )}
 
             <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
               {o.status === "PLACED" && (
@@ -169,6 +205,27 @@ export default function BranchOrdersPage() {
                 >
                   بدء التجهيز
                 </button>
+              )}
+
+              {(o.status === "PLACED" || o.status === "PREPARING") && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {o.status === "PREPARING" && (
+                    <input
+                      placeholder="سبب الإلغاء (مطلوب بعد بدء التجهيز، 10 أحرف على الأقل)"
+                      value={reasonDrafts[o.id] ?? ""}
+                      onChange={(e) =>
+                        setReasonDrafts((prev) => ({ ...prev, [o.id]: e.target.value }))
+                      }
+                    />
+                  )}
+                  <button
+                    className="button button-secondary"
+                    disabled={busyId === o.id}
+                    onClick={() => cancelOrder(o)}
+                  >
+                    إلغاء الطلب
+                  </button>
+                </div>
               )}
 
               {o.status === "PREPARING" && o.fulfilment_method === "DELIVERY" && (
@@ -188,6 +245,26 @@ export default function BranchOrdersPage() {
                   onClick={() => runAction(o.id, "mark-delivered")}
                 >
                   تم التوصيل
+                </button>
+              )}
+
+              {o.status === "SENT" && (
+                <button
+                  className="button-link"
+                  disabled={busyId === o.id}
+                  onClick={() => runAction(o.id, "mark-delivery-failed")}
+                >
+                  تعذّر التوصيل
+                </button>
+              )}
+
+              {o.status === "REFUND_REQUESTED" && (
+                <button
+                  className="button"
+                  disabled={busyId === o.id}
+                  onClick={() => runAction(o.id, "approve-refund")}
+                >
+                  اعتماد الاسترداد
                 </button>
               )}
 
