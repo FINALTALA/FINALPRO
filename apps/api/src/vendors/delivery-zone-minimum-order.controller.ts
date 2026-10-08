@@ -80,6 +80,22 @@ export class DeliveryZoneMinimumOrderController {
 
   // Idempotency-Key required; AuditLog only on a real change - same
   // convention as BranchMinimumOrderController's own PUT.
+  //
+  // Review-round fix: unlike the branch controller, a region an owner
+  // never touched has NO VendorDeliveryZone row yet - `FOR UPDATE`
+  // cannot lock a row that doesn't exist, so a plain unlocked read of
+  // `existing` had the exact same before/after race as the branch
+  // controller did, PLUS a second hazard: two concurrent first-ever
+  // PUTs for the same (vendorId, region) both seeing no row and both
+  // attempting to create one. The unique constraint on
+  // (vendorId, region) means Postgres would still only ever persist
+  // one final row (no actual duplicate), but without a lock, both
+  // requests' AuditLog writes would claim `before: null`, even though
+  // the second one to commit was really changing the FIRST one's
+  // value. A Postgres advisory lock keyed by (vendorId, region) - same
+  // pattern as inviteStaff's own `pg_advisory_xact_lock` - serializes
+  // the two regardless of whether a row exists yet, so the second
+  // transaction always re-reads what the first one just committed.
   @Put()
   @RequireVendorRole('OWNER')
   @UseInterceptors(IdempotencyInterceptor)
@@ -91,43 +107,52 @@ export class DeliveryZoneMinimumOrderController {
     @Req() req: Request,
   ) {
     const typedRegion = this.requireValidRegion(region);
-    const existing = await this.prisma.vendorDeliveryZone.findUnique({
-      where: { vendorId_region: { vendorId, region: typedRegion } },
-    });
-    const before =
-      existing?.minimumOrderValue != null
-        ? Number(existing.minimumOrderValue)
-        : null;
-    const after = dto.minimum_order_value;
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('finalpro:delivery_zone_minimum:' || ${vendorId} || ':' || ${typedRegion}))`;
+      const existing = await tx.vendorDeliveryZone.findUnique({
+        where: { vendorId_region: { vendorId, region: typedRegion } },
+      });
+      const before =
+        existing?.minimumOrderValue != null
+          ? Number(existing.minimumOrderValue)
+          : null;
+      const after = dto.minimum_order_value;
 
-    if (before === after) {
-      return minimumOrderValueDto(before);
-    }
+      if (before === after) {
+        return minimumOrderValueDto(before);
+      }
 
-    // upsert: a region an owner never touched yet (no row at all,
-    // same lazy-default convention as `enabled`/`fee`) still needs a
-    // row created the first time a minimum is actually set. `enabled`
-    // defaults to its own column default (true) on create, matching
-    // the existing fee/enabled endpoint's own untouched-field
-    // behaviour - this endpoint only ever writes minimumOrderValue.
-    const zone = await this.prisma.vendorDeliveryZone.upsert({
-      where: { vendorId_region: { vendorId, region: typedRegion } },
-      create: {
-        vendorId,
-        region: typedRegion,
-        minimumOrderValue: dto.minimum_order_value,
-      },
-      update: { minimumOrderValue: dto.minimum_order_value },
+      // upsert: a region an owner never touched yet (no row at all,
+      // same lazy-default convention as `enabled`/`fee`) still needs a
+      // row created the first time a minimum is actually set. `enabled`
+      // defaults to its own column default (true) on create, matching
+      // the existing fee/enabled endpoint's own untouched-field
+      // behaviour - this endpoint only ever writes minimumOrderValue.
+      // Safe here (no duplicate-create race) because the advisory lock
+      // above already serializes every concurrent call for this exact
+      // (vendorId, region).
+      const zone = await tx.vendorDeliveryZone.upsert({
+        where: { vendorId_region: { vendorId, region: typedRegion } },
+        create: {
+          vendorId,
+          region: typedRegion,
+          minimumOrderValue: after,
+        },
+        update: { minimumOrderValue: after },
+      });
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'vendor_delivery_zone.minimum_order_value_updated',
+          entityType: 'VendorDeliveryZone',
+          entityId: zone.id,
+          beforeState: { minimum_order_value: before },
+          afterState: { minimum_order_value: after },
+        },
+        tx,
+      );
+      return minimumOrderValueDto(zone.minimumOrderValue);
     });
-    await this.auditLog.record({
-      actorId: user.id,
-      correlationId: req.correlationId,
-      action: 'vendor_delivery_zone.minimum_order_value_updated',
-      entityType: 'VendorDeliveryZone',
-      entityId: zone.id,
-      beforeState: { minimum_order_value: before },
-      afterState: { minimum_order_value: after },
-    });
-    return minimumOrderValueDto(zone.minimumOrderValue);
   }
 }

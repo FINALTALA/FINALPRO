@@ -396,6 +396,122 @@ describe('Sprint 20b - checkout policy: minimum order, notes, terms, conflict bl
       expect(auditAfterReplay).toBe(2); // the one genuine 50->60 change, once
     });
 
+    // Review-round fix: two concurrent PUTs with DIFFERENT target
+    // values must never both compute their `before` from the same
+    // stale read - the AuditLog chain must reflect the real sequence
+    // of changes (whichever request actually committed second must
+    // show the FIRST request's new value as its own `before`, not the
+    // original pre-test value again). This is checked by VALUE, not
+    // by timestamp ordering, since both transactions can commit within
+    // the same database-clock millisecond.
+    it('deterministic concurrency: two concurrent branch-minimum PUTs with different values produce a real before/after chain in AuditLog, never two stale reads', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      await setBranchMinimum(owner, vendorId, branchId, 50).expect(200);
+
+      const [resA, resB] = await Promise.all([
+        setBranchMinimum(owner, vendorId, branchId, 80),
+        setBranchMinimum(owner, vendorId, branchId, 100),
+      ]);
+      expect(resA.status).toBe(200);
+      expect(resB.status).toBe(200);
+
+      const rows = await prisma.auditLog.findMany({
+        where: {
+          entityType: 'StoreBranch',
+          entityId: branchId,
+          action: 'store_branch.minimum_order_value_updated',
+        },
+      });
+      // The initial 50 setup wrote its own row (null -> 50) - only the
+      // two concurrent writes below are asserted on here.
+      const concurrentRows = rows.filter(
+        (r) =>
+          (r.beforeState as { minimum_order_value: number })
+            .minimum_order_value !== null,
+      );
+      expect(concurrentRows).toHaveLength(2);
+      const firstRow = concurrentRows.find(
+        (r) =>
+          (r.beforeState as { minimum_order_value: number })
+            .minimum_order_value === 50,
+      );
+      const secondRow = concurrentRows.find((r) => r !== firstRow);
+      expect(firstRow).toBeDefined();
+      expect(secondRow).toBeDefined();
+      // The exact bug this test exists to catch: the second row's
+      // `before` must chain from the first row's `after`, never from
+      // the original 50 again.
+      expect(
+        (secondRow!.beforeState as { minimum_order_value: number })
+          .minimum_order_value,
+      ).toBe(
+        (firstRow!.afterState as { minimum_order_value: number })
+          .minimum_order_value,
+      );
+
+      const finalBranch = await prisma.storeBranch.findUniqueOrThrow({
+        where: { id: branchId },
+      });
+      expect(Number(finalBranch.minimumOrderValue)).toBe(
+        (secondRow!.afterState as { minimum_order_value: number })
+          .minimum_order_value,
+      );
+    });
+
+    // Same invariant, but for the harder case: a region with NO
+    // VendorDeliveryZone row at all yet, where a plain `FOR UPDATE`
+    // has nothing to lock. The advisory lock must still serialize the
+    // two concurrent first-ever writes so the AuditLog chain is
+    // correct AND exactly one row ends up persisted (the unique
+    // constraint alone would prevent a true duplicate row, but not a
+    // wrong/duplicated AuditLog trail).
+    it('deterministic concurrency: two concurrent zone-minimum PUTs on a region with no row yet still produce a real before/after chain, and exactly one row', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      void branchId;
+
+      const [resA, resB] = await Promise.all([
+        setZoneMinimum(owner, vendorId, 'JERUSALEM', 80),
+        setZoneMinimum(owner, vendorId, 'JERUSALEM', 100),
+      ]);
+      expect(resA.status).toBe(200);
+      expect(resB.status).toBe(200);
+
+      const zoneRows = await prisma.vendorDeliveryZone.findMany({
+        where: { vendorId, region: 'JERUSALEM' },
+      });
+      expect(zoneRows).toHaveLength(1);
+
+      const rows = await prisma.auditLog.findMany({
+        where: {
+          entityType: 'VendorDeliveryZone',
+          entityId: zoneRows[0].id,
+          action: 'vendor_delivery_zone.minimum_order_value_updated',
+        },
+      });
+      expect(rows).toHaveLength(2);
+      const firstRow = rows.find(
+        (r) =>
+          (r.beforeState as { minimum_order_value: number | null })
+            .minimum_order_value === null,
+      );
+      const secondRow = rows.find((r) => r !== firstRow);
+      expect(firstRow).toBeDefined();
+      expect(secondRow).toBeDefined();
+      expect(
+        (secondRow!.beforeState as { minimum_order_value: number })
+          .minimum_order_value,
+      ).toBe(
+        (firstRow!.afterState as { minimum_order_value: number })
+          .minimum_order_value,
+      );
+      expect(Number(zoneRows[0].minimumOrderValue)).toBe(
+        (secondRow!.afterState as { minimum_order_value: number })
+          .minimum_order_value,
+      );
+    });
+
     it('PICKUP uses the branch default only - a zone minimum never applies to it', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
@@ -557,6 +673,107 @@ describe('Sprint 20b - checkout policy: minimum order, notes, terms, conflict bl
         },
       ]);
       expect(reserveRes.status).toBe(409);
+    });
+  });
+
+  // ============================================================
+  // Conflict catalogue in quote() (FR-CART-015).
+  //
+  // Review-round fix: the catalogue built in this sprint is EXACTLY
+  // the minimum-order-shortfall blocker above - nothing else. These
+  // two tests lock in the rest of the design explicitly, matching the
+  // corrected traceability row: (1) two independent groups never leak
+  // a blocker across each other, and (2) delivery non-coverage for a
+  // zone is represented through `delivery_fee`/`minimum_order_value`
+  // being null, deliberately NOT as a `blockers[]` entry - it means
+  // "DELIVERY isn't offered here" (same as `is_physical: false` for
+  // PICKUP), not "a conflict to warn about".
+  // ============================================================
+  describe('Conflict catalogue in quote() (FR-CART-015)', () => {
+    it('two separate groups in one quote(): a blocker in one group never appears on the other', async () => {
+      const ownerBelow = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId: vendorBelowId, branchId: branchBelowId } =
+        await createVendorWithBranch(ownerBelow);
+      const variantBelowId = await createOfferWithStock(
+        vendorBelowId,
+        branchBelowId,
+        20,
+        5,
+      ); // 20 ILS
+      await setBranchMinimum(
+        ownerBelow,
+        vendorBelowId,
+        branchBelowId,
+        50,
+      ).expect(200); // 20 < 50 -> blocked
+
+      const ownerOk = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId: vendorOkId, branchId: branchOkId } =
+        await createVendorWithBranch(ownerOk);
+      const variantOkId = await createOfferWithStock(
+        vendorOkId,
+        branchOkId,
+        20,
+        5,
+      ); // 20 ILS, no minimum ever set -> never blocked
+
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const itemBelowId = await addToCart(
+        customer,
+        vendorBelowId,
+        variantBelowId,
+        1,
+      );
+      const itemOkId = await addToCart(customer, vendorOkId, variantOkId, 1);
+
+      const res = await quote(customer, [itemBelowId, itemOkId]).expect(201);
+      expect(res.body.groups).toHaveLength(2);
+
+      const groupBelow = res.body.groups.find(
+        (g: { vendor_id: string }) => g.vendor_id === vendorBelowId,
+      );
+      const groupOk = res.body.groups.find(
+        (g: { vendor_id: string }) => g.vendor_id === vendorOkId,
+      );
+      const branchBelow = groupBelow.eligible_branches.find(
+        (b: { branch_id: string }) => b.branch_id === branchBelowId,
+      );
+      const branchOk = groupOk.eligible_branches.find(
+        (b: { branch_id: string }) => b.branch_id === branchOkId,
+      );
+
+      expect(branchBelow.blockers).toHaveLength(1);
+      expect(branchBelow.blockers[0].code).toBe('BELOW_MINIMUM_ORDER_VALUE');
+      // The OTHER group's branch must stay completely unaffected.
+      expect(branchOk.blockers).toHaveLength(0);
+    });
+
+    it('a zone with no delivery coverage is reflected by delivery_fee/minimum_order_value.delivery being null, NOT as a blockers[] entry', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const variantId = await createOfferWithStock(vendorId, branchId, 20, 5);
+      // No setZoneFee() call at all for INSIDE - no VendorDeliveryZone
+      // row exists for this (vendorId, region) pair, and no minimum
+      // order is set on the branch either.
+
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const addressId = await createAddress(customer, 'INSIDE');
+      const itemId = await addToCart(customer, vendorId, variantId, 1);
+
+      const res = await quote(customer, [itemId], addressId).expect(201);
+      const branch = res.body.groups[0].eligible_branches.find(
+        (b: { branch_id: string }) => b.branch_id === branchId,
+      );
+      expect(branch.delivery_fee).toBeNull();
+      expect(branch.minimum_order_value.delivery).toBeNull();
+      // Deliberately not a blocker - see this describe block's comment.
+      expect(
+        branch.blockers.filter(
+          (b: { fulfilment_method: string }) =>
+            b.fulfilment_method === 'DELIVERY',
+        ),
+      ).toHaveLength(0);
+      expect(branch.blockers).toHaveLength(0);
     });
   });
 
