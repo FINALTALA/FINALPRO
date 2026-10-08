@@ -13,7 +13,6 @@ import {
 import { AuditLogService } from '../audit/audit-log.service';
 import { toDecimal } from '../offers/pricing/effective-price.util';
 import { BranchOrderService } from './branch-order.service';
-import { computeRemainingRefundable } from './branch-order-money.util';
 
 // Money fields are `unknown` deliberately - every caller passes a
 // Prisma-generated row whose Decimal fields need no conversion of
@@ -240,11 +239,18 @@ export class BranchOrderCancellationService {
   }
 
   /**
-   * PLATFORM_ADMIN forced cancel - any non-terminal status. COD closes
-   * to CANCELLED with no refund (nothing was ever charged); ONLINE
-   * refunds every active item + delivery fee and closes to REFUNDED,
-   * in the SAME transaction - never a bare cancel that leaves an
-   * ONLINE customer's money uncredited.
+   * PLATFORM_ADMIN forced cancel. Assumes the caller has ALREADY
+   * locked the BranchOrder row and confirmed its status is PLACED or
+   * PREPARING - the same restriction as the customer's/staff's own
+   * cancellation window, never "any non-terminal status" (review-
+   * round fix, 2026-10-08: past PLACED/PREPARING, the physical goods
+   * may already be out of the branch or in the customer's hands, so
+   * restoring stock here would be unsafe without a real, confirmed
+   * stock-return event - genuine S21 scope). COD closes to CANCELLED
+   * with no refund (nothing was ever charged); ONLINE refunds every
+   * active item + delivery fee and closes to REFUNDED, in the SAME
+   * transaction - never a bare cancel that leaves an ONLINE customer's
+   * money uncredited.
    */
   async adminForceCancel(
     tx: Prisma.TransactionClient,
@@ -264,65 +270,6 @@ export class BranchOrderCancellationService {
       reasonText,
       correlationId,
     );
-  }
-
-  /**
-   * PLATFORM_ADMIN manual refund - NOT tied to cancelling anything or
-   * changing BranchOrder.status at all (e.g. correcting a dispute).
-   * ONLINE only; the amount is ALWAYS the server-computed remaining
-   * refundable figure (total - already refunded) - never a manually
-   * entered one, and never exceeds it (the ceiling is structural, not
-   * merely checked: this is the only place that ever reads it before
-   * writing a row that must respect it).
-   */
-  async adminManualRefund(
-    tx: Prisma.TransactionClient,
-    order: LockedOrder,
-    actorId: string,
-    reasonText: string,
-    correlationId: string,
-  ): Promise<{ refundedAmount: Decimal }> {
-    if (order.paymentMethod !== 'ONLINE') {
-      throw new ConflictException({
-        code: 'REFUND_NOT_APPLICABLE_FOR_COD',
-        message:
-          'A COD order was never charged online - there is nothing to refund',
-      });
-    }
-    const existingRefunds = await tx.branchOrderRefund.findMany({
-      where: { branchOrderId: order.id },
-      select: { amount: true },
-    });
-    const remaining = computeRemainingRefundable(order.total, existingRefunds);
-    if (remaining.lessThanOrEqualTo(0)) {
-      throw new ConflictException({
-        code: 'NOTHING_LEFT_TO_REFUND',
-        message: 'This branch order has already been fully refunded',
-      });
-    }
-    await tx.branchOrderRefund.create({
-      data: {
-        branchOrderId: order.id,
-        branchOrderItemId: null,
-        paymentTransactionId: order.paymentTransactionId,
-        amount: remaining.toFixed(2),
-        reason: BranchOrderRefundReason.PLATFORM_ADMIN_MANUAL,
-        initiatedBy: BranchOrderRefundInitiator.PLATFORM_ADMIN,
-        approvedByUserId: actorId,
-      },
-    });
-    await this.auditLog.record(
-      {
-        actorId,
-        correlationId,
-        action: 'branch_order.admin_manual_refund',
-        entityType: 'BranchOrder',
-        entityId: order.id,
-        afterState: { amount: remaining.toFixed(2), reason: reasonText },
-      },
-      tx,
-    );
-    return { refundedAmount: remaining };
   }
 
   // ---- shared internals ----

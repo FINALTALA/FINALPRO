@@ -7,11 +7,21 @@ import { apiFetch, newIdempotencyKey } from "@/lib/api";
 import { adminErrorMessage } from "@/lib/admin";
 import { useAdminGate } from "@/lib/useAdminGate";
 
-// Sprint 20a (BR-019): PLATFORM_ADMIN's two "break-glass" overrides on
-// a BranchOrder - a forced cancel and a manual refund. There is no
+// Sprint 20a (BR-019): PLATFORM_ADMIN's "break-glass" override on a
+// BranchOrder - a forced cancel, PLACED/PREPARING only. There is no
 // platform-wide branch-order search/list endpoint in this sprint's
 // scope, so this page acts by id only (the id is read from the vendor/
 // customer-facing support conversation, not browsed here).
+//
+// Review-round fix (2026-10-08): this page originally also offered a
+// manual partial-refund action, independent of cancelling anything.
+// It broke the refund ledger's own ceiling - nothing stopped a LATER
+// item cancellation from refunding on top of an already-recorded,
+// unallocated manual refund, past the order's own total. A correct
+// fix needs a real allocation ledger tying a manual refund to
+// specific items - genuine S21 scope - so that action is removed here
+// entirely, not patched. See admin-branch-orders.controller.ts's own
+// comment.
 export default function AdminBranchOrdersPage() {
   const gate = useAdminGate("ADMIN");
   const [branchOrderId, setBranchOrderId] = useState("");
@@ -20,7 +30,7 @@ export default function AdminBranchOrdersPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  async function run(action: "cancel" | "refund") {
+  async function forceCancel() {
     const id = branchOrderId.trim();
     const reasonText = reason.trim();
     if (!id) {
@@ -35,19 +45,15 @@ export default function AdminBranchOrdersPage() {
     setError(null);
     setNotice(null);
     try {
-      const result = await apiFetch<{ refunded_amount: number; order_closed?: boolean }>(
-        `/admin/branch-orders/${id}/${action}`,
+      const result = await apiFetch<{ refunded_amount: number; order_closed: boolean }>(
+        `/admin/branch-orders/${id}/cancel`,
         {
           method: "POST",
           body: { reason: reasonText },
-          idempotencyKey: newIdempotencyKey(`admin-branch-order-${action}`),
+          idempotencyKey: newIdempotencyKey("admin-branch-order-cancel"),
         },
       );
-      setNotice(
-        action === "cancel"
-          ? `تم تنفيذ الإلغاء القسري. المبلغ المسترد: ${result.refunded_amount} ₪`
-          : `تم تنفيذ الاسترداد اليدوي. المبلغ المسترد: ${result.refunded_amount} ₪`,
-      );
+      setNotice(`تم تنفيذ الإلغاء القسري. المبلغ المسترد: ${result.refunded_amount} ₪`);
     } catch (err) {
       setError(adminErrorMessage(err));
     } finally {
@@ -74,7 +80,7 @@ export default function AdminBranchOrdersPage() {
     <div className="page-shell">
       <div className="wide-shell" style={{ maxWidth: 720 }}>
         <div className="top-bar">
-          <h1 className="page-title" style={{ margin: 0 }}>إلغاء/استرداد قسري لطلب</h1>
+          <h1 className="page-title" style={{ margin: 0 }}>إلغاء قسري لطلب</h1>
           <Link href="/admin" className="button-link">إدارة المنصة</Link>
         </div>
 
@@ -102,19 +108,15 @@ export default function AdminBranchOrdersPage() {
             />
           </div>
           <p className="muted">
-            الإلغاء القسري: يُغلق الطلب إن لم يكن في حالة نهائية - دفع عند الاستلام يُلغى بلا
+            يعمل فقط والطلب في حالة «قيد الانتظار» أو «قيد التجهيز» - دفع عند الاستلام يُلغى بلا
             استرداد، والدفع الإلكتروني يُسترد بالكامل (المنتجات + رسوم التوصيل) ضمن نفس العملية.
-          </p>
-          <p className="muted">
-            الاسترداد اليدوي: للطلبات الإلكترونية فقط، بحد أقصى هو المبلغ المتبقي القابل للاسترداد
-            فعلياً - لا يقبل أي مبلغ يُدخل يدوياً.
+            لا يعمل بعد الإرسال أو التسليم أو الاستلام أو فشل التوصيل أو طلب الاسترداد - هذه
+            الحالات قد تكون خرجت فيها البضاعة فعلاً، ولا تُعاد للمخزون تلقائياً بلا مسار إرجاع
+            مؤكد.
           </p>
           <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-            <button className="button button-secondary" disabled={busy} onClick={() => run("cancel")}>
+            <button className="button button-secondary" disabled={busy} onClick={forceCancel}>
               إلغاء قسري
-            </button>
-            <button className="button" disabled={busy} onClick={() => run("refund")}>
-              استرداد يدوي
             </button>
           </div>
         </div>

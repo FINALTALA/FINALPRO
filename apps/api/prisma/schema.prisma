@@ -2541,11 +2541,15 @@ enum BranchOrderRefundReason {
   /// not representable in Prisma's schema DSL - see that migration's
   /// own comment).
   DELIVERY_FEE
-  /// A platform-admin manual refund NOT tied to cancelling any item or
-  /// changing BranchOrder.status at all (e.g. correcting a dispute) -
-  /// ONLINE only, capped at the remaining refundable amount, never a
-  /// manually-entered figure. See the admin refund endpoint's own
-  /// comment.
+  /// Review-round fix (2026-10-08): the manual, unallocated admin
+  /// refund this value represented was removed from S20a entirely - it
+  /// broke computeRemainingRefundable()'s own "structural ceiling"
+  /// (nothing stopped a later item cancellation from refunding on top
+  /// of it, past BranchOrder.total). A real fix needs an allocation
+  /// ledger tying a manual refund to specific items, genuine S21
+  /// scope. No code path writes this value any more - kept here only
+  /// because Postgres enum values are never safely dropped (this
+  /// schema's own additive-migration convention).
   PLATFORM_ADMIN_MANUAL
 }
 

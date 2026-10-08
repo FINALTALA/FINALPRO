@@ -63,11 +63,20 @@ export function computeAmountRefunded(refunds: MoneyRefundInput[]): Decimal {
 
 /**
  * The structural ceiling: total minus whatever has already been
- * refunded for this BranchOrder. Never negative by construction - see
- * BranchOrderRefund's own @@unique(branchOrderItemId) and the partial
- * unique index on (branchOrderId) WHERE reason='DELIVERY_FEE', which
- * together make it impossible for amountRefunded to ever exceed
- * subtotal+deliveryFee=total.
+ * refunded for this BranchOrder. This can only stay non-negative by
+ * construction as long as EVERY refund-creating code path is tied to
+ * closing out a specific item or the one delivery fee (never a
+ * freestanding, admin-entered amount) - BranchOrderRefund's own
+ * @@unique(branchOrderItemId) and the partial unique index on
+ * (branchOrderId) WHERE reason='DELIVERY_FEE' then bound each item/the
+ * fee to at most one refund, so the sum can never exceed
+ * subtotal+deliveryFee=total. Review-round fix (2026-10-08): this
+ * invariant was briefly broken by a manual, unallocated
+ * PLATFORM_ADMIN_MANUAL refund that bypassed the item/fee pairing
+ * entirely - removed from S20a for exactly that reason (see
+ * PLATFORM_ADMIN_MANUAL's own schema comment). Do not reintroduce a
+ * refund path that creates a row not tied to a specific item or the
+ * delivery fee without a real allocation ledger.
  */
 export function computeRemainingRefundable(
   total: unknown,

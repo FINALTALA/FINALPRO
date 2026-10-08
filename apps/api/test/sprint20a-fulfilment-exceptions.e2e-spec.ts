@@ -1206,8 +1206,19 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
   // ============================================================
   // PLATFORM_ADMIN overrides (BR-019).
   // ============================================================
-  describe('Admin forced cancel / manual refund', () => {
-    it('forced cancel: COD closes to CANCELLED with no refund; ONLINE refunds everything and closes to REFUNDED', async () => {
+  // ============================================================
+  // Review-round fix (2026-10-08): the admin manual-refund endpoint
+  // (unallocated, independent of cancelling anything) is REMOVED
+  // entirely - it broke computeRemainingRefundable()'s own ceiling,
+  // since nothing stopped a later item cancellation from refunding on
+  // top of it, past BranchOrder.total. Forced cancel itself is now
+  // PLACED/PREPARING only, never "any non-terminal status" - past
+  // that point the physical goods may already be out of the branch or
+  // in the customer's hands, so restoring stock would be unsafe
+  // without a real, confirmed stock-return event (genuine S21 scope).
+  // ============================================================
+  describe('Admin forced cancel (PLACED/PREPARING only, no manual refund)', () => {
+    it('forced cancel on PLACED: COD closes to CANCELLED with no refund; ONLINE refunds everything (never more than total) and closes to REFUNDED', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
       const variantId = await createOfferWithStock(vendorId, branchId, 20, 5);
@@ -1254,84 +1265,370 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
         { reason: REASON },
       );
       expect(onlineRes.status).toBe(201);
-      expect(onlineRes.body.refunded_amount).toBe(30);
+      expect(onlineRes.body.refunded_amount).toBe(30); // == total, never more
       const onlineFinal = await prisma.branchOrder.findUniqueOrThrow({
         where: { id: onlineOrder.branchOrderId },
       });
       expect(onlineFinal.status).toBe('REFUNDED');
+      const onlineRefundsSum = (
+        await prisma.branchOrderRefund.findMany({
+          where: { branchOrderId: onlineOrder.branchOrderId },
+        })
+      ).reduce((sum, r) => sum + Number(r.amount), 0);
+      expect(onlineRefundsSum).toBeLessThanOrEqual(30);
 
       // Already-terminal: a second forced cancel is refused.
       const again = await adminAction(admin, codOrder.branchOrderId, 'cancel', {
         reason: REASON,
       });
-      expect(again.status).toBe(404);
-      expect(again.body.error.code).toBe('BRANCH_ORDER_ALREADY_TERMINAL');
+      expect(again.status).toBe(409);
+      expect(again.body.error.code).toBe('INVALID_BRANCH_ORDER_TRANSITION');
     });
 
-    it('manual refund rejects COD outright (no row created) and caps at the remaining refundable amount for ONLINE', async () => {
+    it('forced cancel on PREPARING still works', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
       const variantId = await createOfferWithStock(vendorId, branchId, 20, 5);
-      const customerCod = await signup(uniquePhone(), 'a-strong-password');
-      const codOrder = await placeDeliveryOrder(
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const { branchOrderId } = await placeDeliveryOrder(
         owner,
-        customerCod,
+        customer,
         vendorId,
         branchId,
         [variantId],
         'COD',
       );
-      const customerOnline = await signup(uniquePhone(), 'a-strong-password');
-      const onlineOrder = await placeDeliveryOrder(
+      await staffAction(
         owner,
-        customerOnline,
+        vendorId,
+        branchId,
+        branchOrderId,
+        'start-preparation',
+      ).expect(201);
+      const admin = await platformAdmin();
+
+      const res = await adminAction(admin, branchOrderId, 'cancel', {
+        reason: REASON,
+      });
+      expect(res.status).toBe(201);
+      const order = await prisma.branchOrder.findUniqueOrThrow({
+        where: { id: branchOrderId },
+      });
+      expect(order.status).toBe('CANCELLED');
+    });
+
+    /** Snapshots status/items/stock/refunds, attempts a forced cancel,
+     * asserts it is rejected with NO change to any of them. */
+    async function expectForceCancelRejected(
+      admin: string,
+      branchOrderId: string,
+      vendorId: string,
+      branchId: string,
+      variantId: string,
+    ) {
+      const before = await prisma.branchOrder.findUniqueOrThrow({
+        where: { id: branchOrderId },
+      });
+      const itemsBefore = await prisma.branchOrderItem.findMany({
+        where: { branchOrderId },
+        orderBy: { id: 'asc' },
+      });
+      const stockBefore = await prisma.branchStock.findFirstOrThrow({
+        where: { vendorId, branchId, offerVariantId: variantId },
+      });
+      const refundsBefore = await prisma.branchOrderRefund.count({
+        where: { branchOrderId },
+      });
+
+      const res = await adminAction(admin, branchOrderId, 'cancel', {
+        reason: REASON,
+      });
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe('INVALID_BRANCH_ORDER_TRANSITION');
+
+      const after = await prisma.branchOrder.findUniqueOrThrow({
+        where: { id: branchOrderId },
+      });
+      expect(after.status).toBe(before.status);
+      const itemsAfter = await prisma.branchOrderItem.findMany({
+        where: { branchOrderId },
+        orderBy: { id: 'asc' },
+      });
+      expect(itemsAfter.map((i) => i.cancelledAt)).toEqual(
+        itemsBefore.map((i) => i.cancelledAt),
+      );
+      const stockAfter = await prisma.branchStock.findFirstOrThrow({
+        where: { vendorId, branchId, offerVariantId: variantId },
+      });
+      expect(stockAfter.quantity).toBe(stockBefore.quantity);
+      expect(
+        await prisma.branchOrderRefund.count({ where: { branchOrderId } }),
+      ).toBe(refundsBefore);
+    }
+
+    it('rejects forced cancel on SENT, with no change to stock/refunds/status', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const variantId = await createOfferWithStock(vendorId, branchId, 20, 5);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const { branchOrderId } = await placeDeliveryOrder(
+        owner,
+        customer,
+        vendorId,
+        branchId,
+        [variantId],
+        'COD',
+      );
+      await staffAction(
+        owner,
+        vendorId,
+        branchId,
+        branchOrderId,
+        'start-preparation',
+      ).expect(201);
+      await staffAction(
+        owner,
+        vendorId,
+        branchId,
+        branchOrderId,
+        'mark-sent',
+      ).expect(201);
+      const admin = await platformAdmin();
+      await expectForceCancelRejected(
+        admin,
+        branchOrderId,
+        vendorId,
+        branchId,
+        variantId,
+      );
+    });
+
+    it('rejects forced cancel on DELIVERED, with no change to stock/refunds/status', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const variantId = await createOfferWithStock(vendorId, branchId, 20, 5);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const { branchOrderId } = await placeDeliveryOrder(
+        owner,
+        customer,
+        vendorId,
+        branchId,
+        [variantId],
+        'COD',
+      );
+      await staffAction(
+        owner,
+        vendorId,
+        branchId,
+        branchOrderId,
+        'start-preparation',
+      ).expect(201);
+      await staffAction(
+        owner,
+        vendorId,
+        branchId,
+        branchOrderId,
+        'mark-sent',
+      ).expect(201);
+      await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/branches/${branchId}/orders/${branchOrderId}/mark-delivered`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('mark-delivered'))
+        .send({})
+        .expect(201);
+      const admin = await platformAdmin();
+      await expectForceCancelRejected(
+        admin,
+        branchOrderId,
+        vendorId,
+        branchId,
+        variantId,
+      );
+    });
+
+    it('rejects forced cancel on PICKED_UP, with no change to stock/refunds/status', async () => {
+      // PICKED_UP is never a resting status in the real flow - pickup-
+      // handover transitions PICKED_UP->COMPLETED in the SAME request
+      // (see BranchOrdersStaffController.pickupHandover). Set it
+      // directly to exercise the admin guard against this status on
+      // its own terms, independent of real-flow reachability.
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const variantId = await createOfferWithStock(vendorId, branchId, 20, 5);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const itemId = await addToCart(customer, vendorId, variantId, 1);
+      const reserved = await request(app.getHttpServer())
+        .post('/api/v1/checkout/reserve')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('reserve'))
+        .send({
+          groups: [
+            {
+              cart_item_ids: [itemId],
+              branch_id: branchId,
+              fulfilment_method: 'PICKUP',
+              payment_method: 'COD',
+            },
+          ],
+        })
+        .expect(201);
+      const confirmed = await request(app.getHttpServer())
+        .post('/api/v1/checkout/confirm')
+        .set('Authorization', `Bearer ${customer}`)
+        .set('Idempotency-Key', unique('confirm'))
+        .send({ reservation_id: reserved.body.reservation_id })
+        .expect(201);
+      const branchOrderId = confirmed.body.branch_orders[0].id as string;
+      await prisma.branchOrder.update({
+        where: { id: branchOrderId },
+        data: { status: 'PICKED_UP' },
+      });
+      const admin = await platformAdmin();
+      await expectForceCancelRejected(
+        admin,
+        branchOrderId,
+        vendorId,
+        branchId,
+        variantId,
+      );
+    });
+
+    it('rejects forced cancel on DELIVERY_FAILED, with no change to stock/refunds/status', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const variantId = await createOfferWithStock(vendorId, branchId, 20, 5);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const { branchOrderId } = await placeDeliveryOrder(
+        owner,
+        customer,
+        vendorId,
+        branchId,
+        [variantId],
+        'COD',
+      );
+      await staffAction(
+        owner,
+        vendorId,
+        branchId,
+        branchOrderId,
+        'start-preparation',
+      ).expect(201);
+      await staffAction(
+        owner,
+        vendorId,
+        branchId,
+        branchOrderId,
+        'mark-sent',
+      ).expect(201);
+      await staffAction(
+        owner,
+        vendorId,
+        branchId,
+        branchOrderId,
+        'mark-delivery-failed',
+      ).expect(201);
+      const admin = await platformAdmin();
+      await expectForceCancelRejected(
+        admin,
+        branchOrderId,
+        vendorId,
+        branchId,
+        variantId,
+      );
+    });
+
+    it('rejects forced cancel on REFUND_REQUESTED, with no change to stock/refunds/status', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const variantId = await createOfferWithStock(vendorId, branchId, 20, 5);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const { branchOrderId } = await placeDeliveryOrder(
+        owner,
+        customer,
         vendorId,
         branchId,
         [variantId],
         'ONLINE',
-        { daysAhead: 2 },
+        { daysAhead: 1 },
       );
+      await staffAction(
+        owner,
+        vendorId,
+        branchId,
+        branchOrderId,
+        'start-preparation',
+      ).expect(201);
+      await staffAction(
+        owner,
+        vendorId,
+        branchId,
+        branchOrderId,
+        'mark-sent',
+      ).expect(201);
+      await staffAction(
+        owner,
+        vendorId,
+        branchId,
+        branchOrderId,
+        'mark-delivery-failed',
+      ).expect(201); // count=1
+      const midWindowId = await createWindow(
+        owner,
+        vendorId,
+        branchId,
+        dayOfWeekFor(2),
+        '09:00',
+        '18:00',
+        5,
+      );
+      await customerAction(customer, branchOrderId, 'reschedule', {
+        delivery_window_id: midWindowId,
+        scheduled_date: nextDateForDayOfWeek(2),
+      }).expect(201);
+      await staffAction(
+        owner,
+        vendorId,
+        branchId,
+        branchOrderId,
+        'mark-delivery-failed',
+      ).expect(201); // count=2, ONLINE -> rests at DELIVERY_FAILED
+      await customerAction(customer, branchOrderId, 'request-refund').expect(
+        201,
+      ); // -> REFUND_REQUESTED
+
       const admin = await platformAdmin();
-
-      const codRefund = await adminAction(
+      await expectForceCancelRejected(
         admin,
-        codOrder.branchOrderId,
-        'refund',
-        {
-          reason: REASON,
-        },
+        branchOrderId,
+        vendorId,
+        branchId,
+        variantId,
       );
-      expect(codRefund.status).toBe(409);
-      expect(codRefund.body.error.code).toBe('REFUND_NOT_APPLICABLE_FOR_COD');
-      expect(
-        await prisma.branchOrderRefund.count({
-          where: { branchOrderId: codOrder.branchOrderId },
-        }),
-      ).toBe(0);
-
-      const onlineRefund = await adminAction(
-        admin,
-        onlineOrder.branchOrderId,
-        'refund',
-        { reason: REASON },
-      );
-      expect(onlineRefund.status).toBe(201);
-      expect(onlineRefund.body.refunded_amount).toBe(30);
-
-      // Fully refunded now - a second manual refund finds nothing left.
-      const again = await adminAction(
-        admin,
-        onlineOrder.branchOrderId,
-        'refund',
-        {
-          reason: REASON,
-        },
-      );
-      expect(again.status).toBe(409);
-      expect(again.body.error.code).toBe('NOTHING_LEFT_TO_REFUND');
     });
 
-    it('refuses every admin branch-order route to a non-PLATFORM_ADMIN caller', async () => {
+    it('the manual-refund endpoint no longer exists', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const variantId = await createOfferWithStock(vendorId, branchId, 20, 5);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const { branchOrderId } = await placeDeliveryOrder(
+        owner,
+        customer,
+        vendorId,
+        branchId,
+        [variantId],
+        'ONLINE',
+      );
+      const admin = await platformAdmin();
+      const res = await adminAction(admin, branchOrderId, 'refund', {
+        reason: REASON,
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it('refuses the admin cancel route to a non-PLATFORM_ADMIN caller', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
       const variantId = await createOfferWithStock(vendorId, branchId, 20, 5);

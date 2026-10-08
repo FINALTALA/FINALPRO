@@ -101,11 +101,15 @@ const ERROR_MESSAGES: Record<string, string> = {
   SPLIT_WOULD_SPAN_VENDOR_OFFER: "تعذّر التقسيم: أحد عروض المتاجر مرتبط بمتغيّرات ستُقسَّم بين منتجين مختلفين.",
   SPLIT_REQUIRES_AT_LEAST_ONE_VARIANT: "اختاري متغيّراً واحداً على الأقل للتقسيم.",
   SPLIT_CANNOT_MOVE_ALL_VARIANTS: "لا يمكن نقل كل المتغيّرات؛ يجب أن يبقى للمنتج الأصلي متغيّر واحد على الأقل.",
-  // Sprint 20a: platform-admin branch-order overrides.
+  // Sprint 20a: platform-admin forced branch-order cancellation.
   BRANCH_ORDER_NOT_FOUND: "لم يُعثر على طلب بهذا المعرّف.",
-  BRANCH_ORDER_ALREADY_TERMINAL: "هذا الطلب وصل بالفعل إلى حالة نهائية.",
-  REFUND_NOT_APPLICABLE_FOR_COD: "الطلب دفع عند الاستلام - لا يوجد مبلغ إلكتروني لاسترداده.",
-  NOTHING_LEFT_TO_REFUND: "تم استرداد كامل مبلغ هذا الطلب مسبقاً.",
+  // Review-round fix (2026-10-08): the manual-refund endpoint and its
+  // own error codes (REFUND_NOT_APPLICABLE_FOR_COD/NOTHING_LEFT_TO_REFUND)
+  // were removed entirely - see admin-branch-orders.controller.ts's own
+  // comment. Forced cancel outside PLACED/PREPARING now surfaces the
+  // same INVALID_BRANCH_ORDER_TRANSITION every other order action uses.
+  INVALID_BRANCH_ORDER_TRANSITION:
+    "لا يمكن الإلغاء القسري إلا والطلب في حالة «قيد الانتظار» أو «قيد التجهيز».",
 };
 
 /** Turns an API failure into the Arabic message shown to the user. */

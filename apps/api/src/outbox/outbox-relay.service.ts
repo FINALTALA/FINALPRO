@@ -139,9 +139,11 @@ const EVENT_TYPE_MAP: Record<string, EventMapping> = {
     targetType: 'BRANCH_ORDER',
     targetIdField: 'branch_order_id',
   },
-  // Covers both a staff-approved REFUND_REQUESTED->REFUNDED resolution
-  // and a PLATFORM_ADMIN manual refund - both are a human-approved
-  // refund decision from the customer's own point of view.
+  // The staff-approved REFUND_REQUESTED->REFUNDED resolution - a
+  // human-approved refund decision from the customer's own point of
+  // view. (Review-round fix, 2026-10-08: the PLATFORM_ADMIN manual
+  // refund this event type also used to cover was removed from S20a
+  // entirely - see admin-branch-orders.controller.ts's own comment.)
   'branch_order.refund_approved': {
     type: 'REFUND_APPROVED',
     targetType: 'BRANCH_ORDER',
