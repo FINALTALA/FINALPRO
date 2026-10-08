@@ -42,6 +42,12 @@ interface OrderRow {
   amount_due?: number | null;
   cod_collected_amount?: number | null;
   cancellation_reason?: string | null;
+  // Sprint 20b (FR-CART-014): both present for owner and employee -
+  // see BranchOrdersStaffController's own ownerOrderDto/employeeOrderDto
+  // comment. customer_note is read-only here (the customer's own
+  // text); internal_store_note is editable below.
+  customer_note?: string | null;
+  internal_store_note?: string | null;
 }
 
 function openReportFor(o: OrderRow): boolean {
@@ -85,6 +91,7 @@ export default function BranchOrdersPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [pickupCodeDrafts, setPickupCodeDrafts] = useState<Record<string, string>>({});
   const [reasonDrafts, setReasonDrafts] = useState<Record<string, string>>({});
+  const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
 
   function load() {
     apiFetch<OrderRow[]>(
@@ -129,6 +136,31 @@ export default function BranchOrdersPage() {
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "تعذّر تنفيذ الإجراء");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function saveInternalNote(orderId: string) {
+    const note = (noteDrafts[orderId] ?? "").trim();
+    if (note.length < 1) {
+      setError("يلزم إدخال نص للملاحظة الداخلية");
+      return;
+    }
+    setBusyId(orderId);
+    setError(null);
+    try {
+      await apiFetch(
+        `/vendors/${params.vendorId}/branches/${params.branchId}/orders/${orderId}/internal-note`,
+        {
+          method: "PATCH",
+          body: { note },
+          idempotencyKey: newIdempotencyKey("staff-internal-note"),
+        },
+      );
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "تعذّر حفظ الملاحظة الداخلية");
     } finally {
       setBusyId(null);
     }
@@ -195,6 +227,30 @@ export default function BranchOrdersPage() {
             {o.cancellation_reason && (
               <div className="muted">سبب الإلغاء: {o.cancellation_reason}</div>
             )}
+            {o.customer_note && (
+              <div className="muted">ملاحظة العميل: {o.customer_note}</div>
+            )}
+
+            <div className="field" style={{ marginTop: 8 }}>
+              <label>ملاحظة داخلية (لا يراها العميل)</label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  style={{ flex: 1 }}
+                  placeholder={o.internal_store_note ?? "بلا ملاحظة"}
+                  value={noteDrafts[o.id] ?? o.internal_store_note ?? ""}
+                  onChange={(e) =>
+                    setNoteDrafts((prev) => ({ ...prev, [o.id]: e.target.value }))
+                  }
+                />
+                <button
+                  className="button-link"
+                  disabled={busyId === o.id}
+                  onClick={() => saveInternalNote(o.id)}
+                >
+                  حفظ
+                </button>
+              </div>
+            </div>
 
             <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
               {o.status === "PLACED" && (

@@ -266,6 +266,8 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
       .set('Authorization', `Bearer ${customer}`)
       .set('Idempotency-Key', unique('reserve'))
       .send({
+        terms_accepted: true,
+        terms_version: '2026-10-v1',
         groups: [
           {
             cart_item_ids: cartItemIds,
@@ -1464,6 +1466,8 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],

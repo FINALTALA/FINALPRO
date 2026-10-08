@@ -2,6 +2,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsEnum,
   IsIn,
   IsOptional,
@@ -13,6 +14,7 @@ import {
   BranchOrderPaymentMethod,
   FulfilmentMethod,
 } from '../../../generated/prisma/client';
+import { TrimmedText } from '../../common/validation/trimmed-text.decorator';
 
 class ReserveGroupDto {
   @IsArray()
@@ -40,6 +42,14 @@ class ReserveGroupDto {
   @IsOptional()
   @Matches(/^\d{4}-\d{2}-\d{2}$/)
   scheduled_date?: string;
+
+  // Sprint 20b (FR-CART-014): the customer's own free-text note for
+  // THIS branch-group only (e.g. delivery instructions) - never a
+  // vendor-wide or cart-wide note. Optional: a group with no note is
+  // the common case.
+  @IsOptional()
+  @TrimmedText(1, 500)
+  customer_note?: string;
 }
 
 // RB-ORD-002: the customer's final per-group choices, submitted
@@ -53,4 +63,13 @@ export class ReserveCheckoutDto {
   @ValidateNested({ each: true })
   @Type(() => ReserveGroupDto)
   groups!: ReserveGroupDto[];
+
+  // Sprint 20b (FR-CART-012, platform terms only): required on every
+  // reserve() call - platform terms are checkout-wide, not per group.
+  // See CheckoutService's own CURRENT_PLATFORM_TERMS_VERSION constant.
+  @IsBoolean()
+  terms_accepted!: boolean;
+
+  @IsString()
+  terms_version!: string;
 }

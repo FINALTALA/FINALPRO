@@ -26,11 +26,20 @@ interface SlotOption {
   end_time: string;
   remaining_capacity: number;
 }
+interface MinimumOrderBlocker {
+  code: "BELOW_MINIMUM_ORDER_VALUE";
+  fulfilment_method: "PICKUP" | "DELIVERY";
+  required: number;
+  current: number;
+  message: string;
+}
 interface EligibleBranch {
   branch_id: string;
   branch_name: string;
   is_physical: boolean;
   delivery_fee: number | null;
+  minimum_order_value: { pickup: number | null; delivery: number | null };
+  blockers: MinimumOrderBlocker[];
   available_slots: SlotOption[];
 }
 interface QuoteGroup {
@@ -61,7 +70,13 @@ interface GroupChoice {
   addressId: string;
   deliveryWindowId: string;
   scheduledDate: string;
+  customerNote: string;
 }
+
+// Sprint 20b (FR-CART-012, platform terms only): must match the
+// backend's own CheckoutService.CURRENT_PLATFORM_TERMS_VERSION
+// exactly - reserve() rejects a mismatch outright.
+const CURRENT_PLATFORM_TERMS_VERSION = "2026-10-v1";
 
 interface ReserveResponse {
   reservation_id: string;
@@ -110,6 +125,7 @@ export default function CheckoutPage() {
   const [addingAddressFor, setAddingAddressFor] = useState<string | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
   const [priceChange, setPriceChange] = useState<PriceChangeSummary | null>(null);
+  const [termsAccepted, setTermsAccepted] = useState(false);
 
   function groupKey(g: QuoteGroup): string {
     return `${g.vendor_id}:${g.cart_item_ids.join(",")}`;
@@ -151,6 +167,7 @@ export default function CheckoutPage() {
             addressId: "",
             deliveryWindowId: "",
             scheduledDate: "",
+            customerNote: "",
           };
         }
         setChoices(initial);
@@ -189,6 +206,10 @@ export default function CheckoutPage() {
         return;
       }
     }
+    if (!termsAccepted) {
+      setError("يجب الموافقة على شروط الاستخدام قبل المتابعة.");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -199,6 +220,7 @@ export default function CheckoutPage() {
           branch_id: choice.branchId,
           fulfilment_method: choice.fulfilmentMethod as FulfilmentMethod,
           payment_method: choice.paymentMethod,
+          ...(choice.customerNote.trim() ? { customer_note: choice.customerNote.trim() } : {}),
           ...(choice.fulfilmentMethod === "DELIVERY"
             ? {
                 address_id: choice.addressId,
@@ -210,7 +232,11 @@ export default function CheckoutPage() {
       });
       const res = await apiFetch<ReserveResponse>("/checkout/reserve", {
         method: "POST",
-        body: { groups },
+        body: {
+          groups,
+          terms_accepted: true,
+          terms_version: CURRENT_PLATFORM_TERMS_VERSION,
+        },
         idempotencyKey: newIdempotencyKey("checkout-reserve"),
       });
       setReservation(res);
@@ -511,6 +537,26 @@ export default function CheckoutPage() {
                 )}
               </div>
 
+              {/* Sprint 20b (FR-CART-015): shown per-group, for the
+                  CURRENTLY selected branch/fulfilment method only -
+                  quote() previews both methods independently, but only
+                  the one actually chosen here is relevant to the
+                  customer right now. reserve() still rejects this with
+                  the same code/details if ignored - this is a preview,
+                  not the real gate. */}
+              {branch?.blockers
+                .filter((b) => b.fulfilment_method === choice.fulfilmentMethod)
+                .map((b, i) => (
+                  <div
+                    key={i}
+                    className="error-banner"
+                    role="alert"
+                    style={{ margin: "6px 0 0" }}
+                  >
+                    {b.message}
+                  </div>
+                ))}
+
               {choice.fulfilmentMethod === "DELIVERY" && branch && (
                 <>
                   <div className="field">
@@ -589,9 +635,34 @@ export default function CheckoutPage() {
                   <option value="ONLINE">دفع إلكتروني (تجريبي)</option>
                 </select>
               </div>
+
+              <div className="field">
+                <label>ملاحظة للمتجر (اختياري)</label>
+                <textarea
+                  rows={2}
+                  maxLength={500}
+                  placeholder="مثال: الرجاء الاتصال قبل التوصيل"
+                  value={choice.customerNote}
+                  onChange={(e) => updateChoice(key, { customerNote: e.target.value })}
+                />
+              </div>
             </div>
           );
         })}
+
+        {quote.groups.length > 0 && (
+          <div className="field" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <input
+              type="checkbox"
+              id="terms-accepted"
+              checked={termsAccepted}
+              onChange={(e) => setTermsAccepted(e.target.checked)}
+            />
+            <label htmlFor="terms-accepted" style={{ margin: 0 }}>
+              أوافق على <a href="/terms" target="_blank" rel="noreferrer">شروط الاستخدام</a>
+            </label>
+          </div>
+        )}
 
         {quote.groups.length > 0 && (
           <button
@@ -599,6 +670,7 @@ export default function CheckoutPage() {
             onClick={reserve}
             disabled={
               busy ||
+              !termsAccepted ||
               !allGroupsFulfillable(quote.groups.map((g) => choices[groupKey(g)]?.fulfilmentMethod ?? null))
             }
           >

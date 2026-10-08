@@ -577,13 +577,22 @@ enum DeliveryZoneRegion {
 /// as actually usable for delivery only when BOTH enabled is true AND
 /// fee is set - never inferring or defaulting a fee amount.
 model VendorDeliveryZone {
-  id        String             @id @default(uuid())
-  vendorId  String
-  vendor    Vendor             @relation(fields: [vendorId], references: [id])
-  region    DeliveryZoneRegion
-  enabled   Boolean            @default(true)
-  fee       Decimal?           @db.Decimal(10, 2)
-  createdAt DateTime           @default(now())
+  id                String             @id @default(uuid())
+  vendorId          String
+  vendor            Vendor             @relation(fields: [vendorId], references: [id])
+  region            DeliveryZoneRegion
+  enabled           Boolean            @default(true)
+  fee               Decimal?           @db.Decimal(10, 2)
+  /// Sprint 20b (FR-PRICE-006): an OPTIONAL override of
+  /// StoreBranch.minimumOrderValue for DELIVERY orders into this one
+  /// region - null means "no override, fall back to the branch's own
+  /// default" (same lazy-default-null convention as `fee` above, never
+  /// inferred). PICKUP never reads this field at all - only the
+  /// branch's own default applies to a pickup order, since there is no
+  /// delivery region involved. Checked against the ITEMS-ONLY subtotal
+  /// of the branch-group, never delivery fee or any future tax/fee.
+  minimumOrderValue Decimal?           @db.Decimal(10, 2)
+  createdAt         DateTime           @default(now())
 
   @@unique([vendorId, region])
   @@map("vendor_delivery_zones")
@@ -696,6 +705,14 @@ model StoreBranch {
   /// references this branch - see archive()'s own comment for the
   /// exact four checks and why each exists.
   archivedAt           DateTime?
+  /// Sprint 20b (FR-PRICE-006, FR-CART-003): the owner's own minimum
+  /// order value for this branch, in ILS, checked against the ITEMS-
+  /// ONLY subtotal of a branch-group at checkout (never delivery fee,
+  /// never any future tax/fee). Null = no minimum. This is the default
+  /// for every PICKUP order at this branch, and the fallback for a
+  /// DELIVERY order whose zone has no override (see
+  /// VendorDeliveryZone.minimumOrderValue's own comment).
+  minimumOrderValue    Decimal?                 @db.Decimal(10, 2)
 
   vendorUsers              VendorUser[]
   staffInvites             StaffInvite[]
@@ -2222,10 +2239,20 @@ model StoreSectionOffer {
 /// no payment reference, nothing checkout (Sprint 10) would compute -
 /// just the grouping parent shape RB-ORD-001 asks for.
 model CustomerOrder {
-  id         String          @id @default(uuid())
-  customerId String
-  customer   CustomerProfile @relation(fields: [customerId], references: [id])
-  createdAt  DateTime        @default(now())
+  id                   String          @id @default(uuid())
+  customerId           String
+  customer             CustomerProfile @relation(fields: [customerId], references: [id])
+  createdAt            DateTime        @default(now())
+  /// Sprint 20b (FR-CART-012, platform terms only): a snapshot of
+  /// CheckoutReservation.platformTermsVersion/termsAcceptedAt, copied
+  /// here at confirm() time - an immutable fact about THIS checkout
+  /// event, not operational state (BR-028's "the parent never carries
+  /// its own state" is about BranchOrder-level status/fulfilment, not
+  /// this). Always both-set-or-both-null: reserve() rejects outright
+  /// when terms were not accepted, so a CustomerOrder can never exist
+  /// without them.
+  platformTermsVersion String?
+  termsAcceptedAt      DateTime?
 
   branchOrders        BranchOrder[]
   paymentTransactions PaymentTransaction[]
@@ -2428,18 +2455,18 @@ model BranchOrder {
   /// (COD finalizes straight to CANCELLED in the same call that raises
   /// the count to 2; ONLINE rests at DELIVERY_FAILED awaiting the
   /// customer's own refund request). See branch-order-state-machine.ts.
-  deliveryAttemptCount  Int       @default(0)
+  deliveryAttemptCount        Int       @default(0)
   /// Sprint 20a (PDR-027): set the moment this order FIRST enters
   /// DELIVERY_FAILED (attempt 1), cleared back to null on a successful
   /// reschedule. Starts the 48h "no reschedule" clock the sweep polls -
   /// same lazy-reconciliation pattern as confirmReminderSentAt/
   /// deliveredAt, not a real scheduled job.
-  deliveryFailedAt      DateTime?
+  deliveryFailedAt            DateTime?
   /// Sprint 20a (PDR-025): set the moment the sweep first detects this
   /// order still PLACED/PREPARING past its slot's start time, cleared
   /// back to null on a successful reschedule. Starts the 48h
   /// "no reschedule" clock (COD cancels, ONLINE auto-refunds).
-  slotMissedAt          DateTime?
+  slotMissedAt                DateTime?
   /// Sprint 20a: dedupe key for the 6-hour pre-slot prep reminder,
   /// deliberately the (window, date) pair this reminder was LAST sent
   /// for - not a bare boolean/timestamp - so a reschedule to a new slot
@@ -2455,8 +2482,8 @@ model BranchOrder {
   /// delivery fee), never the original `total` and never a staff-
   /// entered figure. Null for ONLINE orders and for any COD order not
   /// yet delivered/picked-up.
-  codCollectedAmount    Decimal?  @db.Decimal(10, 2)
-  codCollectedAt        DateTime?
+  codCollectedAmount          Decimal?  @db.Decimal(10, 2)
+  codCollectedAt              DateTime?
   /// Sprint 20a (PDR-028): the whole-order cancellation's own reason -
   /// mandatory when staff cancels (after prep, before Sent), optional/
   /// null for a customer's own pre-prep self-service cancellation. A
@@ -2464,9 +2491,23 @@ model BranchOrder {
   /// item instead (see BranchOrderItem.cancelledReason) - this field is
   /// set only when the WHOLE order (or its last active item) is what
   /// closes out.
-  cancellationReason    String?
+  cancellationReason          String?
+  /// Sprint 20b (FR-CART-014): the customer's own free-text note for
+  /// THIS branch-group (e.g. delivery instructions), entered at
+  /// reserve() time and carried through to confirm() unchanged -
+  /// visible to the branch's own staff/owner, never editable after
+  /// creation, never surfaced to any Outbox/Notification payload
+  /// (staff reads it from this order's own protected detail endpoint,
+  /// never from a notification body).
+  customerNote                String?
+  /// Sprint 20b (FR-CART-014): an operational note the branch's own
+  /// staff/owner attach to THIS order, visible ONLY to vendor staff -
+  /// never to the customer, never surfaced to any Outbox/Notification
+  /// payload. Editable any time, no status restriction (unlike
+  /// cancellationReason, which is written once at closing time).
+  internalStoreNote           String?
 
-  items  BranchOrderItem[]
+  items   BranchOrderItem[]
   refunds BranchOrderRefund[]
 
   /// Backs BranchOrderItem's own composite FK (vendorId,
@@ -2482,17 +2523,17 @@ model BranchOrder {
 }
 
 model BranchOrderItem {
-  id             String       @id @default(uuid())
-  vendorId       String
-  branchOrderId  String
-  branchOrder    BranchOrder  @relation(fields: [vendorId, branchOrderId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
-  offerVariantId String
-  offerVariant   OfferVariant @relation(fields: [vendorId, offerVariantId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
-  quantity       Int
+  id              String       @id @default(uuid())
+  vendorId        String
+  branchOrderId   String
+  branchOrder     BranchOrder  @relation(fields: [vendorId, branchOrderId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  offerVariantId  String
+  offerVariant    OfferVariant @relation(fields: [vendorId, offerVariantId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  quantity        Int
   /// Snapshot of OfferVariant.basePrice/salePrice at order time - never
   /// re-read live, so a later price change never rewrites history.
-  unitPrice      Decimal      @db.Decimal(10, 2)
-  createdAt      DateTime     @default(now())
+  unitPrice       Decimal      @db.Decimal(10, 2)
+  createdAt       DateTime     @default(now())
   /// Sprint 20a (PDR-028): null = still active. Set once, under this
   /// row's own lock, by whichever cancellation call (customer item-
   /// cancel, staff item-cancel, or a whole-order/last-item cancel
@@ -2503,7 +2544,7 @@ model BranchOrderItem {
   /// one layer down at the DB level too). Cancelling by full line
   /// quantity only this sprint - no partial-quantity cancellation (a
   /// deliberate, documented scope decision, not an oversight).
-  cancelledAt    DateTime?
+  cancelledAt     DateTime?
   /// Mandatory when STAFF cancels this item (after prep, before Sent),
   /// optional/null for a customer's own pre-prep self-service
   /// cancellation - same convention as BranchOrder.cancellationReason.
@@ -2586,7 +2627,7 @@ model BranchOrderRefund {
   /// CanonicalProductMergeService-style comment convention: no lump
   /// "remainder" row ever exists).
   branchOrderItemId    String?                    @unique
-  branchOrderItem      BranchOrderItem?            @relation(fields: [branchOrderItemId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  branchOrderItem      BranchOrderItem?           @relation(fields: [branchOrderItemId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   /// Snapshotted from BranchOrder.paymentTransactionId at refund time -
   /// always non-null in practice (a refund only ever exists for an
   /// ONLINE BranchOrder, which always has one), kept nullable only
@@ -2796,11 +2837,19 @@ model PaymentTransaction {
 /// POST /checkout/reservations/:id/cancel (idempotent - releasing an
 /// already-gone reservation is a no-op success, not an error).
 model CheckoutReservation {
-  id         String          @id @default(uuid())
-  customerId String
-  customer   CustomerProfile @relation(fields: [customerId], references: [id])
-  expiresAt  DateTime
-  createdAt  DateTime        @default(now())
+  id                   String          @id @default(uuid())
+  customerId           String
+  customer             CustomerProfile @relation(fields: [customerId], references: [id])
+  expiresAt            DateTime
+  createdAt            DateTime        @default(now())
+  /// Sprint 20b (FR-CART-012, platform terms only): set together, at
+  /// reserve() time, once reserve() has confirmed the request named
+  /// the current CURRENT_PLATFORM_TERMS_VERSION constant and explicitly
+  /// accepted it - reserve() rejects outright otherwise, so these are
+  /// always both-set on every row that exists. Copied verbatim onto
+  /// CustomerOrder at confirm() time (see that model's own comment).
+  platformTermsVersion String?
+  termsAcceptedAt      DateTime?
 
   items CheckoutReservationItem[]
   slots CheckoutReservationSlot[]
@@ -2827,6 +2876,11 @@ model CheckoutReservation {
 /// separate "reservation group" table, so confirm() can reconstruct
 /// each BranchOrder-to-be directly from the items it already has to
 /// read, without a third table whose only job would be mapping.
+/// Sprint 20b (FR-CART-014): customerNote follows the EXACT same
+/// denormalization - repeated identically on every item row of one
+/// (vendorId, branchId) group, since the note is a per-group fact just
+/// like fulfilmentMethod/paymentMethod. confirm() reads items[0]'s
+/// value for that group's resulting BranchOrder.customerNote.
 model CheckoutReservationItem {
   id                 String                   @id @default(uuid())
   reservationId      String
@@ -2840,6 +2894,7 @@ model CheckoutReservationItem {
   unitPriceAtReserve Decimal                  @db.Decimal(10, 2)
   fulfilmentMethod   FulfilmentMethod
   paymentMethod      BranchOrderPaymentMethod
+  customerNote       String?
   createdAt          DateTime                 @default(now())
   /// Codex review round 1 on commit d0ea80d: confirm() previously
   /// removed a purchased cart LINE by matching (customerId, vendorId,

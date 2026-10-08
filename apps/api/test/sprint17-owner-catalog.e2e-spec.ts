@@ -1401,6 +1401,8 @@ describe('Sprint 17 - owner catalog (pricing, PDR-036 templates, brand, media, i
         .set('Authorization', `Bearer ${customerToken}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [cart.body[0].id],

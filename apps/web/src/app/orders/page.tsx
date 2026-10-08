@@ -62,6 +62,10 @@ interface OrderDto {
   delivered_at: string | null;
   not_received_reported_at: string | null;
   not_received_reason: string | null;
+  // Sprint 20b (FR-CART-014): read-only - the note the customer
+  // themselves entered at checkout. Never internal_store_note, which
+  // this DTO never carries at all.
+  customer_note: string | null;
   confirm_reminder_sent_at: string | null;
   created_at: string;
 }
@@ -335,6 +339,9 @@ export default function OrdersPage() {
               )}
               {o.cancellation_reason && (
                 <div className="muted">سبب الإلغاء: {o.cancellation_reason}</div>
+              )}
+              {o.customer_note && (
+                <div className="muted">ملاحظتك للمتجر: {o.customer_note}</div>
               )}
 
               {o.status === "DELIVERY_FAILED" && (

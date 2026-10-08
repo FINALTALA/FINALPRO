@@ -264,6 +264,8 @@ describe('Sprint 11 - Orders UI, fulfilment loop, notification dispatch (e2e)', 
       .set('Authorization', `Bearer ${customer}`)
       .set('Idempotency-Key', unique('reserve'))
       .send({
+        terms_accepted: true,
+        terms_version: '2026-10-v1',
         groups: [
           {
             cart_item_ids: [itemId],
@@ -311,6 +313,8 @@ describe('Sprint 11 - Orders UI, fulfilment loop, notification dispatch (e2e)', 
       .set('Authorization', `Bearer ${customer}`)
       .set('Idempotency-Key', unique('reserve'))
       .send({
+        terms_accepted: true,
+        terms_version: '2026-10-v1',
         groups: [
           {
             cart_item_ids: [itemId],
@@ -1036,6 +1040,8 @@ describe('Sprint 11 - Orders UI, fulfilment loop, notification dispatch (e2e)', 
       // the employee knowing it IS a COD order and exactly how much to
       // collect - see employeeOrderDto's own updated comment. `total`
       // itself (the original, pre-cancellation value) stays excluded.
+      // Sprint 20b (FR-CART-014): customer_note/internal_store_note
+      // are now ALSO present - see employeeOrderDto's own comment.
       expect(Object.keys(employeeList.body[0]).sort()).toEqual(
         [
           'id',
@@ -1048,6 +1054,8 @@ describe('Sprint 11 - Orders UI, fulfilment loop, notification dispatch (e2e)', 
           'has_open_not_received_report',
           'amount_due',
           'cod_collected_amount',
+          'customer_note',
+          'internal_store_note',
         ].sort(),
       );
     });

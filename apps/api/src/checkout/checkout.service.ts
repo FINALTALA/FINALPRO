@@ -48,9 +48,24 @@ import {
   computeEffectivePrice,
   sumLineAmounts,
 } from '../offers/pricing/effective-price.util';
+import {
+  minimumOrderBlocker,
+  normalizeMinimumOrderValue,
+  resolveDeliveryMinimumOrderValue,
+} from './minimum-order.util';
 
 const RESERVATION_TTL_MS = 10 * 60 * 1000;
 const PICKUP_CODE_MAX_ATTEMPTS = 10;
+
+// Sprint 20b (FR-CART-012, platform terms only): the one, current
+// version string reserve() requires every request to name exactly -
+// bumping this (when the actual terms text changes) immediately makes
+// every reservation created against an older version re-prompt the
+// customer on their next attempt, never silently reusing a stale
+// acceptance. Vendor-specific terms are explicitly NOT built this
+// sprint (no mechanism exists for a vendor to author their own terms
+// text) - FR-CART-012 stays PARTIAL for that half.
+export const CURRENT_PLATFORM_TERMS_VERSION = '2026-10-v1';
 
 // Sprint 17 (blocker 1): delegates to the single shared
 // computeEffectivePrice() - every call site below is unchanged, only
@@ -133,6 +148,12 @@ interface ResolvedGroup {
   addressId?: string;
   windowId?: string;
   scheduledDate?: string;
+  // Sprint 20b: computed once in Phase 1, reused by the later
+  // DELIVERY-minimum check (reserveDeliverySlotAlreadyLocked) without
+  // a redundant re-sum or re-query.
+  subtotal: number;
+  branchMinimumOrderValue: number | null;
+  customerNote: string | null;
 }
 
 /**
@@ -243,7 +264,12 @@ export class CheckoutService {
 
     const zoneSettingsByVendor = new Map<
       string,
-      { region: string; fee: unknown; enabled: boolean }[]
+      {
+        region: string;
+        fee: unknown;
+        enabled: boolean;
+        minimumOrderValue: unknown;
+      }[]
     >();
     const vendorIds = [...new Set(groups.map((g) => g.vendorId))];
     for (const vendorId of vendorIds) {
@@ -277,22 +303,59 @@ export class CheckoutService {
           g.eligibleBranchIds.map(async (branchId) => {
             const branch = branchById.get(branchId)!;
             let deliveryFee: number | null = null;
+            let zoneSetting:
+              | { enabled: boolean; fee: unknown; minimumOrderValue: unknown }
+              | undefined;
             if (addressRow?.zone) {
-              const setting = zoneSettingsByVendor
+              zoneSetting = zoneSettingsByVendor
                 .get(g.vendorId)
                 ?.find((s) => s.region === addressRow.zone);
-              deliveryFee = resolveDeliveryFee(setting ?? null);
+              deliveryFee = resolveDeliveryFee(zoneSetting ?? null);
             }
             const availableSlots = await computeAvailableSlots(
               this.prisma,
               g.vendorId,
               branchId,
             );
+            // Sprint 20b (FR-PRICE-006/FR-CART-015): quote() doesn't yet
+            // know which fulfilment method the customer will pick for
+            // this branch, so both are previewed independently - PICKUP
+            // only meaningful when is_physical, DELIVERY only
+            // meaningful when an address was supplied AND this zone is
+            // actually deliverable (delivery_fee !== null). Neither
+            // blocks anything here - reserve() is the real gate.
+            const branchMinimum = normalizeMinimumOrderValue(
+              branch.minimumOrderValue,
+            );
+            const pickupMinimum = branch.isPhysical ? branchMinimum : null;
+            const deliveryMinimum =
+              addressRow?.zone && deliveryFee !== null
+                ? resolveDeliveryMinimumOrderValue(
+                    branchMinimum,
+                    normalizeMinimumOrderValue(zoneSetting?.minimumOrderValue),
+                  )
+                : null;
+            const blockers = [];
+            if (pickupMinimum !== null && subtotal < pickupMinimum) {
+              blockers.push(
+                minimumOrderBlocker('PICKUP', pickupMinimum, subtotal),
+              );
+            }
+            if (deliveryMinimum !== null && subtotal < deliveryMinimum) {
+              blockers.push(
+                minimumOrderBlocker('DELIVERY', deliveryMinimum, subtotal),
+              );
+            }
             return {
               branch_id: branch.id,
               branch_name: branch.name,
               is_physical: branch.isPhysical,
               delivery_fee: deliveryFee,
+              minimum_order_value: {
+                pickup: pickupMinimum,
+                delivery: deliveryMinimum,
+              },
+              blockers,
               available_slots: availableSlots.map((s) => ({
                 delivery_window_id: s.deliveryWindowId,
                 date: s.date,
@@ -424,6 +487,24 @@ export class CheckoutService {
     correlationId: string,
     idempotencyClaimId: string | undefined,
   ) {
+    // Sprint 20b (FR-CART-012, platform terms only): checked first,
+    // before any DB read - a pure request-shape validation, same as
+    // the duplicate checks right below. Platform terms are checkout-
+    // wide, not per group.
+    if (dto.terms_accepted !== true) {
+      throw new ConflictException({
+        code: 'TERMS_NOT_ACCEPTED',
+        message: 'You must accept the platform terms of service to continue',
+      });
+    }
+    if (dto.terms_version !== CURRENT_PLATFORM_TERMS_VERSION) {
+      throw new ConflictException({
+        code: 'TERMS_VERSION_MISMATCH',
+        message:
+          'The terms of service have changed since this page was loaded - please reload and accept again',
+      });
+    }
+
     const branchIds = dto.groups.map((g) => g.branch_id);
     if (new Set(branchIds).size !== branchIds.length) {
       throw new ConflictException({
@@ -545,12 +626,46 @@ export class CheckoutService {
             unitPrice: effectivePrice(ci.offerVariant),
           };
         });
+        // Sprint 20b (FR-PRICE-006): the ITEMS-ONLY subtotal of this
+        // group - never delivery fee, never any future tax/fee - the
+        // one figure both the PICKUP check right below and the
+        // DELIVERY check inside reserveDeliverySlotAlreadyLocked
+        // compare against.
+        const groupSubtotal = sumLineAmounts(
+          items.map((i) => ({ amount: i.unitPrice, quantity: i.quantity })),
+        );
+        const branchMinimumOrderValue = normalizeMinimumOrderValue(
+          branch.minimumOrderValue,
+        );
 
         if (group.fulfilment_method === 'PICKUP') {
           if (!branch.isPhysical) {
             throw new ConflictException({
               code: 'PICKUP_REQUIRES_PHYSICAL_BRANCH',
               message: 'This branch cannot be used for pickup',
+            });
+          }
+          if (
+            branchMinimumOrderValue !== null &&
+            groupSubtotal < branchMinimumOrderValue
+          ) {
+            const blocker = minimumOrderBlocker(
+              'PICKUP',
+              branchMinimumOrderValue,
+              groupSubtotal,
+            );
+            throw new ConflictException({
+              code: blocker.code,
+              message: blocker.message,
+              details: [
+                {
+                  branch_id: branch.id,
+                  vendor_id: vendorId,
+                  fulfilment_method: blocker.fulfilment_method,
+                  required: blocker.required,
+                  current: blocker.current,
+                },
+              ],
             });
           }
         } else if (
@@ -574,6 +689,9 @@ export class CheckoutService {
           addressId: group.address_id,
           windowId: group.delivery_window_id,
           scheduledDate: group.scheduled_date,
+          subtotal: groupSubtotal,
+          branchMinimumOrderValue,
+          customerNote: group.customer_note ?? null,
         });
       }
 
@@ -692,7 +810,12 @@ export class CheckoutService {
 
       // Phase 3: locks held - check availability and write.
       const reservation = await tx.checkoutReservation.create({
-        data: { customerId, expiresAt },
+        data: {
+          customerId,
+          expiresAt,
+          platformTermsVersion: dto.terms_version,
+          termsAcceptedAt: new Date(),
+        },
       });
 
       for (const g of resolvedGroups) {
@@ -740,6 +863,7 @@ export class CheckoutService {
               fulfilmentMethod: g.fulfilmentMethod,
               paymentMethod: g.paymentMethod,
               cartItemId: item.cartItemId,
+              customerNote: g.customerNote,
             },
           });
         }
@@ -754,6 +878,8 @@ export class CheckoutService {
             g.addressId!,
             g.windowId!,
             g.scheduledDate!,
+            g.branchMinimumOrderValue,
+            g.subtotal,
           );
         }
       }
@@ -783,6 +909,8 @@ export class CheckoutService {
     addressId: string,
     windowId: string,
     scheduledDateStr: string,
+    branchMinimumOrderValue: number | null,
+    groupSubtotal: number,
   ): Promise<void> {
     const address = await tx.address.findUnique({ where: { id: addressId } });
     if (!address || address.customerId !== customerId) {
@@ -807,6 +935,34 @@ export class CheckoutService {
       throw new ConflictException({
         code: 'DELIVERY_NOT_AVAILABLE_IN_ZONE',
         message: 'This vendor does not deliver to your zone',
+      });
+    }
+
+    // Sprint 20b (FR-PRICE-006): the zone's own override, if the owner
+    // set one, else the branch's own default - see
+    // minimum-order.util.ts's own comment for the precedence rule.
+    const effectiveMinimum = resolveDeliveryMinimumOrderValue(
+      branchMinimumOrderValue,
+      normalizeMinimumOrderValue(zoneSetting?.minimumOrderValue),
+    );
+    if (effectiveMinimum !== null && groupSubtotal < effectiveMinimum) {
+      const blocker = minimumOrderBlocker(
+        'DELIVERY',
+        effectiveMinimum,
+        groupSubtotal,
+      );
+      throw new ConflictException({
+        code: blocker.code,
+        message: blocker.message,
+        details: [
+          {
+            branch_id: branchId,
+            vendor_id: vendorId,
+            fulfilment_method: blocker.fulfilment_method,
+            required: blocker.required,
+            current: blocker.current,
+          },
+        ],
       });
     }
 
@@ -1256,7 +1412,15 @@ export class CheckoutService {
       }
 
       const customerOrder = await tx.customerOrder.create({
-        data: { customerId },
+        data: {
+          customerId,
+          // Sprint 20b (FR-CART-012): a verbatim snapshot of the
+          // reservation's own acceptance - reserve() never allows a
+          // reservation to exist without both set, so these are never
+          // backfilled or defaulted here.
+          platformTermsVersion: reservation.platformTermsVersion,
+          termsAcceptedAt: reservation.termsAcceptedAt,
+        },
       });
 
       let paymentTransactionId: string | null = null;
@@ -1321,6 +1485,11 @@ export class CheckoutService {
           subtotal,
           deliveryFee,
           total,
+          // Sprint 20b (FR-CART-014): every item in this group carries
+          // the identical value (denormalized at reserve() time, same
+          // convention as fulfilmentMethod/paymentMethod above) - null
+          // when the customer left no note for this group.
+          customerNote: items[0].customerNote,
           paymentTransactionId:
             paymentMethod === 'ONLINE' ? paymentTransactionId : null,
         };

@@ -5,6 +5,7 @@ import {
   Get,
   NotFoundException,
   Param,
+  Patch,
   Post,
   Req,
   UseGuards,
@@ -29,6 +30,7 @@ import { BranchOrderService } from './branch-order.service';
 import { MarkDeliveryFailedDto } from './dto/mark-delivery-failed.dto';
 import { PickupHandoverDto } from './dto/pickup-handover.dto';
 import { StaffCancelBranchOrderDto } from './dto/staff-cancel-branch-order.dto';
+import { UpdateInternalOrderNoteDto } from './dto/update-internal-order-note.dto';
 import { FulfilmentReconciliationService } from './fulfilment-reconciliation.service';
 
 interface BranchOrderRow {
@@ -46,6 +48,8 @@ interface BranchOrderRow {
   cancellationReason: string | null;
   codCollectedAmount: unknown;
   codCollectedAt: Date | null;
+  customerNote: string | null;
+  internalStoreNote: string | null;
   items: { unitPrice: unknown; quantity: number; cancelledAt: Date | null }[];
   refunds: { amount: unknown; reason: string }[];
   customerOrder: {
@@ -90,6 +94,11 @@ function ownerOrderDto(o: BranchOrderRow) {
             o.deliveryFee,
           ).toNumber()
         : null,
+    // Sprint 20b (FR-CART-014): both notes are staff-visible - never
+    // sent to the customer's own order DTO (customer-orders.controller.ts
+    // exposes customer_note only, never internal_store_note).
+    customer_note: o.customerNote,
+    internal_store_note: o.internalStoreNote,
   };
 }
 
@@ -159,6 +168,11 @@ function employeeOrderDto(o: BranchOrderRow) {
         : null,
     cod_collected_amount:
       o.codCollectedAmount !== null ? Number(o.codCollectedAmount) : null,
+    // Sprint 20b (FR-CART-014): same reasoning as ownerOrderDto's own
+    // comment - both notes are operationally necessary for whoever is
+    // actually fulfilling the order, not an owner-only extra.
+    customer_note: o.customerNote,
+    internal_store_note: o.internalStoreNote,
   };
 }
 
@@ -888,5 +902,67 @@ export class BranchOrdersStaffController {
       order_closed: result.orderClosed,
       refunded_amount: result.refundedAmount.toNumber(),
     };
+  }
+
+  // Sprint 20b (FR-CART-014): an operational note the branch's own
+  // staff/owner attach to this order - visible only to them, never
+  // the customer, never surfaced to any Outbox/Notification payload.
+  // No status restriction (unlike cancellationReason, written once at
+  // closing time) - editable any time while the order exists.
+  // Idempotency-Key required; AuditLog records ONLY that it changed
+  // and the new length - never the note text itself.
+  @Patch('branches/:branchId/orders/:branchOrderId/internal-note')
+  @UseInterceptors(IdempotencyInterceptor)
+  async updateInternalNote(
+    @Param('vendorId') vendorId: string,
+    @Param('branchId') branchId: string,
+    @Param('branchOrderId') branchOrderId: string,
+    @Body() dto: UpdateInternalOrderNoteDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM branch_orders WHERE id = ${branchOrderId} FOR UPDATE`;
+      const order = await tx.branchOrder.findUnique({
+        where: { id: branchOrderId },
+        select: {
+          id: true,
+          vendorId: true,
+          branchId: true,
+          internalStoreNote: true,
+        },
+      });
+      if (
+        !order ||
+        order.vendorId !== vendorId ||
+        order.branchId !== branchId
+      ) {
+        throw new NotFoundException({
+          code: 'BRANCH_ORDER_NOT_FOUND',
+          message: 'Branch order not found for this branch',
+        });
+      }
+      const changed = order.internalStoreNote !== dto.note;
+      if (changed) {
+        await tx.branchOrder.update({
+          where: { id: branchOrderId },
+          data: { internalStoreNote: dto.note },
+        });
+        await this.auditLog.record(
+          {
+            actorId: user.id,
+            correlationId: req.correlationId,
+            action: 'branch_order.internal_note_updated',
+            entityType: 'BranchOrder',
+            entityId: branchOrderId,
+            // Never the note text itself - only that it changed and
+            // its new length (review-round requirement).
+            afterState: { changed: true, new_length: dto.note.length },
+          },
+          tx,
+        );
+      }
+      return { id: branchOrderId, internal_store_note: dto.note };
+    });
   }
 }
