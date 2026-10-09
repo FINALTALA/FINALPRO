@@ -132,6 +132,7 @@ describe('Sprint 19 - notification relay, sweeps, API (e2e)', () => {
         store_type: 'PHYSICAL',
         branches: [{ name: 'Main', is_physical: true }],
         applicable_categories: ['WOMEN'],
+        return_policy: { mode: 'NO_RETURN' },
       })
       .expect(201);
     const vendorId = vendorRes.body.id as string;

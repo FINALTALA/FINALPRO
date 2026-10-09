@@ -119,6 +119,7 @@ describe('Sprint 15 - vendor onboarding: warehouse verification evidence, staff 
         store_type: 'ONLINE_ONLY',
         branches: [{ name: 'Warehouse branch', is_physical: false }],
         applicable_categories: ['WOMEN'],
+        return_policy: { mode: 'NO_RETURN' },
       })
       .expect(201);
     return { vendorId: res.body.id };
@@ -241,6 +242,7 @@ describe('Sprint 15 - vendor onboarding: warehouse verification evidence, staff 
           store_type: 'ONLINE_ONLY',
           branches: [{ name: 'Warehouse branch', is_physical: false }],
           applicable_categories: ['WOMEN'],
+          return_policy: { mode: 'NO_RETURN' },
         })
         .expect(201);
     });
@@ -306,6 +308,7 @@ describe('Sprint 15 - vendor onboarding: warehouse verification evidence, staff 
           store_type: 'PHYSICAL',
           branches: [{ name: 'Main branch', is_physical: true }],
           applicable_categories: ['WOMEN'],
+          return_policy: { mode: 'NO_RETURN' },
         })
         .expect(201);
       const vendorId = res.body.id;
@@ -842,6 +845,7 @@ describe('Sprint 15 - vendor onboarding: warehouse verification evidence, staff 
           store_type: 'PHYSICAL',
           branches: [{ name: 'Main branch', is_physical: true }],
           applicable_categories: ['WOMEN'],
+          return_policy: { mode: 'NO_RETURN' },
         })
         .expect(201);
       return { vendorId: res.body.id, branchId: res.body.branches[0].id };

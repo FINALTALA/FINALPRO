@@ -19,6 +19,7 @@ import { OutboxModule } from './outbox/outbox.module';
 import { PlatformAdminModule } from './platform-admin/platform-admin.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
+import { ReturnsModule } from './returns/returns.module';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { VendorVerificationModule } from './vendor-verification/vendor-verification.module';
 import { VendorsModule } from './vendors/vendors.module';
@@ -52,6 +53,7 @@ import { WarehouseVerificationModule } from './warehouse-verification/warehouse-
     DeliveryWindowsModule,
     CartModule,
     CheckoutModule,
+    ReturnsModule,
   ],
   providers: [
     {

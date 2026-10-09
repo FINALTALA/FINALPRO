@@ -93,6 +93,7 @@ describe('Sprint 18a - inventory: safety stock, physical count, SALE movements, 
           { name: 'Branch B', is_physical: true },
         ],
         applicable_categories: ['WOMEN'],
+        return_policy: { mode: 'NO_RETURN' },
       })
       .expect(201);
     return {

@@ -102,6 +102,7 @@ describe('Sprint 9 - BranchOrder model + delivery-window calendar setup (e2e)', 
           { name: 'Branch B', is_physical: true },
         ],
         applicable_categories: ['WOMEN'],
+        return_policy: { mode: 'NO_RETURN' },
       })
       .expect(201);
     return {

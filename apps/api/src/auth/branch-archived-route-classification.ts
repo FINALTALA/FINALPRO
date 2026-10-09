@@ -84,4 +84,12 @@ export const BRANCH_ARCHIVED_ALLOW_ROUTES: readonly string[] = [
   // existing order finish" reasoning as the fulfilment actions above,
   // never new footprint.
   'PATCH vendors/:vendorId/branches/:branchId/orders/:branchOrderId/internal-note',
+  // Sprint 21: a return can still be pending/escalated against an
+  // order placed before this branch was archived - same "let an
+  // existing [order/return] finish" reasoning as cancel/approve-refund
+  // above. (The vendor-wide redeem endpoint has no :branchId in its
+  // own route - out of scope for this file, same as staff/:vendorUserId
+  // /transfer - see this file's own top comment.)
+  'GET vendors/:vendorId/branches/:branchId/returns',
+  'PATCH vendors/:vendorId/branches/:branchId/returns/:returnId/decision',
 ];

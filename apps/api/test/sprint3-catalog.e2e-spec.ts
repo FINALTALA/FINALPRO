@@ -142,6 +142,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         store_type: 'PHYSICAL',
         branches: [{ name: 'Main branch', is_physical: true }],
         applicable_categories: ['WOMEN'],
+        return_policy: { mode: 'NO_RETURN' },
       })
       .expect(201);
     return { vendorId: res.body.id, branchId: res.body.branches[0].id };
@@ -508,6 +509,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
             { name: 'Branch B (no evidence)', is_physical: true },
           ],
           applicable_categories: ['WOMEN'],
+          return_policy: { mode: 'NO_RETURN' },
         })
         .expect(201);
       const vendorId = applyRes.body.id;
@@ -694,6 +696,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
           store_type: 'PHYSICAL',
           branches: [{ name: 'Corrected main branch', is_physical: true }],
           applicable_categories: ['WOMEN'],
+          return_policy: { mode: 'NO_RETURN' },
         })
         .expect(201);
       expect(reapplied.body.status).toBe('APPLIED');
@@ -840,6 +843,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
             { name: 'Branch B', is_physical: true },
           ],
           applicable_categories: ['WOMEN'],
+          return_policy: { mode: 'NO_RETURN' },
         })
         .expect(201);
       const vendorId = applyRes.body.id;

@@ -54,6 +54,7 @@ import {
   resolveDeliveryMinimumOrderValue,
 } from './minimum-order.util';
 import { deliveryNotAvailableBlocker } from './delivery-coverage.util';
+import { buildReturnPolicySnapshot } from '../returns/return-policy.util';
 
 const RESERVATION_TTL_MS = 10 * 60 * 1000;
 const PICKUP_CODE_MAX_ATTEMPTS = 10;
@@ -1487,6 +1488,26 @@ export class CheckoutService {
         const deliveryFee = slot ? Number(slot.deliveryFeeAtReserve) : null;
         const total = addMoney(subtotal, deliveryFee ?? 0);
 
+        // Sprint 21 (PDR-030): the vendor's return policy exactly AS
+        // IT IS right now, snapshotted onto this BranchOrder and never
+        // re-read afterward - see return-policy.util.ts's own comment.
+        // A later change to the vendor's live policy must never
+        // retroactively change what this already-placed order is
+        // eligible for.
+        const vendorForReturnPolicy = await tx.vendor.findUniqueOrThrow({
+          where: { id: vendorId },
+          select: {
+            returnsEnabled: true,
+            returnMode: true,
+            returnWindowDays: true,
+            returnFeeIls: true,
+            returnPolicyUpdatedAt: true,
+          },
+        });
+        const returnPolicySnapshot = buildReturnPolicySnapshot(
+          vendorForReturnPolicy,
+        );
+
         const baseData = {
           customerOrderId: customerOrder.id,
           vendorId,
@@ -1506,6 +1527,16 @@ export class CheckoutService {
           customerNote: items[0].customerNote,
           paymentTransactionId:
             paymentMethod === 'ONLINE' ? paymentTransactionId : null,
+          returnPolicySnapshotEnabled:
+            returnPolicySnapshot.returnPolicySnapshotEnabled,
+          returnPolicySnapshotMode:
+            returnPolicySnapshot.returnPolicySnapshotMode,
+          returnPolicySnapshotWindowDays:
+            returnPolicySnapshot.returnPolicySnapshotWindowDays,
+          returnPolicySnapshotFeeIls:
+            returnPolicySnapshot.returnPolicySnapshotFeeIls?.toFixed(2) ?? null,
+          returnPolicySnapshotVersion:
+            returnPolicySnapshot.returnPolicySnapshotVersion,
         };
 
         const branchOrder =

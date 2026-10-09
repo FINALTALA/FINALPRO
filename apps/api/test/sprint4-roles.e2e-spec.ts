@@ -100,6 +100,7 @@ describe('Sprint 4 - roles, staff invites, workspace switcher (e2e)', () => {
         store_type: 'PHYSICAL',
         branches: [{ name: 'Main branch', is_physical: true }],
         applicable_categories: ['WOMEN'],
+        return_policy: { mode: 'NO_RETURN' },
       })
       .expect(201);
     return { vendorId: res.body.id, branchId: res.body.branches[0].id };
@@ -348,6 +349,7 @@ describe('Sprint 4 - roles, staff invites, workspace switcher (e2e)', () => {
             { name: 'Branch B', is_physical: true },
           ],
           applicable_categories: ['WOMEN'],
+          return_policy: { mode: 'NO_RETURN' },
         })
         .expect(201);
       const vendorId = applyRes.body.id;
@@ -426,6 +428,7 @@ describe('Sprint 4 - roles, staff invites, workspace switcher (e2e)', () => {
             { name: 'Branch B', is_physical: true },
           ],
           applicable_categories: ['WOMEN'],
+          return_policy: { mode: 'NO_RETURN' },
         })
         .expect(201);
       const vendorId = applyRes.body.id;
@@ -499,6 +502,7 @@ describe('Sprint 4 - roles, staff invites, workspace switcher (e2e)', () => {
             { name: 'Branch B', is_physical: true },
           ],
           applicable_categories: ['WOMEN'],
+          return_policy: { mode: 'NO_RETURN' },
         })
         .expect(201);
       const vendorId = applyRes.body.id;
@@ -802,6 +806,7 @@ describe('Sprint 4 - roles, staff invites, workspace switcher (e2e)', () => {
             { name: 'Branch B', is_physical: true },
           ],
           applicable_categories: ['WOMEN'],
+          return_policy: { mode: 'NO_RETURN' },
         })
         .expect(201);
       const vendorId = applyRes.body.id;

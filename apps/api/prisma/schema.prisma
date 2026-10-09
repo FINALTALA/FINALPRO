@@ -336,6 +336,31 @@ model Vendor {
   storefrontPublished Boolean            @default(false)
   createdAt           DateTime           @default(now())
 
+  /// Sprint 21 (PDR-030, FR-RET-008): selected at registration
+  /// (POST /vendors's own return_policy field - CreateVendorDto makes
+  /// it required), never silently defaulted to "enabled" on an owner
+  /// who never chose. false/NO_RETURN until the owner explicitly opts
+  /// in. S21a's DTOs accept only NO_RETURN/REFUND_ONLY - EXCHANGE_ONLY
+  /// and BOTH exist on the enum purely so a later sprint can add real
+  /// exchange support without a destructive enum change, but every
+  /// write path in this sprint rejects them outright.
+  returnsEnabled        Boolean    @default(false)
+  returnMode            ReturnMode @default(NO_RETURN)
+  /// Required by the DTO when returnMode = REFUND_ONLY, null for
+  /// NO_RETURN.
+  returnWindowDays      Int?
+  returnFeeIls          Decimal?   @db.Decimal(10, 2)
+  /// Null on every vendor created before this migration (legacy) -
+  /// deliberately: the 6-month "at most one change per window" rule
+  /// (PDR-030) only starts counting from a REAL decision. A legacy
+  /// vendor's first post-migration policy write is never gated by it;
+  /// every write after that first one is, measured from this
+  /// timestamp. Set at registration (apply()) and on every accepted
+  /// later update (updateReturnPolicy()), always under this row's own
+  /// `FOR UPDATE` lock so two concurrent updates can never both read a
+  /// stale value and both wrongly pass the 6-month check.
+  returnPolicyUpdatedAt DateTime?
+
   vendorUsers                   VendorUser[]
   storeBranches                 StoreBranch[]
   subscriptions                 VendorSubscription[]
@@ -723,6 +748,10 @@ model StoreBranch {
   checkoutReservationItems CheckoutReservationItem[]
   operatingHours           BranchOperatingHours[]
   closures                 BranchClosure[]
+  /// Sprint 21: returns actually RECEIVED here - may differ from the
+  /// originating BranchOrder's own branch (PDR-031's cross-branch
+  /// acceptance within the same vendor).
+  returnsReceived          Return[]
 
   /// Backs the composite FKs on VendorUser/StaffInvite (vendorId,
   /// branchId) -> (vendorId, id) - a plain PK-only unique on `id`
@@ -1945,6 +1974,12 @@ enum StockMovementReason {
   LOSS
   COUNT_CORRECTION
   SALE
+  /// Sprint 21 (EPIC-RET, PDR-030): a returned item marked RESELLABLE
+  /// at receipt - quantityDelta positive, the only positive-delta
+  /// reason in this enum (every other value here is a decrease).
+  /// DAMAGED-condition returns write no StockMovement at all (never
+  /// automatic - a separate, later, explicit owner decision).
+  RETURN_RESTOCK
 }
 
 /// Sprint 6 (RB-INV-003, PDR-021): "Manual non-sale stock reductions
@@ -2506,6 +2541,31 @@ model BranchOrder {
   /// payload. Editable any time, no status restriction (unlike
   /// cancellationReason, which is written once at closing time).
   internalStoreNote           String?
+  /// Sprint 21 (FR-RET-001, prerequisite for return-window
+  /// computation): mirrors deliveredAt exactly, for PICKUP orders -
+  /// written in the same transaction as the PICKED_UP transition
+  /// (never a separate, unguarded write), null until then. Without
+  /// this, a PICKUP order's return window had no honest anchor at all
+  /// (updatedAt is unsafe - any later, unrelated write to this row
+  /// would silently push a return deadline forward).
+  pickedUpAt                  DateTime?
+  /// Sprint 21 (PDR-030): the vendor's return policy exactly AS IT WAS
+  /// the moment this order was confirmed - written once, in the same
+  /// transaction as confirm() (same snapshot-at-confirm convention as
+  /// Sprint 20b's platformTermsVersion), never re-read from the live
+  /// Vendor row afterward. All five null together on every order
+  /// confirmed before this migration shipped (legacy) - deliberately:
+  /// a return right never disclosed at purchase cannot be granted
+  /// retroactively just because the vendor later turns returns on.
+  /// returnPolicySnapshotVersion is Vendor.returnPolicyUpdatedAt's own
+  /// value AT THAT MOMENT, copied verbatim - proof of which policy
+  /// revision actually applied, independent of whatever the vendor's
+  /// policy has since become.
+  returnPolicySnapshotEnabled    Boolean?
+  returnPolicySnapshotMode       ReturnMode?
+  returnPolicySnapshotWindowDays Int?
+  returnPolicySnapshotFeeIls     Decimal?    @db.Decimal(10, 2)
+  returnPolicySnapshotVersion    DateTime?
 
   items   BranchOrderItem[]
   refunds BranchOrderRefund[]
@@ -2550,8 +2610,18 @@ model BranchOrderItem {
   /// cancellation - same convention as BranchOrder.cancellationReason.
   cancelledReason String?
 
-  refund BranchOrderRefund?
+  refund  BranchOrderRefund?
+  /// Sprint 21: possibly several over time (resubmission after
+  /// REJECTED_CLOSED/EXPIRED/CANCELLED_BY_CUSTOMER) - see Return's own
+  /// partial unique index for exactly which statuses forbid a second
+  /// concurrent/duplicate row.
+  returns Return[]
 
+  /// Sprint 21: backs Return's own composite FK (vendorId,
+  /// branchOrderItemId) -> (vendorId, id) - same tenant-safety pattern
+  /// as BranchOrder's own @@unique([vendorId, id]) above, which backs
+  /// THIS model's own composite FK to BranchOrder.
+  @@unique([vendorId, id])
   @@index([branchOrderId])
   @@map("branch_order_items")
 }
@@ -2592,6 +2662,22 @@ enum BranchOrderRefundReason {
   /// because Postgres enum values are never safely dropped (this
   /// schema's own additive-migration convention).
   PLATFORM_ADMIN_MANUAL
+  /// Sprint 21 (EPIC-RET): a Return reaching RECEIVED/REFUNDED - the
+  /// ONLY reason value whose row may carry a non-null `returnId` (see
+  /// this model's own CHECK constraint, hand-written in migration SQL
+  /// since Prisma's schema DSL cannot express it).
+  ITEM_RETURNED
+}
+
+/// Sprint 21: distinguishes a real online-gateway refund from a cash
+/// hand-back at a branch for a COD return - see BranchOrderRefund's
+/// own comment for why this must never be inferred from
+/// paymentTransactionId being null (that's ALSO true for a COD order,
+/// for an entirely different reason - no gateway involvement at all,
+/// ever, for ANY COD row).
+enum RefundMethod {
+  ONLINE_GATEWAY
+  COD_CASH
 }
 
 enum BranchOrderRefundInitiator {
@@ -2629,9 +2715,11 @@ model BranchOrderRefund {
   branchOrderItemId    String?                    @unique
   branchOrderItem      BranchOrderItem?           @relation(fields: [branchOrderItemId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   /// Snapshotted from BranchOrder.paymentTransactionId at refund time -
-  /// always non-null in practice (a refund only ever exists for an
-  /// ONLINE BranchOrder, which always has one), kept nullable only
-  /// because the FK itself is nullable on BranchOrder.
+  /// non-null for an ONLINE_GATEWAY refund (which always has one by
+  /// construction), null for a COD_CASH refund (Sprint 21 - no
+  /// gateway involvement for COD, ever, for any reason) and kept
+  /// nullable for the same original reason the FK itself is nullable
+  /// on BranchOrder.
   paymentTransactionId String?
   paymentTransaction   PaymentTransaction?        @relation(fields: [paymentTransactionId], references: [id])
   amount               Decimal                    @db.Decimal(10, 2)
@@ -2640,11 +2728,219 @@ model BranchOrderRefund {
   /// Null for a SYSTEM-initiated (automatic) refund; set for a
   /// STAFF/PLATFORM_ADMIN-approved one.
   approvedByUserId     String?
+  /// Sprint 21: ONLINE_GATEWAY vs COD_CASH - never inferred from
+  /// paymentTransactionId alone (null means two different things for
+  /// two different reasons, see that field's own comment). Nullable
+  /// only during the additive migration's own backfill window - every
+  /// pre-S21 row is verified ONLINE_GATEWAY directly from the code
+  /// (branch-order-cancellation.service.ts's own `if (isOnline)` gate
+  /// around every branchOrderRefund.create() call site, no exception),
+  /// then the column is set NOT NULL in the same migration.
+  method               RefundMethod
+  /// Sprint 21: the ONE real link to the Return that produced this
+  /// refund (null for every cancellation-driven row, which has no
+  /// Return at all) - a COMPOSITE FK into Return's own
+  /// (id, branchOrderItemId) unique target, together with this row's
+  /// own branchOrderItemId above, so a raw write can never attach this
+  /// refund's returnId to a Return belonging to a DIFFERENT item than
+  /// this same row already claims. @unique: exactly one refund per
+  /// Return (1:1) - a given item can never be refunded twice
+  /// regardless of path, which this composite target combined with
+  /// branchOrderItemId's own pre-existing @unique above both enforce
+  /// independently. A hand-written CHECK constraint (migration SQL,
+  /// not representable in Prisma's schema DSL) additionally requires
+  /// that returnId IS NOT NULL implies branchOrderItemId IS NOT NULL
+  /// AND reason = ITEM_RETURNED AND method IS NOT NULL - a composite
+  /// FK alone does not enforce "if A then B," only "if both A and B,
+  /// they must be consistent," since Postgres skips an FK check
+  /// entirely when any of its columns is NULL.
+  returnId             String?                    @unique
+  return               Return?                    @relation("ReturnRefund", fields: [returnId, branchOrderItemId], references: [id, branchOrderItemId], onDelete: Restrict, onUpdate: Cascade)
   createdAt            DateTime                   @default(now())
 
   @@index([branchOrderId])
   @@index([paymentTransactionId])
+  /// Required by Prisma for the composite one-to-one relation above -
+  /// returnId's own plain @unique already makes this pair unique in
+  /// practice; this is the exact-fields-list constraint the relation
+  /// attribute itself needs declared on its defining side.
+  @@unique([returnId, branchOrderItemId])
   @@map("branch_order_refunds")
+}
+
+/// Sprint 21 (PDR-030): a store's return/exchange policy. S21a's DTOs
+/// accept only NO_RETURN/REFUND_ONLY - EXCHANGE_ONLY/BOTH exist here
+/// purely so a later sprint (S21b) can add real exchange support
+/// without a destructive enum change; every write path in S21a rejects
+/// them outright (400).
+enum ReturnMode {
+  NO_RETURN
+  REFUND_ONLY
+  EXCHANGE_ONLY
+  BOTH
+}
+
+enum ReturnReason {
+  DAMAGED
+  WRONG_ITEM
+  COUNTERFEIT_CLAIM
+  WARRANTY_CLAIM
+  CHANGE_OF_MIND
+}
+
+/// Sprint 21 (PDR-030): recorded at RECEIVED time, drives whether the
+/// item restocks (RESELLABLE) or not (DAMAGED, requiring a separate,
+/// later, explicit owner decision via the existing manual stock-
+/// adjustment path - never automatic).
+enum ReturnItemCondition {
+  RESELLABLE
+  DAMAGED
+}
+
+/// Sprint 21 (EPIC-RET). See this file's own migration-round review
+/// history for why the state space looks like this - in short:
+/// (1) approval only ever ISSUES a code; refund/restock happen only
+/// at RECEIVED, never before; (2) a store's own rejection (disputable
+/// within 7 days) is a DIFFERENT state from PLATFORM_ADMIN's final
+/// escalation-resolution rejection (never disputable, never
+/// resubmittable) - conflating them into one value previously allowed
+/// resubmission after an admin's final decision, a real bug caught in
+/// review; (3) REJECTED_CLOSED/EXPIRED/CANCELLED_BY_CUSTOMER are the
+/// ONLY three values a resubmission is allowed from - see Return's
+/// own partial unique index comment.
+enum ReturnStatus {
+  REQUESTED
+  APPROVED_AWAITING_DROPOFF
+  RECEIVED
+  REFUND_PROCESSING
+  REFUNDED
+  /// Store rejected - still within the customer's dispute window.
+  REJECTED
+  /// The dispute window closed with no dispute filed (sweep-driven,
+  /// same lazy-reconciliation pattern as EXPIRED below) - terminal,
+  /// resubmission allowed.
+  REJECTED_CLOSED
+  /// PLATFORM_ADMIN's own final decision after ESCALATED - terminal,
+  /// NEVER disputable, NEVER resubmittable. Distinct from REJECTED/
+  /// REJECTED_CLOSED on purpose (see this enum's own top comment).
+  ADMIN_REJECTED
+  ESCALATED
+  /// The approval code expired (7 days) without being redeemed -
+  /// terminal, resubmission allowed.
+  EXPIRED
+  /// Customer cancelled while still REQUESTED - terminal, resubmission
+  /// allowed. Unreachable from APPROVED_AWAITING_DROPOFF onward (a
+  /// code has already been issued; the customer's only move then is
+  /// to simply not redeem it, which EXPIRED already covers).
+  CANCELLED_BY_CUSTOMER
+}
+
+/// Sprint 21 (EPIC-RET, FR-RET-001..009, PDR-030/031, BR-025/033). One
+/// row per return attempt on a single BranchOrderItem - see the
+/// partial unique index below for exactly which statuses count as
+/// "still open or already resolved successfully," which together
+/// block a second concurrent/duplicate attempt on the same item
+/// (including after REFUNDED and ADMIN_REJECTED - a prior review round
+/// caught that an earlier draft of this index let those two slip
+/// through).
+///
+/// No separate `Fulfillment` entity (the literal SRS Part-3 design,
+/// `OrderItem.fulfillment_id` with potentially many Fulfillment rows
+/// per suborder under split shipment). FR-FUL-007 (split shipment) is
+/// deferred by approved decision, and BR-028 already makes BranchOrder
+/// itself the ONE shared fulfilment unit for every one of its items -
+/// exactly the splitShipment = false default case the SRS itself
+/// describes as reproducing Part 2's original single-shipment
+/// behavior. BranchOrder's own deliveredAt/pickedUpAt timestamps ARE
+/// that one-Fulfillment-per-order case; inventing a second entity to
+/// hold the same two timestamps a second time would add nothing.
+model Return {
+  id       String @id @default(uuid())
+  /// Denormalized from BranchOrderItem - backs the composite FKs below
+  /// (tenant safety, same pattern as CheckoutReservationItem's own
+  /// denormalized fulfilmentMethod/paymentMethod) and the vendor-wide
+  /// (not branch-wide) code-uniqueness index: PDR-031 lets ANY branch
+  /// of this vendor accept the drop-off, so the code must be looked up
+  /// by (vendorId, code), never by code alone.
+  vendorId          String
+  branchOrderItemId String
+  branchOrderItem   BranchOrderItem @relation(fields: [vendorId, branchOrderItemId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+
+  reason     ReturnReason
+  reasonNote String?
+  /// Optional photo evidence (FR-RET-002) - URLs only, same convention
+  /// as StoreBranch.verificationPhotoUrl (no upload pipeline exists in
+  /// this codebase - the client uploads elsewhere and passes the URL
+  /// back). Capped at 5 by DTO validation, not by the schema itself.
+  photoUrls String[]
+
+  status ReturnStatus @default(REQUESTED)
+
+  /// Generated ONLY on vendor approval (REQUESTED ->
+  /// APPROVED_AWAITING_DROPOFF), never earlier - no refund, no stock
+  /// movement is possible before a code even exists. Scoped
+  /// (vendorId, code), not globally, same per-scope retry-on-collision
+  /// convention as BranchOrder.pickupCode (partial unique index,
+  /// migration SQL, not representable in Prisma's schema DSL).
+  code          String?
+  codeExpiresAt DateTime?
+
+  /// SLA bookkeeping (PDR-031): 48h reminder, 72h auto-escalation -
+  /// same lazy-reconciliation-sweep pattern as BranchOrder's own
+  /// confirmReminderSentAt/deliveredAt fields, not a real cron.
+  vendorReviewDueAt    DateTime
+  vendorReminderSentAt DateTime?
+
+  /// Store-level rejection path. disputeDeadlineAt is fixed at
+  /// rejectedAt + 7 days and never recomputed from updatedAt - a
+  /// later, unrelated write to this row must never silently move a
+  /// legal deadline.
+  rejectedAt        DateTime?
+  disputeDeadlineAt DateTime?
+  /// Required by the DTO whenever status enters REJECTED or
+  /// ADMIN_REJECTED - null everywhere else. Never surfaced in any
+  /// Outbox/Notification payload (same privacy convention as Sprint
+  /// 20b's internalStoreNote) - read only via a protected endpoint.
+  rejectionReason String?
+
+  /// Escalation: REQUESTED's own 72h timeout, or a customer's dispute
+  /// of REJECTED within its window. PLATFORM_ADMIN is the only
+  /// resolver (no separate support-agent role exists in this
+  /// codebase - EPIC-SUP is Won't-build for the FYP). A rejection here
+  /// is ADMIN_REJECTED - final, see that status's own comment.
+  escalatedAt                DateTime?
+  escalationResolvedAt       DateTime?
+  escalationResolvedByUserId String?
+
+  /// Drop-off receipt (APPROVED_AWAITING_DROPOFF -> RECEIVED). The
+  /// ACTUAL branch that redeemed the code, which may differ from the
+  /// originating BranchOrder's own branch (PDR-031's cross-branch
+  /// acceptance within the same vendor) - composite FK, same tenant-
+  /// safety pattern as branchOrderItem above.
+  receivingBranchId String?
+  receivingBranch   StoreBranch?        @relation(fields: [vendorId, receivingBranchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  receivedByUserId  String?
+  receivedAt        DateTime?
+  itemCondition     ReturnItemCondition?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Inverse side only - BranchOrderRefund.returnId is the one real,
+  /// physical FK (see that model's own comment for why the direction
+  /// matters: a Return must never carry a refundId pointing anywhere
+  /// inconsistent with what actually refunded it).
+  refund BranchOrderRefund? @relation("ReturnRefund")
+
+  /// Composite-relation target for BranchOrderRefund.returnId above -
+  /// plain `id` already uniquely identifies a row; this additionally
+  /// pairs it with branchOrderItemId so that relation's own composite
+  /// FK can enforce "the refund's item must match THIS Return's own
+  /// item," not merely "THIS Return exists somewhere."
+  @@unique([id, branchOrderItemId])
+  @@index([branchOrderItemId])
+  @@index([vendorId, code])
+  @@map("returns")
 }
 
 // ============================================================

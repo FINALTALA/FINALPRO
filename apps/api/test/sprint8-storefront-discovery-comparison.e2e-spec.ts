@@ -111,6 +111,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
           { name: 'Branch B', is_physical: true },
         ],
         applicable_categories: ['WOMEN'],
+        return_policy: { mode: 'NO_RETURN' },
       })
       .expect(201);
     return {
@@ -1101,6 +1102,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
           store_type: 'PHYSICAL',
           branches: [{ name: 'Main branch', is_physical: true }],
           applicable_categories: [],
+          return_policy: { mode: 'NO_RETURN' },
         });
       expect(missingRes.status).toBe(400);
       // The whole transaction (vendor + branches + categories) must
@@ -1132,6 +1134,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
           store_type: 'PHYSICAL',
           branches: [{ name: 'Main branch', is_physical: true }],
           applicable_categories: ['WOMEN', 'WOMEN'],
+          return_policy: { mode: 'NO_RETURN' },
         });
       expect(duplicateRes.status).toBe(400);
 
@@ -1144,6 +1147,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
           store_type: 'PHYSICAL',
           branches: [{ name: 'Main branch', is_physical: true }],
           applicable_categories: ['NOT_A_REAL_CATEGORY'],
+          return_policy: { mode: 'NO_RETURN' },
         });
       expect(invalidValueRes.status).toBe(400);
 
@@ -1156,6 +1160,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
           store_type: 'PHYSICAL',
           branches: [{ name: 'Main branch', is_physical: true }],
           applicable_categories: ['MEN', 'ACCESSORIES'],
+          return_policy: { mode: 'NO_RETURN' },
         })
         .expect(201);
       expect(successRes.body.applicable_categories.sort()).toEqual([

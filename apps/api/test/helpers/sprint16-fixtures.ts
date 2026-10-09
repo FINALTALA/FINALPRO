@@ -151,6 +151,7 @@ export function createFixtures(ctx: Sprint16Ctx, phoneLane: PhoneLane) {
           is_physical: true,
         })),
         applicable_categories: ['WOMEN'],
+        return_policy: { mode: 'NO_RETURN' },
       })
       .expect(201);
     return {
@@ -171,6 +172,7 @@ export function createFixtures(ctx: Sprint16Ctx, phoneLane: PhoneLane) {
         store_type: 'ONLINE_ONLY',
         branches: [{ name: 'Warehouse branch', is_physical: false }],
         applicable_categories: ['WOMEN'],
+        return_policy: { mode: 'NO_RETURN' },
       })
       .expect(201);
     return { vendorId: res.body.id as string };

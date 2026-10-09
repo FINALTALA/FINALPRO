@@ -30,11 +30,11 @@
  * persistent dev database.
  */
 
-// Sprint 20b: shrunk again from 434_000 to fit a 24th lane under the
-// 10,000,000 ceiling (24 * 416_000 = 9_984_000) - no test asserts a
-// literal phone value (see this file's own header comment), so
+// Sprint 21: shrunk again from 416_000 to fit a 25th lane exactly at
+// the 10,000,000 ceiling (25 * 400_000 = 10_000_000) - no test asserts
+// a literal phone value (see this file's own header comment), so
 // changing which raw digits a lane's numbers land on is safe.
-const LANE_WIDTH = 416_000; // usable numbers per lane: base .. base + LANE_WIDTH - 1
+const LANE_WIDTH = 400_000; // usable numbers per lane: base .. base + LANE_WIDTH - 1
 
 // Order is arbitrary but stable - reordering shifts every later lane's
 // numbers. That's harmless (no test asserts a literal phone value) but
@@ -65,6 +65,7 @@ const LANES = [
   'sprint17b-platform-catalog',
   'sprint20a-fulfilment-exceptions',
   'sprint20b-checkout-policy',
+  'sprint21-returns',
 ] as const;
 
 export type PhoneLane = (typeof LANES)[number];
@@ -73,11 +74,11 @@ const LANE_INDEX: Record<PhoneLane, number> = Object.fromEntries(
   LANES.map((name, i) => [name, i]),
 ) as Record<PhoneLane, number>;
 
-// 24 lanes * 416_000 = 9_984_000, inside the 10,000,000-wide
-// (0000000-9999999) 7-digit space this leaves per prefix, with very
-// little room left for more lanes at this LANE_WIDTH. Fails loudly at
-// module load, not silently at some far-off runtime call, if that ever
-// stops being true.
+// 25 lanes * 400_000 = 10_000_000, exactly the 10,000,000-wide
+// (0000000-9999999) 7-digit space this leaves per prefix, with no room
+// left for another lane at this LANE_WIDTH. Fails loudly at module
+// load, not silently at some far-off runtime call, if that ever stops
+// being true.
 if (LANES.length * LANE_WIDTH > 10_000_000) {
   throw new Error(
     'e2e-phone-lanes: LANES no longer fit the 7-digit space at this LANE_WIDTH - widen the space (use both prefixes for one file) or shrink LANE_WIDTH before adding more lanes.',

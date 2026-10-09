@@ -118,6 +118,7 @@ describe('Sprint 20b - checkout policy: minimum order, notes, terms, conflict bl
         store_type: 'PHYSICAL',
         branches: [{ name: 'Branch A', is_physical: true }],
         applicable_categories: ['WOMEN'],
+        return_policy: { mode: 'NO_RETURN' },
       })
       .expect(201);
     return { vendorId: res.body.id, branchId: res.body.branches[0].id };
@@ -1125,6 +1126,7 @@ describe('Sprint 20b - checkout policy: minimum order, notes, terms, conflict bl
             { name: 'Branch B', is_physical: true },
           ],
           applicable_categories: ['WOMEN'],
+          return_policy: { mode: 'NO_RETURN' },
         })
         .expect(201);
       const vendorId = res.body.id;

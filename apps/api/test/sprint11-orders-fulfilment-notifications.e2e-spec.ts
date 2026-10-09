@@ -106,6 +106,7 @@ describe('Sprint 11 - Orders UI, fulfilment loop, notification dispatch (e2e)', 
           { name: 'Branch B', is_physical: true },
         ],
         applicable_categories: ['WOMEN'],
+        return_policy: { mode: 'NO_RETURN' },
       })
       .expect(201);
     return {

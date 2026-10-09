@@ -115,6 +115,7 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
         store_type: 'PHYSICAL',
         branches: [{ name: 'Branch A', is_physical: true }],
         applicable_categories: ['WOMEN'],
+        return_policy: { mode: 'NO_RETURN' },
       })
       .expect(201);
     return { vendorId: res.body.id, branchId: res.body.branches[0].id };
@@ -579,6 +580,7 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
           amount: '20.00',
           reason: 'ITEM_CANCELLED',
           initiatedBy: 'SYSTEM',
+          method: 'ONLINE_GATEWAY',
         },
       });
       await expect(
@@ -590,6 +592,7 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
             amount: '20.00',
             reason: 'ITEM_CANCELLED',
             initiatedBy: 'SYSTEM',
+            method: 'ONLINE_GATEWAY',
           },
         }),
       ).rejects.toMatchObject({ code: 'P2002' });
@@ -605,6 +608,7 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
           amount: '10.00',
           reason: 'DELIVERY_FEE',
           initiatedBy: 'SYSTEM',
+          method: 'ONLINE_GATEWAY',
         },
       });
       await expect(
@@ -616,6 +620,7 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
             amount: '10.00',
             reason: 'DELIVERY_FEE',
             initiatedBy: 'SYSTEM',
+            method: 'ONLINE_GATEWAY',
           },
         }),
       ).rejects.toMatchObject({ code: 'P2002' });
@@ -632,6 +637,7 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
           amount: '10.00',
           reason: 'DELIVERY_FEE',
           initiatedBy: 'SYSTEM',
+          method: 'ONLINE_GATEWAY',
         },
       });
       await expect(
@@ -643,6 +649,7 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
             amount: '10.00',
             reason: 'DELIVERY_FEE',
             initiatedBy: 'SYSTEM',
+            method: 'ONLINE_GATEWAY',
           },
         }),
       ).resolves.toBeTruthy();
