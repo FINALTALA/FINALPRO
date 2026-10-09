@@ -53,6 +53,7 @@ import {
   normalizeMinimumOrderValue,
   resolveDeliveryMinimumOrderValue,
 } from './minimum-order.util';
+import { deliveryNotAvailableBlocker } from './delivery-coverage.util';
 
 const RESERVATION_TTL_MS = 10 * 60 * 1000;
 const PICKUP_CODE_MAX_ATTEMPTS = 10;
@@ -345,6 +346,19 @@ export class CheckoutService {
               blockers.push(
                 minimumOrderBlocker('DELIVERY', deliveryMinimum, subtotal),
               );
+            }
+            // Review-round fix (FR-CART-015): a customer who HAS
+            // supplied an address but whose zone this branch's vendor
+            // simply doesn't deliver to at all (no VendorDeliveryZone
+            // row, or disabled) must get a real structured blocker, not
+            // just an implicit null on delivery_fee/minimum_order_value
+            // a client would have to already know to check. No address
+            // yet -> no delivery intent stated -> nothing to warn about
+            // (same as is_physical for PICKUP). Never fires alongside
+            // the DELIVERY minimum-order blocker above - deliveryMinimum
+            // is only ever non-null when deliveryFee is also non-null.
+            if (addressRow?.zone && deliveryFee === null) {
+              blockers.push(deliveryNotAvailableBlocker());
             }
             return {
               branch_id: branch.id,

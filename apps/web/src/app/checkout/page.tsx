@@ -33,13 +33,25 @@ interface MinimumOrderBlocker {
   current: number;
   message: string;
 }
+// Sprint 20b review-round fix (FR-CART-015): a branch whose vendor
+// doesn't deliver to the customer's selected zone at all - previously
+// only an implicit null on delivery_fee/minimum_order_value.delivery,
+// now a real structured blocker rendered the same way as the
+// minimum-order one below (generic `fulfilment_method`/`message`
+// rendering - see this file's blockers.filter(...).map(...) below).
+interface DeliveryNotAvailableBlocker {
+  code: "DELIVERY_NOT_AVAILABLE_IN_ZONE";
+  fulfilment_method: "DELIVERY";
+  message: string;
+}
+type QuoteBlocker = MinimumOrderBlocker | DeliveryNotAvailableBlocker;
 interface EligibleBranch {
   branch_id: string;
   branch_name: string;
   is_physical: boolean;
   delivery_fee: number | null;
   minimum_order_value: { pickup: number | null; delivery: number | null };
-  blockers: MinimumOrderBlocker[];
+  blockers: QuoteBlocker[];
   available_slots: SlotOption[];
 }
 interface QuoteGroup {

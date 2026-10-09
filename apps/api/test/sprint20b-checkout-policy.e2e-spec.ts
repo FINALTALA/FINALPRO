@@ -2,10 +2,25 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
 import { AppModule } from './../src/app.module';
+import { AuditLogService } from './../src/audit/audit-log.service';
 import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
 import { PrismaService } from './../src/prisma/prisma.service';
 import { createUniquePhone } from './helpers/e2e-phone-lanes';
+
+type Res = { status: number; body: any };
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// supertest's Test object is lazy - it only actually dispatches the
+// HTTP request once something calls .then()/.end() on it. A bare
+// `Promise.all([testA, testB])` happens to trigger both immediately
+// (Promise.all adopts each thenable via its own .then() call in the
+// same tick), but firing one request, awaiting a barrier, and only
+// THEN firing the second does NOT - the first request would never
+// actually be sent before the await, so a barrier on anything inside
+// its handler would hang forever. Promise.resolve(t) forces the
+// dispatch immediately (same fix as sprint16-moderation-concurrency's
+// own `run()` helper).
+const run = (t: PromiseLike<Res>): Promise<Res> => Promise.resolve(t);
 
 class FakeSmsService {
   sent: { phone: string; code: string; expiresAt: Date }[] = [];
@@ -67,6 +82,7 @@ describe('Sprint 20b - checkout policy: minimum order, notes, terms, conflict bl
   });
 
   afterEach(async () => {
+    jest.restoreAllMocks();
     if (app) {
       await app.close();
     }
@@ -269,6 +285,72 @@ describe('Sprint 20b - checkout policy: minimum order, notes, terms, conflict bl
       .send({ reservation_id: reservationId });
   }
 
+  // ------------------------------------------------------------
+  // Review-round fix: genuine lock-contention proof, same pattern
+  // as sprint16-moderation-concurrency.e2e-spec.ts's own
+  // barrierOnAudit/someoneWaitsOnVendorLock - a bare Promise.all
+  // proves nothing about actual serialization (both the locked and
+  // the unlocked version can produce the same final rows if the two
+  // requests merely happen to run sequentially on the event loop).
+  // These pause the FIRST call's AuditLogService.record() - which
+  // runs AFTER the row/advisory lock is taken and the update/upsert
+  // has executed, but BEFORE that transaction commits - so the
+  // second request's genuine wait on the SAME lock can be observed
+  // directly in pg_stat_activity before release.
+  // ------------------------------------------------------------
+  function barrierOnAudit(action: string) {
+    const audit = app!.get(AuditLogService);
+    const original = audit.record.bind(audit);
+    let release!: () => void;
+    let reached!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const hit = new Promise<void>((r) => (reached = r));
+    let armed = true;
+    jest.spyOn(audit, 'record').mockImplementation(async (input, tx) => {
+      if (armed && input.action === action) {
+        armed = false;
+        reached();
+        await gate;
+      }
+      return original(input, tx);
+    });
+    return {
+      release: () => release(),
+      reached: () =>
+        Promise.race([
+          hit,
+          sleep(10_000).then(() => {
+            throw new Error(`barrier: '${action}' was never reached`);
+          }),
+        ]),
+    };
+  }
+
+  const settledWithin = (p: Promise<unknown>, ms: number) =>
+    Promise.race([
+      p.then(
+        () => true,
+        () => true,
+      ),
+      sleep(ms).then(() => false),
+    ]);
+
+  /** A session is genuinely blocked right now waiting on a lock whose query text matches `queryPattern` (an ILIKE fragment, e.g. '%FROM store_branches%FOR UPDATE%'). */
+  async function someoneWaitsOnLock(queryPattern: string): Promise<boolean> {
+    for (let i = 0; i < 30; i++) {
+      const rows = await prisma.$queryRawUnsafe<{ n: bigint }[]>(
+        `SELECT count(*)::bigint AS n FROM pg_stat_activity
+          WHERE datname = current_database()
+            AND wait_event_type = 'Lock'
+            AND query ILIKE $1`,
+        queryPattern,
+      );
+      if (Number(rows[0].n) > 0) return true;
+      await sleep(100);
+    }
+    return false;
+  }
+
   // ============================================================
   // Minimum order value - branch default + zone override.
   // ============================================================
@@ -396,120 +478,177 @@ describe('Sprint 20b - checkout policy: minimum order, notes, terms, conflict bl
       expect(auditAfterReplay).toBe(2); // the one genuine 50->60 change, once
     });
 
-    // Review-round fix: two concurrent PUTs with DIFFERENT target
-    // values must never both compute their `before` from the same
-    // stale read - the AuditLog chain must reflect the real sequence
-    // of changes (whichever request actually committed second must
-    // show the FIRST request's new value as its own `before`, not the
-    // original pre-test value again). This is checked by VALUE, not
-    // by timestamp ordering, since both transactions can commit within
-    // the same database-clock millisecond.
-    it('deterministic concurrency: two concurrent branch-minimum PUTs with different values produce a real before/after chain in AuditLog, never two stale reads', async () => {
+    // Review-round fix: a bare Promise.all proves nothing - both the
+    // buggy unlocked version and the fixed version can leave behind
+    // the exact same final rows if the two requests merely happen to
+    // run sequentially on the event loop rather than genuinely
+    // contending on the lock. This barrier PROVES real serialization:
+    // A is paused (via its own AuditLogService.record() call) AFTER
+    // taking `FOR UPDATE` and running its update, but BEFORE commit;
+    // B is then fired and shown to be truly blocked in Postgres itself
+    // (pg_stat_activity, wait_event_type = 'Lock') - not merely slow -
+    // before A is released. Run across three independent cycles
+    // (fresh barrier each time) so this isn't a one-off.
+    it('deterministic concurrency (barrier-proven): a second branch-minimum PUT genuinely waits on the FIRST ones row lock, then chains before/after correctly - repeated 3x', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
       await setBranchMinimum(owner, vendorId, branchId, 50).expect(200);
 
-      const [resA, resB] = await Promise.all([
-        setBranchMinimum(owner, vendorId, branchId, 80),
-        setBranchMinimum(owner, vendorId, branchId, 100),
-      ]);
-      expect(resA.status).toBe(200);
-      expect(resB.status).toBe(200);
+      let currentValue = 50;
+      const cycles: [number, number][] = [
+        [80, 100],
+        [60, 70],
+        [90, 110],
+      ];
+      for (const [targetA, targetB] of cycles) {
+        const barrier = barrierOnAudit(
+          'store_branch.minimum_order_value_updated',
+        );
+        const resAPromise: Promise<Res> = run(
+          setBranchMinimum(owner, vendorId, branchId, targetA),
+        );
+        await barrier.reached(); // A holds the row lock, update ran, NOT yet committed
+        const resBPromise: Promise<Res> = run(
+          setBranchMinimum(owner, vendorId, branchId, targetB),
+        );
 
-      const rows = await prisma.auditLog.findMany({
-        where: {
-          entityType: 'StoreBranch',
-          entityId: branchId,
-          action: 'store_branch.minimum_order_value_updated',
-        },
-      });
-      // The initial 50 setup wrote its own row (null -> 50) - only the
-      // two concurrent writes below are asserted on here.
-      const concurrentRows = rows.filter(
-        (r) =>
-          (r.beforeState as { minimum_order_value: number })
-            .minimum_order_value !== null,
-      );
-      expect(concurrentRows).toHaveLength(2);
-      const firstRow = concurrentRows.find(
-        (r) =>
-          (r.beforeState as { minimum_order_value: number })
-            .minimum_order_value === 50,
-      );
-      const secondRow = concurrentRows.find((r) => r !== firstRow);
-      expect(firstRow).toBeDefined();
-      expect(secondRow).toBeDefined();
-      // The exact bug this test exists to catch: the second row's
-      // `before` must chain from the first row's `after`, never from
-      // the original 50 again.
-      expect(
-        (secondRow!.beforeState as { minimum_order_value: number })
-          .minimum_order_value,
-      ).toBe(
-        (firstRow!.afterState as { minimum_order_value: number })
-          .minimum_order_value,
-      );
+        expect(
+          await someoneWaitsOnLock('%FROM store_branches%FOR UPDATE%'),
+        ).toBe(true);
+        expect(await settledWithin(resBPromise, 700)).toBe(false);
+        // Proof, not inference: while A is held, the row must still
+        // read as the PRE-cycle value - B has made no progress at all.
+        const whileHeld = await prisma.storeBranch.findUniqueOrThrow({
+          where: { id: branchId },
+        });
+        expect(
+          whileHeld.minimumOrderValue == null
+            ? null
+            : Number(whileHeld.minimumOrderValue),
+        ).toBe(currentValue);
 
-      const finalBranch = await prisma.storeBranch.findUniqueOrThrow({
-        where: { id: branchId },
-      });
-      expect(Number(finalBranch.minimumOrderValue)).toBe(
-        (secondRow!.afterState as { minimum_order_value: number })
-          .minimum_order_value,
-      );
+        barrier.release();
+        const [resA, resB] = await Promise.all([resAPromise, resBPromise]);
+        expect(resA.status).toBe(200);
+        expect(resB.status).toBe(200);
+
+        const rows = await prisma.auditLog.findMany({
+          where: {
+            entityType: 'StoreBranch',
+            entityId: branchId,
+            action: 'store_branch.minimum_order_value_updated',
+          },
+        });
+        const rowA = rows.find(
+          (r) =>
+            (r.afterState as { minimum_order_value: number })
+              .minimum_order_value === targetA,
+        );
+        const rowB = rows.find(
+          (r) =>
+            (r.afterState as { minimum_order_value: number })
+              .minimum_order_value === targetB,
+        );
+        expect(rowA).toBeDefined();
+        expect(rowB).toBeDefined();
+        // A (released first, since the barrier held it) committed
+        // from the pre-cycle value; B - genuinely blocked until A
+        // committed - must chain from A's own new value, never a
+        // stale re-read of the pre-cycle value.
+        expect(
+          (rowA!.beforeState as { minimum_order_value: number | null })
+            .minimum_order_value,
+        ).toBe(currentValue);
+        expect(
+          (rowB!.beforeState as { minimum_order_value: number })
+            .minimum_order_value,
+        ).toBe(targetA);
+
+        const finalBranch = await prisma.storeBranch.findUniqueOrThrow({
+          where: { id: branchId },
+        });
+        expect(Number(finalBranch.minimumOrderValue)).toBe(targetB);
+
+        currentValue = targetB;
+        jest.restoreAllMocks();
+      }
     });
 
-    // Same invariant, but for the harder case: a region with NO
+    // Same proof, for the harder case: a region with NO
     // VendorDeliveryZone row at all yet, where a plain `FOR UPDATE`
-    // has nothing to lock. The advisory lock must still serialize the
-    // two concurrent first-ever writes so the AuditLog chain is
-    // correct AND exactly one row ends up persisted (the unique
-    // constraint alone would prevent a true duplicate row, but not a
-    // wrong/duplicated AuditLog trail).
-    it('deterministic concurrency: two concurrent zone-minimum PUTs on a region with no row yet still produce a real before/after chain, and exactly one row', async () => {
+    // has nothing to lock - the advisory lock must be what B is
+    // genuinely waiting on instead.
+    it('deterministic concurrency (barrier-proven): a second zone-minimum PUT on a region with no row yet genuinely waits on the advisory lock, then chains before/after correctly - repeated 3x', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
-      const { vendorId, branchId } = await createVendorWithBranch(owner);
-      void branchId;
+      const { vendorId } = await createVendorWithBranch(owner);
 
-      const [resA, resB] = await Promise.all([
-        setZoneMinimum(owner, vendorId, 'JERUSALEM', 80),
-        setZoneMinimum(owner, vendorId, 'JERUSALEM', 100),
-      ]);
-      expect(resA.status).toBe(200);
-      expect(resB.status).toBe(200);
+      let currentValue: number | null = null;
+      const cycles: [number, number][] = [
+        [80, 100],
+        [60, 70],
+        [90, 110],
+      ];
+      for (const [targetA, targetB] of cycles) {
+        const barrier = barrierOnAudit(
+          'vendor_delivery_zone.minimum_order_value_updated',
+        );
+        const resAPromise: Promise<Res> = run(
+          setZoneMinimum(owner, vendorId, 'JERUSALEM', targetA),
+        );
+        await barrier.reached(); // A holds the advisory lock, upsert ran, NOT yet committed
+        const resBPromise: Promise<Res> = run(
+          setZoneMinimum(owner, vendorId, 'JERUSALEM', targetB),
+        );
 
-      const zoneRows = await prisma.vendorDeliveryZone.findMany({
-        where: { vendorId, region: 'JERUSALEM' },
-      });
-      expect(zoneRows).toHaveLength(1);
+        expect(
+          await someoneWaitsOnLock(
+            '%pg_advisory_xact_lock%delivery_zone_minimum%',
+          ),
+        ).toBe(true);
+        expect(await settledWithin(resBPromise, 700)).toBe(false);
 
-      const rows = await prisma.auditLog.findMany({
-        where: {
-          entityType: 'VendorDeliveryZone',
-          entityId: zoneRows[0].id,
-          action: 'vendor_delivery_zone.minimum_order_value_updated',
-        },
-      });
-      expect(rows).toHaveLength(2);
-      const firstRow = rows.find(
-        (r) =>
-          (r.beforeState as { minimum_order_value: number | null })
-            .minimum_order_value === null,
-      );
-      const secondRow = rows.find((r) => r !== firstRow);
-      expect(firstRow).toBeDefined();
-      expect(secondRow).toBeDefined();
-      expect(
-        (secondRow!.beforeState as { minimum_order_value: number })
-          .minimum_order_value,
-      ).toBe(
-        (firstRow!.afterState as { minimum_order_value: number })
-          .minimum_order_value,
-      );
-      expect(Number(zoneRows[0].minimumOrderValue)).toBe(
-        (secondRow!.afterState as { minimum_order_value: number })
-          .minimum_order_value,
-      );
+        barrier.release();
+        const [resA, resB] = await Promise.all([resAPromise, resBPromise]);
+        expect(resA.status).toBe(200);
+        expect(resB.status).toBe(200);
+
+        const zoneRows = await prisma.vendorDeliveryZone.findMany({
+          where: { vendorId, region: 'JERUSALEM' },
+        });
+        expect(zoneRows).toHaveLength(1); // never a duplicate row
+
+        const rows = await prisma.auditLog.findMany({
+          where: {
+            entityType: 'VendorDeliveryZone',
+            entityId: zoneRows[0].id,
+            action: 'vendor_delivery_zone.minimum_order_value_updated',
+          },
+        });
+        const rowA = rows.find(
+          (r) =>
+            (r.afterState as { minimum_order_value: number })
+              .minimum_order_value === targetA,
+        );
+        const rowB = rows.find(
+          (r) =>
+            (r.afterState as { minimum_order_value: number })
+              .minimum_order_value === targetB,
+        );
+        expect(rowA).toBeDefined();
+        expect(rowB).toBeDefined();
+        expect(
+          (rowA!.beforeState as { minimum_order_value: number | null })
+            .minimum_order_value,
+        ).toBe(currentValue);
+        expect(
+          (rowB!.beforeState as { minimum_order_value: number })
+            .minimum_order_value,
+        ).toBe(targetA);
+        expect(Number(zoneRows[0].minimumOrderValue)).toBe(targetB);
+
+        currentValue = targetB;
+        jest.restoreAllMocks();
+      }
     });
 
     it('PICKUP uses the branch default only - a zone minimum never applies to it', async () => {
@@ -679,18 +818,21 @@ describe('Sprint 20b - checkout policy: minimum order, notes, terms, conflict bl
   // ============================================================
   // Conflict catalogue in quote() (FR-CART-015).
   //
-  // Review-round fix: the catalogue built in this sprint is EXACTLY
-  // the minimum-order-shortfall blocker above - nothing else. These
-  // two tests lock in the rest of the design explicitly, matching the
-  // corrected traceability row: (1) two independent groups never leak
-  // a blocker across each other, and (2) delivery non-coverage for a
-  // zone is represented through `delivery_fee`/`minimum_order_value`
-  // being null, deliberately NOT as a `blockers[]` entry - it means
-  // "DELIVERY isn't offered here" (same as `is_physical: false` for
-  // PICKUP), not "a conflict to warn about".
+  // Review-round fix: the catalogue now has TWO structured blocker
+  // codes - BELOW_MINIMUM_ORDER_VALUE (above) and
+  // DELIVERY_NOT_AVAILABLE_IN_ZONE (below) - both surfaced explicitly
+  // in `blockers[]`, never only as an implicit null on
+  // `delivery_fee`/`minimum_order_value`. A branch that is itself
+  // ineligible (closed/archived/suspended/out of stock) never appears
+  // in `eligible_branches` at all - there is no row to attach a
+  // blocker to - and a cart item left with NO eligible branch anywhere
+  // already surfaces through the existing, safe, structured
+  // `unavailable_items[].reason` (pre-existing Sprint 10/18b behavior,
+  // unchanged here - it names no branch and no stock figure, so it
+  // leaks nothing a customer isn't entitled to know).
   // ============================================================
   describe('Conflict catalogue in quote() (FR-CART-015)', () => {
-    it('two separate groups in one quote(): a blocker in one group never appears on the other', async () => {
+    it('two separate groups in one quote(): a minimum-order blocker in one group never appears on the other', async () => {
       const ownerBelow = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId: vendorBelowId, branchId: branchBelowId } =
         await createVendorWithBranch(ownerBelow);
@@ -748,7 +890,7 @@ describe('Sprint 20b - checkout policy: minimum order, notes, terms, conflict bl
       expect(branchOk.blockers).toHaveLength(0);
     });
 
-    it('a zone with no delivery coverage is reflected by delivery_fee/minimum_order_value.delivery being null, NOT as a blockers[] entry', async () => {
+    it('a zone with no delivery coverage is now a real structured DELIVERY_NOT_AVAILABLE_IN_ZONE blocker, not just a null field', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
       const variantId = await createOfferWithStock(vendorId, branchId, 20, 5);
@@ -764,16 +906,139 @@ describe('Sprint 20b - checkout policy: minimum order, notes, terms, conflict bl
       const branch = res.body.groups[0].eligible_branches.find(
         (b: { branch_id: string }) => b.branch_id === branchId,
       );
+      // The null fields still carry the raw numbers (unchanged) -
+      // but the UI must not rely on them as an implicit signal any
+      // more, since a real blocker is now also present.
       expect(branch.delivery_fee).toBeNull();
       expect(branch.minimum_order_value.delivery).toBeNull();
-      // Deliberately not a blocker - see this describe block's comment.
-      expect(
-        branch.blockers.filter(
-          (b: { fulfilment_method: string }) =>
-            b.fulfilment_method === 'DELIVERY',
-        ),
-      ).toHaveLength(0);
+      expect(branch.blockers).toHaveLength(1);
+      expect(branch.blockers[0].code).toBe('DELIVERY_NOT_AVAILABLE_IN_ZONE');
+      expect(branch.blockers[0].fulfilment_method).toBe('DELIVERY');
+      // Discloses nothing branch/zone/stock-specific.
+      expect(branch.blockers[0]).not.toHaveProperty('region');
+      expect(branch.blockers[0]).not.toHaveProperty('fee');
+    });
+
+    it('a zone the vendor explicitly disabled (not just "never configured") is the same blocker', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const variantId = await createOfferWithStock(vendorId, branchId, 20, 5);
+      await request(app.getHttpServer())
+        .put(`/api/v1/vendors/${vendorId}/delivery-zones/WEST_BANK`)
+        .set('Authorization', `Bearer ${owner}`)
+        .send({ enabled: false, fee: 10 })
+        .expect(200);
+
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const addressId = await createAddress(customer, 'WEST_BANK');
+      const itemId = await addToCart(customer, vendorId, variantId, 1);
+
+      const res = await quote(customer, [itemId], addressId).expect(201);
+      const branch = res.body.groups[0].eligible_branches.find(
+        (b: { branch_id: string }) => b.branch_id === branchId,
+      );
+      expect(branch.blockers).toHaveLength(1);
+      expect(branch.blockers[0].code).toBe('DELIVERY_NOT_AVAILABLE_IN_ZONE');
+    });
+
+    it('no address supplied yet -> no delivery-coverage blocker at all (no delivery intent stated, nothing to warn about)', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const variantId = await createOfferWithStock(vendorId, branchId, 20, 5);
+      // No zone ever configured, but also no address supplied.
+
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const itemId = await addToCart(customer, vendorId, variantId, 1);
+
+      const res = await quote(customer, [itemId]).expect(201);
+      const branch = res.body.groups[0].eligible_branches.find(
+        (b: { branch_id: string }) => b.branch_id === branchId,
+      );
       expect(branch.blockers).toHaveLength(0);
+    });
+
+    it('a zone that IS covered never gets the blocker (no false positive)', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const variantId = await createOfferWithStock(vendorId, branchId, 20, 5);
+      await setZoneFee(owner, vendorId, 'WEST_BANK', 10);
+
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const addressId = await createAddress(customer, 'WEST_BANK');
+      const itemId = await addToCart(customer, vendorId, variantId, 1);
+
+      const res = await quote(customer, [itemId], addressId).expect(201);
+      const branch = res.body.groups[0].eligible_branches.find(
+        (b: { branch_id: string }) => b.branch_id === branchId,
+      );
+      expect(branch.delivery_fee).toBe(10);
+      expect(branch.blockers).toHaveLength(0);
+    });
+
+    it('two separate groups in one quote(): a delivery-coverage blocker in one group never appears on the other', async () => {
+      const ownerNoCoverage = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId: vendorNoCoverageId, branchId: branchNoCoverageId } =
+        await createVendorWithBranch(ownerNoCoverage);
+      const variantNoCoverageId = await createOfferWithStock(
+        vendorNoCoverageId,
+        branchNoCoverageId,
+        20,
+        5,
+      );
+      // No setZoneFee() for this vendor at all - INSIDE is not covered.
+
+      const ownerCovered = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId: vendorCoveredId, branchId: branchCoveredId } =
+        await createVendorWithBranch(ownerCovered);
+      const variantCoveredId = await createOfferWithStock(
+        vendorCoveredId,
+        branchCoveredId,
+        20,
+        5,
+      );
+      await setZoneFee(ownerCovered, vendorCoveredId, 'INSIDE', 5);
+
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const addressId = await createAddress(customer, 'INSIDE');
+      const itemNoCoverageId = await addToCart(
+        customer,
+        vendorNoCoverageId,
+        variantNoCoverageId,
+        1,
+      );
+      const itemCoveredId = await addToCart(
+        customer,
+        vendorCoveredId,
+        variantCoveredId,
+        1,
+      );
+
+      const res = await quote(
+        customer,
+        [itemNoCoverageId, itemCoveredId],
+        addressId,
+      ).expect(201);
+      expect(res.body.groups).toHaveLength(2);
+
+      const groupNoCoverage = res.body.groups.find(
+        (g: { vendor_id: string }) => g.vendor_id === vendorNoCoverageId,
+      );
+      const groupCovered = res.body.groups.find(
+        (g: { vendor_id: string }) => g.vendor_id === vendorCoveredId,
+      );
+      const branchNoCoverage = groupNoCoverage.eligible_branches.find(
+        (b: { branch_id: string }) => b.branch_id === branchNoCoverageId,
+      );
+      const branchCovered = groupCovered.eligible_branches.find(
+        (b: { branch_id: string }) => b.branch_id === branchCoveredId,
+      );
+
+      expect(branchNoCoverage.blockers).toHaveLength(1);
+      expect(branchNoCoverage.blockers[0].code).toBe(
+        'DELIVERY_NOT_AVAILABLE_IN_ZONE',
+      );
+      // The OTHER group's covered branch must stay completely unaffected.
+      expect(branchCovered.blockers).toHaveLength(0);
     });
   });
 
