@@ -150,6 +150,11 @@ function orderDto(o: OrderRow) {
     not_received_reason: o.notReceivedReason,
     confirm_reminder_sent_at: o.confirmReminderSentAt?.toISOString() ?? null,
     created_at: o.createdAt.toISOString(),
+    // Sprint 20b (FR-CART-014): the customer's own note, read back to
+    // them - never internal_store_note, which this DTO must NEVER
+    // include under any circumstance (staff/owner only, see
+    // BranchOrdersStaffController's own ownerOrderDto/employeeOrderDto).
+    customer_note: o.customerNote,
   };
 }
 

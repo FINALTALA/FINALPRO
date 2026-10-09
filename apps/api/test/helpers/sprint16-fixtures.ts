@@ -424,6 +424,8 @@ export function createFixtures(ctx: Sprint16Ctx, phoneLane: PhoneLane) {
       .set('Authorization', `Bearer ${token}`)
       .set('Idempotency-Key', unique('reserve'))
       .send({
+        terms_accepted: true,
+        terms_version: '2026-10-v1',
         groups: [
           {
             cart_item_ids: cartItemIds,

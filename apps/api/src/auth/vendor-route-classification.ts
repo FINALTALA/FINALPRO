@@ -75,6 +75,9 @@ export const SUSPENDED_ALLOW_ROUTES: readonly string[] = [
   'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/items/:itemId/cancel',
   'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/mark-delivery-failed',
   'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/approve-refund',
+  // Sprint 20b: editing a note on an EXISTING order - same reasoning
+  // as the fulfilment actions immediately above.
+  'PATCH vendors/:vendorId/branches/:branchId/orders/:branchOrderId/internal-note',
   // Reads.
   'GET vendors/:vendorId',
   'GET vendors/:vendorId/branches',
@@ -114,6 +117,12 @@ export const SUSPENDED_ALLOW_ROUTES: readonly string[] = [
   'PUT vendors/:vendorId/store-type',
   'PUT vendors/:vendorId/warehouse',
   'PUT vendors/:vendorId/delivery-zones/:region',
+  // Sprint 20b: minimum-order settings, same "store configuration, not
+  // catalog" bucket as the delivery-zone fee/enabled endpoint above.
+  'GET vendors/:vendorId/branches/:branchId/minimum-order',
+  'PUT vendors/:vendorId/branches/:branchId/minimum-order',
+  'GET vendors/:vendorId/delivery-zones/:region/minimum-order',
+  'PUT vendors/:vendorId/delivery-zones/:region/minimum-order',
   'POST vendors/:vendorId/pickup-points',
   'POST vendors/:vendorId/branches/:branchId/staff-invites',
   'POST vendors/:vendorId/branches/:branchId/delivery-windows',

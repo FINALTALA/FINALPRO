@@ -408,6 +408,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],
@@ -440,6 +442,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],
@@ -481,6 +485,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],
@@ -518,6 +524,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],
@@ -558,6 +566,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],
@@ -598,6 +608,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId1],
@@ -619,6 +631,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId2],
@@ -653,6 +667,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId1],
@@ -701,6 +717,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],
@@ -766,6 +784,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],
@@ -827,6 +847,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [item1],
@@ -875,6 +897,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],
@@ -922,6 +946,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],
@@ -965,6 +991,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customerA}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],
@@ -1001,6 +1029,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],
@@ -1062,12 +1092,20 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
           .post('/api/v1/checkout/reserve')
           .set('Authorization', `Bearer ${customerA}`)
           .set('Idempotency-Key', unique('reserve'))
-          .send({ groups: [{ ...body.groups[0], cart_item_ids: [itemA] }] }),
+          .send({
+            terms_accepted: true,
+            terms_version: '2026-10-v1',
+            groups: [{ ...body.groups[0], cart_item_ids: [itemA] }],
+          }),
         request(app.getHttpServer())
           .post('/api/v1/checkout/reserve')
           .set('Authorization', `Bearer ${customerB}`)
           .set('Idempotency-Key', unique('reserve'))
-          .send({ groups: [{ ...body.groups[0], cart_item_ids: [itemB] }] }),
+          .send({
+            terms_accepted: true,
+            terms_version: '2026-10-v1',
+            groups: [{ ...body.groups[0], cart_item_ids: [itemB] }],
+          }),
       ]);
       const statuses = [resA.status, resB.status].sort();
       expect(statuses).toEqual([201, 409]);
@@ -1107,6 +1145,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
           .set('Authorization', `Bearer ${customerA}`)
           .set('Idempotency-Key', unique('reserve'))
           .send({
+            terms_accepted: true,
+            terms_version: '2026-10-v1',
             groups: [
               {
                 cart_item_ids: [itemA],
@@ -1124,6 +1164,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
           .set('Authorization', `Bearer ${customerB}`)
           .set('Idempotency-Key', unique('reserve'))
           .send({
+            terms_accepted: true,
+            terms_version: '2026-10-v1',
             groups: [
               {
                 cart_item_ids: [itemB],
@@ -1158,6 +1200,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],
@@ -1218,6 +1262,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],
@@ -1342,6 +1388,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],
@@ -1413,6 +1461,10 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       // (folded into mark-delivered/pickup-handover) cannot function
       // without the employee knowing it IS a COD order and exactly
       // how much to collect - see employeeOrderDto's own comment.
+      // Sprint 20b (FR-CART-014): customer_note/internal_store_note
+      // are now ALSO present - both are operationally necessary for
+      // whoever is actually fulfilling the order, not an owner-only
+      // extra.
       expect(Object.keys(list.body[0]).sort()).toEqual(
         [
           'id',
@@ -1425,6 +1477,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
           'has_open_not_received_report',
           'amount_due',
           'cod_collected_amount',
+          'customer_note',
+          'internal_store_note',
         ].sort(),
       );
 
@@ -1488,6 +1542,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],
@@ -1536,6 +1592,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],
@@ -1595,6 +1653,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customerA}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemA],
@@ -1645,6 +1705,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],
@@ -1803,6 +1865,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],
@@ -1833,6 +1897,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],
@@ -1898,6 +1964,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
           .set('Authorization', `Bearer ${customerX}`)
           .set('Idempotency-Key', unique('reserve'))
           .send({
+            terms_accepted: true,
+            terms_version: '2026-10-v1',
             groups: [groupFor(branchAId, itemXA), groupFor(branchBId, itemXB)],
           }),
         request(app.getHttpServer())
@@ -1905,6 +1973,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
           .set('Authorization', `Bearer ${customerY}`)
           .set('Idempotency-Key', unique('reserve'))
           .send({
+            terms_accepted: true,
+            terms_version: '2026-10-v1',
             groups: [groupFor(branchBId, itemYB), groupFor(branchAId, itemYA)],
           }),
       ]);
@@ -1968,6 +2038,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       const itemId = await addToCart(customer, vendorId, variantId, 1);
       const reserveKey = unique('reserve-idem');
       const reserveBody = {
+        terms_accepted: true,
+        terms_version: '2026-10-v1',
         groups: [
           {
             cart_item_ids: [itemId],
@@ -2005,6 +2077,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', reserveKey)
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               ...reserveBody.groups[0],
@@ -2027,6 +2101,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],
@@ -2138,6 +2214,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],
@@ -2317,6 +2395,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
           .set('Authorization', `Bearer ${customerX}`)
           .set('Idempotency-Key', unique('reserve'))
           .send({
+            terms_accepted: true,
+            terms_version: '2026-10-v1',
             groups: [
               groupFor(vendor1.branchAId, itemX1),
               groupFor(vendor2.branchAId, itemX2),
@@ -2327,6 +2407,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
           .set('Authorization', `Bearer ${customerY}`)
           .set('Idempotency-Key', unique('reserve'))
           .send({
+            terms_accepted: true,
+            terms_version: '2026-10-v1',
             groups: [
               groupFor(vendor2.branchAId, itemY2),
               groupFor(vendor1.branchAId, itemY1),
@@ -2385,6 +2467,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${r1Customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [r1Item],
@@ -2425,6 +2509,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
           .set('Authorization', `Bearer ${newCustomer}`)
           .set('Idempotency-Key', unique('reserve'))
           .send({
+            terms_accepted: true,
+            terms_version: '2026-10-v1',
             groups: [
               {
                 cart_item_ids: [newItem1],
@@ -2484,6 +2570,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${r1Customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [r1Item],
@@ -2524,6 +2612,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
           .set('Authorization', `Bearer ${customerX}`)
           .set('Idempotency-Key', unique('reserve'))
           .send({
+            terms_accepted: true,
+            terms_version: '2026-10-v1',
             groups: [
               groupFor(vendor1.branchAId, itemX1),
               groupFor(vendor2.branchAId, itemX2),
@@ -2534,6 +2624,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
           .set('Authorization', `Bearer ${customerY}`)
           .set('Idempotency-Key', unique('reserve'))
           .send({
+            terms_accepted: true,
+            terms_version: '2026-10-v1',
             groups: [
               groupFor(vendor2.branchAId, itemY2),
               groupFor(vendor1.branchAId, itemY1),
@@ -2576,6 +2668,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],
@@ -2632,6 +2726,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],
@@ -2711,6 +2807,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],
@@ -2786,6 +2884,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [itemId],

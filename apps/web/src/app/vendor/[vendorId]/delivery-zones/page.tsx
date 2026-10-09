@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { apiFetch, ApiError } from "@/lib/api";
+import { apiFetch, ApiError, newIdempotencyKey } from "@/lib/api";
 import { clearSession, getSessionToken } from "@/lib/session";
 
 interface ZoneDto {
@@ -11,6 +11,8 @@ interface ZoneDto {
   enabled: boolean;
   fee: number | null;
 }
+
+const REGIONS: ZoneDto["region"][] = ["WEST_BANK", "JERUSALEM", "INSIDE"];
 
 const ZONE_LABELS: Record<ZoneDto["region"], string> = {
   WEST_BANK: "الضفة الغربية",
@@ -28,13 +30,26 @@ export default function DeliveryZonesPage() {
   const params = useParams<{ vendorId: string }>();
   const router = useRouter();
   const [zones, setZones] = useState<ZoneDto[] | null>(null);
+  const [zoneMinimums, setZoneMinimums] = useState<Record<string, number | null>>({});
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   function load() {
-    apiFetch<ZoneDto[]>(`/vendors/${params.vendorId}/delivery-zones`)
-      .then(setZones)
+    Promise.all([
+      apiFetch<ZoneDto[]>(`/vendors/${params.vendorId}/delivery-zones`),
+      Promise.all(
+        REGIONS.map((region) =>
+          apiFetch<{ minimum_order_value: number | null }>(
+            `/vendors/${params.vendorId}/delivery-zones/${region}/minimum-order`,
+          ).then((res) => [region, res.minimum_order_value] as const),
+        ),
+      ),
+    ])
+      .then(([zoneList, minimums]) => {
+        setZones(zoneList);
+        setZoneMinimums(Object.fromEntries(minimums));
+      })
       .catch((err) => {
         if (err instanceof ApiError && err.status === 401) {
           clearSession();
@@ -67,6 +82,29 @@ export default function DeliveryZonesPage() {
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "تعذّر حفظ المنطقة");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Sprint 20b (FR-PRICE-006): an OPTIONAL override of the branch's
+  // own default minimum order value, for DELIVERY to this one region
+  // only - null clears the override (falls back to the branch
+  // default).
+  async function saveMinimum(region: ZoneDto["region"], value: number | null) {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await apiFetch(`/vendors/${params.vendorId}/delivery-zones/${region}/minimum-order`, {
+        method: "PUT",
+        body: { minimum_order_value: value },
+        idempotencyKey: newIdempotencyKey("zone-minimum-order"),
+      });
+      setNotice("تم الحفظ");
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "تعذّر حفظ الحد الأدنى");
     } finally {
       setBusy(false);
     }
@@ -131,6 +169,24 @@ export default function DeliveryZonesPage() {
                   }
                 }}
               />
+            </div>
+            <div className="field">
+              <label>حد أدنى للطلب في هذه المنطقة (₪) - اختياري</label>
+              <input
+                type="number"
+                min={0}
+                defaultValue={zoneMinimums[zone.region] ?? ""}
+                placeholder="بلا حد أدنى خاص بالمنطقة (يُستخدم حد الفرع)"
+                onBlur={(e) => {
+                  const value = e.target.value === "" ? null : Number(e.target.value);
+                  if (value !== zoneMinimums[zone.region]) {
+                    saveMinimum(zone.region, value);
+                  }
+                }}
+              />
+              <p className="muted" style={{ margin: "4px 0 0" }}>
+                اتركيه فارغاً لاستخدام الحد الأدنى الافتراضي للفرع بدلاً منه.
+              </p>
             </div>
           </div>
         ))}

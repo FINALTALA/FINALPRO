@@ -202,6 +202,8 @@ describe('Sprint 14 - delivery checkout completeness (e2e)', () => {
       .set(auth(token))
       .set('Idempotency-Key', unique('reserve'))
       .send({
+        terms_accepted: true,
+        terms_version: '2026-10-v1',
         groups: [
           {
             cart_item_ids: cartItemIds,
@@ -954,6 +956,8 @@ describe('Sprint 14 - delivery checkout completeness (e2e)', () => {
         .set(auth(buyer.token))
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [line],
@@ -972,6 +976,8 @@ describe('Sprint 14 - delivery checkout completeness (e2e)', () => {
         .set(auth(buyer.token))
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [line],

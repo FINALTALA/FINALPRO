@@ -49,6 +49,9 @@ export const BRANCH_ARCHIVED_DENY_ROUTES: readonly string[] = [
   'PUT vendors/:vendorId/branches/:branchId/operating-hours',
   'POST vendors/:vendorId/branches/:branchId/closures',
   'POST vendors/:vendorId/branches/:branchId/archive',
+  // Sprint 20b: a branch setting, same reasoning as operating-hours
+  // above - pointless (and blocked) once the branch is retired.
+  'PUT vendors/:vendorId/branches/:branchId/minimum-order',
 ];
 
 export const BRANCH_ARCHIVED_ALLOW_ROUTES: readonly string[] = [
@@ -74,4 +77,11 @@ export const BRANCH_ARCHIVED_ALLOW_ROUTES: readonly string[] = [
   'GET vendors/:vendorId/branches/:branchId/delivery-windows',
   'GET vendors/:vendorId/branches/:branchId/operating-hours',
   'GET vendors/:vendorId/branches/:branchId/closures',
+  // Sprint 20b: a plain read (same reasoning as operating-hours' own
+  // GET above).
+  'GET vendors/:vendorId/branches/:branchId/minimum-order',
+  // Sprint 20b: editing a note on an EXISTING order - same "let an
+  // existing order finish" reasoning as the fulfilment actions above,
+  // never new footprint.
+  'PATCH vendors/:vendorId/branches/:branchId/orders/:branchOrderId/internal-note',
 ];

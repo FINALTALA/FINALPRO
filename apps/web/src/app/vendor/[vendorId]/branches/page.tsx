@@ -165,6 +165,9 @@ export default function BranchesPage() {
                 <Link href={`/vendor/${params.vendorId}/branches/${b.id}/hours`} className="button-link">
                   الساعات والإغلاقات
                 </Link>
+                <Link href={`/vendor/${params.vendorId}/branches/${b.id}/minimum-order`} className="button-link">
+                  الحد الأدنى للطلب
+                </Link>
                 {isOwner && !b.archived_at && (
                   <button
                     className="button-link"

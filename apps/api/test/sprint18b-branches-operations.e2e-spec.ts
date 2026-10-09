@@ -480,6 +480,8 @@ describe('Sprint 18b - branch add/activate/archive, hours, closures, staff (e2e)
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [cartItemId],
@@ -522,6 +524,8 @@ describe('Sprint 18b - branch add/activate/archive, hours, closures, staff (e2e)
           .set('Authorization', `Bearer ${customer}`)
           .set('Idempotency-Key', unique('reserve'))
           .send({
+            terms_accepted: true,
+            terms_version: '2026-10-v1',
             groups: [
               {
                 cart_item_ids: [cartItemId],
@@ -591,6 +595,8 @@ describe('Sprint 18b - branch add/activate/archive, hours, closures, staff (e2e)
           .set('Authorization', `Bearer ${customer}`)
           .set('Idempotency-Key', unique('reserve'))
           .send({
+            terms_accepted: true,
+            terms_version: '2026-10-v1',
             groups: [
               {
                 cart_item_ids: [cartItemId],
@@ -740,6 +746,8 @@ describe('Sprint 18b - branch add/activate/archive, hours, closures, staff (e2e)
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [cartItemId],
@@ -772,6 +780,8 @@ describe('Sprint 18b - branch add/activate/archive, hours, closures, staff (e2e)
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [cartItemB],
@@ -809,6 +819,8 @@ describe('Sprint 18b - branch add/activate/archive, hours, closures, staff (e2e)
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [cartItemId],
@@ -849,6 +861,8 @@ describe('Sprint 18b - branch add/activate/archive, hours, closures, staff (e2e)
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [cartItemId],
@@ -1025,6 +1039,8 @@ describe('Sprint 18b - branch add/activate/archive, hours, closures, staff (e2e)
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [cartItemId],
@@ -1492,6 +1508,8 @@ describe('Sprint 18b - branch add/activate/archive, hours, closures, staff (e2e)
         .set('Authorization', `Bearer ${customer}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               cart_item_ids: [cartItemId],

@@ -698,6 +698,8 @@ describe('Sprint 19 - notification relay, sweeps, API (e2e)', () => {
         .set('Authorization', `Bearer ${customerToken}`)
         .set('Idempotency-Key', unique('reserve'))
         .send({
+          terms_accepted: true,
+          terms_version: '2026-10-v1',
           groups: [
             {
               branch_id: branchId,
@@ -762,6 +764,8 @@ describe('Sprint 19 - notification relay, sweeps, API (e2e)', () => {
           .set('Authorization', `Bearer ${customerToken}`)
           .set('Idempotency-Key', unique('reserve'))
           .send({
+            terms_accepted: true,
+            terms_version: '2026-10-v1',
             groups: [
               {
                 branch_id: branchId,

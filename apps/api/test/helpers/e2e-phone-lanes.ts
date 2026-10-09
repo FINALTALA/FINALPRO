@@ -30,11 +30,11 @@
  * persistent dev database.
  */
 
-// Sprint 20a: shrunk again from 454_545 to fit a 23rd lane under the
-// 10,000,000 ceiling (23 * 434_000 = 9_982_000) - no test asserts a
+// Sprint 20b: shrunk again from 434_000 to fit a 24th lane under the
+// 10,000,000 ceiling (24 * 416_000 = 9_984_000) - no test asserts a
 // literal phone value (see this file's own header comment), so
 // changing which raw digits a lane's numbers land on is safe.
-const LANE_WIDTH = 434_000; // usable numbers per lane: base .. base + LANE_WIDTH - 1
+const LANE_WIDTH = 416_000; // usable numbers per lane: base .. base + LANE_WIDTH - 1
 
 // Order is arbitrary but stable - reordering shifts every later lane's
 // numbers. That's harmless (no test asserts a literal phone value) but
@@ -64,6 +64,7 @@ const LANES = [
   'sprint19-notification-relay',
   'sprint17b-platform-catalog',
   'sprint20a-fulfilment-exceptions',
+  'sprint20b-checkout-policy',
 ] as const;
 
 export type PhoneLane = (typeof LANES)[number];
@@ -72,7 +73,7 @@ const LANE_INDEX: Record<PhoneLane, number> = Object.fromEntries(
   LANES.map((name, i) => [name, i]),
 ) as Record<PhoneLane, number>;
 
-// 23 lanes * 434_000 = 9_982_000, inside the 10,000,000-wide
+// 24 lanes * 416_000 = 9_984_000, inside the 10,000,000-wide
 // (0000000-9999999) 7-digit space this leaves per prefix, with very
 // little room left for more lanes at this LANE_WIDTH. Fails loudly at
 // module load, not silently at some far-off runtime call, if that ever
