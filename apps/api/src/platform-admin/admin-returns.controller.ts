@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Get,
   Param,
   Patch,
   Req,
@@ -28,6 +29,12 @@ import { ReturnsService } from '../returns/returns.service';
 @UseGuards(SessionAuthGuard, PlatformRoleGuard)
 export class AdminReturnsController {
   constructor(private readonly returns: ReturnsService) {}
+
+  @Get()
+  @RequirePlatformRole(PlatformRole.PLATFORM_ADMIN)
+  async list() {
+    return this.returns.listEscalated();
+  }
 
   @Patch(':returnId/escalation-decision')
   @RequirePlatformRole(PlatformRole.PLATFORM_ADMIN)

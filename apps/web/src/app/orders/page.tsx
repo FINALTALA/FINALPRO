@@ -253,6 +253,7 @@ export default function OrdersPage() {
     <div className="page-shell">
       <div className="top-bar">
         <div className="brand" style={{ margin: 0 }}>طلباتي</div>
+        <Link href="/returns" className="button-link">إرجاعاتي</Link>
       </div>
 
       {error && <div className="error-banner" style={{ maxWidth: 720 }}>{error}</div>}
@@ -293,6 +294,15 @@ export default function OrdersPage() {
                         إلغاء هذا المنتج
                       </button>
                     )}
+                    {!it.cancelled_at &&
+                      ["DELIVERED", "PICKED_UP", "COMPLETED"].includes(o.status) && (
+                        <Link
+                          href={`/orders/${o.id}/items/${it.id}/return`}
+                          className="button-link"
+                        >
+                          طلب إرجاع
+                        </Link>
+                      )}
                   </div>
                 ))}
               </div>

@@ -53,6 +53,7 @@ export class CustomerReturnsController {
     const customerId = await this.requireCustomerId(user);
     return this.returns.submit(
       customerId,
+      user.id,
       branchOrderId,
       itemId,
       {
@@ -62,6 +63,12 @@ export class CustomerReturnsController {
       },
       req.correlationId,
     );
+  }
+
+  @Get('returns')
+  async list(@CurrentUser() user: AuthenticatedUser) {
+    const customerId = await this.requireCustomerId(user);
+    return this.returns.listOwnReturns(customerId);
   }
 
   @Get('returns/:returnId')
@@ -81,7 +88,12 @@ export class CustomerReturnsController {
     @Req() req: Request,
   ) {
     const customerId = await this.requireCustomerId(user);
-    return this.returns.cancel(customerId, returnId, req.correlationId);
+    return this.returns.cancel(
+      customerId,
+      user.id,
+      returnId,
+      req.correlationId,
+    );
   }
 
   @Post('returns/:returnId/dispute')
@@ -92,6 +104,11 @@ export class CustomerReturnsController {
     @Req() req: Request,
   ) {
     const customerId = await this.requireCustomerId(user);
-    return this.returns.dispute(customerId, returnId, req.correlationId);
+    return this.returns.dispute(
+      customerId,
+      user.id,
+      returnId,
+      req.correlationId,
+    );
   }
 }

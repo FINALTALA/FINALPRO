@@ -168,6 +168,9 @@ export default function BranchesPage() {
                 <Link href={`/vendor/${params.vendorId}/branches/${b.id}/minimum-order`} className="button-link">
                   الحد الأدنى للطلب
                 </Link>
+                <Link href={`/vendor/${params.vendorId}/branches/${b.id}/returns`} className="button-link">
+                  طلبات الإرجاع
+                </Link>
                 {isOwner && !b.archived_at && (
                   <button
                     className="button-link"

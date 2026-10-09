@@ -143,6 +143,8 @@ describe('Sprint 13 - web navigation model', () => {
         `/vendor/${VENDOR}/delivery-windows`,
         `/vendor/${VENDOR}/orders`,
         `/vendor/${VENDOR}/verification`,
+        `/vendor/${VENDOR}/return-policy`,
+        `/vendor/${VENDOR}/returns/redeem`,
       ]);
     });
 
@@ -153,6 +155,7 @@ describe('Sprint 13 - web navigation model', () => {
         ...ownerHubTiles(VENDOR).map((t) => t.href),
         `/vendor/${VENDOR}/branches/${BRANCH}/orders`,
         `/vendor/${VENDOR}/branches/${BRANCH}/delivery-windows`,
+        `/vendor/${VENDOR}/branches/${BRANCH}/returns`,
       ];
       for (const href of hrefs) {
         expect(existsSync(pageFileFor(href, ids))).toBe(true);
@@ -194,6 +197,7 @@ describe('Sprint 13 - web navigation model', () => {
         '/admin/brands',
         '/admin/canonical-products',
         '/admin/branch-orders',
+        '/admin/returns',
       ]);
     });
 

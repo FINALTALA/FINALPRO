@@ -504,8 +504,8 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | PDR-027 | سياسة فشل التوصيل | mark-delivery-failed مع `deliveryAttemptCount` (0→1→2)؛ محاولة أولى: تُفتح لإعادة الجدولة أو مهلة 48 ساعة تلقائية؛ محاولة ثانية: COD تُلغى تلقائياً في نفس الاستدعاء، إلكتروني يُفتح لطلب استرداد العميل وموافقة الموظف (لا مسار رفض — فجوة موثَّقة عمداً، القرار النهائي 2026-10-07) | موظف/عميل | /orders، صفحة طلبات الفرع | S20a | ✅ DONE | - |
 | PDR-028 | إلغاء صنف/طلب قبل Sent وقواعد الرسوم | إلغاء كامل الطلب أو صنف واحد (العميل: PLACED فقط؛ الموظف: PLACED/PREPARING، سبب إلزامي بعد بدء التجهيز)؛ إلغاء صنف واحد لا يغيّر حالة الطلب إن بقي صنف آخر نشطاً؛ رسوم التوصيل تُسترد مرة واحدة فقط عند إغلاق الطلب (partial unique index حقيقي) | عميل/موظف | /orders، صفحة طلبات الفرع | S9,S20a | ✅ DONE | - |
 | PDR-029 | عناوين: خريطة وافتراضي وحفظ صريح؛ تغيير قبل التحضير | إنشاء/عرض فقط؛ **GPS يملأ lat/lng فقط (لا مزوّد خريطة خارجي، قرار معتمد)**، لا default، لا تعديل/حذف، لا تغيير العنوان قبل التحضير | session | /account، /checkout | S14 | 🟡 PARTIAL — بسبب default/تعديل/حذف/تغيير قبل التحضير، وليس الخريطة | S22 |
-| PDR-030 | سياسة إرجاع المتجر ورسومها ولقطة الشراء | لا | - | لا | لا | ❌ MISSING | S21 |
-| PDR-031 | طلب إرجاع وSLA وكود 7 أيام | لا | - | لا | لا | ❌ MISSING | S21 |
+| PDR-030 | سياسة إرجاع المتجر ورسومها ولقطة الشراء | مبنية بالكامل (API/منطق): `return_policy` إلزامي عند التسجيل، تحديث لاحق تحت قفل 6 أشهر حقيقي، لقطة كاملة على `BranchOrder` وقت `confirm()` لا تتأثر بتعديل لاحق. انظر FR-RET-008/009 للتفاصيل الكاملة | OWNER | - (لا واجهة مستخدم بعد) | S21 e2e | 🟡 PARTIAL (لا UI) | - |
+| PDR-031 | طلب إرجاع وSLA وكود 7 أيام | مبنية بالكامل (API/منطق): طلب بسبب+صور، SLA 48h/72h حقيقي، كود 6 أرقام يولَّد عند الموافقة فقط وصالح 7 أيام، قبول عابر لفروع المتجر الفعلية (لا نقاط استلام بعد). انظر FR-RET-009/FR-FUL-009 للتفاصيل الكاملة | عميل/OWNER/موظف | - (لا واجهة مستخدم بعد) | S21 e2e | 🟡 PARTIAL (لا UI؛ فروع فعلية فقط) | - |
 | PDR-032 | مراجعات موثّقة للمنتج والمتجر؛ غير قابلة للتعديل؛ الردود مؤجلة | لا | - | لا | لا | ❌ MISSING | S23 |
 | PDR-033 | اشتراك sandbox شهر وتجديد؛ تعطيل عند الانتهاء؛ تذكيرات | VendorSubscription وبوابة الانتهاء؛ لا تذكيرات | OWNER | لا | S3 | 🟡 PARTIAL | S15 |
 | PDR-034 | تعطيل الحساب مع استرجاع 30 يوماً | لا | - | لا | لا | ❌ MISSING | S22 |
@@ -724,7 +724,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | SRS-G0-05 | المخزون: OfferBranchInventory (= BranchStock فعلياً) لفرع فعلي/مستودع فقط؛ InventoryMovement بكل الأسباب المذكورة؛ لا نوع نقل | BranchStock+StockMovement موجودان؛ أسباب الحركة تغطي DAMAGE/LOSS/COUNT_CORRECTION/SALE الآن (S18a)، لا "استرجاع مرتجع" ولا "استيراد/إضافة" كأسباب حركة منفصلة | 🟡 PARTIAL | S18 |
 | SRS-G0-06 | السلة والطلب: Cart لعميل موثّق فقط، CartItem بلا فرع/تنفيذ عند الإضافة؛ CustomerOrder له BranchOrder واحد أو أكثر | مطابق تماماً | ✅ DONE | - |
 | SRS-G0-07 | التنفيذ والدفع: Fulfillment واحد لكل BranchOrder بلا سائق؛ دفع sandbox واحد يغطي عدة BranchOrders بتخصيص عبر branch_order_id | لا كيان Fulfillment منفصل (مدموج داخل BranchOrder، وهذا يحقق نفس الغرض عملياً)؛ PaymentTransaction واحد + BranchOrder.paymentTransactionId كإحالة (يحقق التخصيص فعلياً) | ✅ DONE | - |
-| SRS-G0-08 | الجدولة والإرجاع: DeliverySlot لفرع مالك مخزون؛ ReturnPolicy مُلقَطة على BranchOrder/Item؛ Notification بحالة قراءة ورابط عميق؛ Review لمنتج/متجر فقط، غير قابل للتعديل | DeliveryWindow/Exception DONE؛ **`Notification` بحالة قراءة ورابط عميق مبني الآن بالكامل (S19)**؛ ReturnPolicy/ReturnRequest/Review ما زالت غير موجودة إطلاقاً | 🟡 PARTIAL (ثلاثة أرباعه DONE الآن، ReturnPolicy/ReturnRequest/Review فقط ما زال MISSING بالكامل) | S17/S19/S21/S23 |
+| SRS-G0-08 | الجدولة والإرجاع: DeliverySlot لفرع مالك مخزون؛ ReturnPolicy مُلقَطة على BranchOrder/Item؛ Notification بحالة قراءة ورابط عميق؛ Review لمنتج/متجر فقط، غير قابل للتعديل | DeliveryWindow/Exception DONE؛ `Notification` بحالة قراءة ورابط عميق مبني بالكامل (S19)؛ **`ReturnPolicy` مُلقَطة على `BranchOrder`/Item مبنية بالكامل الآن (S21)** - `returnPolicySnapshot*` على `BranchOrder`، و`ReturnRequest` (نموذج `Return`) مبني أيضاً. `Review` فقط ما زال غير موجود (S23) | 🟡 PARTIAL (Review فقط متبقٍ) | S17/S19/S21/S23 |
 
 ### G.3 — كيانات مقابل Prisma الفعلي (الكيانات غير المذكورة في G.0 فقط؛ ما ذُكر أعلاه لا يتكرر)
 
@@ -736,7 +736,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | SRS-G3-04 | `FxRate` | غير موجود، ومطلوب ألا يوجد (PDR-001) | ✅ DONE (بالإزالة المتعمدة) | - |
 | SRS-G3-05 | `Payment`/`PaymentAllocation`/`PaymentTransactionAllocation`/`WebhookInbox` (نموذج دفع متعدد المراحل مع تسوية) | فقط `PaymentTransaction` بحالتين (SUCCEEDED/FAILED)، بلا بوابة حقيقية ولا webhook inbox (PDR-005 بسّط النموذج عمداً) | ✅ DONE (تبسيط sandbox متعمد، ليس فجوة) | - |
 | SRS-G3-06 | `VendorSettlement`/`Promotion`/`Coupon` (Phase 2 بحسب الـSRS) | غير موجودة | ❌ MISSING | قرار-نطاق |
-| SRS-G3-07 | `Review`/`ReturnRequest`/`Refund`/`Dispute` | غير موجودة (متوافق مع FR-REV-*/FR-RET-* MISSING أعلاه) | ❌ MISSING | S21/S23 |
+| SRS-G3-07 | `Review`/`ReturnRequest`/`Refund`/`Dispute` | **`ReturnRequest`/`Refund`/`Dispute` مبنية بالكامل الآن (S21)** - نموذج `Return` + `BranchOrderRefund` + مسار النزاع/التصعيد. `Review` فقط ما زال غير موجود (S23) | 🟡 PARTIAL (Review فقط متبقٍ) | S23 |
 | SRS-G3-08 | `Notification`/`SupportTicket` | **`Notification` مبني بالكامل الآن** (S19، يتبع FR-NOTIF-008 الذي أصبح ✅)؛ `SupportTicket` ما زال غير موجود إطلاقاً | 🟡 PARTIAL | S19/قرار-نطاق |
 | SRS-G3-09 | `PriceHistory` | موجود (متوافق مع FR-PRICE-002، S17): سجلّ إضافة فقط، صف واحد لكل تغيير سعر حقيقي، تعبئة أولية MIGRATED_BASELINE لكل متغيّر سابق | ✅ DONE | - |
 | SRS-G3-10 | ثابتان معماريان: لا `vendor_id` على `CanonicalProduct`/`CanonicalProductVariant` أبداً؛ كل جدول مملوك للبائع يحمل `vendor_id` إلزامياً | مطابق تماماً في السكيما الفعلية (تحقّقت من `CanonicalProduct`/`CanonicalProductVariant`/`OfferVariant`) | ✅ DONE | - |
@@ -775,7 +775,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | SRS-H3A-05 | Checkout: quote بلا تعديل، ثم إنشاء ذري | `POST /checkout/quote`, `/reserve`, `/confirm` — يطابق المعنى وإن كان بثلاث خطوات لا خطوتين | ✅ DONE | - |
 | SRS-H3A-06 | طلبات الفرع: GET orders، PATCH actions (بدء تحضير، رجوع، إلغاء صنف، إعادة محاولة توصيل، موافقة استرداد) | البدء/الإرسال/التسليم/الاستلام موجودة؛ **الرجوع (cancel)، إلغاء الصنف، إعادة محاولة التوصيل (mark-delivery-failed + إعادة جدولة العميل)، موافقة الاسترداد — الأربعة مبنية الآن** | ✅ DONE | - |
 | SRS-H3A-07 | التقويم/العناوين: فترات، إعادة جدولة، تعديل عنوان قبل التحضير فقط | فترات التوصيل CRUD موجودة؛ **إعادة الجدولة مبنية الآن (قفل سعة حقيقي، نفس آلية الحجز)**؛ لا تعديل عنوان لطلب قائم | 🟡 PARTIAL | S22 |
-| SRS-H3A-08 | المرتجعات/المراجعات/التنبيهات: طلب إرجاع، قرار، مراجعة، إشعارات بحالة قراءة | **إشعارات بحالة قراءة مبنية الآن بالكامل** (S19)؛ طلب الإرجاع والقرار والمراجعة ما زالت غير موجودة إطلاقاً | 🟡 PARTIAL (ربعه عن الإشعارات DONE، الباقي MISSING بالكامل) | S19/S21/S23 |
+| SRS-H3A-08 | المرتجعات/المراجعات/التنبيهات: طلب إرجاع، قرار، مراجعة، إشعارات بحالة قراءة | إشعارات بحالة قراءة مبنية بالكامل (S19)؛ **طلب الإرجاع والقرار مبنيان بالكامل الآن (S21)** - API فقط، لا UI؛ المراجعة (Review) فقط ما زالت غير موجودة (S23) | 🟡 PARTIAL (Review فقط متبقٍ؛ المرتجعات API فقط بلا UI) | S19/S21/S23 |
 
 ## §10 — Part 5: تجربة المستخدم وحالات الفشل
 
@@ -1066,8 +1066,8 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 | AC-09 | RTL في جدول المقارنة | 🟡 PARTIAL |
 | AC-10 | بوابة AwaitingPayment: نجاح الدفع | ✅ DONE (بمقاربة بديلة، انظر ADR-010) |
 | AC-11 | بوابة AwaitingPayment: فشل الدفع | ✅ DONE (بمقاربة بديلة، انظر ADR-010) |
-| AC-12 | إرجاع صنف مسلَّم من شحنة مجزأة | ❌ MISSING |
-| AC-13 | رفض إرجاع صنف لم يُسلَّم بعد | ❌ MISSING |
+| AC-12 | إرجاع صنف مسلَّم من شحنة مجزأة | الإرجاع نفسه مبني (S21)، لكن "شحنة مجزأة" (split shipment) غير قابلة للحدوث - FR-FUL-007 مؤجَّل بقرار معتمد (انظر BR-025) | 🟡 PARTIAL (الإرجاع مبني، السيناريو الحرفي غير منطبق) |
+| AC-13 | رفض إرجاع صنف لم يُسلَّم بعد | مبني بالضبط: `checkReturnEligibility()` يرفض بـ`NOT_YET_ARRIVED` قبل التسليم/الاستلام | ✅ DONE (S21) |
 | AC-14 | بائع مُعلَّق يحتفظ بوصول محدود | ❌ MISSING (لا تعليق مبني) |
 | AC-15 | ازدواجية webhook | ❌ MISSING (لا webhooks) |
 | AC-16 | فشل durability لـwebhook | ❌ MISSING (لا webhooks) |
@@ -1084,7 +1084,7 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 
 ## §15 — E.11 آلات الحالة القديمة: صفوف بمعرّفات ثابتة
 
-**ملاحظة جوهرية قبل الجدول:** آلات E.11 (`CustomerOrder`/`VendorSuborder`/`OrderItem`/`Payment`/`Delivery`) تصف **النموذج الذي سبق PDR-004/PDR-005** (تحقّقت من الكود: لا حقل `status` على `CustomerOrder` إطلاقاً، لا تجميع rollup، `PaymentTransactionStatus` مبسَّط لحالتين فقط `SUCCEEDED`/`FAILED` لا الحالات الثماني الأصلية، لا كيان `Delivery`/`Fulfillment` منفصل، ولا موظف "سائق"). لذلك **معظم صفوف VendorSuborder/Payment/Delivery القديمة SUPERSEDED بالتصميم الفعلي (`BranchOrderStatus` + `PaymentTransaction` المبسَّط)**، وليست فجوة. الصفوف التي تصف **إرجاعاً** تبقى MISSING فعلياً (الإرجاع غير مبني بأي نموذج، قديم أو جديد). آلة `Return` بالكامل (9 صفوف) تُدرَج مرة واحدة كمجموعة لأن كل صفوفها MISSING بنفس السبب.
+**ملاحظة جوهرية قبل الجدول:** آلات E.11 (`CustomerOrder`/`VendorSuborder`/`OrderItem`/`Payment`/`Delivery`) تصف **النموذج الذي سبق PDR-004/PDR-005** (تحقّقت من الكود: لا حقل `status` على `CustomerOrder` إطلاقاً، لا تجميع rollup، `PaymentTransactionStatus` مبسَّط لحالتين فقط `SUCCEEDED`/`FAILED` لا الحالات الثماني الأصلية، لا كيان `Delivery`/`Fulfillment` منفصل، ولا موظف "سائق"). لذلك **معظم صفوف VendorSuborder/Payment/Delivery القديمة SUPERSEDED بالتصميم الفعلي (`BranchOrderStatus` + `PaymentTransaction` المبسَّط)**، وليست فجوة. **الصفوف التي تصف إرجاعاً مبنية الآن (S21)** عبر نموذج `Return` المستقل - لا كحالة على `BranchOrder`/`PaymentTransaction` نفسهما (لذلك صفوف VS-16/17 وPM-07..11 أعلاه SUPERSEDED تحديداً، لا MISSING). آلة `Return` بالكامل (9 صفوف أدناه) مبنية بالكامل الآن، مع تصحيحات جولات المراجعة الخمس المذكورة في كل صف (لا أتمتة Approve→Refund، فصل REJECTED عن ADMIN_REJECTED، إلخ).
 
 ### CustomerOrder (8 صفوف)
 
@@ -1118,8 +1118,8 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 | SRS-E11-VS-13 | `ReadyForPickup→PickedUp` | يقابله pickup-handover | ✅ DONE |
 | SRS-E11-VS-14 | `OutForDelivery→Delivered` | يقابله mark-delivered | ✅ DONE |
 | SRS-E11-VS-15 | `PickedUp/Delivered→Completed` | يقابله confirm-received (العميل) | ✅ DONE |
-| SRS-E11-VS-16 | `Completed→ReturnRequested` | لا إرجاع مبني | ❌ MISSING |
-| SRS-E11-VS-17 | `ReturnRequested→ReturnedRefunded` | لا إرجاع مبني | ❌ MISSING |
+| SRS-E11-VS-16 | `Completed→ReturnRequested` | لا حقل status مستقل على `BranchOrder` يتحول إليه - الحالة "طلب إرجاع" تعيش على نموذج `Return` المستقل (S21)، لا على الأب. السلوك الفعلي مبني (انظر SRS-E11-RT-01) | ↪ SUPERSEDED (انظر Return) |
+| SRS-E11-VS-17 | `ReturnRequested→ReturnedRefunded` | نفس السبب أعلاه - الاسترداد يُسجَّل في `BranchOrderRefund`، لا كحالة على `BranchOrder` نفسه | ↪ SUPERSEDED (انظر Return، SRS-E11-RT-09) |
 
 ### OrderItem (4 صفوف، الآن BranchOrderItem)
 
@@ -1127,8 +1127,8 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 |---|---|---|---|
 | SRS-E11-OI-01 | إنشاء يرث حالة الأب | `BranchOrderItem` بلا حقل status خاص به أصلاً — يتبع الأب بالضرورة البنيوية | ✅ DONE (بالغياب المتسق) |
 | SRS-E11-OI-02 | الأب يكتمل → الصنف يكتمل | نفس السبب أعلاه | ✅ DONE |
-| SRS-E11-OI-03 | طلب إرجاع لصنف محدد | لا إرجاع مبني | ❌ MISSING |
-| SRS-E11-OI-04 | استرداد الصنف | لا إرجاع مبني | ❌ MISSING |
+| SRS-E11-OI-03 | طلب إرجاع لصنف محدد | مبني: `POST .../items/:itemId/returns` ينشئ `Return` مرتبطاً بـ`BranchOrderItem` هذا بالذات | ✅ DONE (S21) |
+| SRS-E11-OI-04 | استرداد الصنف | مبني: `BranchOrderRefund.branchOrderItemId` فريد لكل صنف، يُكتب عند استلام المرتجع فقط | ✅ DONE (S21) |
 
 ### Payment (14 صفاً، الآن PaymentTransaction مبسَّط)
 
@@ -1140,11 +1140,11 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 | SRS-E11-PM-04 | `Authorized→Captured` | لا فصل تفويض/التقاط؛ خطوة واحدة | ↪ SUPERSEDED |
 | SRS-E11-PM-05 | `Authorized→Failed` (انتهاء نافذة الالتقاط) | غير منطبق | ↪ SUPERSEDED |
 | SRS-E11-PM-06 | `Captured→Settled` | لا تسوية مصرفية منفصلة (sandbox) | ↪ SUPERSEDED |
-| SRS-E11-PM-07 | `Captured→Refunded` | لا استرداد مبني | ❌ MISSING |
-| SRS-E11-PM-08 | `Captured→PartiallyRefunded` | لا استرداد مبني | ❌ MISSING |
-| SRS-E11-PM-09 | `Settled→Refunded` | لا استرداد مبني | ❌ MISSING |
-| SRS-E11-PM-10 | `Settled→PartiallyRefunded` | لا استرداد مبني | ❌ MISSING |
-| SRS-E11-PM-11 | `PartiallyRefunded→Refunded` | لا استرداد مبني | ❌ MISSING |
+| SRS-E11-PM-07 | `Captured→Refunded` | **لا تحول حرفي على `PaymentTransaction.status` نفسه** - الـenum الفعلي (`SUCCEEDED`/`FAILED` فقط) لا يملك قيمة Refunded إطلاقاً، بتصميم معتمد: `PaymentTransaction` يبقى غير قابل للتغيير دائماً (قد يغطي أكثر من BranchOrder)، والاسترداد الفعلي مبني بالكامل (S20a للإلغاء، S21 للإرجاع) في دفتر مستقل `BranchOrderRefund` | ↪ SUPERSEDED (انظر `BranchOrderRefund`) |
+| SRS-E11-PM-08 | `Captured→PartiallyRefunded` | نفس السبب أعلاه - الاسترداد الجزئي مبني عبر صفوف `BranchOrderRefund` متعددة، لا حالة "جزئي" على `PaymentTransaction` | ↪ SUPERSEDED |
+| SRS-E11-PM-09 | `Settled→Refunded` | نفس السبب | ↪ SUPERSEDED |
+| SRS-E11-PM-10 | `Settled→PartiallyRefunded` | نفس السبب | ↪ SUPERSEDED |
+| SRS-E11-PM-11 | `PartiallyRefunded→Refunded` | نفس السبب | ↪ SUPERSEDED |
 | SRS-E11-PM-12 | `[*]→PendingCOD` | يقابله ضمنياً: BranchOrder COD يُنشأ مباشرة بلا حالة دفع منفصلة | ↪ SUPERSEDED |
 | SRS-E11-PM-13 | `PendingCOD→CollectedOnDelivery` | يقابله pickup-handover/mark-delivered يعلّم الدفع كمدفوع | ✅ DONE (بالاسم المختلف) |
 | SRS-E11-PM-14 | `CollectedOnDelivery→Settled` | لا تسوية منفصلة (sandbox) | ↪ SUPERSEDED |
@@ -1161,7 +1161,7 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 | SRS-E11-DL-06 | `FailedAttempt→Assigned` (إعادة جدولة) | لا مسار فشل توصيل مبني | ❌ MISSING |
 | SRS-E11-DL-07 | `FailedAttempt→Cancelled` | لا مسار فشل توصيل مبني | ❌ MISSING |
 
-### Return (9 صفوف منفصلة — كلها MISSING لنفس السبب: لا نموذج إرجاع من أي نوع مبني في الكود)
+### Return (9 صفوف منفصلة — مبنية بالكامل الآن، S21، مع تصحيحات جولات المراجعة المذكورة في كل صف)
 
 | ID | الانتقال | الحالة الفعلية | Status | Sprint |
 |---|---|---|---|---|

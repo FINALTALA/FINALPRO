@@ -631,7 +631,11 @@ describe('Sprint 21 - returns: policy, request, code, receipt, refund (e2e)', ()
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
       const variantId = await createOfferWithStock(vendorId, branchId, 100, 5);
-      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const customerPhone = uniquePhone();
+      const customer = await signup(customerPhone, 'a-strong-password');
+      const customerUser = await prisma.user.findUniqueOrThrow({
+        where: { phone: customerPhone },
+      });
       const { branchOrderId, itemId } = await placeAndPickUpOrder(
         owner,
         customer,
@@ -642,12 +646,32 @@ describe('Sprint 21 - returns: policy, request, code, receipt, refund (e2e)', ()
       const submitted = await submitReturn(customer, branchOrderId, itemId);
       const returnId = submitted.body.id;
 
+      // Review-round requirement: actorId must be the REAL signed-in
+      // customer, never null - a human actor did this.
+      const submitAudit = await prisma.auditLog.findFirstOrThrow({
+        where: {
+          entityType: 'Return',
+          entityId: returnId,
+          action: 'return.requested',
+        },
+      });
+      expect(submitAudit.actorId).toBe(customerUser.id);
+
       const cancelled = await customerReturnAction(
         customer,
         `returns/${returnId}/cancel`,
       );
       expect(cancelled.status).toBe(201);
       expect(cancelled.body.status).toBe('CANCELLED_BY_CUSTOMER');
+
+      const cancelAudit = await prisma.auditLog.findFirstOrThrow({
+        where: {
+          entityType: 'Return',
+          entityId: returnId,
+          action: 'return.cancelled_by_customer',
+        },
+      });
+      expect(cancelAudit.actorId).toBe(customerUser.id);
 
       // Resubmission after CANCELLED_BY_CUSTOMER succeeds.
       const resubmitted = await submitReturn(customer, branchOrderId, itemId);
@@ -718,6 +742,19 @@ describe('Sprint 21 - returns: policy, request, code, receipt, refund (e2e)', ()
       });
       expect(closed.status).toBe('REJECTED_CLOSED');
 
+      const closureAudit = await prisma.auditLog.findFirstOrThrow({
+        where: {
+          entityType: 'Return',
+          entityId: returnId,
+          action: 'return.dispute_window_closed',
+        },
+      });
+      expect(closureAudit.actorId).toBeNull();
+      expect(closureAudit.beforeState).toMatchObject({ status: 'REJECTED' });
+      expect(closureAudit.afterState).toMatchObject({
+        status: 'REJECTED_CLOSED',
+      });
+
       const allowedResubmit = await submitReturn(
         customer,
         branchOrderId,
@@ -730,7 +767,11 @@ describe('Sprint 21 - returns: policy, request, code, receipt, refund (e2e)', ()
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
       const variantId = await createOfferWithStock(vendorId, branchId, 100, 5);
-      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const customerPhone = uniquePhone();
+      const customer = await signup(customerPhone, 'a-strong-password');
+      const customerUser = await prisma.user.findUniqueOrThrow({
+        where: { phone: customerPhone },
+      });
       const { branchOrderId, itemId } = await placeAndPickUpOrder(
         owner,
         customer,
@@ -751,6 +792,15 @@ describe('Sprint 21 - returns: policy, request, code, receipt, refund (e2e)', ()
       );
       expect(disputed.status).toBe(201);
       expect(disputed.body.status).toBe('ESCALATED');
+
+      const disputeAudit = await prisma.auditLog.findFirstOrThrow({
+        where: {
+          entityType: 'Return',
+          entityId: returnId,
+          action: 'return.disputed',
+        },
+      });
+      expect(disputeAudit.actorId).toBe(customerUser.id);
     });
 
     it('no return is ever possible again once REFUNDED (not merely while open)', async () => {
@@ -782,6 +832,48 @@ describe('Sprint 21 - returns: policy, request, code, receipt, refund (e2e)', ()
       const blocked = await submitReturn(customer, branchOrderId, itemId);
       expect(blocked.status).toBe(409);
       expect(blocked.body.error.code).toBe('RETURN_ALREADY_EXISTS');
+    });
+
+    it("GET /customers/me/returns lists only the signed-in customer's own returns, newest first, with the item title and order/item ids", async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const variantId = await createOfferWithStock(vendorId, branchId, 100, 5);
+      const customerA = await signup(uniquePhone(), 'a-strong-password');
+      const customerB = await signup(uniquePhone(), 'a-strong-password');
+
+      const orderA = await placeAndPickUpOrder(
+        owner,
+        customerA,
+        vendorId,
+        branchId,
+        variantId,
+      );
+      const returnA = await submitReturn(
+        customerA,
+        orderA.branchOrderId,
+        orderA.itemId,
+      );
+
+      const orderB = await placeAndPickUpOrder(
+        owner,
+        customerB,
+        vendorId,
+        branchId,
+        variantId,
+      );
+      await submitReturn(customerB, orderB.branchOrderId, orderB.itemId);
+
+      const list = await request(app.getHttpServer())
+        .get('/api/v1/customers/me/returns')
+        .set('Authorization', `Bearer ${customerA}`);
+      expect(list.status).toBe(200);
+      expect(list.body).toHaveLength(1);
+      expect(list.body[0]).toMatchObject({
+        id: returnA.body.id,
+        branch_order_id: orderA.branchOrderId,
+        branch_order_item_id: orderA.itemId,
+      });
+      expect(typeof list.body[0].title_ar).toBe('string');
     });
   });
 
@@ -826,6 +918,22 @@ describe('Sprint 21 - returns: policy, request, code, receipt, refund (e2e)', ()
         where: { id: returnId },
       });
       expect(afterEscalation.status).toBe('ESCALATED');
+
+      // Every automatic sweep transition gets its own AuditLog row too,
+      // same as every human-triggered one - actorId null (system), a
+      // real before/after.
+      const escalationAudit = await prisma.auditLog.findFirstOrThrow({
+        where: {
+          entityType: 'Return',
+          entityId: returnId,
+          action: 'return.auto_escalated',
+        },
+      });
+      expect(escalationAudit.actorId).toBeNull();
+      expect(escalationAudit.beforeState).toMatchObject({
+        status: 'REQUESTED',
+      });
+      expect(escalationAudit.afterState).toMatchObject({ status: 'ESCALATED' });
     });
 
     it('PLATFORM_ADMIN resolves an escalation: approve issues a code, reject is ADMIN_REJECTED - final, no dispute, no resubmission', async () => {
@@ -900,6 +1008,60 @@ describe('Sprint 21 - returns: policy, request, code, receipt, refund (e2e)', ()
         .set('Idempotency-Key', unique('admin-decision'))
         .send({ decision: 'approve' });
       expect(res.status).toBe(403);
+    });
+
+    it('GET /admin/returns lists only ESCALATED returns, and only for PLATFORM_ADMIN', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const variantId = await createOfferWithStock(vendorId, branchId, 100, 5);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const admin = await platformAdmin();
+
+      const requested = await placeAndPickUpOrder(
+        owner,
+        customer,
+        vendorId,
+        branchId,
+        variantId,
+      );
+      const requestedReturn = await submitReturn(
+        customer,
+        requested.branchOrderId,
+        requested.itemId,
+      );
+
+      const escalated = await placeAndPickUpOrder(
+        owner,
+        customer,
+        vendorId,
+        branchId,
+        variantId,
+      );
+      const escalatedReturn = await submitReturn(
+        customer,
+        escalated.branchOrderId,
+        escalated.itemId,
+      );
+      await prisma.return.update({
+        where: { id: escalatedReturn.body.id },
+        data: { status: 'ESCALATED', escalatedAt: new Date() },
+      });
+
+      const forbidden = await request(app.getHttpServer())
+        .get('/api/v1/admin/returns')
+        .set('Authorization', `Bearer ${owner}`);
+      expect(forbidden.status).toBe(403);
+
+      const list = await request(app.getHttpServer())
+        .get('/api/v1/admin/returns')
+        .set('Authorization', `Bearer ${admin}`);
+      expect(list.status).toBe(200);
+      const ids = list.body.map((r: { id: string }) => r.id);
+      expect(ids).toContain(escalatedReturn.body.id);
+      expect(ids).not.toContain(requestedReturn.body.id);
+      expect(
+        list.body.every((r: { status: string }) => r.status === 'ESCALATED'),
+      ).toBe(true);
     });
   });
 
@@ -1006,6 +1168,19 @@ describe('Sprint 21 - returns: policy, request, code, receipt, refund (e2e)', ()
         where: { id: submitted.body.id },
       });
       expect(expired.status).toBe('EXPIRED');
+
+      const expiryAudit = await prisma.auditLog.findFirstOrThrow({
+        where: {
+          entityType: 'Return',
+          entityId: submitted.body.id,
+          action: 'return.code_expired',
+        },
+      });
+      expect(expiryAudit.actorId).toBeNull();
+      expect(expiryAudit.beforeState).toMatchObject({
+        status: 'APPROVED_AWAITING_DROPOFF',
+      });
+      expect(expiryAudit.afterState).toMatchObject({ status: 'EXPIRED' });
 
       const redeemAfterExpiry = await redeemReturn(owner, vendorId, {
         code: expired.code,
@@ -1340,6 +1515,61 @@ describe('Sprint 21 - returns: policy, request, code, receipt, refund (e2e)', ()
         item_condition: 'RESELLABLE',
       });
       expect([403, 409]).toContain(crossVendor.status);
+    });
+
+    it('privacy: redeem by an employee of a DIFFERENT branch of the same vendor succeeds (PDR-031) but never receives reason_note/photo_urls/rejection_reason/code in the response', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId: branchAId } =
+        await createVendorWithBranch(owner);
+      await makeVendorEligible(vendorId);
+      const branchBId = await addBranch(owner, vendorId, 'Branch B');
+      await prisma.storeBranch.update({
+        where: { id: branchBId },
+        data: { verificationStatus: 'APPROVED' },
+      });
+      const variantId = await createOfferWithStock(vendorId, branchAId, 100, 5);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const { branchOrderId, itemId } = await placeAndPickUpOrder(
+        owner,
+        customer,
+        vendorId,
+        branchAId,
+        variantId,
+      );
+      const secretNote =
+        'A very specific secret complaint only branch A should see.';
+      const submitted = await customerReturnAction(
+        customer,
+        `orders/${branchOrderId}/items/${itemId}/returns`,
+        { reason: 'DAMAGED', reason_note: secretNote },
+      );
+      await decideReturn(owner, vendorId, branchAId, submitted.body.id, {
+        decision: 'approve',
+      }).expect(200);
+      const r = await prisma.return.findUniqueOrThrow({
+        where: { id: submitted.body.id },
+      });
+      const usedCode = r.code;
+
+      const redeemedAtB = await redeemReturn(owner, vendorId, {
+        code: usedCode,
+        receiving_branch_id: branchBId,
+        item_condition: 'RESELLABLE',
+      });
+      expect(redeemedAtB.status).toBe(201);
+      // Only the minimal, safe fields - never the note, photos, code,
+      // or rejection reason (same privacy convention as internalStoreNote).
+      expect(Object.keys(redeemedAtB.body).sort()).toEqual(
+        [
+          'id',
+          'item_condition',
+          'received_at',
+          'receiving_branch_id',
+          'status',
+        ].sort(),
+      );
+      expect(JSON.stringify(redeemedAtB.body)).not.toContain(secretNote);
+      expect(JSON.stringify(redeemedAtB.body)).not.toContain(usedCode);
     });
 
     it('deterministic concurrency (barrier-proven): two concurrent redeem attempts with the SAME code - only one succeeds, genuinely serialized on the Return row lock', async () => {

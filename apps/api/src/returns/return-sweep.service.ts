@@ -4,7 +4,9 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { Prisma } from '../../generated/prisma/client';
+import { AuditLogService } from '../audit/audit-log.service';
 import { PeriodicTask } from '../common/periodic-task.util';
 import { OutboxEventService } from '../outbox/outbox-event.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -50,6 +52,7 @@ export class ReturnSweepService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly outbox: OutboxEventService,
+    private readonly auditLog: AuditLogService,
   ) {}
 
   onModuleInit() {
@@ -155,6 +158,23 @@ export class ReturnSweepService implements OnModuleInit, OnModuleDestroy {
       where: { id: returnId },
       data: { status: 'ESCALATED', escalatedAt: new Date() },
     });
+    // Review-round requirement: every automatic transition gets its
+    // own AuditLog row too, same as every human-triggered one -
+    // actorId null (no human actor), a fresh correlationId per sweep
+    // tick (same convention as FulfilmentExceptionSweepService's own
+    // resolveTimeoutOnce).
+    await this.auditLog.record(
+      {
+        actorId: null,
+        correlationId: randomUUID(),
+        action: 'return.auto_escalated',
+        entityType: 'Return',
+        entityId: returnId,
+        beforeState: { status: 'REQUESTED' },
+        afterState: { status: 'ESCALATED' },
+      },
+      tx,
+    );
     await this.notifyAdmins(tx, 'return.auto_escalated', {
       return_id: returnId,
     });
@@ -199,6 +219,18 @@ export class ReturnSweepService implements OnModuleInit, OnModuleDestroy {
       where: { id: returnId },
       data: { status: 'REJECTED_CLOSED' },
     });
+    await this.auditLog.record(
+      {
+        actorId: null,
+        correlationId: randomUUID(),
+        action: 'return.dispute_window_closed',
+        entityType: 'Return',
+        entityId: returnId,
+        beforeState: { status: 'REJECTED' },
+        afterState: { status: 'REJECTED_CLOSED' },
+      },
+      tx,
+    );
     return true;
   }
 
@@ -239,6 +271,18 @@ export class ReturnSweepService implements OnModuleInit, OnModuleDestroy {
       where: { id: returnId },
       data: { status: 'EXPIRED' },
     });
+    await this.auditLog.record(
+      {
+        actorId: null,
+        correlationId: randomUUID(),
+        action: 'return.code_expired',
+        entityType: 'Return',
+        entityId: returnId,
+        beforeState: { status: 'APPROVED_AWAITING_DROPOFF' },
+        afterState: { status: 'EXPIRED' },
+      },
+      tx,
+    );
     await this.notifyCustomerForReturn(tx, returnId, 'return.code_expired');
     return true;
   }

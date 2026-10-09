@@ -79,6 +79,31 @@ function returnDto(r: {
 }
 
 /**
+ * Review-round requirement: redeem() is deliberately reachable by any
+ * employee/owner of ANY branch of this vendor (PDR-031's cross-branch
+ * acceptance) - but reason_note/photo_urls/rejection_reason/code are
+ * only for the customer, the ORIGINATING branch's own staff, and
+ * PLATFORM_ADMIN (same privacy convention as Sprint 20b's
+ * internalStoreNote). The full returnDto() above must never be the
+ * response to a redeem call - this is the only safe subset.
+ */
+function redeemResultDto(r: {
+  id: string;
+  status: string;
+  receivingBranchId: string | null;
+  receivedAt: Date | null;
+  itemCondition: string | null;
+}) {
+  return {
+    id: r.id,
+    status: r.status,
+    receiving_branch_id: r.receivingBranchId,
+    received_at: r.receivedAt,
+    item_condition: r.itemCondition,
+  };
+}
+
+/**
  * Sprint 21 (EPIC-RET). The full Return lifecycle - submit, customer
  * cancel/dispute, vendor decide, vendor redeem, admin escalation
  * decision. See Return's own schema.prisma comment for the state
@@ -101,6 +126,7 @@ export class ReturnsService {
 
   async submit(
     customerId: string,
+    actorUserId: string,
     branchOrderId: string,
     itemId: string,
     dto: {
@@ -203,7 +229,7 @@ export class ReturnsService {
 
       await this.auditLog.record(
         {
-          actorId: null,
+          actorId: actorUserId,
           correlationId,
           action: 'return.requested',
           entityType: 'Return',
@@ -223,7 +249,12 @@ export class ReturnsService {
     });
   }
 
-  async cancel(customerId: string, returnId: string, correlationId: string) {
+  async cancel(
+    customerId: string,
+    actorUserId: string,
+    returnId: string,
+    correlationId: string,
+  ) {
     return this.prisma.$transaction(async (tx) => {
       const r = await this.lockAndRequireOwnReturn(tx, customerId, returnId);
       if (r.status !== 'REQUESTED') {
@@ -239,7 +270,7 @@ export class ReturnsService {
       });
       await this.auditLog.record(
         {
-          actorId: null,
+          actorId: actorUserId,
           correlationId,
           action: 'return.cancelled_by_customer',
           entityType: 'Return',
@@ -253,7 +284,12 @@ export class ReturnsService {
     });
   }
 
-  async dispute(customerId: string, returnId: string, correlationId: string) {
+  async dispute(
+    customerId: string,
+    actorUserId: string,
+    returnId: string,
+    correlationId: string,
+  ) {
     return this.prisma.$transaction(async (tx) => {
       const r = await this.lockAndRequireOwnReturn(tx, customerId, returnId);
       if (r.status !== 'REJECTED') {
@@ -275,7 +311,7 @@ export class ReturnsService {
       });
       await this.auditLog.record(
         {
-          actorId: null,
+          actorId: actorUserId,
           correlationId,
           action: 'return.disputed',
           entityType: 'Return',
@@ -287,6 +323,41 @@ export class ReturnsService {
       );
       return returnDto(updated);
     });
+  }
+
+  /** List the customer's own returns, newest first - the minimal
+   * read-only plumbing the Orders/Returns UI needs to show "this item
+   * already has a return, here's its status" without a client-side
+   * returnId cache. */
+  async listOwnReturns(customerId: string) {
+    const rows = await this.prisma.return.findMany({
+      where: {
+        branchOrderItem: {
+          branchOrder: { customerOrder: { customerId } },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        branchOrderItem: {
+          select: {
+            id: true,
+            branchOrderId: true,
+            offerVariant: {
+              select: {
+                vendorOffer: { select: { titleAr: true, titleEn: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+    return rows.map((r) => ({
+      ...returnDto(r),
+      branch_order_id: r.branchOrderItem.branchOrderId,
+      branch_order_item_id: r.branchOrderItem.id,
+      title_ar: r.branchOrderItem.offerVariant.vendorOffer.titleAr,
+      title_en: r.branchOrderItem.offerVariant.vendorOffer.titleEn,
+    }));
   }
 
   async getOwnReturn(customerId: string, returnId: string) {
@@ -341,6 +412,20 @@ export class ReturnsService {
         branchOrderItem: { branchOrder: { branchId } },
       },
       orderBy: { createdAt: 'desc' },
+    });
+    return rows.map(returnDto);
+  }
+
+  // ============================================================
+  // Admin-facing
+  // ============================================================
+
+  /** The admin escalation queue - ESCALATED only, the one status
+   * resolveEscalation() actually acts on. */
+  async listEscalated() {
+    const rows = await this.prisma.return.findMany({
+      where: { status: 'ESCALATED' },
+      orderBy: { escalatedAt: 'asc' },
     });
     return rows.map(returnDto);
   }
@@ -620,7 +705,7 @@ export class ReturnsService {
       );
       await this.notifyCustomerForReturn(tx, r.id, 'return.refunded');
 
-      return returnDto(finalReturn);
+      return redeemResultDto(finalReturn);
     });
   }
 
