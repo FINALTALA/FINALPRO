@@ -29,6 +29,7 @@ export interface VendorReturnPolicySource {
   returnMode: 'NO_RETURN' | 'REFUND_ONLY' | 'EXCHANGE_ONLY' | 'BOTH';
   returnWindowDays: number | null;
   returnFeeIls: unknown;
+  exchangeFeeIls: unknown;
   returnPolicyUpdatedAt: Date | null;
 }
 
@@ -38,6 +39,7 @@ export interface ReturnPolicySnapshot {
     'NO_RETURN' | 'REFUND_ONLY' | 'EXCHANGE_ONLY' | 'BOTH';
   returnPolicySnapshotWindowDays: number | null;
   returnPolicySnapshotFeeIls: Decimal | null;
+  returnPolicySnapshotExchangeFeeIls: Decimal | null;
   returnPolicySnapshotVersion: Date | null;
 }
 
@@ -50,8 +52,31 @@ export function buildReturnPolicySnapshot(
     returnPolicySnapshotWindowDays: vendor.returnWindowDays,
     returnPolicySnapshotFeeIls:
       vendor.returnFeeIls != null ? toDecimal(vendor.returnFeeIls) : null,
+    returnPolicySnapshotExchangeFeeIls:
+      vendor.exchangeFeeIls != null ? toDecimal(vendor.exchangeFeeIls) : null,
     returnPolicySnapshotVersion: vendor.returnPolicyUpdatedAt,
   };
+}
+
+/**
+ * Sprint 21b: whether a customer-chosen outcome is even permitted by
+ * the ORDER's own snapshotted mode (never the vendor's live policy) -
+ * REFUND_ONLY allows only RETURN, EXCHANGE_ONLY allows only EXCHANGE,
+ * BOTH allows either. Called at submit() time AND re-checked verbatim
+ * under lock inside the approval helper, since the snapshot itself
+ * never changes between the two (re-checking here only protects
+ * against the pre-lock submit()-time check being bypassed by a direct
+ * call, not against a real race - the snapshot is frozen at confirm()
+ * time, long before either check runs).
+ */
+export function isOutcomeAllowedBySnapshot(
+  snapshotMode: string | null,
+  desiredOutcome: 'RETURN' | 'EXCHANGE',
+): boolean {
+  if (snapshotMode === 'BOTH') return true;
+  if (snapshotMode === 'REFUND_ONLY') return desiredOutcome === 'RETURN';
+  if (snapshotMode === 'EXCHANGE_ONLY') return desiredOutcome === 'EXCHANGE';
+  return false;
 }
 
 export type FulfilmentMethod = 'PICKUP' | 'DELIVERY';
@@ -180,4 +205,56 @@ export function computeReturnRefundAmount(
     snapshottedFeeIls != null ? toDecimal(snapshottedFeeIls) : new Decimal(0);
   const amount = itemTotal.minus(fee);
   return roundIls(amount.isNegative() ? new Decimal(0) : amount);
+}
+
+export interface ExchangeSettlementCalculation {
+  originalTotal: Decimal;
+  replacementTotal: Decimal;
+  netAmount: Decimal;
+  direction: 'COLLECT_CASH' | 'REFUND_CASH' | 'NONE';
+}
+
+/**
+ * Sprint 21b (PDR §3.5, review-round exact formula):
+ *   replacement_total = replacement_unit_price_snapshot * quantity
+ *   original_total     = original_unit_price_snapshot * quantity
+ *   net                 = replacement_total - original_total + exchange_fee_snapshot
+ * net > 0 => COLLECT_CASH net; net < 0 => REFUND_CASH abs(net); net = 0 => NONE.
+ * All decimal.js, never Number - both totals use the SAME quantity
+ * (no partial-quantity exchange, S21b scope decision), and both unit
+ * prices are SNAPSHOTS captured at submit() time, never a live price
+ * re-read at settlement time.
+ */
+export function computeExchangeSettlement(
+  originalUnitPriceSnapshot: unknown,
+  replacementUnitPriceSnapshot: unknown,
+  quantity: number,
+  exchangeFeeSnapshot: unknown,
+): ExchangeSettlementCalculation {
+  const originalTotal = roundIls(
+    toDecimal(originalUnitPriceSnapshot).times(quantity),
+  );
+  const replacementTotal = roundIls(
+    toDecimal(replacementUnitPriceSnapshot).times(quantity),
+  );
+  const fee =
+    exchangeFeeSnapshot != null
+      ? toDecimal(exchangeFeeSnapshot)
+      : new Decimal(0);
+  const net = roundIls(replacementTotal.minus(originalTotal).plus(fee));
+
+  if (net.isZero()) {
+    return {
+      originalTotal,
+      replacementTotal,
+      netAmount: net,
+      direction: 'NONE',
+    };
+  }
+  return {
+    originalTotal,
+    replacementTotal,
+    netAmount: net.isNegative() ? net.negated() : net,
+    direction: net.isNegative() ? 'REFUND_CASH' : 'COLLECT_CASH',
+  };
 }

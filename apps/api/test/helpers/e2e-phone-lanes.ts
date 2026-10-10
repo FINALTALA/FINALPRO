@@ -30,11 +30,11 @@
  * persistent dev database.
  */
 
-// Sprint 21: shrunk again from 416_000 to fit a 25th lane exactly at
-// the 10,000,000 ceiling (25 * 400_000 = 10_000_000) - no test asserts
-// a literal phone value (see this file's own header comment), so
+// Sprint 21b: shrunk again from 400_000 to fit a 26th lane under the
+// 10,000,000 ceiling (26 * 380_000 = 9_880_000) - no test asserts a
+// literal phone value (see this file's own header comment), so
 // changing which raw digits a lane's numbers land on is safe.
-const LANE_WIDTH = 400_000; // usable numbers per lane: base .. base + LANE_WIDTH - 1
+const LANE_WIDTH = 380_000; // usable numbers per lane: base .. base + LANE_WIDTH - 1
 
 // Order is arbitrary but stable - reordering shifts every later lane's
 // numbers. That's harmless (no test asserts a literal phone value) but
@@ -66,6 +66,7 @@ const LANES = [
   'sprint20a-fulfilment-exceptions',
   'sprint20b-checkout-policy',
   'sprint21-returns',
+  'sprint21b-exchange',
 ] as const;
 
 export type PhoneLane = (typeof LANES)[number];

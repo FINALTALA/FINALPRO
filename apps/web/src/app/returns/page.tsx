@@ -22,6 +22,7 @@ interface ReturnListRow {
   title_ar: string;
   title_en: string;
   created_at: string;
+  desired_outcome: "RETURN" | "EXCHANGE";
 }
 
 // Sprint 21 (review-round point 1): the customer's own cross-order
@@ -82,13 +83,22 @@ export default function ReturnsListPage() {
           {rows.map((r) => (
             <Link key={r.id} href={`/returns/${r.id}`} className="card" style={{ display: "block" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-                <div style={{ fontWeight: 600 }}>{r.title_ar || r.title_en}</div>
+                <div style={{ fontWeight: 600 }}>
+                  {r.title_ar || r.title_en}
+                  {r.desired_outcome === "EXCHANGE" && (
+                    <span className="muted" style={{ marginRight: 8 }}>(تبديل)</span>
+                  )}
+                </div>
                 <span className="badge badge-active">{RETURN_STATUS_LABEL[r.status] ?? r.status}</span>
               </div>
               <div className="muted">
                 {RETURN_REASON_LABEL[r.reason] ?? r.reason} · {formatDateTime(r.created_at)}
               </div>
-              {r.code && <div style={{ fontWeight: 600, marginTop: 4 }}>كود الإرجاع: {r.code}</div>}
+              {r.code && (
+                <div style={{ fontWeight: 600, marginTop: 4 }}>
+                  {r.desired_outcome === "EXCHANGE" ? "كود التبديل" : "كود الإرجاع"}: {r.code}
+                </div>
+              )}
             </Link>
           ))}
         </div>

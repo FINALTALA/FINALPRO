@@ -21,6 +21,7 @@ interface EscalatedReturn {
   photo_urls: string[];
   rejection_reason: string | null;
   escalated_at: string | null;
+  desired_outcome: "RETURN" | "EXCHANGE";
 }
 
 function EscalationRow({ r, onDone }: { r: EscalatedReturn; onDone: () => void }) {
@@ -56,7 +57,12 @@ function EscalationRow({ r, onDone }: { r: EscalatedReturn; onDone: () => void }
   return (
     <div className="card" style={{ maxWidth: "none" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <div style={{ fontWeight: 600 }}>{RETURN_REASON_LABEL[r.reason] ?? r.reason}</div>
+        <div style={{ fontWeight: 600 }}>
+          {RETURN_REASON_LABEL[r.reason] ?? r.reason}
+          {r.desired_outcome === "EXCHANGE" && (
+            <span className="muted" style={{ marginRight: 8 }}>(طلب تبديل)</span>
+          )}
+        </div>
         <span className="badge badge-active">{RETURN_STATUS_LABEL[r.status] ?? r.status}</span>
       </div>
       <div className="muted">تصاعد في {formatDateTime(r.escalated_at)}</div>
@@ -72,7 +78,7 @@ function EscalationRow({ r, onDone }: { r: EscalatedReturn; onDone: () => void }
         {!rejecting ? (
           <div style={{ display: "flex", gap: 8 }}>
             <button className="button" disabled={busy} onClick={() => decide("approve")}>
-              اعتماد الإرجاع
+              {r.desired_outcome === "EXCHANGE" ? "اعتماد التبديل" : "اعتماد الإرجاع"}
             </button>
             <button
               className="button button-secondary"

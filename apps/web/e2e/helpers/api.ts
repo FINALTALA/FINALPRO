@@ -244,3 +244,44 @@ export async function decideReturn(
     body,
   });
 }
+
+export async function redeemReturn(
+  owner: string,
+  vendorId: string,
+  code: string,
+  receivingBranchId: string,
+  itemCondition: "RESELLABLE" | "DAMAGED" = "RESELLABLE",
+) {
+  return call(`/vendors/${vendorId}/returns/redeem`, {
+    method: "POST",
+    token: owner,
+    idempotencyKey: unique("redeem"),
+    body: { code, receiving_branch_id: receivingBranchId, item_condition: itemCondition },
+  });
+}
+
+// Sprint 21b (EPIC-RET): exchange - desired_outcome=EXCHANGE plus the
+// replacement variant/branch, mirroring submitReturn() above.
+export async function submitExchange(
+  customer: string,
+  branchOrderId: string,
+  itemId: string,
+  replacementOfferVariantId: string,
+  replacementBranchId: string,
+  reason = "CHANGE_OF_MIND",
+) {
+  return call<{ id: string }>(
+    `/customers/me/orders/${branchOrderId}/items/${itemId}/returns`,
+    {
+      method: "POST",
+      token: customer,
+      idempotencyKey: unique("exchange-submit"),
+      body: {
+        reason,
+        desired_outcome: "EXCHANGE",
+        replacement_offer_variant_id: replacementOfferVariantId,
+        replacement_branch_id: replacementBranchId,
+      },
+    },
+  );
+}

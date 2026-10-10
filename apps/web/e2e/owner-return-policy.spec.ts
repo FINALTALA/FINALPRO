@@ -48,4 +48,60 @@ test.describe("owner return-policy UI", () => {
       ),
     ).toBeVisible();
   });
+
+  // Sprint 21b (PDR-030): EXCHANGE_ONLY/BOTH are real modes now - BOTH
+  // shows all three number fields (window, return fee, exchange fee);
+  // EXCHANGE_ONLY shows window + exchange fee only, no return fee.
+  test("BOTH mode shows the exchange-fee field alongside the return fee", async ({
+    page,
+  }) => {
+    const { vendorId } = await createVendorWithBranch(fixtures.ownerToken, {
+      mode: "NO_RETURN",
+    });
+    await prisma.vendor.update({
+      where: { id: vendorId },
+      data: { returnPolicyUpdatedAt: new Date(Date.now() - 200 * 24 * 60 * 60 * 1000) },
+    });
+
+    await loginAs(page, fixtures.ownerToken);
+    await page.goto(`/vendor/${vendorId}/return-policy`);
+
+    const modeSelect = page.locator("select");
+    await modeSelect.selectOption("BOTH");
+    await expect(page.getByText("رسوم الإرجاع (₪)")).toBeVisible();
+    await expect(page.getByText(/رسوم التبديل/)).toBeVisible();
+    await page.locator('input[type="number"]').nth(0).fill("14"); // window
+    await page.locator('input[type="number"]').nth(1).fill("5"); // return fee
+    await page.locator('input[type="number"]').nth(2).fill("10"); // exchange fee
+    await page.getByRole("button", { name: "حفظ" }).click();
+    await expect(page.getByText("تم الحفظ")).toBeVisible();
+    await expect(modeSelect).toHaveValue("BOTH");
+
+    // EXCHANGE_ONLY is a different vendor's own save - the 6-month
+    // lock here is per-vendor, so a second vendor proves the fee-field
+    // visibility rule without waiting on this one's own lock.
+  });
+
+  test("EXCHANGE_ONLY mode hides the return fee field, keeps the exchange fee field", async ({
+    page,
+  }) => {
+    const { vendorId } = await createVendorWithBranch(fixtures.ownerToken, {
+      mode: "NO_RETURN",
+    });
+    await prisma.vendor.update({
+      where: { id: vendorId },
+      data: { returnPolicyUpdatedAt: new Date(Date.now() - 200 * 24 * 60 * 60 * 1000) },
+    });
+
+    await loginAs(page, fixtures.ownerToken);
+    await page.goto(`/vendor/${vendorId}/return-policy`);
+
+    await page.locator("select").selectOption("EXCHANGE_ONLY");
+    await expect(page.getByText("رسوم الإرجاع (₪)")).not.toBeVisible();
+    await expect(page.getByText(/رسوم التبديل/)).toBeVisible();
+    await page.locator('input[type="number"]').nth(0).fill("14");
+    await page.locator('input[type="number"]').nth(1).fill("10");
+    await page.getByRole("button", { name: "حفظ" }).click();
+    await expect(page.getByText("تم الحفظ")).toBeVisible();
+  });
 });

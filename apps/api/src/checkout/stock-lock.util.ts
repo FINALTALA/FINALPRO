@@ -206,3 +206,55 @@ export async function lockAndSweepStockRowAssumingReservationsLocked(
   });
   return { ...stock, reservedQuantity: stock.reservedQuantity - releasedQty };
 }
+
+/**
+ * Sprint 21b (EPIC-RET, PDR §3.5's exchange reservation): the exchange
+ * module's own stock entry point - built on lockAndSweepStockRow
+ * (never a parallel, weaker lock), because a plain FOR UPDATE alone
+ * would not sweep a stale checkout hold first and could reject an
+ * exchange approval with a false "not enough stock" (the exact bug
+ * flagged in the review round that asked for this). The ONE thing
+ * lockAndSweepStockRow doesn't do - create the row if it doesn't exist
+ * yet - is exactly what a RESELLABLE exchange's returned-item leg
+ * needs (the receiving branch may never have sold this variant
+ * before). The advisory lock (same key convention as returns.service
+ * .ts's own incrementBranchStockWithLock) serializes two concurrent
+ * creators for the same (branchId, offerVariantId) before either one
+ * even looks for the row.
+ */
+export async function lockSweepOrCreateStockRow(
+  tx: Prisma.TransactionClient,
+  vendorId: string,
+  branchId: string,
+  offerVariantId: string,
+): Promise<LockedStock> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('finalpro:branch_stock:' || ${branchId} || ':' || ${offerVariantId}))`;
+  const existing = await lockAndSweepStockRow(
+    tx,
+    vendorId,
+    branchId,
+    offerVariantId,
+  );
+  if (existing) return existing;
+
+  await tx.branchStock.create({
+    data: { vendorId, branchId, offerVariantId, quantity: 0 },
+  });
+  // Re-locked via the same call: the row now exists, and no checkout
+  // reservation could possibly reference a row that didn't exist a
+  // moment ago, so the sweep here is a guaranteed no-op - this just
+  // reuses the one function rather than hand-rolling a second raw
+  // SELECT ... FOR UPDATE.
+  const created = await lockAndSweepStockRow(
+    tx,
+    vendorId,
+    branchId,
+    offerVariantId,
+  );
+  if (!created) {
+    throw new Error(
+      'unreachable: branch_stock row created above was not found immediately after',
+    );
+  }
+  return created;
+}
