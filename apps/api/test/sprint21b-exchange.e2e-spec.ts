@@ -1334,6 +1334,162 @@ describe('Sprint 21b - exchange within a real branch (e2e)', () => {
   });
 
   // ============================================================
+  // Deterministic concurrency: redeem touching TWO stock keys, raced
+  // against a DIFFERENT transaction that touches only ONE of them -
+  // the review-round lock-order fix. fulfillExchange() used to call
+  // the SINGLE-key lockSweepOrCreateStockRow() twice sequentially (once
+  // per key), each independently discovering-and-locking its own
+  // expired-reservation set - a real deadlock risk against any other
+  // caller touching one of the same keys. The fix
+  // (lockSweepOrCreateStockRowsSorted) takes every key's advisory lock
+  // up front in one deterministic sorted order instead.
+  //
+  // Two redemptions at the SAME branch can't actually exercise this at
+  // the stock layer in isolation - redeem() already takes
+  // lockBranchOperationalStatus for the branch BEFORE reaching
+  // fulfillExchange, which alone fully serializes them (same
+  // established finding as the "last unit" test above). The sweep's
+  // own expiry release, by contrast, deliberately does NOT take that
+  // branch lock (it only locks the Return row - see
+  // return-sweep.service.ts's own comment), so a redeem's multi-key
+  // lock and a DIFFERENT return's sweep-expiry single-key lock CAN
+  // reach the branch_stock advisory lock concurrently - this is the
+  // one pairing in this codebase that actually proves the fix at the
+  // stock layer itself, not merely behind an earlier, coarser lock.
+  // ============================================================
+  describe('Deterministic concurrency: redeem (multi-key) vs. sweep expiry (single-key) on a shared stock key', () => {
+    it('redeeming R1 (keys A+B) and sweep-expiring R2 (key B only) race on the shared key B - one waits, then both complete with correct final stock', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const { originalVariantId: variantA, replacementVariantId: variantB } =
+        await createOfferWithTwoVariants(vendorId, branchId, 100, 5, 120, 2);
+      const offerForA = await prisma.offerVariant.findUniqueOrThrow({
+        where: { id: variantA },
+        select: { vendorOfferId: true },
+      });
+      const variantC = await prisma.offerVariant.create({
+        data: {
+          vendorId,
+          vendorOfferId: offerForA.vendorOfferId,
+          sellerSku: unique('sku-c'),
+          basePrice: 110,
+          storeInventoryBarcode: unique('barcode-c'),
+        },
+      });
+      await prisma.branchStock.create({
+        data: { vendorId, branchId, offerVariantId: variantC.id, quantity: 5 },
+      });
+
+      // R1: bought A, exchanges for B - will be REDEEMED (touches A+B).
+      const customer1 = await signup(uniquePhone(), 'a-strong-password');
+      const order1 = await placeAndPickUpOrder(
+        owner,
+        customer1,
+        vendorId,
+        branchId,
+        variantA,
+      );
+      const submitted1 = await submitExchange(
+        customer1,
+        order1.branchOrderId,
+        order1.itemId,
+        variantB,
+        branchId,
+      );
+      await decideReturn(owner, vendorId, branchId, submitted1.body.id, {
+        decision: 'approve',
+      }).expect(200);
+      const r1 = await prisma.return.findUniqueOrThrow({
+        where: { id: submitted1.body.id },
+      });
+
+      // R2: bought C, exchanges for B too (the SHARED key) - will
+      // EXPIRE via the sweep instead of being redeemed (touches only B).
+      const customer2 = await signup(uniquePhone(), 'a-strong-password');
+      const order2 = await placeAndPickUpOrder(
+        owner,
+        customer2,
+        vendorId,
+        branchId,
+        variantC.id,
+      );
+      const submitted2 = await submitExchange(
+        customer2,
+        order2.branchOrderId,
+        order2.itemId,
+        variantB,
+        branchId,
+      );
+      await decideReturn(owner, vendorId, branchId, submitted2.body.id, {
+        decision: 'approve',
+      }).expect(200);
+      await prisma.return.update({
+        where: { id: submitted2.body.id },
+        data: { codeExpiresAt: new Date(Date.now() - 1000) },
+      });
+
+      // Pause R1's redeem deep inside fulfillExchange (after it has
+      // already acquired both stock locks and mutated both rows, right
+      // before the final audit write) - the concurrent sweep, wanting
+      // B's advisory lock too, must then genuinely wait, never deadlock
+      // or corrupt either row.
+      const barrier = barrierOnAudit('return.exchange_fulfilled');
+      const firstRedeem = run(
+        redeemReturn(owner, vendorId, {
+          code: r1.code,
+          receiving_branch_id: branchId,
+          item_condition: 'RESELLABLE',
+        }),
+      );
+      await barrier.reached();
+
+      try {
+        const sweepPromise = sweep.sweepOnce();
+        const sweepSettledEarly = await settledWithin(sweepPromise, 500);
+        expect(sweepSettledEarly).toBe(false);
+        expect(
+          await someoneWaitsOnLock('%pg_advisory_xact_lock%branch_stock%'),
+        ).toBe(true);
+        barrier.release();
+        await sweepPromise;
+      } finally {
+        barrier.release();
+      }
+      const firstResult = await firstRedeem;
+      expect(firstResult.status).toBe(201);
+
+      const stockA = await prisma.branchStock.findUniqueOrThrow({
+        where: {
+          branchId_offerVariantId: { branchId, offerVariantId: variantA },
+        },
+      });
+      const stockB = await prisma.branchStock.findUniqueOrThrow({
+        where: {
+          branchId_offerVariantId: { branchId, offerVariantId: variantB },
+        },
+      });
+      // A: 5 bought-down to 4, restocked by R1's redeem back to 5.
+      expect(stockA.quantity).toBe(5);
+      expect(stockA.reservedQuantity).toBe(0);
+      // B: started at 2, never bought, R1's redeem hands one over (1
+      // left) and releases its own reservation; R2's sweep releases its
+      // OWN reservation too (never a hand-over) - reservedQuantity ends
+      // at 0 either way, proving neither release was lost to the race.
+      expect(stockB.quantity).toBe(1);
+      expect(stockB.reservedQuantity).toBe(0);
+
+      const final1 = await prisma.return.findUniqueOrThrow({
+        where: { id: r1.id },
+      });
+      const final2 = await prisma.return.findUniqueOrThrow({
+        where: { id: submitted2.body.id },
+      });
+      expect(final1.status).toBe('EXCHANGED');
+      expect(final2.status).toBe('EXPIRED');
+    });
+  });
+
+  // ============================================================
   // Exchange-options endpoint - review-round requirement §2.
   // ============================================================
   describe('GET exchange-options (customer replacement picker)', () => {

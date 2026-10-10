@@ -8,7 +8,10 @@ import {
 import { Prisma } from '../../generated/prisma/client';
 import { AuditLogService } from '../audit/audit-log.service';
 import { lockBranchOperationalStatus } from '../common/branch-operational-lock.util';
-import { lockSweepOrCreateStockRow } from '../checkout/stock-lock.util';
+import {
+  lockSweepOrCreateStockRow,
+  lockSweepOrCreateStockRowsSorted,
+} from '../checkout/stock-lock.util';
 import {
   computeEffectivePrice,
   toDecimal,
@@ -1125,10 +1128,13 @@ export class ReturnsService {
    * happens in between). Lock order: Return (caller already holds it)
    * -> branch-operational-status (caller already took it) ->
    * BranchOrderItem (caller already holds it) -> the two BranchStock
-   * rows below, SORTED by offerVariantId (same branchId for both,
-   * since an exchange never crosses branches) - deadlock-safe against
-   * a concurrent exchange touching the same two variants in the
-   * opposite order.
+   * rows below, locked TOGETHER via lockSweepOrCreateStockRowsSorted
+   * (never two sequential standalone single-key calls - a real
+   * review-round finding: each standalone call independently
+   * discovers-and-locks its own reservation set, which can deadlock
+   * against a concurrent checkout reserve() or a second exchange
+   * touching the same two keys in the opposite order - see that
+   * function's own comment).
    */
   private async fulfillExchange(
     tx: Prisma.TransactionClient,
@@ -1165,29 +1171,16 @@ export class ReturnsService {
     const replacementVariantId = r.replacementOfferVariantId!;
     const now = new Date();
 
-    const [originalVariantId, replacementKey] = [
-      item.offerVariantId,
-      replacementVariantId,
-    ].sort();
-    const firstStock = await lockSweepOrCreateStockRow(
-      tx,
-      vendorId,
-      branchId,
-      originalVariantId,
-    );
-    const secondStock =
-      replacementKey === originalVariantId
-        ? firstStock
-        : await lockSweepOrCreateStockRow(
-            tx,
-            vendorId,
-            branchId,
-            replacementKey,
-          );
-    const originalStock =
-      item.offerVariantId === originalVariantId ? firstStock : secondStock;
-    const replacementStock =
-      replacementVariantId === originalVariantId ? firstStock : secondStock;
+    const lockedStocks = await lockSweepOrCreateStockRowsSorted(tx, [
+      { vendorId, branchId, offerVariantId: item.offerVariantId },
+      { vendorId, branchId, offerVariantId: replacementVariantId },
+    ]);
+    const originalStock = lockedStocks.get(
+      `${branchId}:${item.offerVariantId}`,
+    )!;
+    const replacementStock = lockedStocks.get(
+      `${branchId}:${replacementVariantId}`,
+    )!;
 
     // Release the reservation taken at approval time and decrement the
     // real quantity - the replacement physically leaves the shelf now.
