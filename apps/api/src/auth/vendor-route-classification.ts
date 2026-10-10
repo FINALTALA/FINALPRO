@@ -152,4 +152,14 @@ export const SUSPENDED_ALLOW_ROUTES: readonly string[] = [
   'POST vendors/:vendorId/staff/:vendorUserId/transfer',
   'POST vendors/:vendorId/staff/:vendorUserId/suspend',
   'POST vendors/:vendorId/staff/:vendorUserId/reactivate',
+  // Sprint 21: return policy is store configuration (same bucket as
+  // minimum-order settings above, not catalog). Deciding/redeeming a
+  // return is resolving an EXISTING order's exception - same "in-
+  // flight order fulfilment" bucket as cancel/approve-refund above,
+  // never new footprint.
+  'GET vendors/:vendorId/return-policy',
+  'PUT vendors/:vendorId/return-policy',
+  'GET vendors/:vendorId/branches/:branchId/returns',
+  'PATCH vendors/:vendorId/branches/:branchId/returns/:returnId/decision',
+  'POST vendors/:vendorId/returns/redeem',
 ];

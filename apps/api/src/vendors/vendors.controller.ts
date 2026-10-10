@@ -227,6 +227,14 @@ export class VendorsController {
       // the owner may diverge it later via the storefront settings
       // endpoint without ever changing the stable slug.
       const vendorId = randomUUID();
+      // Sprint 21 (PDR-030): "selected at registration" - never left
+      // null/default until a later settings-page visit. When
+      // mode=NO_RETURN, window/fee are stored null regardless of what
+      // the DTO received for them (ReturnPolicyInputDto only validates
+      // those two when mode=REFUND_ONLY - it never guarantees they
+      // were omitted on the wire for NO_RETURN, so this is the one
+      // place that actually enforces "null means null").
+      const returnPolicy = dto.return_policy;
       const created = await tx.vendor.create({
         data: {
           id: vendorId,
@@ -234,6 +242,15 @@ export class VendorsController {
           slug: generateVendorSlug(dto.legal_name, vendorId),
           displayName: dto.legal_name,
           storeType: dto.store_type,
+          returnsEnabled: returnPolicy.mode === 'REFUND_ONLY',
+          returnMode: returnPolicy.mode,
+          returnWindowDays:
+            returnPolicy.mode === 'REFUND_ONLY'
+              ? returnPolicy.window_days!
+              : null,
+          returnFeeIls:
+            returnPolicy.mode === 'REFUND_ONLY' ? returnPolicy.fee_ils! : null,
+          returnPolicyUpdatedAt: new Date(),
         },
       });
       await tx.vendorUser.create({

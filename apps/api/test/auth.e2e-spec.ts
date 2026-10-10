@@ -903,6 +903,7 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
           store_type: 'PHYSICAL',
           branches: [{ name: 'Main branch', is_physical: true }],
           applicable_categories: ['WOMEN'],
+          return_policy: { mode: 'NO_RETURN' },
         })
         .expect(201);
 
@@ -951,6 +952,7 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
           store_type: 'PHYSICAL',
           branches: [{ name: 'A Branch', is_physical: true }],
           applicable_categories: ['WOMEN'],
+          return_policy: { mode: 'NO_RETURN' },
         })
         .expect(201);
 
@@ -966,6 +968,7 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
           store_type: 'ONLINE_ONLY',
           branches: [{ name: 'B Branch', is_physical: false }],
           applicable_categories: ['WOMEN'],
+          return_policy: { mode: 'NO_RETURN' },
         })
         .expect(201);
 
@@ -1000,6 +1003,7 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
         store_type: 'PHYSICAL',
         branches: [{ name: 'Main branch', is_physical: true }],
         applicable_categories: ['WOMEN'],
+        return_policy: { mode: 'NO_RETURN' },
       };
 
       const first = await request(app.getHttpServer())

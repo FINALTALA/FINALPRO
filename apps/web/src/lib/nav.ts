@@ -149,6 +149,13 @@ export function ownerHubTiles(vendorId: string): HubTile[] {
     { href: `${base}/delivery-windows`, title: "نوافذ التوصيل", description: "أوقات التوصيل وسعتها لكل فرع" },
     { href: `${base}/orders`, title: "الطلبات", description: "طلبات كل الفروع" },
     { href: `${base}/verification`, title: "حالة التحقق", description: "نتيجة مراجعة المتجر وملاحظات المراجع" },
+    // Sprint 21 (EPIC-RET): return policy is vendor-wide (one setting,
+    // not per-branch); redeem is deliberately vendor-wide too (any
+    // branch may accept a drop-off) - see VendorReturnsController's own
+    // comment - so both live on the hub, unlike the per-branch returns
+    // queue which is reached from the branches page itself.
+    { href: `${base}/return-policy`, title: "سياسة الإرجاع", description: "تفعيل الإرجاع، مهلته ورسومه" },
+    { href: `${base}/returns/redeem`, title: "استبدال كود إرجاع", description: "استلام منتج مُرجَع بكوده في أي فرع" },
   ];
 }
 
@@ -203,6 +210,14 @@ export function adminTiles(role: PlatformRoleName): HubTile[] {
         href: "/admin/branch-orders",
         title: "إلغاء/استرداد الطلبات",
         description: "إلغاء قسري أو استرداد يدوي لطلب فرع محدد",
+      },
+      // Sprint 21 (EPIC-RET, PDR-031): the Return state machine's own
+      // escalation queue - PLATFORM_ADMIN only, same break-glass shape
+      // as the branch-order override above.
+      {
+        href: "/admin/returns",
+        title: "الإرجاعات المتصاعدة",
+        description: "إرجاعات اعترض عليها العميل أو تجاوزت مهلة المتجر، بانتظار قرارك",
       },
     );
   }

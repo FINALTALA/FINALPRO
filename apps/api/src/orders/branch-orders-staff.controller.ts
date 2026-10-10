@@ -505,13 +505,17 @@ export class BranchOrdersStaffController {
         });
       }
       const codData = await this.computeCodCollectionExtraData(tx, id);
+      // Sprint 21 (FR-RET-001 prerequisite): mirrors markDelivered()'s
+      // own deliveredAt - the return-window anchor for a PICKUP order,
+      // written in this same transaction, never a separate unguarded
+      // write.
       await this.branchOrderService.transition(
         tx,
         id,
         'PICKED_UP',
         user.id,
         req.correlationId,
-        codData,
+        { pickedUpAt: new Date(), ...codData },
       );
       return this.branchOrderService.transition(
         tx,

@@ -97,6 +97,7 @@ describe('Sprint 17 - owner catalog (pricing, PDR-036 templates, brand, media, i
           { name: 'Branch B', is_physical: true },
         ],
         applicable_categories: ['WOMEN'],
+        return_policy: { mode: 'NO_RETURN' },
       })
       .expect(201);
     return {

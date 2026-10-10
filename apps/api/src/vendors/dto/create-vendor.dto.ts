@@ -2,6 +2,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
   ArrayUnique,
+  IsDefined,
   IsEnum,
   IsString,
   ValidateNested,
@@ -10,6 +11,7 @@ import {
   StoreApplicableCategory,
   StoreType,
 } from '../../../generated/prisma/client';
+import { ReturnPolicyInputDto } from '../../returns/dto/return-policy-input.dto';
 import { CreateBranchDto } from './create-branch.dto';
 
 // FR-VEND-001 / BL-VEND-001: "application form + >=1 branch required
@@ -55,4 +57,18 @@ export class CreateVendorDto {
       'At least one applicable store category (Women/Men/Kids/Accessories) is required to register (PDR-013)',
   })
   applicable_categories!: StoreApplicableCategory[];
+
+  // Sprint 21 (PDR-030): "a per-store policy selected at registration"
+  // - required here, not left until a later settings-page visit.
+  // @ValidateNested() alone only validates a nested object IF it is
+  // present - an entirely missing field passes it silently (there is
+  // nothing to descend into), which crashed the controller with a 500
+  // reading `.mode` off undefined before @IsDefined() was added here.
+  // ReturnPolicyInputDto itself rejects EXCHANGE_ONLY/BOTH (S21a is
+  // refund-only) and requires window_days/fee_ils exactly when
+  // mode=REFUND_ONLY.
+  @IsDefined()
+  @ValidateNested()
+  @Type(() => ReturnPolicyInputDto)
+  return_policy!: ReturnPolicyInputDto;
 }

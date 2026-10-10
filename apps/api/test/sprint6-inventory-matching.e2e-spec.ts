@@ -96,6 +96,7 @@ describe('Sprint 6 - branch inventory, stock movements, media, non-exact match r
           { name: 'Branch B', is_physical: true },
         ],
         applicable_categories: ['WOMEN'],
+        return_policy: { mode: 'NO_RETURN' },
       })
       .expect(201);
     return {

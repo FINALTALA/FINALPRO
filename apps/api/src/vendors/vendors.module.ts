@@ -6,6 +6,7 @@ import { BranchClosuresController } from './branch-closures.controller';
 import { BranchMinimumOrderController } from './branch-minimum-order.controller';
 import { BranchOperatingHoursController } from './branch-operating-hours.controller';
 import { DeliveryZoneMinimumOrderController } from './delivery-zone-minimum-order.controller';
+import { ReturnPolicyController } from './return-policy.controller';
 import { StaffController } from './staff.controller';
 import { StoreOffersPublicController } from './store-offers-public.controller';
 import { StoreSectionsController } from './store-sections.controller';
@@ -25,6 +26,7 @@ import { VendorsController } from './vendors.controller';
     BranchClosuresController,
     BranchMinimumOrderController,
     DeliveryZoneMinimumOrderController,
+    ReturnPolicyController,
     StaffController,
   ],
 })

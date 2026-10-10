@@ -228,6 +228,7 @@ describe('Sprint 17b - platform catalog administration (e2e)', () => {
         store_type: 'PHYSICAL',
         branches: [{ name: 'Main', is_physical: true }],
         applicable_categories: ['WOMEN'],
+        return_policy: { mode: 'NO_RETURN' },
       })
       .expect(201);
     return res.body.id;

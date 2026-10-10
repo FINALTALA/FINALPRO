@@ -699,6 +699,7 @@ describe('Sprint 16 - vendor suspension and reactivation (e2e)', () => {
             store_type: 'PHYSICAL',
             branches: [{ name: 'B', is_physical: true }],
             applicable_categories: ['WOMEN'],
+            return_policy: { mode: 'NO_RETURN' },
           })
           .expect(201);
         ids.push(res.body.id);

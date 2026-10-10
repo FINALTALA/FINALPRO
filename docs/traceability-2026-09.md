@@ -7,6 +7,30 @@
 **Scope:** the full SRS, Parts 0–9. Every `FR-*` ID in [SRS Part 2](srs/02-functional-requirements.md) (244 rows, including the E.0 September amendment), every `PDR-*` ID in [`approved-product-decisions-2026-09.md`](approved-product-decisions-2026-09.md) (36 rows, including the 2026-09-26 PDR-035/036 amendment), every `BR-*` (34) and `NFR-*` (32) in Part 3/4, and every remaining requirement, decision, screen, failure scenario, backlog item and state-machine transition in Parts 0, 1, and 3–9 — covered in the appendix starting at §6, with each ID-range explicitly expanded (no row stands for more than one ID; see §0 for the two narrow, explicitly-justified exceptions — the `O.1`/`O.2` test-level classification and the `BO`/module-matrix/recommendations rollup — neither of which carries an independent DONE/PARTIAL/MISSING status of its own).
 **Update rule:** this file is reviewed again after every sprint. Each review edits it in place under a new dated version note, rather than creating a new file, so it stays the one living record.
 
+## v12 — S21-returns review-round UI pass applied, 2026-10-10
+
+Review-round fix on `feat/sprint-21-returns` (commit `100be5a`) built the full customer/owner/staff/admin UI that v11 (below) flagged as missing, plus a real Playwright browser-test suite (the first in this project) proving it end to end against a real running API/web server. **This update is UI/test documentation only — no backend code, migration, or business-rule change is implied; see `100be5a` for the actual diff.** PickupPoint redemption and exchange (`EXCHANGE_ONLY`/`BOTH`) remain exactly as scoped out in v11 below — this pass does not touch either, and does not mark either DONE.
+
+Status changes verified directly against the actual pages (`apps/web/src/app/{orders/[orderId]/items/[itemId]/return,returns,returns/[returnId],vendor/[vendorId]/return-policy,vendor/[vendorId]/branches/[branchId]/returns,vendor/[vendorId]/returns/redeem,admin/returns}/page.tsx`) and the new Playwright suite (`apps/web/e2e/*.spec.ts`, 14 tests, 2x clean-room green):
+
+- `FR-RET-002` 🟡→✅: customer's "طلب إرجاع" form (`/orders/:id/items/:id/return`).
+- `FR-RET-003` 🟡→✅: note corrected, not just "UI added" — this FR is the *automatic* sweep (48h reminder/72h escalate/dispute-window close); it never needed a dedicated UI step, so "لا UI" was a miscategorization, not a real gap. The resulting pending state is visible in the now-built branch-returns queue.
+- `FR-RET-004` 🟡→✅: note corrected — the computed refund amount was already surfacing correctly the whole time, via the pre-existing `/orders` page's `amount_refunded` field (`computeAmountRefunded()` sums every `BranchOrderRefund` row regardless of `reason`, so a return's `ITEM_RETURNED` row was already included with zero new code). "لا UI" was never actually true for the ONLINE case; COD shows no amount, by the exact same pre-existing design every other COD refund already follows (physical cash, nothing electronic to confirm on screen).
+- `FR-RET-006` 🟡→✅: `PLATFORM_ADMIN`'s escalation queue + decision (`/admin/returns`).
+- `FR-RET-008` 🟡→✅ (= `PDR-030`): owner's return-policy settings page (`/vendor/:id/return-policy`) — the 6-month lock renders as a real 409 error state, verified live.
+- `FR-VPORTAL-004` 🟡→✅: the return portion's UI gap (the only thing keeping this row PARTIAL) is now closed — branch-returns queue + vendor-wide redeem page.
+- `PDR-009`, `SRS-H3A-08`, `SRS-K1A-07`, `SRS-G3-07`: notes corrected to drop the stale "API فقط/لا UI للمرتجعات" claim; each stays exactly 🟡 PARTIAL for its own separate, genuinely unrelated remainder (owner reports, Review, the unified-timeline decision) — none of those reach DONE from this pass.
+- `FR-RET-001`, `FR-RET-005`, `FR-RET-007`, `FR-RET-009`, `FR-FUL-009`, `PDR-031`, `BR-012` stay exactly 🟡 PARTIAL/❌ MISSING — their UI column is corrected to name the real pages where one now exists, but each row's own non-UI gap (legal-minimum question still open, reason-based SLA routing not built, abuse-rate monitoring not built, PickupPoint redemption not built, store-level-not-category-level) is untouched by this pass.
+- `BL-RET-001`: note corrected (`API فقط` dropped — the backing `FR-RET-002` now has a real UI).
+- §5 roadmap's **S21** row: re-derived directly. Of the original 12 rows counted into it (`FR-RET-001` through `009`, `PDR-030/031`, `BR-012`), 6 move to ✅ DONE above, leaving **6** genuinely PARTIAL/MISSING for reasons unrelated to UI (legal minimum, reason-routing, abuse monitoring, PickupPoint ×2, store-vs-category level) — see that row's own updated note for the exact list.
+- As with every narrowly-scoped pass before this one (v7/v8/v10's own precedent), this pass does **not** attempt to reconcile the separate, frozen §2/§6/§16/§17 grand-total tables — out of scope for a UI-only documentation pass; a future full-sprint pass should fold this in.
+
+## v11 — S21-returns applied, 2026-10-09
+
+`S21-returns` (branch `feat/sprint-21-returns`) builds EPIC-RET's backend/API in full: return policy selected at `POST /vendors` registration (PDR-030) with a real 6-month-locked update endpoint; a full `Return` model and state machine (`REQUESTED→APPROVED_AWAITING_DROPOFF→RECEIVED→REFUND_PROCESSING→REFUNDED`, plus `REJECTED`/`REJECTED_CLOSED`/`ADMIN_REJECTED`/`ESCALATED`/`EXPIRED`/`CANCELLED_BY_CUSTOMER` — corrected across five review rounds from an earlier draft that wrongly auto-refunded on approval and conflated store-rejection with admin-final-rejection); a policy snapshot on `BranchOrder` at `confirm()` time (never the live policy); a vendor-wide (not branch-scoped) redeem endpoint with resellable/damaged stock handling and a `BranchOrderRefund.method` discriminator (`ONLINE_GATEWAY`/`COD_CASH`) so COD is never conflated with an electronic refund; and `PLATFORM_ADMIN`-only escalation resolution. **Deliberately NOT built this sprint, documented honestly below rather than silently claimed**: any customer/vendor/admin UI (API-only — every FR-RET-*/FR-FUL-009/PDR-030/031 row below is capped at 🟡 PARTIAL specifically for this reason, even where the backend is otherwise complete), exchange (`EXCHANGE_ONLY`/`BOTH` — rejected outright by every DTO), `PickupPoint` redemption (no operational-staff membership model exists for it), per-reason differentiated SLA routing (FR-RET-005), and abuse-rate monitoring (FR-RET-007, stays ❌ MISSING entirely). Verified: 753→779 e2e tests (26 new, including two barrier-proven deterministic concurrency tests), 227→243 unit tests, 2x clean-room green.
+
+**[تصحيح v12، 2026-10-10]:** الادّعاء أعلاه ("لا واجهة مستخدم إطلاقاً - API فقط") أصبح غير دقيق - جولة مراجعة لاحقة على نفس الفرع بنت واجهة كاملة لكل الأدوار الأربعة (عميل/مالك/موظف/أدمن) واختبارات Playwright حقيقية. انظر **v12 أعلاه** وصفوف `FR-RET-*`/`PDR-030`/`PDR-031` المحدَّثة أدناه للتفاصيل الدقيقة لكل صف. الاستبدال (exchange) ونقاط الاستلام (PickupPoint) يبقيان كما وُصفا هنا تماماً - لم يتغيّر أي منهما.
+
 ## v10 — S19-notification-relay applied (documentation only), 2026-10-05
 
 `S19-notification-relay` (branch `feat/sprint-19-notification-relay`) is the first real read-side of the Outbox: since Sprint 3, `OutboxEvent` rows were written and never consumed. This pass closes that half — a claim/lease relay with retry/backoff/dead-letter, a real `Notification` model and in-app inbox, and delivery wired into the event types that already existed plus three new triggers (new order for employee, low stock after reserve, followed-store fan-out). **This update is documentation only — no code, migration, or commit beyond this file is authorised or implied by it.** Per explicit product-owner instruction: no row here claims real external delivery — `NotificationChannelService` is still a fallback-log-only service mirroring `SmsService`'s own OPEN-004 contract; no SMS/WhatsApp/email/push provider exists. Any requirement that specifically needs a real external channel stays exactly PARTIAL or MISSING, unchanged. `BR-020` and `BDR-004` are left completely untouched, per the original S19 plan's own explicit decision (the three specific "independently-tracked" notifications they each name still have no approved source defining what they are) and per this pass's own instruction not to change either without a new product decision.
@@ -188,8 +212,8 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-PAY-010 (E.0) | الطلبات المدفوعة إلكترونياً بمعاملة sandbox واحدة؛ COD لكل فرع | PaymentTransaction، توكنات sandbox | session | نموذج البطاقة في /checkout | S10,S14 | ✅ DONE | - |
 | FR-FUL-008 (E.0) | تقويم الفرع، فترات لا تتداخل، سعة، استثناءات، حماية الفترات المحجوزة | DeliveryWindow(+Exception)، EXCLUDE، HAS_ACTIVE_ORDERS | OWNER | /vendor/:id/branches/:b/delivery-windows | S9 | ✅ DONE | - |
 | FR-FUL-009 (E.0) | بدء التحضير وSent وDelivered؛ تذكيرات وفشل توصيل وعدم رد (PDR-025..027) | start-preparation، mark-sent، mark-delivered، pickup-handover، mark-delivery-failed، approve-refund؛ تذكير التحضير قبل 6 ساعات وكشف تأخر الموعد ومهلة 48 ساعة عبر `FulfilmentExceptionSweepService` | OWNER/موظف الفرع | /vendor/:id/branches/:b/orders | S11,S20a | ✅ DONE | - |
-| FR-RET-008 (E.0) | سياسة إرجاع، لقطة عند الشراء، تغيير كل 6 أشهر | لا | - | لا | لا | ❌ MISSING | S21 |
-| FR-RET-009 (E.0) | كود 6 أرقام صالح 7 أيام؛ كل الفروع تقبل | لا | - | لا | لا | ❌ MISSING | S21 |
+| FR-RET-008 (E.0) | سياسة إرجاع، لقطة عند الشراء، تغيير كل 6 أشهر | مبني بالكامل: `return_policy` إلزامي عند `POST /vendors` (PDR-030 حرفياً: "selected at registration")، `PUT /vendors/:id/return-policy` للتحديث اللاحق تحت قفل 6 أشهر حقيقي (قفل صف Vendor، لا مجرد فحص timestamp)، واللقطة الكاملة (enabled/mode/window/fee/version) تُكتب على `BranchOrder` لحظة `confirm()` فقط - لا تتأثر بتعديل لاحق. متجر قديم بلا قرار = `returnsEnabled=false`؛ طلب قديم بلا لقطة = غير مؤهل إطلاقاً (قرار صريح، لا افتراض صامت) | OWNER | صفحة سياسة الإرجاع لصاحب المتجر (`/vendor/:id/return-policy`) - تعرض القيمة الحالية، تعدّلها، وترفض التعديل المبكر برسالة 409 حقيقية (جولة مراجعة 2026-10-10) | S21 e2e + Playwright | ✅ DONE | - |
+| FR-RET-009 (E.0) | كود 6 أرقام صالح 7 أيام؛ كل الفروع تقبل | الكود يولَّد فقط عند موافقة المتجر (لا تلقائياً)، صالح 7 أيام بالضبط، فريد على مستوى vendor كله (`vendorId, code`) لا الفرع - يُستهلك مرة واحدة. **الاستلام مقيَّد على فروع المتجر الفعلية فقط هذا السبرنت** - نقاط الاستلام (PickupPoint) بلا عضوية تشغيلية في هذا الكود، فذاك الجزء من "كل نقاط الاستلام تقبل" يبقى غير مبني | OWNER/موظف أي فرع لنفس المتجر | العميل يرى الكود على صفحة تتبّع الإرجاع (`/returns/:id`)؛ أي موظف/مالك لفروع المتجر الفعلية يستبدله عبر (`/vendor/:id/returns/redeem`) (جولة مراجعة 2026-10-10) | S21 e2e + Playwright | 🟡 PARTIAL (فروع فعلية فقط، لا pickup points) | - |
 | FR-REV-008 (E.0) | مراجعات منتج ومتجر لمشترٍ موثّق، غير قابلة للتعديل | لا | - | لا | لا | ❌ MISSING | S23 |
 | FR-FAV-005 (E.0) | صفحة أتابعه؛ إشعارات منفصلة لمنتج/خصم جديد؛ تعتيم غير النشط | StoreFollow، following API؛ **إشعارات منفصلة لمنتج جديد وخصم جديد مبنيتان الآن فعلياً** (FOLLOWED_STORE_NEW_PRODUCT/FOLLOWED_STORE_DISCOUNT، fan-out عادل لكل متابع عبر الـrelay، S19)؛ غير النشط ما زال يُخفى لا يُعتّم (لم يتغيّر) | session | /following، /notifications (S19) | S13,S19 | 🟡 PARTIAL | S19 |
 | FR-NOTIF-008 (E.0) | مركز إشعارات: مقروء/غير مقروء، روابط عميقة | **`Notification` model مبني بالكامل** (S19): `GET /me/notifications` (cursor + unread_only)، `/me/notifications/unread-count`، `POST .../read` (idempotent، آمن من BOLA — صف مستخدم آخر 404 لا 403)؛ بيانات الإشعار قائمة بيضاء فقط، لا نص حر إطلاقاً | session | أيقونة جرس + شارة غير مقروء في AppShell، صفحة /notifications (مقروء/غير مقروء، روابط عميقة لكل نوع — نوعا متابعة المتجر يُعاد توجيههما لصفحة "أتابعه" لا لصفحة المنتج تحديداً، لا slug مخزَّن على الإشعار) | S19 | ✅ DONE | - |
@@ -385,7 +409,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-FUL-006 | معالجة فشل التوصيل | mark-delivery-failed مع عداد المحاولات؛ محاولة أولى تنتظر إعادة جدولة العميل (48 ساعة)، محاولة ثانية: COD تُلغى تلقائياً، إلكتروني يُفتح لطلب استرداد العميل | موظف الفرع/عميل | صفحة طلبات الفرع، /orders | S20a | ✅ DONE | - |
 | FR-FUL-007 | شحنات مجزأة إن فعّلها المتجر | لا خيار؛ شحنة واحدة فقط — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
 | FR-FUL-008 (E.13) | كود استلام يتحقق منه الفرع | BranchOrder.pickupCode، pickup-handover | موظف الفرع | صفحة طلبات الفرع، /orders | S10,S11 | ✅ DONE | - |
-| FR-FUL-009 (E.13) | استلام المرتجعات | لا | - | لا | لا | ❌ MISSING | S21 |
+| FR-FUL-009 (E.13) | استلام المرتجعات | مبني: استلام الكود يسجّل الفرع الفعلي/المستلم/الوقت/حالة السلعة (resellable/damaged) ضمن transaction ذرية واحدة (قفل Return→BranchOrderItem→BranchStock بترتيب ثابت). **تفسير معتمد**: "يتبع Delivery SM بالعكس" حرفياً في الـSRS غير مطابق لهذه البنية (PDR-006 يمنع دور سائق داخلي) - المطبَّق هو drop-off بالكود في أي فرع تابع لنفس المتجر، لا reverse-delivery حقيقي. resellable يعيد المخزون (حركة `RETURN_RESTOCK`)؛ damaged لا يعيده بلا قرار owner يدوي صريح | OWNER/موظف أي فرع لنفس المتجر | صفحة استبدال الكود (`/vendor/:id/returns/redeem`) - نموذج الكود+الفرع المستلِم+حالة السلعة (جولة مراجعة 2026-10-10) | S21 e2e + Playwright: resellable/damaged، BOLA عبر الفروع، سباق redeem حتمي | 🟡 PARTIAL (فروع فقط، لا pickup points) | - |
 | FR-FUL-010 | وقت توصيل/جاهزية تقديري | يُعرض الموعد المختار؛ لا حساب ETA — استُبعد عمداً من نطاق S20a (قرار الجولة الأولى من المراجعة، 2026-10-07): هذا السبرنت غطّى الاستثناءات/الإلغاء/الاسترداد فقط | session | /checkout، /orders | S10 | 🟡 PARTIAL | - |
 | FR-FUL-011 | تعيين سائق | استُبدل بـPDR-006 | - | - | - | ↪ SUPERSEDED | - |
 | FR-FUL-012 | تسجيل استلام النقد مع المبلغ | `codCollectedAmount`/`codCollectedAt` يُسجَّلان ضمن معاملة mark-delivered/pickup-handover ذاتها، بمبلغ محسوب من الخادم (الإجمالي الأصلي ناقص أي صنف/رسوم ملغاة)، لا مبلغ يُدخله الموظف يدوياً | موظف الفرع | صفحة طلبات الفرع | S11,S20a | ✅ DONE | - |
@@ -395,13 +419,13 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 ### E.14 — المرتجعات
 | ID | Requirement | Backend | Authz | UI | Test | Status | Sprint |
 |---|---|---|---|---|---|---|---|
-| FR-RET-001 | أهلية الإرجاع بالمدة والسبب | لا | - | لا | لا | ❌ MISSING | S21 |
-| FR-RET-002 | طلب إرجاع بسبب وصور لأصناف محددة | لا | - | لا | لا | ❌ MISSING | S21 |
-| FR-RET-003 | SLA للمتجر وتصعيد تلقائي | لا | - | لا | لا | ❌ MISSING | S21 |
-| FR-RET-004 | حساب الاسترداد | لا | - | لا | لا | ❌ MISSING | S21 |
-| FR-RET-005 | أسباب موجَّهة | لا | - | لا | لا | ❌ MISSING | S21 |
-| FR-RET-006 | تصعيد النزاعات | لا | - | لا | لا | ❌ MISSING | S21 |
-| FR-RET-007 | حدود إساءة الاستخدام | لا | - | لا | لا | ❌ MISSING | S21 |
+| FR-RET-001 | أهلية الإرجاع بالمدة والسبب | مبني: `checkReturnEligibility()` يفحص الحالة الفعلية (DELIVERED/COMPLETED للتوصيل مع `deliveredAt`، PICKED_UP/COMPLETED للاستلام مع `pickedUpAt` الحقل الجديد، COD يتطلب `codCollectedAt` إضافياً، ONLINE مضمون بنيوياً عبر بوابة AwaitingPayment) والنافذة من لقطة السياسة لا السياسة الحيّة. الحد الأدنى القانوني المحتمل (Q11) يبقى مفتوحاً، لا يُفترض | عميل | صفحة طلب الإرجاع (`/orders/:id/items/:id/return`) تعرض رسالة عدم الأهلية الحقيقية من الخادم حرفياً (جولة مراجعة 2026-10-10) | S21 e2e + Playwright: كل حالة أهلية + legacy + snapshot لا يتأثر بتعديل لاحق | 🟡 PARTIAL (الحد الأدنى القانوني المحتمل لا يزال مفتوحاً - Q11) | - |
+| FR-RET-002 | طلب إرجاع بسبب وصور لأصناف محددة | مبني: `POST .../items/:itemId/returns` بسبب موجَّه (enum) + ملاحظة + حتى 5 صور (URLs فقط، بلا pipeline رفع - نفس قيد الكود العام) | عميل (مالك الطلب) | صفحة طلب الإرجاع للعميل (`/orders/:id/items/:id/return`) - نموذج السبب+الملاحظة+الصور (جولة مراجعة 2026-10-10) | S21 e2e + Playwright: تقديم، منع تكرار مفتوح، إعادة تقديم بعد إغلاق | ✅ DONE | - |
+| FR-RET-003 | SLA للمتجر وتصعيد تلقائي | مبني: 48 ساعة تذكير (`ReturnSweepService`، نمط sweep كسول موجود مسبقاً)، 72 ساعة تصعيد تلقائي حقيقي (ESCALATED)، ونافذة نزاع 7 أيام بعد رفض المتجر تُغلق تلقائياً (REJECTED_CLOSED) إن لم يُنازع العميل | نظام (sweep) | - (آلي بالكامل بالتصميم؛ لا خطوة واجهة مطلوبة - التذكير يصل عبر مركز الإشعارات الموجود (S19)، والحالة المعلَّقة تظهر في قائمة إرجاعات الفرع (`/vendor/:id/branches/:b/returns`)؛ "لا UI" كان توصيفاً خاطئاً لا فجوة حقيقية - تصحيح 2026-10-10) | S21 e2e: تذكير 48h، تصعيد 72h، إغلاق نافذة النزاع | ✅ DONE | - |
+| FR-RET-004 | حساب الاسترداد | مبني وفق PDR-030/031 حرفياً (لا BR-013 القديمة): `max(0, سعر الصنف − رسم الإرجاع الملتقط)`، بلا رسم توصيل أبداً. **ONLINE وCOD سجلّان منفصلان بوضوح** (`BranchOrderRefund.method`: `ONLINE_GATEWAY` بـ`paymentTransactionId` حقيقي، أو `COD_CASH` بلا أي ربط بوابة دفع) - لا يُعاملان كشيء واحد | نظام (عند الاستلام) | صفحة طلبات العميل (`/orders`) - حقل `amount_refunded` الموجود مسبقاً يجمع كل صفوف `BranchOrderRefund` بلا تمييز سبب، فمبلغ استرداد ONLINE الناتج من إرجاع يظهر تلقائياً بلا أي كود جديد؛ COD لا يُعرض له مبلغ بالتصميم المعتمد نفسه لكل استرداد COD آخر (نقد فعلي) - تصحيح 2026-10-10 | S21 e2e + orders e2e: ONLINE/COD منفصلان، الرسم ≥ السعر يُصفَّر عند 0 | ✅ DONE | - |
+| FR-RET-005 | أسباب موجَّهة | الأسباب الخمسة (DAMAGED/WRONG_ITEM/COUNTERFEIT_CLAIM/WARRANTY_CLAIM/CHANGE_OF_MIND) مُسجَّلة وتُعرَض، **لكن لا توجّه فعلياً لمسارات SLA/موافقة مختلفة** كما يطلب النص الحرفي - SLA واحد موحّد (48h/72h) لكل الأسباب هذا السبرنت | عميل | قائمة الأسباب تُعرَض في نموذج طلب الإرجاع (`/orders/:id/items/:id/return`) وفي كل صفحة عرض لاحقة (جولة مراجعة 2026-10-10) - لكن التوجيه التفاضلي نفسه (المطلوب هنا) لا يزال غير مبني | - | 🟡 PARTIAL (الأسباب موجودة وتُعرَض، التوجيه التفاضلي غير مبني) | - |
+| FR-RET-006 | تصعيد النزاعات | مبني: نزاع العميل على رفض المتجر (ضمن 7 أيام) → ESCALATED، يحسمه `PLATFORM_ADMIN` فقط (لا دور دعم مستقل في هذا الكود) عبر `PATCH /admin/returns/:id/escalation-decision`. رفض الأدمن (`ADMIN_REJECTED`) حالة مستقلة عمداً عن رفض المتجر - نهائي، لا نزاع ثانٍ، لا إعادة تقديم (تصحيح جولة مراجعة: خلط الحالتين كان يسمح بالتفافّ على قرار الأدمن) | PLATFORM_ADMIN | طابور إدارة المنصة والحسم (`/admin/returns`) - اعتماد/رفض نهائي بسبب إلزامي (جولة مراجعة 2026-10-10) | S21 e2e + Playwright: نزاع ضمن النافذة، رفض أدمن نهائي بلا نزاع/إعادة تقديم | ✅ DONE | - |
+| FR-RET-007 | حدود إساءة الاستخدام | لا - لم يُبنَ أي رصد لمعدل إرجاع شاذ أو تصعيد لمراجعة تشغيلية | - | - | - | - | ❌ MISSING | S21b+ |
 
 ### E.15–E.17 — المراجعات والمفضلات والإشعارات
 | ID | Requirement | Backend | Authz | UI | Test | Status | Sprint |
@@ -448,7 +472,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-VPORTAL-001 | لوحة: طلبات تحتاج انتباهاً واشتراك وKPIs | مركز روابط فقط | OWNER | /vendor/:id | NAV | 🟡 PARTIAL | S18 |
 | FR-VPORTAL-002 | إدارة المنتجات والمخزون والتسعير | إنشاء/تعديل/أرشفة عرض ومتغيّر، أسعار وخصومات، وسائط (S17) | OWNER | /vendor/:id/offers وكل الصفحات الفرعية (جديد/تعديل/متغيّر/وسائط، S17) | S3,S17 | ✅ DONE | - |
 | FR-VPORTAL-003 | استيراد وسجل وأخطاء | API الاستيراد + ImportBatch (سجل ملخّص، S17) | OWNER | /vendor/:id/offers/import (تقرير + سجلّ الدفعات، S17) | S7,S17 | ✅ DONE | - |
-| FR-VPORTAL-004 | إدارة الطلبات مع الإلغاء والمرتجعات | قُرئ كإدارة طلبات وإلغاء/استرداد لا كتقارير أداء SLA (قرار الجولة الأولى من المراجعة، 2026-10-07)؛ شطر الإلغاء/فشل التوصيل/موافقة الاسترداد مبني بالكامل الآن. **المرتجعات الفعلية (استلام سلعة مرتجعة) لا تزال غير موجودة** | OWNER/موظف | /vendor/:id/orders، طلبات الفرع | S9,S11,S20a | 🟡 PARTIAL | S21 |
+| FR-VPORTAL-004 | إدارة الطلبات مع الإلغاء والمرتجعات | قُرئ كإدارة طلبات وإلغاء/استرداد لا كتقارير أداء SLA (قرار الجولة الأولى من المراجعة، 2026-10-07)؛ شطر الإلغاء/فشل التوصيل/موافقة الاسترداد مبني بالكامل. **المرتجعات الفعلية (استلام سلعة مرتجعة) مبنية الآن بالكامل** (موافقة/رفض، استلام بالكود، استرداد ONLINE/COD منفصلان) **بواجهة مستخدم كاملة أيضاً** (جولة مراجعة 2026-10-10) | OWNER/موظف | /vendor/:id/orders، طلبات الفرع؛ المرتجعات: `/vendor/:id/branches/:b/returns` (قائمة الفرع+القرار)، `/vendor/:id/returns/redeem` (استبدال الكود) | S9,S11,S20a,S21 | ✅ DONE | - |
 | FR-VPORTAL-005 | إدارة الفروع والموظفين | إضافة/أرشفة فرع، قائمة الموظفين ونقلهم وتعليقهم/إعادة تفعيلهم (S18b)؛ **دعوة موظف جديد لا تزال API فقط، بلا صفحة** | OWNER | /vendor/:id/branches، /vendor/:id/staff | S4,S18b | 🟡 PARTIAL | S15 |
 | FR-VPORTAL-006 | حالة وسجل الاشتراك | GET subscription | OWNER | لا | S3 | 🟡 PARTIAL | S15 |
 | FR-VPORTAL-007 (E.20) | تقارير الأداء/SLA والرد على المراجعات (الردود مؤجلة) | لا | - | لا | لا | ❌ MISSING | S25 |
@@ -479,7 +503,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | PDR-006 | لا دور سائق؛ الموظف يحدّث Sent/Delivered | لا دور سائق؛ إجراءات الموظف | موظف الفرع | صفحة طلبات الفرع | S11 | ✅ DONE | - |
 | PDR-007 | لا دردشة ولا stories؛ وسيلة تواصل خارجية | لم تُبنَ؛ بوابة التواصل | OWNER | /vendor/:id/storefront | S7 | ✅ DONE | - |
 | PDR-008 | حساب واحد بأدوار متعددة؛ مبدّل؛ موظف لفرع واحد | VendorUser؛ me/workspaces؛ API الدعوة | OWNER | مبدّل /account؛ لا دعوة ولا نقل | S4,NAV | 🟡 PARTIAL | S15 |
-| PDR-009 | فصل صلاحيات المالك والموظف | الـguards تفرضه؛ واجهات إدارة الفروع/الموظفين (S18b) وإلغاء/فشل التوصيل/موافقة الاسترداد (S20a) الآن مبنية لكليهما؛ واجهات المالك الأخرى (مثل المرتجعات والتقارير) لا تزال ناقصة | OWNER/موظف | المركز، طلبات الفرع، /vendor/:id/branches، /vendor/:id/staff | S4,S9,S18b,S20a | 🟡 PARTIAL | S21 |
+| PDR-009 | فصل صلاحيات المالك والموظف | الـguards تفرضه؛ واجهات إدارة الفروع/الموظفين (S18b) وإلغاء/فشل التوصيل/موافقة الاسترداد (S20a) مبنية لكليهما. S21: قرار المرتجع (موافقة/رفض) محصور بموظف/مالك الفرع الأصلي فقط (نفس انضباط الإلغاء)؛ **الاستلام (redeem) عمداً استثناء مُقنَّن** - أي موظف/مالك لنفس المتجر بصرف النظر عن فرعه (PDR-031: قبول عابر للفروع)، عبر مسار بلا `:branchId` في نفسه لا بتوسيع الحارس العام. **واجهة المرتجعات الآن مبنية بالكامل لكل الأدوار** (العميل، المالك/الموظف، الأدمن - انظر PDR-031، جولة مراجعة 2026-10-10). واجهات المالك الأخرى (التقارير) لا تزال ناقصة | OWNER/موظف | المركز، طلبات الفرع، /vendor/:id/branches، /vendor/:id/staff | S4,S9,S18b,S20a,S21 | 🟡 PARTIAL | - |
 | PDR-010 | متجر فعلي/إلكتروني/هجين؛ مستودع مخفي؛ نقاط استلام. تحقّق ONLINE_ONLY مفصَّل الآن بـPDR-035 (2026-09-26): دبوس عنوان المستودع (lat/lng + ملاحظة) قبل إرسال أدلة التحقق؛ المستودع لا يظهر في أي endpoint عام؛ المراجع يراه فقط داخل مسار التحقق | Vendor.storeType، Warehouse، PickupPoint | OWNER | لا | S5 | 🟡 PARTIAL | S15 |
 | PDR-011 | صفحة متجر عامة: رابط واسم وشعار ونبذة وغلاف وتواصل وأقسام ومتابعة | حقول واجهة المتجر وAPI عام | OWNER؛ عام | /store/:slug، /vendor/:id/storefront | S7,S13 | ✅ DONE | - |
 | PDR-012 | أقسام المتجر وسقف 20 | StoreSection | OWNER | /vendor/:id/sections | S7 | ✅ DONE | - |
@@ -500,8 +524,8 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | PDR-027 | سياسة فشل التوصيل | mark-delivery-failed مع `deliveryAttemptCount` (0→1→2)؛ محاولة أولى: تُفتح لإعادة الجدولة أو مهلة 48 ساعة تلقائية؛ محاولة ثانية: COD تُلغى تلقائياً في نفس الاستدعاء، إلكتروني يُفتح لطلب استرداد العميل وموافقة الموظف (لا مسار رفض — فجوة موثَّقة عمداً، القرار النهائي 2026-10-07) | موظف/عميل | /orders، صفحة طلبات الفرع | S20a | ✅ DONE | - |
 | PDR-028 | إلغاء صنف/طلب قبل Sent وقواعد الرسوم | إلغاء كامل الطلب أو صنف واحد (العميل: PLACED فقط؛ الموظف: PLACED/PREPARING، سبب إلزامي بعد بدء التجهيز)؛ إلغاء صنف واحد لا يغيّر حالة الطلب إن بقي صنف آخر نشطاً؛ رسوم التوصيل تُسترد مرة واحدة فقط عند إغلاق الطلب (partial unique index حقيقي) | عميل/موظف | /orders، صفحة طلبات الفرع | S9,S20a | ✅ DONE | - |
 | PDR-029 | عناوين: خريطة وافتراضي وحفظ صريح؛ تغيير قبل التحضير | إنشاء/عرض فقط؛ **GPS يملأ lat/lng فقط (لا مزوّد خريطة خارجي، قرار معتمد)**، لا default، لا تعديل/حذف، لا تغيير العنوان قبل التحضير | session | /account، /checkout | S14 | 🟡 PARTIAL — بسبب default/تعديل/حذف/تغيير قبل التحضير، وليس الخريطة | S22 |
-| PDR-030 | سياسة إرجاع المتجر ورسومها ولقطة الشراء | لا | - | لا | لا | ❌ MISSING | S21 |
-| PDR-031 | طلب إرجاع وSLA وكود 7 أيام | لا | - | لا | لا | ❌ MISSING | S21 |
+| PDR-030 | سياسة إرجاع المتجر ورسومها ولقطة الشراء | مبنية بالكامل (API/منطق): `return_policy` إلزامي عند التسجيل، تحديث لاحق تحت قفل 6 أشهر حقيقي، لقطة كاملة على `BranchOrder` وقت `confirm()` لا تتأثر بتعديل لاحق. انظر FR-RET-008/009 للتفاصيل الكاملة | OWNER | صفحة سياسة الإرجاع لصاحب المتجر (`/vendor/:id/return-policy`) (جولة مراجعة 2026-10-10) | S21 e2e + Playwright | ✅ DONE | - |
+| PDR-031 | طلب إرجاع وSLA وكود 7 أيام | مبنية بالكامل (API/منطق): طلب بسبب+صور، SLA 48h/72h حقيقي، كود 6 أرقام يولَّد عند الموافقة فقط وصالح 7 أيام، قبول عابر لفروع المتجر الفعلية (لا نقاط استلام بعد). انظر FR-RET-009/FR-FUL-009 للتفاصيل الكاملة | عميل/OWNER/موظف/PLATFORM_ADMIN | **بواجهة كاملة لكل الأدوار الآن (جولة مراجعة 2026-10-10)**: العميل - إنشاء الطلب (`/orders/:id/items/:id/return`)، قائمة الإرجاعات (`/returns`)، التتبّع والإلغاء والاعتراض (`/returns/:id`). OWNER - سياسة الإرجاع (`/vendor/:id/return-policy`). موظف/OWNER - قائمة إرجاعات الفرع والقرار (`/vendor/:id/branches/:b/returns`)، استبدال الكود عابراً للفروع (`/vendor/:id/returns/redeem`). PLATFORM_ADMIN - طابور الإرجاعات المتصاعدة والحسم النهائي (`/admin/returns`) | S21 e2e + Playwright (14 اختبار متصفّح حقيقي، مرتين) | 🟡 PARTIAL (فروع فعلية فقط، لا pickup points) | - |
 | PDR-032 | مراجعات موثّقة للمنتج والمتجر؛ غير قابلة للتعديل؛ الردود مؤجلة | لا | - | لا | لا | ❌ MISSING | S23 |
 | PDR-033 | اشتراك sandbox شهر وتجديد؛ تعطيل عند الانتهاء؛ تذكيرات | VendorSubscription وبوابة الانتهاء؛ لا تذكيرات | OWNER | لا | S3 | 🟡 PARTIAL | S15 |
 | PDR-034 | تعطيل الحساب مع استرجاع 30 يوماً | لا | - | لا | لا | ❌ MISSING | S22 |
@@ -582,7 +606,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | S19 | إشعارات: تصميم الـrelay ثم relay وإشعارات داخل التطبيق لأحداث الطلب الأساسية | **18 — منفَّذ جزئياً** (معاد اشتقاقه مباشرة من صفوف الملف يحمل `S19` في عمود Sprint وحالته 🟡 PARTIAL أو ❌ MISSING بعد تطبيق v10 = 18 صفاً بالضبط، بنفس منهج صفّ S17 في `v7` أعلاه. **الرقم "10" السابق كان غير محدَّث أصلاً** قبل هذا التحديث — عدة صفوف (`FR-INV-010`، `FR-VPORTAL-009`) أُعيد تعيينها لـ`S19` في `v8`/`v9` دون تحديث هذا العدّاد حينها؛ لم يُحاول هذا التمرير أيضاً مطابقة بقية أعمدة الـ"#" في هذا الجدول — نفس نطاق `v7` الضيّق لكل تمريرة) | لا شيء تقني؛ يفضَّل بعد S17/S18 لأحداثها | OPEN-004 (SMS: يبقى المسجَّل fallback — ما زال مفتوحاً، `G-NO-04` لم يُبنَ) |
 | **S20a** | **استثناءات التنفيذ والإلغاء والاسترداد**: تأخر التحضير، فشل التوصيل، إلغاء صنف/طلب، استرداد، توزيع الدفع، سجل COD، جدول الطلب، تقارير الأداء (VPORTAL-004) | 15 | S19 | OPEN-009 (الرسوم/الضريبة تؤثر على الاسترداد)؛ قواعد رسوم الإلغاء (PDR-028) |
 | **S20b** | **إضافات checkout**: الشروط، ملاحظة العميل/المتجر، الحد الأدنى للطلب، رسوم/ضريبة الدفع النهائي، كتالوج تعارض التنفيذ | 6 | S20a (نفس مسار الدفع، تسلسل بعده تجنباً لتضارب تعديلين متزامنين على checkout) | OPEN-009 (الضريبة/الرسوم)؛ نص الشروط النهائي |
-| S21 | المرتجعات: سياسة المتجر، طلب، كود، استرداد، استلام المرتجعات | 12 | S20a (الاسترداد) | OPEN-009 |
+| **S21** | **المرتجعات: سياسة المتجر، طلب، كود، استرداد، استلام المرتجعات** | 6 — **منفَّذ جزئياً (الواجهة كاملة لكل الأدوار الآن - جولة مراجعة 2026-10-10؛ معاد اشتقاقه من الـ12 صفاً الأصلية التي كانت تحمل هذا السبرنت - `FR-RET-001` إلى `009`، `PDR-030/031`، `BR-012` - بعد انتقال 6 منها إلى ✅ DONE: `FR-RET-002/003/004/006/008`، `PDR-030`)** | S20a (الاسترداد) | محسوم فعلياً - OPEN-009 لم يحجب التنفيذ (PDR-030/031 لا تحتاج قرار المنصة عن الرسم/الضريبة). **متبقٍ خارج S21a عمداً**: الاستبدال (EXCHANGE_ONLY/BOTH، S21b)، نقاط الاستلام (PickupPoint، تحتاج عضوية تشغيلية جديدة - `FR-RET-009`/`PDR-031`)، توجيه الأسباب لمسارات SLA مختلفة (`FR-RET-005`)، رصد إساءة الاستخدام (`FR-RET-007`)، والحد الأدنى القانوني المحتمل (`FR-RET-001`/`BR-012`، Q11) |
 | S22 | الحساب: تغيير الهاتف، التعطيل، اللغة، إدارة العناوين (افتراضي/تعديل/حذف/تغيير قبل التحضير) | 8 | لا شيء | قواعد الاحتفاظ بالبيانات (OPEN-009). **لا قرار خريطة مطلوب — محسوم بلا مزوّد خارجي (§0.1)** |
 | S23 | المراجعات وشارة التحقق | 10 | S20a (الطلبات المكتملة) | قرار D1 (مؤجَّل من قِبلك رغم أن PDR-032 معتمد) |
 | S24 | المفضلات والتنبيهات ومجموعات المقارنة ومقارنة أعمق | 16 | S17 (تاريخ الأسعار)، S19 | لا شيء جديد |
@@ -642,8 +666,8 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | BR-009 | السلة مقسّمة بالبائع؛ كل تحقق (حد أدنى، أهلية توصيل) لكل قسم | التقسيم الفعلي أصبح بالفرع لا بالبائع (PDR-004 بديل معتمد)؛ كل التحققات (مخزون، أهلية، سعة، **والحد الأدنى الآن**) تعمل لكل مجموعة فرع بشكل مستقل تماماً | session | /checkout | S10,S14,S20b | ✅ DONE | - |
 | BR-010 | CustomerOrder وكل صفوفه التابعة تُنشأ ذرياً من طلب checkout واحد | معاملة Prisma واحدة تغطي الخصم والطلبات والدفع | session | /checkout | S10,S14 | ✅ DONE | - |
 | BR-011 | إلغاء الطلب الفرعي محكوم بحالته (العميل حتى Confirmed، البائع حتى Preparing)؛ تجاوز الأدمن موثّق | العميل: PLACED فقط؛ الموظف/OWNER: PLACED/PREPARING؛ تجاوز PLATFORM_ADMIN بسبب إلزامي وAuditLog (BR-019)، **مقيَّد هو نفسه بـPLACED/PREPARING فقط** (مراجعة 2026-10-08: ليس "أي حالة غير نهائية" — بعد SENT قد تكون البضاعة خرجت فعلاً، وإعادتها للمخزون تلقائياً دون مسار إرجاع مؤكد غير مقبولة، نطاق S21) | عميل/موظف/PLATFORM_ADMIN | /orders، صفحة طلبات الفرع، /admin/branch-orders | S20a | ✅ DONE | - |
-| BR-012 | أهلية الإرجاع نافذة زمنية + سبب، قابلة للضبط لكل فئة | لا | - | لا | لا | ❌ MISSING | S21 |
-| BR-013 | صيغة الاسترداد (سعر + حصة رسوم التوصيل − تسوية)؛ كانت مقترحة معلّقة على OPEN-007 (أُغلق الآن) | OPEN-007 أُغلق، لكن الاسترداد نفسه غير مبني؛ القاعدة الفعلية الآن PDR-030/031 لا BR-013 | - | لا | لا | ❌ MISSING | S21 |
+| BR-012 | أهلية الإرجاع نافذة زمنية + سبب، قابلة للضبط لكل فئة | **استُبدلت فعلياً بـPDR-030**: النافذة/السبب قابلان للضبط لكل متجر (vendor) الآن، لا لكل فئة منتج حرفياً كما ورد هنا - قرار منتج معتمد يتجاوز هذا النص. الحد الأدنى القانوني المحتمل (Q11/OPEN-009) يبقى مفتوحاً، لم يُفترض | - | - | لا | 🟡 PARTIAL (مستوى المتجر لا الفئة؛ الحد القانوني مفتوح) | - |
+| BR-013 | صيغة الاسترداد (سعر + حصة رسوم التوصيل − تسوية)؛ كانت مقترحة معلّقة على OPEN-007 (أُغلق الآن) | **مستبدلة فعلياً**: OPEN-007 أُغلق (PDR-001: ILS فقط، لا FX)؛ القاعدة الفعلية الآن PDR-030/031 (`max(0, سعر الصنف − رسم الإرجاع)`، بلا رسم توصيل أبداً) - مبنية بالكامل | - | - | - | ↪ SUPERSEDED (انظر PDR-030/031 وFR-RET-004) | - |
 | BR-014 | الاشتراك يتحكم بالظهور لا بالعمولة؛ Past Due يدخل فترة سماح قبل Suspended | ACTIVE/EXPIRED فقط (PDR-033 بسّطت الحالات)؛ لا فترة سماح منفصلة | OWNER | لا | S3 | 🟡 PARTIAL | S15 |
 | BR-015 | فوترة اشتراك البائع وفوترة طلب العميل على دورتين مستقلتين | VendorSubscription وPaymentTransaction نموذجان منفصلان تماماً بالبناء | OWNER/session | - | S3,S10 | ✅ DONE | - |
 | BR-016 | مراجعة فقط بعد اكتمال طلب/صنف موثّق ("شراء موثّق") | لا مراجعات مبنية إطلاقاً | - | لا | لا | ❌ MISSING | S23 |
@@ -655,7 +679,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | BR-022 | فرع فعلي لا يغادر "قيد التحقق" بلا دبوس وصورة، مراجَعة من مراجع تحقق | POST verification-evidence + verification-decision | OWNER + REVIEWER | لا | S3,VV | 🟡 PARTIAL | S15 |
 | BR-023 | هاتف+كلمة مرور أساسي؛ OTP يوثّق التسجيل ويبوّب استعادة كلمة المرور وتغيير الهاتف | التسجيل والاستعادة DONE؛ تغيير الهاتف بـOTP غير موجود | عام/session | /register,/reset-password | AUTH | 🟡 PARTIAL | S22 |
 | BR-024 | الضيف يتصفح ويبني سلة بلا حساب؛ الدخول يدمج سلة الضيف | استُبدل: السلة تتطلب تسجيل دخول من الأصل الآن (PDR-002/FR-AUTH-013)، فلا سلة ضيف لتُدمج | - | - | - | ↪ SUPERSEDED | - |
-| BR-025 | أهلية إرجاع الصنف تعتمد فقط على `Fulfillment` الخاص به، لا الأصناف الشقيقة أو الطلب الفرعي كاملاً | لا كيان Fulfillment منفصل، ولا إرجاع مبني إطلاقاً | - | لا | لا | ❌ MISSING | S21 |
+| BR-025 | أهلية إرجاع الصنف تعتمد فقط على `Fulfillment` الخاص به، لا الأصناف الشقيقة أو الطلب الفرعي كاملاً | **مبنية بلا كيان `Fulfillment` مستقل** - FR-FUL-007 (split shipment) مؤجَّل بقرار معتمد، وBR-028 نفسها تجعل `BranchOrder` الوحدة الوحيدة المشتركة لكل أصنافه (حالة splitShipment=false التي يصفها الـSRS نفسه كالحالة الافتراضية المطابقة لسلوك Part 2 الأصلي). الاستقلالية عن الأصناف الشقيقة محقَّقة عبر محاسبة استرداد لكل صنف (`BranchOrderRefund.branchOrderItemId` فريد، وفهرس Return الجزئي لكل صنف) - لا عبر توقيت تسليم مختلف | عميل | - | S21 unit+e2e | ✅ DONE | - |
 | BR-026 (F + F.1) | رفض تحقق فرع واحد يرفض الطلب كاملاً؛ إعادة التقديم مسار منفصل عن الرفض؛ يمكن تقديم طلب مصحَّح فوراً بعد الرفض مع بقاء السجل القديم | منطق UNDER_REVIEW→REJECTED الشامل مبني ومختبر؛ سبب الرفض يراه المالك (verification-status)؛ الطلب المصحَّح = POST /vendors جديد بسجل قديم محفوظ (واجهة تقديم الطلب نفسها تحت FR-VEND-001/S15) | REVIEWER/ADMIN | /admin/verification، /vendor/:vendorId/verification | VV,S16 | ✅ DONE | - |
 | BR-027 | كل المبالغ ILS؛ لا FX ولا تسوية متعددة العملات؛ يُلغي BR-021 ويُغلق OPEN-002/007 | بيانات ILS فقط في كل مكان | n/a | كل واجهات السعر | S10,S14 | ✅ DONE | - |
 | BR-028 | checkout واحد ينتج CustomerOrder أب وBranchOrder واحد أو أكثر، كل BranchOrder بطريقة تنفيذ/رسم/دفع/موعد/دورة حياة خاصة به | BranchOrder | session | /orders | S9,S10 | ✅ DONE | - |
@@ -663,7 +687,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | BR-030 | باركود المخزون فريد وscanner-facing؛ الباركود المشترك داخلي لا يُستبدل أبداً؛ بيع/تخفيض لا يمكن أن ينزل المخزون تحت الصفر | فصل الباركودين DONE؛ واجهة بحث بالباركود (scanner-facing) موجودة الآن (S18a)؛ منع النزول تحت الصفر DONE (خصم ذري) | OWNER | صفحة مخزون الفرع: حقل البحث بالباركود (S18a) | S6,S18a | ✅ DONE | - |
 | BR-031 | خصم يدوي غير بيعي له سبب دائماً ويُشعِر المالك؛ لا نقل مخزون بين الفروع في المرحلة الأولى | السبب مفروض؛ لا نقل مبني (متوافق مع القرار)؛ **الإشعار يصل فعلياً الآن** لصندوق المالك (relay S19)، لم يعد outbox فقط | OWNER/EMP | صفحة مخزون الفرع: نموذج الحركة (S18a)؛ /notifications (S19) | S6,S18a,S19 | ✅ DONE | - |
 | BR-032 | التوفر العام مشتق من مجموع مخزون الفروع المؤهلة لكن يُعرض فقط Available/Low/Sold out؛ الكمية الحقيقية خاصة إلا حد أقصى عند تحقق السلة | البطاقات العامة تستخدم المجموع (bucketForStock) كما هو منصوص؛ حد السلة الأقصى أصبح عمداً لكل فرع مفرد (إصلاح مراجعة Sprint 14) بما يطابق أن checkout لا يقسّم سطراً على فرعين | public/session | البطاقات، /cart | S8,S14 | ✅ DONE | - |
-| BR-033 | سياسة إرجاع المتجر ورسومه تُلقَط لحظة الشراء؛ تتغير كل 6 أشهر فقط؛ قبول موحّد عبر كل الفروع/نقاط الاستلام | لا | - | لا | لا | ❌ MISSING | S21 |
+| BR-033 | سياسة إرجاع المتجر ورسومه تُلقَط لحظة الشراء؛ تتغير كل 6 أشهر فقط؛ قبول موحّد عبر كل الفروع/نقاط الاستلام | مبنية: اللقطة على `BranchOrder` عند `confirm()`، قفل 6 أشهر حقيقي (صف Vendor مقفول، لا timestamp فقط) مع اختبار تزامن حتمي. **قبول موحّد عبر الفروع الفعلية فقط** - نقاط الاستلام (PickupPoint) بلا عضوية تشغيلية في هذا الكود، فجزء "نقاط الاستلام" غير مبني | OWNER | - | S21 e2e | 🟡 PARTIAL (فروع فعلية فقط) | - |
 | BR-034 | التوصيل يديره موظفو الفرع؛ تأكيد العميل يُطلب بعد تحديث الموظف؛ تذكير 48 ساعة وتأكيد تلقائي 72؛ لا هوية سائق ولا نزاع داخل المنصة | الإجراءات اليدوية DONE؛ **التذكير والتأكيد التلقائي أصبحا مجدوَلين فعلياً الآن** (`FulfilmentSweepService` دوري، لا عند القراءة فقط — S19) | EMP/session | صفحة الفرع،/orders، /notifications (S19) | S11,S19 | ✅ DONE | - |
 
 **عدّاد BR:** 34 صفاً (BR-001..034)، منها 2 SUPERSEDED (021، 024). أُعيد فرز الـ32 الحيّة مباشرة من الجدول أعلاه بعد S19 (لا تقدير): DONE=11 (002، 005، 006، 010، 015، 027، 028، 030، 031، 032، 034)، PARTIAL=9 (001، 007، 009، 014، 020، 022، 023، 026، 029)، MISSING=12 (003، 004، 008، 011، 012، 013، 016، 017، 018، 019، 025، 033). المجموع 11+9+12+2=34. (قبل S19: DONE=10، PARTIAL=10 — BR-034 انتقلت PARTIAL←DONE. قبل S18a: DONE=7، PARTIAL=13 — BR-005/030/031 انتقلت PARTIAL←DONE. النسخة v2 كانت ذكرت 8/17/7 خطأً؛ صُحِّحت في v3/§16.)
@@ -720,7 +744,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | SRS-G0-05 | المخزون: OfferBranchInventory (= BranchStock فعلياً) لفرع فعلي/مستودع فقط؛ InventoryMovement بكل الأسباب المذكورة؛ لا نوع نقل | BranchStock+StockMovement موجودان؛ أسباب الحركة تغطي DAMAGE/LOSS/COUNT_CORRECTION/SALE الآن (S18a)، لا "استرجاع مرتجع" ولا "استيراد/إضافة" كأسباب حركة منفصلة | 🟡 PARTIAL | S18 |
 | SRS-G0-06 | السلة والطلب: Cart لعميل موثّق فقط، CartItem بلا فرع/تنفيذ عند الإضافة؛ CustomerOrder له BranchOrder واحد أو أكثر | مطابق تماماً | ✅ DONE | - |
 | SRS-G0-07 | التنفيذ والدفع: Fulfillment واحد لكل BranchOrder بلا سائق؛ دفع sandbox واحد يغطي عدة BranchOrders بتخصيص عبر branch_order_id | لا كيان Fulfillment منفصل (مدموج داخل BranchOrder، وهذا يحقق نفس الغرض عملياً)؛ PaymentTransaction واحد + BranchOrder.paymentTransactionId كإحالة (يحقق التخصيص فعلياً) | ✅ DONE | - |
-| SRS-G0-08 | الجدولة والإرجاع: DeliverySlot لفرع مالك مخزون؛ ReturnPolicy مُلقَطة على BranchOrder/Item؛ Notification بحالة قراءة ورابط عميق؛ Review لمنتج/متجر فقط، غير قابل للتعديل | DeliveryWindow/Exception DONE؛ **`Notification` بحالة قراءة ورابط عميق مبني الآن بالكامل (S19)**؛ ReturnPolicy/ReturnRequest/Review ما زالت غير موجودة إطلاقاً | 🟡 PARTIAL (ثلاثة أرباعه DONE الآن، ReturnPolicy/ReturnRequest/Review فقط ما زال MISSING بالكامل) | S17/S19/S21/S23 |
+| SRS-G0-08 | الجدولة والإرجاع: DeliverySlot لفرع مالك مخزون؛ ReturnPolicy مُلقَطة على BranchOrder/Item؛ Notification بحالة قراءة ورابط عميق؛ Review لمنتج/متجر فقط، غير قابل للتعديل | DeliveryWindow/Exception DONE؛ `Notification` بحالة قراءة ورابط عميق مبني بالكامل (S19)؛ **`ReturnPolicy` مُلقَطة على `BranchOrder`/Item مبنية بالكامل الآن (S21)** - `returnPolicySnapshot*` على `BranchOrder`، و`ReturnRequest` (نموذج `Return`) مبني أيضاً. `Review` فقط ما زال غير موجود (S23) | 🟡 PARTIAL (Review فقط متبقٍ) | S17/S19/S21/S23 |
 
 ### G.3 — كيانات مقابل Prisma الفعلي (الكيانات غير المذكورة في G.0 فقط؛ ما ذُكر أعلاه لا يتكرر)
 
@@ -732,7 +756,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | SRS-G3-04 | `FxRate` | غير موجود، ومطلوب ألا يوجد (PDR-001) | ✅ DONE (بالإزالة المتعمدة) | - |
 | SRS-G3-05 | `Payment`/`PaymentAllocation`/`PaymentTransactionAllocation`/`WebhookInbox` (نموذج دفع متعدد المراحل مع تسوية) | فقط `PaymentTransaction` بحالتين (SUCCEEDED/FAILED)، بلا بوابة حقيقية ولا webhook inbox (PDR-005 بسّط النموذج عمداً) | ✅ DONE (تبسيط sandbox متعمد، ليس فجوة) | - |
 | SRS-G3-06 | `VendorSettlement`/`Promotion`/`Coupon` (Phase 2 بحسب الـSRS) | غير موجودة | ❌ MISSING | قرار-نطاق |
-| SRS-G3-07 | `Review`/`ReturnRequest`/`Refund`/`Dispute` | غير موجودة (متوافق مع FR-REV-*/FR-RET-* MISSING أعلاه) | ❌ MISSING | S21/S23 |
+| SRS-G3-07 | `Review`/`ReturnRequest`/`Refund`/`Dispute` | **`ReturnRequest`/`Refund`/`Dispute` مبنية بالكامل الآن (S21) بواجهة مستخدم لكل الأدوار** (جولة مراجعة 2026-10-10، انظر PDR-031) - نموذج `Return` + `BranchOrderRefund` + مسار النزاع/التصعيد. `Review` فقط ما زال غير موجود (S23) | 🟡 PARTIAL (Review فقط متبقٍ) | S23 |
 | SRS-G3-08 | `Notification`/`SupportTicket` | **`Notification` مبني بالكامل الآن** (S19، يتبع FR-NOTIF-008 الذي أصبح ✅)؛ `SupportTicket` ما زال غير موجود إطلاقاً | 🟡 PARTIAL | S19/قرار-نطاق |
 | SRS-G3-09 | `PriceHistory` | موجود (متوافق مع FR-PRICE-002، S17): سجلّ إضافة فقط، صف واحد لكل تغيير سعر حقيقي، تعبئة أولية MIGRATED_BASELINE لكل متغيّر سابق | ✅ DONE | - |
 | SRS-G3-10 | ثابتان معماريان: لا `vendor_id` على `CanonicalProduct`/`CanonicalProductVariant` أبداً؛ كل جدول مملوك للبائع يحمل `vendor_id` إلزامياً | مطابق تماماً في السكيما الفعلية (تحقّقت من `CanonicalProduct`/`CanonicalProductVariant`/`OfferVariant`) | ✅ DONE | - |
@@ -771,7 +795,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | SRS-H3A-05 | Checkout: quote بلا تعديل، ثم إنشاء ذري | `POST /checkout/quote`, `/reserve`, `/confirm` — يطابق المعنى وإن كان بثلاث خطوات لا خطوتين | ✅ DONE | - |
 | SRS-H3A-06 | طلبات الفرع: GET orders، PATCH actions (بدء تحضير، رجوع، إلغاء صنف، إعادة محاولة توصيل، موافقة استرداد) | البدء/الإرسال/التسليم/الاستلام موجودة؛ **الرجوع (cancel)، إلغاء الصنف، إعادة محاولة التوصيل (mark-delivery-failed + إعادة جدولة العميل)، موافقة الاسترداد — الأربعة مبنية الآن** | ✅ DONE | - |
 | SRS-H3A-07 | التقويم/العناوين: فترات، إعادة جدولة، تعديل عنوان قبل التحضير فقط | فترات التوصيل CRUD موجودة؛ **إعادة الجدولة مبنية الآن (قفل سعة حقيقي، نفس آلية الحجز)**؛ لا تعديل عنوان لطلب قائم | 🟡 PARTIAL | S22 |
-| SRS-H3A-08 | المرتجعات/المراجعات/التنبيهات: طلب إرجاع، قرار، مراجعة، إشعارات بحالة قراءة | **إشعارات بحالة قراءة مبنية الآن بالكامل** (S19)؛ طلب الإرجاع والقرار والمراجعة ما زالت غير موجودة إطلاقاً | 🟡 PARTIAL (ربعه عن الإشعارات DONE، الباقي MISSING بالكامل) | S19/S21/S23 |
+| SRS-H3A-08 | المرتجعات/المراجعات/التنبيهات: طلب إرجاع، قرار، مراجعة، إشعارات بحالة قراءة | إشعارات بحالة قراءة مبنية بالكامل (S19)؛ **طلب الإرجاع والقرار مبنيان بالكامل الآن (S21) بواجهة مستخدم كاملة** (جولة مراجعة 2026-10-10) - العميل (`/orders/:id/items/:id/return`، `/returns`، `/returns/:id`)، صاحب المتجر/الموظف (`/vendor/:id/branches/:b/returns`، `/vendor/:id/return-policy`، `/vendor/:id/returns/redeem`)، PLATFORM_ADMIN (`/admin/returns`)؛ المراجعة (Review) فقط ما زالت غير موجودة (S23) | 🟡 PARTIAL (Review فقط متبقٍ) | S19/S21/S23 |
 
 ## §10 — Part 5: تجربة المستخدم وحالات الفشل
 
@@ -785,7 +809,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | SRS-K1A-04 | أتابعه | موجودة (S13)؛ **الإشعارات المنفصلة مبنية الآن** (منتج/خصم جديد، S19) | ✅ DONE | - |
 | SRS-K1A-05 | تفاصيل عرض المتجر | موجودة | ✅ DONE | - |
 | SRS-K1A-06 | السلة والـcheckout | موجودة ومختبرة جيداً (S10/S14) | ✅ DONE | - |
-| SRS-K1A-07 | طلبات العميل | موجودة؛ **إلغاء الطلب/الصنف، إعادة الجدولة، وطلب الاسترداد مبنية الآن**؛ بلا جدول زمني موحّد (قرار بنيوي، BR-028) وبلا إرجاع فعلي | 🟡 PARTIAL | S21 |
+| SRS-K1A-07 | طلبات العميل | موجودة؛ **إلغاء الطلب/الصنف، إعادة الجدولة، وطلب الاسترداد مبنية**؛ **طلب الإرجاع الفعلي للصنف مبني الآن أيضاً بواجهة كاملة** (جولة مراجعة 2026-10-10) - العميل يرسل/يتابع/يلغي/ينازع عبر (`/orders/:id/items/:id/return`، `/returns`، `/returns/:id`)؛ بلا جدول زمني موحّد يبقى (قرار بنيوي، BR-028) | 🟡 PARTIAL (جدول زمني موحّد فقط متبقٍ) | - |
 | SRS-K1A-08 | مساحة عمل المالك | مركز روابط فقط، أغلب الشاشات الفرعية API-only | 🟡 PARTIAL | S15-S18 |
 | SRS-K1A-09 | مساحة عمل الموظف | طلبات الفرع فقط؛ لا ماسح/بيع فعلي | 🟡 PARTIAL | S18 |
 | SRS-K1A-10 | ماسح المخزون والاستيراد | الاستيراد له واجهة كاملة الآن (S17: `/vendor/:id/offers/import`)؛ ماسح المخزون (قراءة باركود بالكاميرا) لا يزال API فقط بلا واجهة | 🟡 PARTIAL | S18 |
@@ -822,7 +846,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | L-16 | إشعار فشل | **نموذج Notification مبني بالكامل الآن** (S19) ويمكن أن يحمل أي نوع إشعار مستقبلاً، لكن لا نوع "فشل" تقني محدد (دفع/webhook) مبني فعلياً بعد — الأنواع الإحدى عشر المبنية كلها إيجابية التدفق (طلب جديد، تذكير، تفعيل خصم...)، لا فشل | 🟡 PARTIAL | S19 |
 | L-17 | webhook مكرر | لا webhooks واردة أصلاً | ❌ MISSING | قرار-نطاق |
 | L-18 | تكرار إرسال checkout | idempotency key يعيد نفس الطلب | ✅ DONE | - |
-| L-19 | استرداد جزئي | لا استرداد مبني | ❌ MISSING | S21 |
+| L-19 | استرداد جزئي | مبني: استرداد الإرجاع هو استرداد جزئي بطبيعته (لكل صنف، لا الطلب كاملاً) - `max(0, سعر الصنف − رسم الإرجاع)`، ONLINE/COD بسجلّين منفصلين | ✅ DONE | - |
 | L-20 | توصيل مجزأ | لا شحنات متعددة لكل BranchOrder | ❌ MISSING | S26/قرار-نطاق |
 | L-21 | عنوان توصيل غير صالح | تحقق العنوان موجود (S14)؛ لا خريطة (قرار معتمد) | ✅ DONE (ضمن القرار المعتمد) | - |
 | L-22 | العميل خارج منطقة خدمة البائع | يتحول لاستلام فقط تلقائياً برسالة واضحة | ✅ DONE | - |
@@ -1007,9 +1031,9 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 | BL-FUL-003 | Must | FR-FUL-003 | 🟡 PARTIAL | - |
 | BL-FUL-004 | Should | FR-FUL-004 | ✅ DONE | - |
 | BL-FUL-004b | Should | PDR-023 | 🟡 PARTIAL | - |
-| BL-RET-001 | Should | FR-RET-002 | ❌ MISSING | - |
-| BL-RET-002 | Should | BR-025 | ❌ MISSING | - |
-| BL-RET-003 | Should | FR-RET-003 | ❌ MISSING | - |
+| BL-RET-001 | Should | FR-RET-002 | ✅ DONE (S21) | - |
+| BL-RET-002 | Should | BR-025 | ✅ DONE (S21) | - |
+| BL-RET-003 | Should | FR-RET-003 | ✅ DONE (S21) | - |
 | BL-REV-001 | Must | FR-REV-001 | ❌ MISSING | الأولوية الأصلية Must — لم يُبنَ إطلاقاً، فجوة حقيقية مقابل الالتزام الأصلي |
 | BL-REV-002 | Must | FR-REV-002 | ❌ MISSING | نفس الملاحظة أعلاه |
 | BL-REV-003 | Could | FR-REV-004 | ⏸ DEFERRED | - |
@@ -1062,8 +1086,8 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 | AC-09 | RTL في جدول المقارنة | 🟡 PARTIAL |
 | AC-10 | بوابة AwaitingPayment: نجاح الدفع | ✅ DONE (بمقاربة بديلة، انظر ADR-010) |
 | AC-11 | بوابة AwaitingPayment: فشل الدفع | ✅ DONE (بمقاربة بديلة، انظر ADR-010) |
-| AC-12 | إرجاع صنف مسلَّم من شحنة مجزأة | ❌ MISSING |
-| AC-13 | رفض إرجاع صنف لم يُسلَّم بعد | ❌ MISSING |
+| AC-12 | إرجاع صنف مسلَّم من شحنة مجزأة | الإرجاع نفسه مبني (S21)، لكن "شحنة مجزأة" (split shipment) غير قابلة للحدوث - FR-FUL-007 مؤجَّل بقرار معتمد (انظر BR-025) | 🟡 PARTIAL (الإرجاع مبني، السيناريو الحرفي غير منطبق) |
+| AC-13 | رفض إرجاع صنف لم يُسلَّم بعد | مبني بالضبط: `checkReturnEligibility()` يرفض بـ`NOT_YET_ARRIVED` قبل التسليم/الاستلام | ✅ DONE (S21) |
 | AC-14 | بائع مُعلَّق يحتفظ بوصول محدود | ❌ MISSING (لا تعليق مبني) |
 | AC-15 | ازدواجية webhook | ❌ MISSING (لا webhooks) |
 | AC-16 | فشل durability لـwebhook | ❌ MISSING (لا webhooks) |
@@ -1080,7 +1104,7 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 
 ## §15 — E.11 آلات الحالة القديمة: صفوف بمعرّفات ثابتة
 
-**ملاحظة جوهرية قبل الجدول:** آلات E.11 (`CustomerOrder`/`VendorSuborder`/`OrderItem`/`Payment`/`Delivery`) تصف **النموذج الذي سبق PDR-004/PDR-005** (تحقّقت من الكود: لا حقل `status` على `CustomerOrder` إطلاقاً، لا تجميع rollup، `PaymentTransactionStatus` مبسَّط لحالتين فقط `SUCCEEDED`/`FAILED` لا الحالات الثماني الأصلية، لا كيان `Delivery`/`Fulfillment` منفصل، ولا موظف "سائق"). لذلك **معظم صفوف VendorSuborder/Payment/Delivery القديمة SUPERSEDED بالتصميم الفعلي (`BranchOrderStatus` + `PaymentTransaction` المبسَّط)**، وليست فجوة. الصفوف التي تصف **إرجاعاً** تبقى MISSING فعلياً (الإرجاع غير مبني بأي نموذج، قديم أو جديد). آلة `Return` بالكامل (9 صفوف) تُدرَج مرة واحدة كمجموعة لأن كل صفوفها MISSING بنفس السبب.
+**ملاحظة جوهرية قبل الجدول:** آلات E.11 (`CustomerOrder`/`VendorSuborder`/`OrderItem`/`Payment`/`Delivery`) تصف **النموذج الذي سبق PDR-004/PDR-005** (تحقّقت من الكود: لا حقل `status` على `CustomerOrder` إطلاقاً، لا تجميع rollup، `PaymentTransactionStatus` مبسَّط لحالتين فقط `SUCCEEDED`/`FAILED` لا الحالات الثماني الأصلية، لا كيان `Delivery`/`Fulfillment` منفصل، ولا موظف "سائق"). لذلك **معظم صفوف VendorSuborder/Payment/Delivery القديمة SUPERSEDED بالتصميم الفعلي (`BranchOrderStatus` + `PaymentTransaction` المبسَّط)**، وليست فجوة. **الصفوف التي تصف إرجاعاً مبنية الآن (S21)** عبر نموذج `Return` المستقل - لا كحالة على `BranchOrder`/`PaymentTransaction` نفسهما (لذلك صفوف VS-16/17 وPM-07..11 أعلاه SUPERSEDED تحديداً، لا MISSING). آلة `Return` بالكامل (9 صفوف أدناه) مبنية بالكامل الآن، مع تصحيحات جولات المراجعة الخمس المذكورة في كل صف (لا أتمتة Approve→Refund، فصل REJECTED عن ADMIN_REJECTED، إلخ).
 
 ### CustomerOrder (8 صفوف)
 
@@ -1114,8 +1138,8 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 | SRS-E11-VS-13 | `ReadyForPickup→PickedUp` | يقابله pickup-handover | ✅ DONE |
 | SRS-E11-VS-14 | `OutForDelivery→Delivered` | يقابله mark-delivered | ✅ DONE |
 | SRS-E11-VS-15 | `PickedUp/Delivered→Completed` | يقابله confirm-received (العميل) | ✅ DONE |
-| SRS-E11-VS-16 | `Completed→ReturnRequested` | لا إرجاع مبني | ❌ MISSING |
-| SRS-E11-VS-17 | `ReturnRequested→ReturnedRefunded` | لا إرجاع مبني | ❌ MISSING |
+| SRS-E11-VS-16 | `Completed→ReturnRequested` | لا حقل status مستقل على `BranchOrder` يتحول إليه - الحالة "طلب إرجاع" تعيش على نموذج `Return` المستقل (S21)، لا على الأب. السلوك الفعلي مبني (انظر SRS-E11-RT-01) | ↪ SUPERSEDED (انظر Return) |
+| SRS-E11-VS-17 | `ReturnRequested→ReturnedRefunded` | نفس السبب أعلاه - الاسترداد يُسجَّل في `BranchOrderRefund`، لا كحالة على `BranchOrder` نفسه | ↪ SUPERSEDED (انظر Return، SRS-E11-RT-09) |
 
 ### OrderItem (4 صفوف، الآن BranchOrderItem)
 
@@ -1123,8 +1147,8 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 |---|---|---|---|
 | SRS-E11-OI-01 | إنشاء يرث حالة الأب | `BranchOrderItem` بلا حقل status خاص به أصلاً — يتبع الأب بالضرورة البنيوية | ✅ DONE (بالغياب المتسق) |
 | SRS-E11-OI-02 | الأب يكتمل → الصنف يكتمل | نفس السبب أعلاه | ✅ DONE |
-| SRS-E11-OI-03 | طلب إرجاع لصنف محدد | لا إرجاع مبني | ❌ MISSING |
-| SRS-E11-OI-04 | استرداد الصنف | لا إرجاع مبني | ❌ MISSING |
+| SRS-E11-OI-03 | طلب إرجاع لصنف محدد | مبني: `POST .../items/:itemId/returns` ينشئ `Return` مرتبطاً بـ`BranchOrderItem` هذا بالذات | ✅ DONE (S21) |
+| SRS-E11-OI-04 | استرداد الصنف | مبني: `BranchOrderRefund.branchOrderItemId` فريد لكل صنف، يُكتب عند استلام المرتجع فقط | ✅ DONE (S21) |
 
 ### Payment (14 صفاً، الآن PaymentTransaction مبسَّط)
 
@@ -1136,11 +1160,11 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 | SRS-E11-PM-04 | `Authorized→Captured` | لا فصل تفويض/التقاط؛ خطوة واحدة | ↪ SUPERSEDED |
 | SRS-E11-PM-05 | `Authorized→Failed` (انتهاء نافذة الالتقاط) | غير منطبق | ↪ SUPERSEDED |
 | SRS-E11-PM-06 | `Captured→Settled` | لا تسوية مصرفية منفصلة (sandbox) | ↪ SUPERSEDED |
-| SRS-E11-PM-07 | `Captured→Refunded` | لا استرداد مبني | ❌ MISSING |
-| SRS-E11-PM-08 | `Captured→PartiallyRefunded` | لا استرداد مبني | ❌ MISSING |
-| SRS-E11-PM-09 | `Settled→Refunded` | لا استرداد مبني | ❌ MISSING |
-| SRS-E11-PM-10 | `Settled→PartiallyRefunded` | لا استرداد مبني | ❌ MISSING |
-| SRS-E11-PM-11 | `PartiallyRefunded→Refunded` | لا استرداد مبني | ❌ MISSING |
+| SRS-E11-PM-07 | `Captured→Refunded` | **لا تحول حرفي على `PaymentTransaction.status` نفسه** - الـenum الفعلي (`SUCCEEDED`/`FAILED` فقط) لا يملك قيمة Refunded إطلاقاً، بتصميم معتمد: `PaymentTransaction` يبقى غير قابل للتغيير دائماً (قد يغطي أكثر من BranchOrder)، والاسترداد الفعلي مبني بالكامل (S20a للإلغاء، S21 للإرجاع) في دفتر مستقل `BranchOrderRefund` | ↪ SUPERSEDED (انظر `BranchOrderRefund`) |
+| SRS-E11-PM-08 | `Captured→PartiallyRefunded` | نفس السبب أعلاه - الاسترداد الجزئي مبني عبر صفوف `BranchOrderRefund` متعددة، لا حالة "جزئي" على `PaymentTransaction` | ↪ SUPERSEDED |
+| SRS-E11-PM-09 | `Settled→Refunded` | نفس السبب | ↪ SUPERSEDED |
+| SRS-E11-PM-10 | `Settled→PartiallyRefunded` | نفس السبب | ↪ SUPERSEDED |
+| SRS-E11-PM-11 | `PartiallyRefunded→Refunded` | نفس السبب | ↪ SUPERSEDED |
 | SRS-E11-PM-12 | `[*]→PendingCOD` | يقابله ضمنياً: BranchOrder COD يُنشأ مباشرة بلا حالة دفع منفصلة | ↪ SUPERSEDED |
 | SRS-E11-PM-13 | `PendingCOD→CollectedOnDelivery` | يقابله pickup-handover/mark-delivered يعلّم الدفع كمدفوع | ✅ DONE (بالاسم المختلف) |
 | SRS-E11-PM-14 | `CollectedOnDelivery→Settled` | لا تسوية منفصلة (sandbox) | ↪ SUPERSEDED |
@@ -1157,19 +1181,21 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 | SRS-E11-DL-06 | `FailedAttempt→Assigned` (إعادة جدولة) | لا مسار فشل توصيل مبني | ❌ MISSING |
 | SRS-E11-DL-07 | `FailedAttempt→Cancelled` | لا مسار فشل توصيل مبني | ❌ MISSING |
 
-### Return (9 صفوف منفصلة — كلها MISSING لنفس السبب: لا نموذج إرجاع من أي نوع مبني في الكود)
+### Return (9 صفوف منفصلة — مبنية بالكامل الآن، S21، مع تصحيحات جولات المراجعة المذكورة في كل صف)
 
 | ID | الانتقال | الحالة الفعلية | Status | Sprint |
 |---|---|---|---|---|
-| SRS-E11-RT-01 | `[*]→Requested` | لا نموذج إرجاع مبني | ❌ MISSING | S21 |
-| SRS-E11-RT-02 | `Requested→VendorReview` | لا نموذج إرجاع مبني | ❌ MISSING | S21 |
-| SRS-E11-RT-03 | `VendorReview→Approved` | لا نموذج إرجاع مبني | ❌ MISSING | S21 |
-| SRS-E11-RT-04 | `VendorReview→Rejected` | لا نموذج إرجاع مبني | ❌ MISSING | S21 |
-| SRS-E11-RT-05 | `VendorReview→Escalated` (SLA breach) | لا نموذج إرجاع مبني | ❌ MISSING | S21 |
-| SRS-E11-RT-06 | `Rejected→Escalated` (العميل ينازع) | لا نموذج إرجاع مبني | ❌ MISSING | S21 |
-| SRS-E11-RT-07 | `Escalated→Approved/Rejected` | لا نموذج إرجاع مبني | ❌ MISSING | S21 |
-| SRS-E11-RT-08 | `Approved→RefundProcessing` | لا نموذج إرجاع مبني | ❌ MISSING | S21 |
-| SRS-E11-RT-09 | `RefundProcessing→Refunded` | لا نموذج إرجاع مبني | ❌ MISSING | S21 |
+**تصحيح جولات المراجعة (مطبَّق فعلياً، يختلف عن الوصف الحرفي أدناه لسبب موثَّق في كل صف)**: الموافقة تولّد كوداً فقط (`APPROVED_AWAITING_DROPOFF`)، لا استرداد تلقائياً؛ الاستلام الفعلي (`RECEIVED`) هو الشرط الوحيد لبدء `RefundProcessing`؛ رفض المتجر (قابل للنزاع 7 أيام) وحالة `ADMIN_REJECTED` (نهائية بعد تصعيد، لا نزاع ثانٍ) مفصولتان عمداً لمنع الالتفاف على قرار الأدمن.
+
+| SRS-E11-RT-01 | `[*]→Requested` | مبني: `POST .../returns` → `REQUESTED` | ✅ DONE | - |
+| SRS-E11-RT-02 | `Requested→VendorReview` | **مطوية ضمن `REQUESTED` نفسها** - لا حالة "قيد المراجعة" مستقلة؛ `REQUESTED` تعني ذلك فعلياً، لا تمييز إضافي يفيد | ✅ DONE (مبسَّطة) | - |
+| SRS-E11-RT-03 | `VendorReview→Approved` | مبني: `REQUESTED→APPROVED_AWAITING_DROPOFF` (يولّد الكود هنا فقط، 7 أيام صلاحية) | ✅ DONE | - |
+| SRS-E11-RT-04 | `VendorReview→Rejected` | مبني: `REQUESTED→REJECTED` (سبب إلزامي 10-1000 حرف)، نافذة نزاع 7 أيام ثابتة من `rejectedAt` | ✅ DONE | - |
+| SRS-E11-RT-05 | `VendorReview→Escalated` (SLA breach) | مبني: تصعيد تلقائي حقيقي بعد 72 ساعة بلا قرار (`ReturnSweepService`) | ✅ DONE | - |
+| SRS-E11-RT-06 | `Rejected→Escalated` (العميل ينازع) | مبني: نزاع العميل ضمن نافذة 7 أيام → `ESCALATED`؛ بعدها → `REJECTED_CLOSED` تلقائياً (sweep)، يسمح بإعادة تقديم | ✅ DONE | - |
+| SRS-E11-RT-07 | `Escalated→Approved/Rejected` | مبني: `PLATFORM_ADMIN` فقط يحسم - موافقة→`APPROVED_AWAITING_DROPOFF`، رفض→**`ADMIN_REJECTED`** (قيمة مستقلة عن `REJECTED` العادية، نهائية، بلا نزاع/إعادة تقديم - تصحيح جولة مراجعة) | ✅ DONE | - |
+| SRS-E11-RT-08 | `Approved→RefundProcessing` | **مصحَّحة جولات المراجعة**: لا مسار مباشر من الموافقة - يتطلب `RECEIVED` (استلام فعلي) أولاً. `RECEIVED→REFUND_PROCESSING` فقط | ✅ DONE (بعد التصحيح) | - |
+| SRS-E11-RT-09 | `RefundProcessing→Refunded` | مبني: يكتب `BranchOrderRefund` (ONLINE_GATEWAY/COD_CASH) ضمن نفس transaction الاستلام | ✅ DONE | - |
 
 **عدّاد E.11:** 8 (CO) + 17 (VS) + 4 (OI) + 14 (PM) + 7 (DL) + 9 (RT) = **59 صفاً**.
 

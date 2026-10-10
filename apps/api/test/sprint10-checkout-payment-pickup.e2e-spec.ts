@@ -103,6 +103,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
           { name: 'Branch B', is_physical: true },
         ],
         applicable_categories: ['WOMEN'],
+        return_policy: { mode: 'NO_RETURN' },
       })
       .expect(201);
     return {
@@ -472,6 +473,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
           store_type: 'ONLINE_ONLY',
           branches: [{ name: 'Warehouse', is_physical: false }],
           applicable_categories: ['WOMEN'],
+          return_policy: { mode: 'NO_RETURN' },
         })
         .expect(201);
       const vendorId = res0.body.id;

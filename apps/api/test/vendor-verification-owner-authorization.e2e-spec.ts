@@ -118,6 +118,7 @@ describe('Vendor verification evidence - owner-only authorization fix (e2e)', ()
           { name: 'Branch B', is_physical: true },
         ],
         applicable_categories: ['WOMEN'],
+        return_policy: { mode: 'NO_RETURN' },
       })
       .expect(201);
     return {
@@ -310,6 +311,7 @@ describe('Vendor verification evidence - owner-only authorization fix (e2e)', ()
         store_type: 'PHYSICAL',
         branches: [{ name: 'Solo branch', is_physical: true }],
         applicable_categories: ['WOMEN'],
+        return_policy: { mode: 'NO_RETURN' },
       })
       .expect(201);
     const secondVendorId = secondVendorRes.body.id;

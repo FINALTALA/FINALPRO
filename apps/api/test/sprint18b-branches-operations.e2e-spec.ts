@@ -117,6 +117,7 @@ describe('Sprint 18b - branch add/activate/archive, hours, closures, staff (e2e)
           { name: 'Branch B', is_physical: true },
         ],
         applicable_categories: ['WOMEN'],
+        return_policy: { mode: 'NO_RETURN' },
       })
       .expect(201);
     return {
@@ -292,6 +293,7 @@ describe('Sprint 18b - branch add/activate/archive, hours, closures, staff (e2e)
           store_type: 'ONLINE_ONLY',
           branches: [{ name: 'Virtual', is_physical: false }],
           applicable_categories: ['WOMEN'],
+          return_policy: { mode: 'NO_RETURN' },
         })
         .expect(201);
       const vendorId = res.body.id;

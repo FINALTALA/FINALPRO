@@ -398,6 +398,11 @@ export class BranchOrderCancellationService {
             reason,
             initiatedBy,
             approvedByUserId: actorId,
+            // Sprint 21: a cancellation-driven refund is always
+            // ONLINE_GATEWAY - this whole branch is gated by
+            // `isOnline` above, same as every other refund row this
+            // service writes (COD never reaches here at all).
+            method: 'ONLINE_GATEWAY',
           },
         });
         refundedAmount = refundedAmount.plus(itemAmount);
@@ -443,6 +448,7 @@ export class BranchOrderCancellationService {
           reason: BranchOrderRefundReason.DELIVERY_FEE,
           initiatedBy,
           approvedByUserId: actorId,
+          method: 'ONLINE_GATEWAY',
         },
       });
       refundedAmount = refundedAmount.plus(feeAmount);

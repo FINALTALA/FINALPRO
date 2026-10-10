@@ -93,6 +93,7 @@ describe('Sprint 5 - store type/warehouse/pickup points, delivery zones, barcode
         store_type: 'PHYSICAL',
         branches: [{ name: 'Main branch', is_physical: true }],
         applicable_categories: ['WOMEN'],
+        return_policy: { mode: 'NO_RETURN' },
       })
       .expect(201);
     return { vendorId: res.body.id, branchId: res.body.branches[0].id };
@@ -116,6 +117,7 @@ describe('Sprint 5 - store type/warehouse/pickup points, delivery zones, barcode
         store_type: 'ONLINE_ONLY',
         branches: [{ name: 'Warehouse branch', is_physical: false }],
         applicable_categories: ['WOMEN'],
+        return_policy: { mode: 'NO_RETURN' },
       })
       .expect(201);
     return { vendorId: res.body.id, branchId: res.body.branches[0].id };
@@ -311,6 +313,7 @@ describe('Sprint 5 - store type/warehouse/pickup points, delivery zones, barcode
           store_type: 'ONLINE_ONLY',
           branches: [{ name: 'Branch', is_physical: true }],
           applicable_categories: ['WOMEN'],
+          return_policy: { mode: 'NO_RETURN' },
         })
         .expect(400);
       expect(res.body.error.code).toBe(
@@ -330,6 +333,7 @@ describe('Sprint 5 - store type/warehouse/pickup points, delivery zones, barcode
             store_type: storeType,
             branches: [{ name: 'Branch', is_physical: false }],
             applicable_categories: ['WOMEN'],
+            return_policy: { mode: 'NO_RETURN' },
           })
           .expect(400);
         expect(res.body.error.code).toBe(
