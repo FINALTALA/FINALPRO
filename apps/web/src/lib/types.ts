@@ -58,4 +58,6 @@ export const SEGMENTS: { key: string; label: string }[] = [
   { key: "men", label: "رجال" },
   { key: "kids", label: "أطفال" },
   { key: "accessories", label: "إكسسوارات" },
+  { key: "watches", label: "ساعات" },
+  { key: "shoes", label: "أحذية" },
 ];
