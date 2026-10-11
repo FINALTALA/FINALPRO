@@ -62,7 +62,11 @@ export function requireLocalDatabase(connectionString: string): void {
   // "clean(room)" alongside test/dev/demo/local - this project's own
   // clean-room verification databases (e.g. finalpro_cleanroom_12) are
   // exactly as disposable/local as a "test" or "dev" one.
-  const looksLocal = /test|dev|demo|local|clean/i.test(dbName);
+  // Explicit opt-in for the user's local database; the host allowlist
+  // above still applies. No override is accepted for a remote host.
+  const looksLocal =
+    /test|dev|demo|local|clean/i.test(dbName) ||
+    process.env.LOCAL_DEMO_DATABASE === dbName;
   if (!looksLocal) {
     throw new Error(
       `Refusing to run: DATABASE_URL's database name ("${dbName}") does not ` +

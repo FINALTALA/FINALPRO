@@ -46,6 +46,7 @@ const TAB_ICONS: Record<NavLink["key"], ReactNode> = {
 // real protection for every route it links to.
 export default function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const isViaExperience = pathname === "/" || pathname === "/women";
   const router = useRouter();
   const token = useSessionToken();
   const workspaces = useWorkspaces(token);
@@ -115,13 +116,14 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <>
-      <header className="app-header">
+      <header className={`app-header${isViaExperience ? " home-header" : ""}`}>
+        {isViaExperience && <div className="home-announcement">متاجر محلية في مكان واحد · مقارنة واضحة للسعر والتوفّر</div>}
         <div className="app-header-inner">
-          <Link href="/" className="app-logo" aria-label="FINALPRO - الرئيسية">
+          <Link href="/" className="app-logo" aria-label={isViaExperience ? "Via - الرئيسية" : "FINALPRO - الرئيسية"}>
             <span className="app-logo-mark" aria-hidden="true">
-              F
+              {isViaExperience ? "V" : "F"}
             </span>
-            <span>FINALPRO</span>
+            <span>{isViaExperience ? "VIA" : "FINALPRO"}</span>
           </Link>
 
           <nav className="app-nav" aria-label="التنقل الرئيسي">
@@ -129,8 +131,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
               <Link
                 key={l.key}
                 href={l.href}
-                className={isActivePath(pathname, l.href) ? "active" : ""}
-                aria-current={isActivePath(pathname, l.href) ? "page" : undefined}
+                className={isActivePath(pathname, l.href) || (l.key === "discover" && pathname === "/women") ? "active" : ""}
+                aria-current={isActivePath(pathname, l.href) || (l.key === "discover" && pathname === "/women") ? "page" : undefined}
               >
                 {l.label}
                 {l.key === "cart" && cartCount > 0 && (
@@ -239,16 +241,16 @@ export default function AppShell({ children }: { children: ReactNode }) {
         </div>
       </header>
 
-      <main className="app-main">{children}</main>
+      <main className={`app-main${isViaExperience ? " home-main" : ""}`}>{children}</main>
 
-      <nav className="bottom-nav" aria-label="التنقل السفلي">
+      <nav className={`bottom-nav${isViaExperience ? " home-bottom-nav" : ""}`} aria-label="التنقل السفلي">
         {tabs.map((t) => {
           const activeTab =
             t.key === "account"
               ? isActivePath(pathname, "/account") ||
                 isActivePath(pathname, "/login") ||
                 isActivePath(pathname, "/workspaces")
-              : isActivePath(pathname, t.href);
+              : isActivePath(pathname, t.href) || (t.key === "discover" && pathname === "/women");
           return (
             <Link
               key={t.key}

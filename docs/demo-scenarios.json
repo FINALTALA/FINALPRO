@@ -1,0 +1,355 @@
+{
+  "generatedAt": "2026-10-06T08:37:50.617Z",
+  "accounts": [
+    {
+      "role": "صاحب المتاجر",
+      "phone": "+970560000001",
+      "password": "DemoOwner#2026"
+    },
+    {
+      "role": "موظف الفرع الرئيسي",
+      "phone": "+970560000002",
+      "password": "DemoEmployee#2026"
+    },
+    {
+      "role": "زبون",
+      "phone": "+970560000003",
+      "password": "DemoCustomer#2026"
+    },
+    {
+      "role": "مدير المنصة",
+      "phone": "+970560000004",
+      "password": "DemoTest#2026"
+    },
+    {
+      "role": "مراجع التحقق",
+      "phone": "+970560000005",
+      "password": "DemoTest#2026"
+    },
+    {
+      "role": "زبون بسلة فارغة",
+      "phone": "+970560000006",
+      "password": "DemoTest#2026"
+    }
+  ],
+  "cases": [
+    {
+      "kind": "منتج",
+      "name": "قميص متوفر بالسعر العادي",
+      "id": "d92c3fae-8ef6-414a-af27-f8809434af76",
+      "url": "/store/demo-fashion-house"
+    },
+    {
+      "kind": "منتج",
+      "name": "بنطال بسعر تنزيلات",
+      "id": "ebcb9f00-d510-4aab-a329-d9cf3ce8dbdd",
+      "url": "/store/demo-fashion-house"
+    },
+    {
+      "kind": "منتج",
+      "name": "فستان بخصم فعال",
+      "id": "65ffa2a4-b602-4c91-a139-2e15fd5a5f32",
+      "url": "/store/demo-fashion-house"
+    },
+    {
+      "kind": "منتج",
+      "name": "حقيبة بخصم مستقبلي",
+      "id": "3edf58f5-64ca-4c23-ad5f-1aa8e09f6818",
+      "url": "/store/demo-fashion-house"
+    },
+    {
+      "kind": "منتج",
+      "name": "جاكيت بخصم منتهي",
+      "id": "43b7ed3f-da86-40e2-a123-43251482f661",
+      "url": "/store/demo-fashion-house"
+    },
+    {
+      "kind": "منتج",
+      "name": "حذاء نافد المخزون",
+      "id": "6edea2f9-6079-40d9-a7d9-c46b7bc87487",
+      "url": "/store/demo-fashion-house"
+    },
+    {
+      "kind": "منتج",
+      "name": "بلوزة بمخزون منخفض",
+      "id": "0ab0e899-dd1b-4571-a20d-ac38af6dae6f",
+      "url": "/store/demo-fashion-house"
+    },
+    {
+      "kind": "منتج",
+      "name": "قميص مخزونه محجوز بالكامل",
+      "id": "cbbfb6e6-da15-472b-a5f7-8e6cda60bf62",
+      "url": "/store/demo-fashion-house"
+    },
+    {
+      "kind": "منتج",
+      "name": "منتج مسودة غير منشور",
+      "id": "a83be0ad-66bd-4bef-a884-baaa1efcddf8",
+      "url": "/store/demo-fashion-house"
+    },
+    {
+      "kind": "منتج",
+      "name": "منتج متوقف مؤقتا",
+      "id": "b87abc86-4723-48f6-a3da-3ad00c9a4e0b",
+      "url": "/store/demo-fashion-house"
+    },
+    {
+      "kind": "منتج",
+      "name": "منتج مؤرشف",
+      "id": "160a3da2-e8b1-4ad1-ac7e-9b7a5c97b7d8",
+      "url": "/store/demo-fashion-house"
+    },
+    {
+      "kind": "منتج",
+      "name": "منتج ينتظر تأكيد المطابقة",
+      "id": "0a429912-2f13-4550-a8e8-eca59a3315e8",
+      "url": "/store/demo-fashion-house"
+    },
+    {
+      "kind": "منتج",
+      "name": "منتج مرفوض المطابقة",
+      "id": "8cbbead4-fda4-404a-a9f5-29934cabb3d9",
+      "url": "/store/demo-fashion-house"
+    },
+    {
+      "kind": "منتج",
+      "name": "منتج فريد بلا مطابقة",
+      "id": "7bd578f1-e9a4-4cec-a076-5266afed2523",
+      "url": "/store/demo-fashion-house"
+    },
+    {
+      "kind": "متجر",
+      "name": "applied: APPLIED / NONE",
+      "id": "f1a94c26-92b9-4afa-a5ef-a01ca0632c4e",
+      "url": "/store/qa-applied"
+    },
+    {
+      "kind": "متجر",
+      "name": "review: UNDER_REVIEW / NONE",
+      "id": "8c464364-0017-4743-a9b6-71ea22ffa06b",
+      "url": "/store/qa-review"
+    },
+    {
+      "kind": "متجر",
+      "name": "rejected: REJECTED / NONE",
+      "id": "7a947bfe-0aa7-4e9b-a0cc-33111917471a",
+      "url": "/store/qa-rejected"
+    },
+    {
+      "kind": "متجر",
+      "name": "approved: APPROVED / NONE",
+      "id": "0850d9a8-62ad-4fce-ac05-8af9620e481f",
+      "url": "/store/qa-approved"
+    },
+    {
+      "kind": "متجر",
+      "name": "suspended: SUSPENDED / ACTIVE",
+      "id": "efa9bea0-577d-4cab-acc6-941f188b913c",
+      "url": "/store/qa-suspended"
+    },
+    {
+      "kind": "متجر",
+      "name": "cancelled: CANCELLED / NONE",
+      "id": "e376715c-4c8c-46f8-ada0-ed27826579e3",
+      "url": "/store/qa-cancelled"
+    },
+    {
+      "kind": "متجر",
+      "name": "expired: ACTIVE / EXPIRED",
+      "id": "eb671915-3679-47d1-aa8e-a909f9b3d709",
+      "url": "/store/qa-expired"
+    },
+    {
+      "kind": "متجر",
+      "name": "unpublished: ACTIVE / ACTIVE",
+      "id": "5bbd14ea-f016-4bee-a325-11ea9fbded54",
+      "url": "/store/qa-unpublished"
+    },
+    {
+      "kind": "متجر",
+      "name": "online: ACTIVE / ACTIVE",
+      "id": "22d33048-6146-41f2-ac2f-64a0863b239a",
+      "url": "/store/qa-online"
+    },
+    {
+      "kind": "متجر",
+      "name": "hybrid: ACTIVE / ACTIVE",
+      "id": "f22bca03-99c5-4e69-a12b-9382a3e91aab",
+      "url": "/store/qa-hybrid"
+    },
+    {
+      "kind": "تحقق فرع",
+      "name": "PENDING",
+      "id": "3ccc5ac7-3a68-4688-a86e-5a28267077d7"
+    },
+    {
+      "kind": "تحقق فرع",
+      "name": "REJECTED",
+      "id": "50f5dca9-c8a6-4ada-a375-1081faa42b85"
+    },
+    {
+      "kind": "تحقق فرع",
+      "name": "RESUBMISSION_REQUESTED",
+      "id": "12b57f24-1989-4ba8-ac66-aa5a71e48d5e"
+    },
+    {
+      "kind": "تحقق فرع",
+      "name": "APPROVED",
+      "id": "4d562fd2-9db6-49b3-ac90-32f380bf9d36"
+    },
+    {
+      "kind": "فرع",
+      "name": "مغلق مؤقتا",
+      "id": "a46e8a04-65c4-4f4d-ada7-6def89df9285"
+    },
+    {
+      "kind": "فرع",
+      "name": "مؤرشف",
+      "id": "aa3eb316-3ab9-4f42-a680-056ffb54f9f3"
+    },
+    {
+      "kind": "طلب",
+      "name": "DELIVERY:COD:PLACED",
+      "id": "ee7daff7-6621-4faa-a29a-2606ae5fa345",
+      "url": "/orders"
+    },
+    {
+      "kind": "طلب",
+      "name": "DELIVERY:COD:PREPARING",
+      "id": "39f953a8-9728-4448-a8cf-6e1fefe48c9f",
+      "url": "/orders"
+    },
+    {
+      "kind": "طلب",
+      "name": "DELIVERY:COD:SENT",
+      "id": "992e278f-e992-4d8f-a85b-8c1f8c70f522",
+      "url": "/orders"
+    },
+    {
+      "kind": "طلب",
+      "name": "DELIVERY:COD:DELIVERED",
+      "id": "85dba149-61bf-450e-a6ea-86fd27b9e8dd",
+      "url": "/orders"
+    },
+    {
+      "kind": "طلب",
+      "name": "DELIVERY:COD:COMPLETED",
+      "id": "2531c123-87d2-4012-ab74-6808e5a42967",
+      "url": "/orders"
+    },
+    {
+      "kind": "طلب",
+      "name": "DELIVERY:COD:CANCELLED",
+      "id": "e5a5ac85-8780-4011-a19f-8e943f846394",
+      "url": "/orders"
+    },
+    {
+      "kind": "طلب",
+      "name": "DELIVERY:ONLINE:PLACED",
+      "id": "3ad06be7-f42d-40f2-a35c-68de40d2014d",
+      "url": "/orders"
+    },
+    {
+      "kind": "طلب",
+      "name": "DELIVERY:ONLINE:PREPARING",
+      "id": "833f59af-9b6a-435b-a8e4-c487f43518d1",
+      "url": "/orders"
+    },
+    {
+      "kind": "طلب",
+      "name": "DELIVERY:ONLINE:SENT",
+      "id": "56c845a4-85da-4cf7-a09c-6bd65aedb536",
+      "url": "/orders"
+    },
+    {
+      "kind": "طلب",
+      "name": "DELIVERY:ONLINE:DELIVERED",
+      "id": "01841c1a-4ac0-4818-a41f-48d72b7033fb",
+      "url": "/orders"
+    },
+    {
+      "kind": "طلب",
+      "name": "DELIVERY:ONLINE:COMPLETED",
+      "id": "3397fee4-01a9-441a-a2ae-5552858fd1d4",
+      "url": "/orders"
+    },
+    {
+      "kind": "طلب",
+      "name": "DELIVERY:ONLINE:CANCELLED",
+      "id": "0f038d53-5541-4d5b-a75c-11d76af77a8a",
+      "url": "/orders"
+    },
+    {
+      "kind": "طلب",
+      "name": "DELIVERY:ONLINE:REFUNDED",
+      "id": "39194a19-c7f4-42fc-af22-9c38ec89ed90",
+      "url": "/orders"
+    },
+    {
+      "kind": "طلب",
+      "name": "PICKUP:COD:PLACED",
+      "id": "bea5aa15-9f0a-47b6-a1db-08442a79cdc5",
+      "url": "/orders"
+    },
+    {
+      "kind": "طلب",
+      "name": "PICKUP:COD:PREPARING",
+      "id": "06cd6bc2-a6c2-438a-afcb-42b4f05a2e76",
+      "url": "/orders"
+    },
+    {
+      "kind": "طلب",
+      "name": "PICKUP:COD:PICKED_UP",
+      "id": "7c796699-aad6-4a9b-aa26-5778dedac930",
+      "url": "/orders"
+    },
+    {
+      "kind": "طلب",
+      "name": "PICKUP:COD:COMPLETED",
+      "id": "520d9652-f24e-415c-a984-016453e9df72",
+      "url": "/orders"
+    },
+    {
+      "kind": "طلب",
+      "name": "PICKUP:COD:CANCELLED",
+      "id": "d6e31d2d-6867-4e57-a7f0-a6a1e1ee9ccf",
+      "url": "/orders"
+    },
+    {
+      "kind": "طلب",
+      "name": "PICKUP:ONLINE:PLACED",
+      "id": "467de523-c16e-4d6c-a51d-d2236755673d",
+      "url": "/orders"
+    },
+    {
+      "kind": "طلب",
+      "name": "PICKUP:ONLINE:PREPARING",
+      "id": "18fdc1c5-db58-4160-a338-ad1969888ecd",
+      "url": "/orders"
+    },
+    {
+      "kind": "طلب",
+      "name": "PICKUP:ONLINE:PICKED_UP",
+      "id": "e5161584-52d8-478c-a27b-7df79a5fcf8a",
+      "url": "/orders"
+    },
+    {
+      "kind": "طلب",
+      "name": "PICKUP:ONLINE:COMPLETED",
+      "id": "2160cf07-140b-43b6-a110-f7b2f0d9ae7e",
+      "url": "/orders"
+    },
+    {
+      "kind": "طلب",
+      "name": "PICKUP:ONLINE:CANCELLED",
+      "id": "446eb3dd-a005-48f9-ab06-773d726b328e",
+      "url": "/orders"
+    },
+    {
+      "kind": "طلب",
+      "name": "PICKUP:ONLINE:REFUNDED",
+      "id": "a2e0fe6a-8a83-41bc-a109-f12dfa6dcbd7",
+      "url": "/orders"
+    }
+  ]
+}
