@@ -67,6 +67,53 @@ export async function createOfferWithStock(
   return variant.id;
 }
 
+/** Sprint 21b (EPIC-RET): two variants of the SAME VendorOffer, each
+ * with its own branch stock - the replacement-eligible shape the
+ * exchange flow requires (see returns.service.ts's own
+ * validateReplacementVariantAndBranch(), which rejects a replacement
+ * that isn't a sibling variant of the original item's offer). */
+export async function createOfferWithTwoVariants(
+  vendorId: string,
+  branchId: string,
+  originalPrice: number,
+  originalQty: number,
+  replacementPrice: number,
+  replacementQty: number,
+): Promise<{ originalVariantId: string; replacementVariantId: string }> {
+  skuSeq += 1;
+  await makeVendorEligible(vendorId);
+  const offer = await prisma.vendorOffer.create({
+    data: { vendorId, titleAr: "منتج تجريبي", titleEn: "Test product", status: "ACTIVE" },
+  });
+  const original = await prisma.offerVariant.create({
+    data: {
+      vendorId,
+      vendorOfferId: offer.id,
+      colour: "أحمر",
+      sellerSku: `pw-sku-${Date.now()}-${skuSeq}-a`,
+      basePrice: originalPrice,
+      storeInventoryBarcode: `pw-barcode-${Date.now()}-${skuSeq}-a`,
+    },
+  });
+  const replacement = await prisma.offerVariant.create({
+    data: {
+      vendorId,
+      vendorOfferId: offer.id,
+      colour: "أزرق",
+      sellerSku: `pw-sku-${Date.now()}-${skuSeq}-b`,
+      basePrice: replacementPrice,
+      storeInventoryBarcode: `pw-barcode-${Date.now()}-${skuSeq}-b`,
+    },
+  });
+  await prisma.branchStock.create({
+    data: { vendorId, branchId, offerVariantId: original.id, quantity: originalQty },
+  });
+  await prisma.branchStock.create({
+    data: { vendorId, branchId, offerVariantId: replacement.id, quantity: replacementQty },
+  });
+  return { originalVariantId: original.id, replacementVariantId: replacement.id };
+}
+
 export async function itemIdForOrder(branchOrderId: string): Promise<string> {
   const item = await prisma.branchOrderItem.findFirstOrThrow({
     where: { branchOrderId },

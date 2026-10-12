@@ -206,3 +206,136 @@ export async function lockAndSweepStockRowAssumingReservationsLocked(
   });
   return { ...stock, reservedQuantity: stock.reservedQuantity - releasedQty };
 }
+
+/**
+ * Sprint 21b (EPIC-RET, review-round lock-order fix): the multi-key
+ * sibling of lockSweepOrCreateStockRow below - for a caller (only
+ * fulfillExchange()) that must touch SEVERAL stock keys in one
+ * transaction. Calling the single-key, standalone primitive once per
+ * key sequentially is exactly the bug the round-4 comment on
+ * findExpiredReservationIdsForStockKeys warns about: each call would
+ * independently discover-and-lock its OWN reservation set, so two
+ * concurrent multi-key callers touching the same two keys in opposite
+ * orders could each hold one key's reservation lock while waiting on
+ * the other's - a real deadlock risk, not merely a style preference.
+ *
+ * Lock order here matches reserve()'s own established plan: every
+ * key's advisory creation lock first (sorted), THEN the full
+ * reservation-lock set for ALL keys combined (one batched discovery,
+ * one sorted lock pass), THEN each stock row in sorted order via
+ * lockAndSweepStockRowAssumingReservationsLocked - never the
+ * standalone single-key primitive, which would re-discover and
+ * re-lock reservations per key and reintroduce the same hazard.
+ */
+export async function lockSweepOrCreateStockRowsSorted(
+  tx: Prisma.TransactionClient,
+  keys: StockKey[],
+): Promise<Map<string, LockedStock>> {
+  const sortKey = (k: StockKey) => `${k.branchId}:${k.offerVariantId}`;
+  const uniqueKeys = [
+    ...new Map(keys.map((k) => [sortKey(k), k])).values(),
+  ].sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
+
+  for (const k of uniqueKeys) {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('finalpro:branch_stock:' || ${k.branchId} || ':' || ${k.offerVariantId}))`;
+  }
+
+  const reservationIds = (
+    await findExpiredReservationIdsForStockKeys(tx, uniqueKeys)
+  ).sort();
+  await lockReservationRowsSorted(tx, reservationIds);
+
+  const result = new Map<string, LockedStock>();
+  for (const k of uniqueKeys) {
+    let locked = await lockAndSweepStockRowAssumingReservationsLocked(
+      tx,
+      k.vendorId,
+      k.branchId,
+      k.offerVariantId,
+      reservationIds,
+    );
+    if (!locked) {
+      await tx.branchStock.create({
+        data: {
+          vendorId: k.vendorId,
+          branchId: k.branchId,
+          offerVariantId: k.offerVariantId,
+          quantity: 0,
+        },
+      });
+      locked = await lockAndSweepStockRowAssumingReservationsLocked(
+        tx,
+        k.vendorId,
+        k.branchId,
+        k.offerVariantId,
+        reservationIds,
+      );
+      if (!locked) {
+        throw new Error(
+          'unreachable: branch_stock row created above was not found immediately after',
+        );
+      }
+    }
+    result.set(sortKey(k), locked);
+  }
+  return result;
+}
+
+/**
+ * Sprint 21b (EPIC-RET, PDR §3.5's exchange reservation): the exchange
+ * module's own stock entry point - built on lockAndSweepStockRow
+ * (never a parallel, weaker lock), because a plain FOR UPDATE alone
+ * would not sweep a stale checkout hold first and could reject an
+ * exchange approval with a false "not enough stock" (the exact bug
+ * flagged in the review round that asked for this). The ONE thing
+ * lockAndSweepStockRow doesn't do - create the row if it doesn't exist
+ * yet - is exactly what a RESELLABLE exchange's returned-item leg
+ * needs (the receiving branch may never have sold this variant
+ * before). The advisory lock (same key convention as returns.service
+ * .ts's own incrementBranchStockWithLock) serializes two concurrent
+ * creators for the same (branchId, offerVariantId) before either one
+ * even looks for the row.
+ *
+ * Single-key only: safe for approveReturn()'s exchange-reservation
+ * step and the sweep's own release (each touches exactly one stock
+ * key per transaction). A caller touching MORE than one stock key in
+ * the same transaction (only fulfillExchange()) must use
+ * lockSweepOrCreateStockRowsSorted above instead, never this one per
+ * key in a loop - see that function's own comment for why.
+ */
+export async function lockSweepOrCreateStockRow(
+  tx: Prisma.TransactionClient,
+  vendorId: string,
+  branchId: string,
+  offerVariantId: string,
+): Promise<LockedStock> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('finalpro:branch_stock:' || ${branchId} || ':' || ${offerVariantId}))`;
+  const existing = await lockAndSweepStockRow(
+    tx,
+    vendorId,
+    branchId,
+    offerVariantId,
+  );
+  if (existing) return existing;
+
+  await tx.branchStock.create({
+    data: { vendorId, branchId, offerVariantId, quantity: 0 },
+  });
+  // Re-locked via the same call: the row now exists, and no checkout
+  // reservation could possibly reference a row that didn't exist a
+  // moment ago, so the sweep here is a guaranteed no-op - this just
+  // reuses the one function rather than hand-rolling a second raw
+  // SELECT ... FOR UPDATE.
+  const created = await lockAndSweepStockRow(
+    tx,
+    vendorId,
+    branchId,
+    offerVariantId,
+  );
+  if (!created) {
+    throw new Error(
+      'unreachable: branch_stock row created above was not found immediately after',
+    );
+  }
+  return created;
+}

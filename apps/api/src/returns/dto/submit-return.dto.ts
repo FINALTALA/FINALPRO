@@ -5,12 +5,19 @@ import {
   IsIn,
   IsOptional,
   IsString,
+  ValidateIf,
 } from 'class-validator';
 import { TrimmedText } from '../../common/validation/trimmed-text.decorator';
 
 const trimString = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() : value;
 
+// Sprint 21b: desired_outcome/replacement_* are only ever meaningful
+// for an EXCHANGE outcome - the service itself is the real gate on
+// whether a given order's snapshotted policy mode even permits that
+// outcome (REFUND_ONLY/EXCHANGE_ONLY/BOTH), never this DTO alone; this
+// DTO only enforces "if you say EXCHANGE, you must say which
+// replacement and which branch."
 export class SubmitReturnDto {
   @IsIn([
     'DAMAGED',
@@ -38,4 +45,16 @@ export class SubmitReturnDto {
     Array.isArray(value) ? value.map((v) => trimString({ value: v })) : value,
   )
   photo_urls?: string[];
+
+  @IsOptional()
+  @IsIn(['RETURN', 'EXCHANGE'])
+  desired_outcome?: 'RETURN' | 'EXCHANGE';
+
+  @ValidateIf((o) => o.desired_outcome === 'EXCHANGE')
+  @IsString()
+  replacement_offer_variant_id?: string;
+
+  @ValidateIf((o) => o.desired_outcome === 'EXCHANGE')
+  @IsString()
+  replacement_branch_id?: string;
 }

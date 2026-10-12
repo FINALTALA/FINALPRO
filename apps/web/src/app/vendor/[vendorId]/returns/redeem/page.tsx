@@ -19,12 +19,19 @@ interface BranchDto {
   archived_at: string | null;
 }
 
+interface SettlementDto {
+  net_amount: number;
+  direction: "COLLECT_CASH" | "REFUND_CASH" | "NONE";
+}
+
 interface RedeemResult {
   id: string;
   status: string;
   receiving_branch_id: string;
   received_at: string;
   item_condition: string;
+  desired_outcome: "RETURN" | "EXCHANGE";
+  settlement: SettlementDto | null;
 }
 
 // Sprint 21 (PDR-031, review-round point 1/4): deliberately vendor-wide,
@@ -155,8 +162,18 @@ export default function RedeemReturnPage() {
 
       {result && (
         <div className="notice-banner" style={{ marginTop: 14, maxWidth: 560 }} role="status">
-          تم استلام المنتج بنجاح. الحالة: {RETURN_STATUS_LABEL[result.status] ?? result.status}،
-          وقت الاستلام: {formatDateTime(result.received_at)}.
+          {result.desired_outcome === "EXCHANGE" ? "تم تسليم البديل بنجاح." : "تم استلام المنتج بنجاح."}{" "}
+          الحالة: {RETURN_STATUS_LABEL[result.status] ?? result.status}، وقت الاستلام:{" "}
+          {formatDateTime(result.received_at)}.
+          {result.settlement && result.settlement.direction === "COLLECT_CASH" && (
+            <> يُحصَّل من العميل {result.settlement.net_amount} ₪ نقداً.</>
+          )}
+          {result.settlement && result.settlement.direction === "REFUND_CASH" && (
+            <> يُردّ للعميل {result.settlement.net_amount} ₪ نقداً.</>
+          )}
+          {result.settlement && result.settlement.direction === "NONE" && (
+            <> لا فرق مستحق.</>
+          )}
         </div>
       )}
     </div>

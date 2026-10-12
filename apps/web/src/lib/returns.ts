@@ -15,8 +15,11 @@ export const RETURN_STATUS_LABEL: Record<string, string> = {
   REJECTED_CLOSED: "مرفوض (أُغلق باب الاعتراض)",
   ESCALATED: "معلَّق - قيد مراجعة إدارة المنصة",
   ADMIN_REJECTED: "مرفوض نهائياً من إدارة المنصة",
-  EXPIRED: "انتهت صلاحية كود الإرجاع",
+  EXPIRED: "انتهت صلاحية الكود",
   CANCELLED_BY_CUSTOMER: "ألغاه العميل",
+  // Sprint 21b (EPIC-RET): EXCHANGE outcome only - never reached by a
+  // RETURN outcome (see ReturnStatus's own schema comment).
+  EXCHANGED: "تم التبديل",
 };
 
 export const RETURN_REASON_LABEL: Record<string, string> = {
@@ -56,6 +59,18 @@ const ERROR_MESSAGES: Record<string, string> = {
   RETURN_CODE_EXPIRED: "انتهت صلاحية هذا الكود (7 أيام من الاعتماد).",
   RECEIVING_BRANCH_NOT_IN_VENDOR: "الفرع المحدَّد لا يتبع متجركم.",
   FORBIDDEN: "لا تملك صلاحية لهذا الإجراء.",
+  // Sprint 21b (EPIC-RET): the exchange outcome, within a real branch only.
+  OUTCOME_NOT_ALLOWED_BY_POLICY:
+    "سياسة هذا المتجر وقت الشراء لا تسمح بهذا الخيار (إرجاع/تبديل).",
+  REPLACEMENT_REQUIRED: "يرجى اختيار البديل والفرع.",
+  REPLACEMENT_SAME_AS_ORIGINAL: "يجب أن يكون البديل مختلفاً عن المنتج الأصلي.",
+  REPLACEMENT_VARIANT_NOT_FOUND: "البديل يجب أن يكون متغيّراً آخر من نفس المنتج.",
+  REPLACEMENT_NOT_AVAILABLE: "البديل غير متوفر حالياً بالكمية المطلوبة.",
+  REPLACEMENT_BRANCH_NOT_FOUND: "الفرع المحدَّد لا يتبع متجركم.",
+  REPLACEMENT_BRANCH_NOT_AVAILABLE: "الفرع المحدَّد غير نشط حالياً.",
+  WRONG_BRANCH_FOR_EXCHANGE: "هذا التبديل يُستلَم فقط في الفرع المحدَّد له.",
+  BRANCH_HAS_ACTIVE_EXCHANGE_RESERVATION:
+    "هذا الفرع لديه حجز تبديل نشط، لا يمكن أرشفته الآن.",
 };
 
 /** Turns an API failure (including the eligibility 409's reason_code

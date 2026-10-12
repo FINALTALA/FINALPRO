@@ -1,6 +1,16 @@
 import { expect, test } from "@playwright/test";
-import { createVendorWithBranch, placeAndPickUpOrder, submitReturn } from "./helpers/api";
-import { createOfferWithStock, itemIdForOrder, prisma } from "./helpers/db";
+import {
+  createVendorWithBranch,
+  placeAndPickUpOrder,
+  submitExchange,
+  submitReturn,
+} from "./helpers/api";
+import {
+  createOfferWithStock,
+  createOfferWithTwoVariants,
+  itemIdForOrder,
+  prisma,
+} from "./helpers/db";
 import { loginAs } from "./helpers/session";
 import { loadSharedFixtures } from "./helpers/shared-fixtures";
 
@@ -84,5 +94,67 @@ test.describe("staff/owner returns UI", () => {
     await page.getByRole("textbox").fill("Visible wear inconsistent with the stated reason.");
     await page.getByRole("button", { name: "تأكيد الرفض" }).click();
     await expect(page.getByText("مرفوض من المتجر")).toBeVisible();
+  });
+
+  // Sprint 21b (EPIC-RET): the decide queue marks an exchange request
+  // distinctly, and the vendor-wide redeem page shows the resulting
+  // cash settlement (collect/refund/none) once an exchange code is
+  // redeemed - approveReturn()'s reservation itself is already proven
+  // at the HTTP level by sprint21b-exchange.e2e-spec.ts.
+  test("the decide queue marks an exchange request, and redeeming it shows the cash settlement", async ({
+    page,
+  }) => {
+    const { vendorId, branchId } = await createVendorWithBranch(fixtures.ownerToken, {
+      mode: "BOTH",
+      window_days: 14,
+      fee_ils: 5,
+      exchange_fee_ils: 10,
+    });
+    const { originalVariantId } = await createOfferWithTwoVariants(
+      vendorId,
+      branchId,
+      100,
+      5,
+      80,
+      5,
+    );
+    const { branchOrderId } = await placeAndPickUpOrder(
+      fixtures.ownerToken,
+      fixtures.customerAToken,
+      vendorId,
+      branchId,
+      originalVariantId,
+    );
+    const itemId = await itemIdForOrder(branchOrderId);
+    const original = await prisma.offerVariant.findUniqueOrThrow({
+      where: { id: originalVariantId },
+    });
+    const replacement = await prisma.offerVariant.findFirstOrThrow({
+      where: { vendorOfferId: original.vendorOfferId, id: { not: originalVariantId } },
+    });
+    const submitted = await submitExchange(
+      fixtures.customerAToken,
+      branchOrderId,
+      itemId,
+      replacement.id,
+      branchId,
+    );
+
+    await loginAs(page, fixtures.ownerToken);
+    await page.goto(`/vendor/${vendorId}/branches/${branchId}/returns`);
+    await expect(page.getByText("(طلب تبديل)")).toBeVisible();
+    await page.getByRole("button", { name: "اعتماد" }).click();
+    await expect(page.getByText("معتمد - بانتظار تسليم المنتج")).toBeVisible();
+
+    const withCode = await prisma.return.findUniqueOrThrow({
+      where: { id: submitted.body.id },
+    });
+
+    await page.goto(`/vendor/${vendorId}/returns/redeem`);
+    await page.locator("main input").first().fill(withCode.code!);
+    await page.getByRole("button", { name: "استبدال" }).click();
+    await expect(page.getByText("تم تسليم البديل بنجاح")).toBeVisible();
+    // 80 (replacement) - 100 (original) + 10 (exchange fee) = -10, refunded to the customer.
+    await expect(page.getByText(/يُردّ للعميل 10 ₪ نقداً/)).toBeVisible();
   });
 });

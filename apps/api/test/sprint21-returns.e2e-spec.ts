@@ -1559,15 +1559,21 @@ describe('Sprint 21 - returns: policy, request, code, receipt, refund (e2e)', ()
       expect(redeemedAtB.status).toBe(201);
       // Only the minimal, safe fields - never the note, photos, code,
       // or rejection reason (same privacy convention as internalStoreNote).
+      // Sprint 21b adds `settlement` (null for a plain RETURN outcome,
+      // like this one) to the same privacy-safe shape - still never
+      // reason_note/photo_urls/rejection_reason/code.
       expect(Object.keys(redeemedAtB.body).sort()).toEqual(
         [
           'id',
           'item_condition',
+          'desired_outcome',
           'received_at',
           'receiving_branch_id',
+          'settlement',
           'status',
         ].sort(),
       );
+      expect(redeemedAtB.body.settlement).toBeNull();
       expect(JSON.stringify(redeemedAtB.body)).not.toContain(secretNote);
       expect(JSON.stringify(redeemedAtB.body)).not.toContain(usedCode);
     });

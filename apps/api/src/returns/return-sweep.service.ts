@@ -10,6 +10,7 @@ import { AuditLogService } from '../audit/audit-log.service';
 import { PeriodicTask } from '../common/periodic-task.util';
 import { OutboxEventService } from '../outbox/outbox-event.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { lockSweepOrCreateStockRow } from '../checkout/stock-lock.util';
 
 const SWEEP_INTERVAL_MS = 60_000;
 const BATCH_LIMIT = 200;
@@ -267,6 +268,35 @@ export class ReturnSweepService implements OnModuleInit, OnModuleDestroy {
     ) {
       return false;
     }
+
+    // Sprint 21b: an EXCHANGE outcome's 24h hold on the replacement
+    // must be released in this SAME transaction as the status flip -
+    // whichever of this sweep or a concurrent redeem() commits first
+    // (both lock this Return row first) deterministically wins; the
+    // other sees the already-transitioned status and exits cleanly
+    // (redeem()'s own re-check of status/code already covers that
+    // side, same as always).
+    if (
+      r.desiredOutcome === 'EXCHANGE' &&
+      r.replacementBranchId &&
+      r.replacementOfferVariantId
+    ) {
+      const item = await tx.branchOrderItem.findUniqueOrThrow({
+        where: { id: r.branchOrderItemId },
+        select: { quantity: true },
+      });
+      const stock = await lockSweepOrCreateStockRow(
+        tx,
+        r.vendorId,
+        r.replacementBranchId,
+        r.replacementOfferVariantId,
+      );
+      await tx.branchStock.update({
+        where: { id: stock.id },
+        data: { reservedQuantity: { decrement: item.quantity } },
+      });
+    }
+
     await tx.return.update({
       where: { id: returnId },
       data: { status: 'EXPIRED' },

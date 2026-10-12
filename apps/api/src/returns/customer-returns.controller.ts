@@ -60,9 +60,25 @@ export class CustomerReturnsController {
         reason: dto.reason,
         reason_note: dto.reason_note,
         photo_urls: dto.photo_urls,
+        desired_outcome: dto.desired_outcome,
+        replacement_offer_variant_id: dto.replacement_offer_variant_id,
+        replacement_branch_id: dto.replacement_branch_id,
       },
       req.correlationId,
     );
+  }
+
+  // Sprint 21b (review-round requirement §2): a real, authenticated,
+  // ownership-scoped data source for the exchange replacement picker -
+  // indicative only, see listExchangeOptions()'s own comment.
+  @Get('orders/:branchOrderId/items/:itemId/exchange-options')
+  async exchangeOptions(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('branchOrderId') branchOrderId: string,
+    @Param('itemId') itemId: string,
+  ) {
+    const customerId = await this.requireCustomerId(user);
+    return this.returns.listExchangeOptions(customerId, branchOrderId, itemId);
   }
 
   @Get('returns')

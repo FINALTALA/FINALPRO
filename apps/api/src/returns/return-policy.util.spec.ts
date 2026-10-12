@@ -2,7 +2,9 @@ import Decimal from 'decimal.js';
 import {
   buildReturnPolicySnapshot,
   checkReturnEligibility,
+  computeExchangeSettlement,
   computeReturnRefundAmount,
+  isOutcomeAllowedBySnapshot,
 } from './return-policy.util';
 
 describe('return-policy.util', () => {
@@ -13,12 +15,14 @@ describe('return-policy.util', () => {
         returnMode: 'REFUND_ONLY',
         returnWindowDays: 14,
         returnFeeIls: '10.00',
+        exchangeFeeIls: null,
         returnPolicyUpdatedAt: new Date('2026-01-01T00:00:00Z'),
       });
       expect(snap.returnPolicySnapshotEnabled).toBe(true);
       expect(snap.returnPolicySnapshotMode).toBe('REFUND_ONLY');
       expect(snap.returnPolicySnapshotWindowDays).toBe(14);
       expect(snap.returnPolicySnapshotFeeIls!.toNumber()).toBe(10);
+      expect(snap.returnPolicySnapshotExchangeFeeIls).toBeNull();
       expect(snap.returnPolicySnapshotVersion).toEqual(
         new Date('2026-01-01T00:00:00Z'),
       );
@@ -30,10 +34,86 @@ describe('return-policy.util', () => {
         returnMode: 'NO_RETURN',
         returnWindowDays: null,
         returnFeeIls: null,
+        exchangeFeeIls: null,
         returnPolicyUpdatedAt: new Date('2026-01-01T00:00:00Z'),
       });
       expect(snap.returnPolicySnapshotEnabled).toBe(false);
       expect(snap.returnPolicySnapshotVersion).not.toBeNull();
+    });
+
+    it('BOTH mode snapshots both fees as Decimal', () => {
+      const snap = buildReturnPolicySnapshot({
+        returnsEnabled: true,
+        returnMode: 'BOTH',
+        returnWindowDays: 14,
+        returnFeeIls: '10.00',
+        exchangeFeeIls: '15.00',
+        returnPolicyUpdatedAt: new Date('2026-01-01T00:00:00Z'),
+      });
+      expect(snap.returnPolicySnapshotFeeIls!.toNumber()).toBe(10);
+      expect(snap.returnPolicySnapshotExchangeFeeIls!.toNumber()).toBe(15);
+    });
+  });
+
+  describe('isOutcomeAllowedBySnapshot', () => {
+    it('REFUND_ONLY allows only RETURN', () => {
+      expect(isOutcomeAllowedBySnapshot('REFUND_ONLY', 'RETURN')).toBe(true);
+      expect(isOutcomeAllowedBySnapshot('REFUND_ONLY', 'EXCHANGE')).toBe(false);
+    });
+
+    it('EXCHANGE_ONLY allows only EXCHANGE', () => {
+      expect(isOutcomeAllowedBySnapshot('EXCHANGE_ONLY', 'EXCHANGE')).toBe(
+        true,
+      );
+      expect(isOutcomeAllowedBySnapshot('EXCHANGE_ONLY', 'RETURN')).toBe(false);
+    });
+
+    it('BOTH allows either outcome', () => {
+      expect(isOutcomeAllowedBySnapshot('BOTH', 'RETURN')).toBe(true);
+      expect(isOutcomeAllowedBySnapshot('BOTH', 'EXCHANGE')).toBe(true);
+    });
+
+    it('NO_RETURN and null allow neither', () => {
+      expect(isOutcomeAllowedBySnapshot('NO_RETURN', 'RETURN')).toBe(false);
+      expect(isOutcomeAllowedBySnapshot('NO_RETURN', 'EXCHANGE')).toBe(false);
+      expect(isOutcomeAllowedBySnapshot(null, 'RETURN')).toBe(false);
+    });
+  });
+
+  describe('computeExchangeSettlement', () => {
+    it('pricier replacement plus fee => COLLECT_CASH', () => {
+      const r = computeExchangeSettlement('100.00', '130.00', 1, '15.00');
+      expect(r.originalTotal.toNumber()).toBe(100);
+      expect(r.replacementTotal.toNumber()).toBe(130);
+      expect(r.direction).toBe('COLLECT_CASH');
+      expect(r.netAmount.toNumber()).toBe(45);
+    });
+
+    it('cheaper replacement, fee does not fully offset => REFUND_CASH', () => {
+      const r = computeExchangeSettlement('100.00', '70.00', 1, '15.00');
+      expect(r.direction).toBe('REFUND_CASH');
+      expect(r.netAmount.toNumber()).toBe(15);
+    });
+
+    it('cheaper replacement, fee fully offsets => NONE at exact zero', () => {
+      const r = computeExchangeSettlement('100.00', '85.00', 1, '15.00');
+      expect(r.direction).toBe('NONE');
+      expect(r.netAmount.toNumber()).toBe(0);
+    });
+
+    it('multiplies both totals by quantity before netting', () => {
+      const r = computeExchangeSettlement('50.00', '60.00', 3, '10.00');
+      expect(r.originalTotal.toNumber()).toBe(150);
+      expect(r.replacementTotal.toNumber()).toBe(180);
+      // net = 180 - 150 + 10 = 40
+      expect(r.direction).toBe('COLLECT_CASH');
+      expect(r.netAmount.toNumber()).toBe(40);
+    });
+
+    it('netAmount is always non-negative regardless of direction', () => {
+      const r = computeExchangeSettlement('200.00', '50.00', 1, '10.00');
+      expect(r.direction).toBe('REFUND_CASH');
+      expect(r.netAmount.toNumber()).toBeGreaterThan(0);
     });
   });
 

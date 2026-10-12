@@ -34,12 +34,15 @@ function policyDto(vendor: {
   returnMode: string;
   returnWindowDays: number | null;
   returnFeeIls: unknown;
+  exchangeFeeIls: unknown;
   returnPolicyUpdatedAt: Date | null;
 }) {
   return {
     mode: vendor.returnMode,
     window_days: vendor.returnWindowDays,
     fee_ils: vendor.returnFeeIls != null ? Number(vendor.returnFeeIls) : null,
+    exchange_fee_ils:
+      vendor.exchangeFeeIls != null ? Number(vendor.exchangeFeeIls) : null,
     updated_at: vendor.returnPolicyUpdatedAt,
   };
 }
@@ -103,11 +106,17 @@ export class ReturnPolicyController {
       const updated = await tx.vendor.update({
         where: { id: vendorId },
         data: {
-          returnsEnabled: dto.mode === 'REFUND_ONLY',
+          returnsEnabled: dto.mode !== 'NO_RETURN',
           returnMode: dto.mode,
-          returnWindowDays:
-            dto.mode === 'REFUND_ONLY' ? dto.window_days! : null,
-          returnFeeIls: dto.mode === 'REFUND_ONLY' ? dto.fee_ils! : null,
+          returnWindowDays: dto.mode !== 'NO_RETURN' ? dto.window_days! : null,
+          returnFeeIls:
+            dto.mode === 'REFUND_ONLY' || dto.mode === 'BOTH'
+              ? dto.fee_ils!
+              : null,
+          exchangeFeeIls:
+            dto.mode === 'EXCHANGE_ONLY' || dto.mode === 'BOTH'
+              ? dto.exchange_fee_ils!
+              : null,
           returnPolicyUpdatedAt: now,
         },
       });

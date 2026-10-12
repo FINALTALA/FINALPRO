@@ -1501,6 +1501,7 @@ export class CheckoutService {
             returnMode: true,
             returnWindowDays: true,
             returnFeeIls: true,
+            exchangeFeeIls: true,
             returnPolicyUpdatedAt: true,
           },
         });
@@ -1535,6 +1536,10 @@ export class CheckoutService {
             returnPolicySnapshot.returnPolicySnapshotWindowDays,
           returnPolicySnapshotFeeIls:
             returnPolicySnapshot.returnPolicySnapshotFeeIls?.toFixed(2) ?? null,
+          returnPolicySnapshotExchangeFeeIls:
+            returnPolicySnapshot.returnPolicySnapshotExchangeFeeIls?.toFixed(
+              2,
+            ) ?? null,
           returnPolicySnapshotVersion:
             returnPolicySnapshot.returnPolicySnapshotVersion,
         };

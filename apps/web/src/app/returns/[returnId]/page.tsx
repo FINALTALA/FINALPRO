@@ -14,6 +14,11 @@ import {
   returnErrorMessage,
 } from "@/lib/returns";
 
+interface SettlementDto {
+  net_amount: number;
+  direction: "COLLECT_CASH" | "REFUND_CASH" | "NONE";
+}
+
 interface ReturnDto {
   id: string;
   status: string;
@@ -29,6 +34,8 @@ interface ReturnDto {
   received_at: string | null;
   item_condition: string | null;
   created_at: string;
+  desired_outcome: "RETURN" | "EXCHANGE";
+  settlement: SettlementDto | null;
 }
 
 // Sprint 21 (FR-RET-002/003, review-round point 1): a single return's
@@ -143,8 +150,18 @@ export default function ReturnDetailPage() {
 
         {data.status === "APPROVED_AWAITING_DROPOFF" && data.code && (
           <div className="notice-banner" style={{ marginTop: 10 }}>
-            كود الإرجاع: <strong>{data.code}</strong> - سلّمي المنتج لأي فرع من فروع المتجر وأعطيه هذا
-            الكود. صالح حتى {formatDateTime(data.code_expires_at)}.
+            {data.desired_outcome === "EXCHANGE" ? (
+              <>
+                كود التبديل: <strong>{data.code}</strong> - احضري بالمنتج القديم إلى الفرع
+                المحدَّد لاستلام البديل. صالح حتى {formatDateTime(data.code_expires_at)} (24 ساعة من
+                الاعتماد).
+              </>
+            ) : (
+              <>
+                كود الإرجاع: <strong>{data.code}</strong> - سلّمي المنتج لأي فرع من فروع المتجر
+                وأعطيه هذا الكود. صالح حتى {formatDateTime(data.code_expires_at)}.
+              </>
+            )}
           </div>
         )}
 
@@ -183,9 +200,26 @@ export default function ReturnDetailPage() {
           </div>
         )}
 
+        {data.status === "EXCHANGED" && (
+          <div className="notice-banner" style={{ marginTop: 10 }}>
+            تم التبديل بنجاح في {formatDateTime(data.received_at)}.
+            {data.settlement && data.settlement.direction === "COLLECT_CASH" && (
+              <> دفعتِ {data.settlement.net_amount} ₪ نقداً في الفرع.</>
+            )}
+            {data.settlement && data.settlement.direction === "REFUND_CASH" && (
+              <> استُردّ لك {data.settlement.net_amount} ₪ نقداً في الفرع.</>
+            )}
+            {data.settlement && data.settlement.direction === "NONE" && (
+              <> لا فرق مستحق.</>
+            )}
+          </div>
+        )}
+
         {data.status === "EXPIRED" && (
           <div className="muted" style={{ marginTop: 10 }}>
-            لم يُسلَّم المنتج خلال 7 أيام من اعتماد الطلب، فانتهت صلاحية الكود.
+            {data.desired_outcome === "EXCHANGE"
+              ? "لم يُسلَّم المنتج خلال 24 ساعة من اعتماد الطلب، فانتهت صلاحية الكود وتحرَّر حجز البديل."
+              : "لم يُسلَّم المنتج خلال 7 أيام من اعتماد الطلب، فانتهت صلاحية الكود."}
           </div>
         )}
 

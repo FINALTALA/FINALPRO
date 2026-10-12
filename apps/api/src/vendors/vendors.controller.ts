@@ -227,13 +227,17 @@ export class VendorsController {
       // the owner may diverge it later via the storefront settings
       // endpoint without ever changing the stable slug.
       const vendorId = randomUUID();
-      // Sprint 21 (PDR-030): "selected at registration" - never left
-      // null/default until a later settings-page visit. When
+      // Sprint 21/21b (PDR-030): "selected at registration" - never
+      // left null/default until a later settings-page visit. When
       // mode=NO_RETURN, window/fee are stored null regardless of what
       // the DTO received for them (ReturnPolicyInputDto only validates
-      // those two when mode=REFUND_ONLY - it never guarantees they
-      // were omitted on the wire for NO_RETURN, so this is the one
-      // place that actually enforces "null means null").
+      // the relevant fields per mode - it never guarantees they were
+      // omitted on the wire for NO_RETURN, so this is the one place
+      // that actually enforces "null means null"). returnsEnabled is
+      // true for ANY non-NO_RETURN mode (checkReturnEligibility()'s
+      // own OR-check relies on this) - not REFUND_ONLY-only as a
+      // literal "returns" name might suggest; it really means "this
+      // order ever gets a snapshot that isn't flatly ineligible."
       const returnPolicy = dto.return_policy;
       const created = await tx.vendor.create({
         data: {
@@ -242,14 +246,21 @@ export class VendorsController {
           slug: generateVendorSlug(dto.legal_name, vendorId),
           displayName: dto.legal_name,
           storeType: dto.store_type,
-          returnsEnabled: returnPolicy.mode === 'REFUND_ONLY',
+          returnsEnabled: returnPolicy.mode !== 'NO_RETURN',
           returnMode: returnPolicy.mode,
           returnWindowDays:
-            returnPolicy.mode === 'REFUND_ONLY'
+            returnPolicy.mode !== 'NO_RETURN'
               ? returnPolicy.window_days!
               : null,
           returnFeeIls:
-            returnPolicy.mode === 'REFUND_ONLY' ? returnPolicy.fee_ils! : null,
+            returnPolicy.mode === 'REFUND_ONLY' || returnPolicy.mode === 'BOTH'
+              ? returnPolicy.fee_ils!
+              : null,
+          exchangeFeeIls:
+            returnPolicy.mode === 'EXCHANGE_ONLY' ||
+            returnPolicy.mode === 'BOTH'
+              ? returnPolicy.exchange_fee_ils!
+              : null,
           returnPolicyUpdatedAt: new Date(),
         },
       });
@@ -545,6 +556,30 @@ export class VendorsController {
           code: 'BRANCH_HAS_ACTIVE_STAFF',
           message:
             'This branch has an active staff member assigned - transfer or suspend them first',
+        });
+      }
+
+      // Sprint 21b (review-round requirement §1): a live exchange
+      // reservation already holds real BranchStock.reservedQuantity at
+      // this exact branch - archiving it now would leave that
+      // reservation pointing at a branch no customer/staff can ever
+      // redeem at again. Checked under the SAME lock approveReturn()/
+      // redeem() themselves take on this branch, so whichever side
+      // commits first deterministically wins (barrier-proven both
+      // directions).
+      const activeExchangeReservation = await tx.return.findFirst({
+        where: {
+          desiredOutcome: 'EXCHANGE',
+          replacementBranchId: branchId,
+          status: 'APPROVED_AWAITING_DROPOFF',
+        },
+        select: { id: true },
+      });
+      if (activeExchangeReservation) {
+        throw new ConflictException({
+          code: 'BRANCH_HAS_ACTIVE_EXCHANGE_RESERVATION',
+          message:
+            'This branch has a live exchange reservation and cannot be archived yet',
         });
       }
 

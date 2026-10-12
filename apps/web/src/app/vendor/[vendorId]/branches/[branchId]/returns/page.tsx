@@ -20,6 +20,7 @@ interface ReturnRow {
   reason_note: string | null;
   photo_urls: string[];
   created_at: string;
+  desired_outcome: "RETURN" | "EXCHANGE";
 }
 
 function DecisionRow({
@@ -68,7 +69,12 @@ function DecisionRow({
   return (
     <div className="card">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <div style={{ fontWeight: 600 }}>{RETURN_REASON_LABEL[r.reason] ?? r.reason}</div>
+        <div style={{ fontWeight: 600 }}>
+          {RETURN_REASON_LABEL[r.reason] ?? r.reason}
+          {r.desired_outcome === "EXCHANGE" && (
+            <span className="muted" style={{ marginRight: 8 }}>(طلب تبديل)</span>
+          )}
+        </div>
         <span className="badge badge-active">{RETURN_STATUS_LABEL[r.status] ?? r.status}</span>
       </div>
       <div className="muted">قُدِّم في {formatDateTime(r.created_at)}</div>
