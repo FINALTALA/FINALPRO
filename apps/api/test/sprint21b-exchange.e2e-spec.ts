@@ -4,6 +4,11 @@ import * as request from 'supertest';
 import { AppModule } from './../src/app.module';
 import { AuditLogService } from './../src/audit/audit-log.service';
 import { SmsService } from './../src/auth/sms.service';
+import {
+  lockReservationRowsSorted,
+  lockSweepOrCreateStockRow,
+  lockSweepOrCreateStockRowsSorted,
+} from './../src/checkout/stock-lock.util';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
 import { PrismaService } from './../src/prisma/prisma.service';
 import { ReturnSweepService } from './../src/returns/return-sweep.service';
@@ -15,6 +20,15 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // immediately (see sprint20b-checkout-policy.e2e-spec.ts's own comment
 // for the full reasoning/history of this fix).
 const run = (t: PromiseLike<Res>): Promise<Res> => Promise.resolve(t);
+
+function deferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (v: T) => void;
+} {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => (resolve = r));
+  return { promise, resolve };
+}
 
 class FakeSmsService {
   sent: { phone: string; code: string; expiresAt: Date }[] = [];
@@ -208,6 +222,44 @@ describe('Sprint 21b - exchange within a real branch (e2e)', () => {
       originalVariantId: original.id,
       replacementVariantId: replacement.id,
     };
+  }
+
+  /** A real, already-expired CheckoutReservation (with an EXPLICIT id)
+   * plus one CheckoutReservationItem on a single stock key. The id
+   * belongs on the RESERVATION, not the item - stock-lock.util.ts's
+   * primitives discover/lock/sweep by CheckoutReservation.id (see
+   * findExpiredReservationIdsForStockKeys's own `reservationId`
+   * select), so controlling exactly where each reservation's id sorts
+   * relative to another is the whole point of the lock-order
+   * regression test below. */
+  async function createExpiredReservationItem(
+    reservationId: string,
+    customerId: string,
+    vendorId: string,
+    branchId: string,
+    offerVariantId: string,
+    quantity: number,
+  ): Promise<void> {
+    await prisma.checkoutReservation.create({
+      data: {
+        id: reservationId,
+        customerId,
+        expiresAt: new Date(Date.now() - 60_000),
+      },
+    });
+    await prisma.checkoutReservationItem.create({
+      data: {
+        id: unique('res-item'),
+        reservationId,
+        vendorId,
+        branchId,
+        offerVariantId,
+        quantity,
+        unitPriceAtReserve: 10,
+        fulfilmentMethod: 'PICKUP',
+        paymentMethod: 'ONLINE',
+      },
+    });
   }
 
   async function addToCart(
@@ -1330,6 +1382,236 @@ describe('Sprint 21b - exchange within a real branch (e2e)', () => {
       expect(results).toEqual([200, 409]);
       const failed = firstResult.status === 409 ? firstResult : secondResult;
       expect(failed.body.error.code).toBe('REPLACEMENT_NOT_AVAILABLE');
+    });
+  });
+
+  // ============================================================
+  // Deterministic concurrency: the EXACT reservation-lock-order
+  // regression the review round asked for - not just "two operations
+  // on overlapping keys serialize," but the specific adversarial
+  // arrangement that makes the OLD per-key-sequential pattern lock
+  // reservation rows in the WRONG (reversed) order relative to any
+  // correct multi-key caller (checkout's own reserve(), which batches
+  // ALL its reservation ids and locks them sorted before touching any
+  // stock row - see reserve()'s own "Phase 0" comment).
+  //
+  // Setup: two stock keys A (sorts first) and B (sorts second) at one
+  // branch. One expired reservation with a HIGH-sorting id sits on A
+  // (the key the old code processed FIRST); one with a LOW-sorting id
+  // sits on B (processed SECOND). The old code's own per-key discovery
+  // would therefore lock them [HIGH, LOW] - backwards. A transaction
+  // that locks them correctly, [LOW, HIGH] (reserve()'s own plan), can
+  // then genuinely deadlock against the old pattern: old-pattern holds
+  // HIGH and wants LOW; proper-plan holds LOW and wants HIGH - a real
+  // circular wait, not a hypothetical one.
+  // ============================================================
+  describe('Deterministic concurrency: reservation-lock ORDER itself (the review-round regression)', () => {
+    // Fresh per-call (never reused across tests, which would otherwise
+    // collide on checkout_reservations' own primary key once a prior
+    // test's winning transaction commits its rows for real) - the '0'
+    // vs 'f' prefix is the only thing that matters, guaranteeing
+    // R_LOW() always sorts before R_HIGH() regardless of the unique
+    // suffix.
+    let idSeq = 0;
+    const R_LOW = () =>
+      `00000000-0000-0000-0000-${(++idSeq).toString().padStart(12, '0')}`;
+    const R_HIGH = () =>
+      `ffffffff-ffff-ffff-ffff-${(++idSeq).toString().padStart(12, '0')}`;
+
+    it('reproduces the OLD per-key-sequential pattern genuinely deadlocking against a correctly-ordered caller', async () => {
+      const rHigh = R_HIGH();
+      const rLow = R_LOW();
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const { originalVariantId, replacementVariantId } =
+        await createOfferWithTwoVariants(vendorId, branchId, 100, 10, 120, 10);
+      const [keyFirst, keySecond] = [
+        originalVariantId,
+        replacementVariantId,
+      ].sort();
+
+      // The sweep this pattern triggers decrements reservedQuantity by
+      // the swept item's quantity - the DB's own CHECK
+      // (reservedQuantity >= 0) would reject that at 0, so this has to
+      // start at 1 to match the reservation items below (same as the
+      // FIX test's own setup).
+      await prisma.branchStock.update({
+        where: {
+          branchId_offerVariantId: { branchId, offerVariantId: keyFirst },
+        },
+        data: { reservedQuantity: 1 },
+      });
+      await prisma.branchStock.update({
+        where: {
+          branchId_offerVariantId: { branchId, offerVariantId: keySecond },
+        },
+        data: { reservedQuantity: 1 },
+      });
+
+      const customerPhone = uniquePhone();
+      await signup(customerPhone, 'a-strong-password');
+      const customerProfile = await prisma.customerProfile.findFirstOrThrow({
+        where: { user: { phone: customerPhone } },
+      });
+
+      // rHigh (sorts AFTER rLow) on keyFirst (processed FIRST by the
+      // old pattern); rLow (sorts BEFORE rHigh) on keySecond
+      // (processed SECOND) - the adversarial, reversed-order setup.
+      await createExpiredReservationItem(
+        rHigh,
+        customerProfile.id,
+        vendorId,
+        branchId,
+        keyFirst,
+        1,
+      );
+      await createExpiredReservationItem(
+        rLow,
+        customerProfile.id,
+        vendorId,
+        branchId,
+        keySecond,
+        1,
+      );
+
+      const phase1Done = deferred();
+      const releasePhase1 = deferred();
+      const oldPattern = prisma.$transaction(async (tx) => {
+        // Exactly what fulfillExchange() used to do: one standalone
+        // single-key call per stock key, sequentially.
+        await lockSweepOrCreateStockRow(tx, vendorId, branchId, keyFirst); // locks rHigh + stock-keyFirst
+        phase1Done.resolve();
+        await releasePhase1.promise;
+        await lockSweepOrCreateStockRow(tx, vendorId, branchId, keySecond); // will try rLow next
+        return 'old-done';
+      });
+      await phase1Done.promise;
+
+      // A correctly-ordered caller (reserve()'s own plan): lock every
+      // reservation id it needs, SORTED, before touching anything else.
+      const properPlan = prisma.$transaction(async (tx) => {
+        await lockReservationRowsSorted(tx, [rLow, rHigh]); // locks rLow, then tries rHigh -> blocks (oldPattern holds it)
+        return 'proper-done';
+      });
+
+      const properSettledEarly = await settledWithin(properPlan, 500);
+      expect(properSettledEarly).toBe(false);
+      expect(await someoneWaitsOnLock('%checkout_reservations%')).toBe(true);
+
+      // Release the old pattern -> it now tries to lock rLow, which
+      // properPlan already holds -> genuine circular wait with
+      // properPlan (which is blocked on rHigh, held by oldPattern).
+      releasePhase1.resolve();
+
+      const results = await Promise.allSettled([oldPattern, properPlan]);
+      const rejected = results.filter(
+        (r): r is PromiseRejectedResult => r.status === 'rejected',
+      );
+      // Postgres's own deadlock detector aborts exactly one side.
+      expect(rejected.length).toBe(1);
+      expect(String(rejected[0].reason)).toMatch(/deadlock/i);
+    });
+
+    it('the FIX (lockSweepOrCreateStockRowsSorted) avoids the identical deadlock and completes both sides correctly', async () => {
+      const rHigh = R_HIGH();
+      const rLow = R_LOW();
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const { originalVariantId, replacementVariantId } =
+        await createOfferWithTwoVariants(vendorId, branchId, 100, 10, 120, 10);
+      const [keyFirst, keySecond] = [
+        originalVariantId,
+        replacementVariantId,
+      ].sort();
+
+      await prisma.branchStock.update({
+        where: {
+          branchId_offerVariantId: { branchId, offerVariantId: keyFirst },
+        },
+        data: { reservedQuantity: 1 },
+      });
+      await prisma.branchStock.update({
+        where: {
+          branchId_offerVariantId: { branchId, offerVariantId: keySecond },
+        },
+        data: { reservedQuantity: 1 },
+      });
+
+      const customerPhone = uniquePhone();
+      await signup(customerPhone, 'a-strong-password');
+      const customerProfile = await prisma.customerProfile.findFirstOrThrow({
+        where: { user: { phone: customerPhone } },
+      });
+
+      // The IDENTICAL adversarial reservation arrangement as the OLD-
+      // pattern test above - HIGH-sorting id on the first-sorting key,
+      // LOW-sorting id on the second.
+      await createExpiredReservationItem(
+        rHigh,
+        customerProfile.id,
+        vendorId,
+        branchId,
+        keyFirst,
+        1,
+      );
+      await createExpiredReservationItem(
+        rLow,
+        customerProfile.id,
+        vendorId,
+        branchId,
+        keySecond,
+        1,
+      );
+
+      const fixDone = deferred();
+      const releaseFix = deferred();
+      const fixed = prisma.$transaction(async (tx) => {
+        // The fix: one batched call across BOTH keys, which locks the
+        // combined reservation set SORTED ([rLow, rHigh]) up front -
+        // never per-key, never reversed.
+        await lockSweepOrCreateStockRowsSorted(tx, [
+          { vendorId, branchId, offerVariantId: keyFirst },
+          { vendorId, branchId, offerVariantId: keySecond },
+        ]);
+        fixDone.resolve();
+        await releaseFix.promise;
+        return 'fixed-done';
+      });
+      await fixDone.promise;
+
+      const properPlan = prisma.$transaction(async (tx) => {
+        await lockReservationRowsSorted(tx, [rLow, rHigh]); // blocks on rLow - the fix already holds it, same order
+        return 'proper-done';
+      });
+
+      const properSettledEarly = await settledWithin(properPlan, 500);
+      expect(properSettledEarly).toBe(false);
+      expect(await someoneWaitsOnLock('%checkout_reservations%')).toBe(true);
+
+      releaseFix.resolve();
+
+      const results = await Promise.allSettled([fixed, properPlan]);
+      const rejected = results.filter((r) => r.status === 'rejected');
+      expect(rejected).toHaveLength(0);
+      expect(
+        results.map((r) => (r as PromiseFulfilledResult<string>).value),
+      ).toEqual(expect.arrayContaining(['fixed-done', 'proper-done']));
+
+      const stockFirst = await prisma.branchStock.findUniqueOrThrow({
+        where: {
+          branchId_offerVariantId: { branchId, offerVariantId: keyFirst },
+        },
+      });
+      const stockSecond = await prisma.branchStock.findUniqueOrThrow({
+        where: {
+          branchId_offerVariantId: { branchId, offerVariantId: keySecond },
+        },
+      });
+      // Both expired reservations were genuinely swept by the fix
+      // (properPlan never mutates anything, it only locks) - neither
+      // release was lost or double-applied under the race.
+      expect(stockFirst.reservedQuantity).toBe(0);
+      expect(stockSecond.reservedQuantity).toBe(0);
     });
   });
 
