@@ -3,8 +3,11 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
-import { ErrorBanner } from "@/components/States";
+import AuthField from "@/components/AuthField";
+import AuthLogo from "@/components/AuthLogo";
+import { MessageCodeIcon, PhoneIcon } from "@/components/AuthIcons";
 import PasswordInput from "@/components/PasswordInput";
+import { ErrorBanner } from "@/components/States";
 import { ApiError, apiFetch, newIdempotencyKey } from "@/lib/api";
 import { setSessionToken } from "@/lib/session";
 import styles from "../auth-pages.module.css";
@@ -81,30 +84,31 @@ export default function RegisterPage() {
   return (
     <div className={styles.page}>
       <div className={styles.card}>
-        <div className={styles.brand}>إنشاء حساب</div>
-        <p className={styles.stepHint}>الخطوة {stepNumber} من 3</p>
+        <AuthLogo />
+        <div className={styles.header}>
+          <h1>إنشاء حساب</h1>
+          <p>الخطوة {stepNumber} من 3</p>
+        </div>
+
         {error && <ErrorBanner message={error} />}
 
         {step === "phone" && (
           <form onSubmit={requestCode}>
-            <div className={styles.field}>
-              <label className={styles.label} htmlFor="phone">
-                رقم الهاتف
-              </label>
-              <div className={styles.inputWrap}>
-                <input
-                  id="phone"
-                  className={`${styles.input} ${styles.inputLtr}`}
-                  type="tel"
-                  dir="ltr"
-                  placeholder="+970590000000"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  required
-                />
-              </div>
+            <div className={styles.fields}>
+              <AuthField
+                id="phone"
+                label="رقم الهاتف"
+                icon={<PhoneIcon />}
+                ltr
+                type="tel"
+                placeholder="+970 59 XXX XXXX"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                required
+              />
             </div>
             <button className={styles.button} type="submit" disabled={loading}>
+              <span className={styles.buttonArrow}>←</span>
               {loading ? "جارٍ الإرسال..." : "إرسال رمز التحقق"}
             </button>
           </form>
@@ -113,24 +117,21 @@ export default function RegisterPage() {
         {step === "code" && (
           <form onSubmit={verifyCode}>
             <p className={styles.helperText}>أدخلي الرمز المكوّن من 6 أرقام المرسل إلى {phone}.</p>
-            <div className={styles.field}>
-              <label className={styles.label} htmlFor="code">
-                رمز التحقق
-              </label>
-              <div className={styles.inputWrap}>
-                <input
-                  id="code"
-                  className={`${styles.input} ${styles.inputLtr}`}
-                  inputMode="numeric"
-                  dir="ltr"
-                  maxLength={6}
-                  value={code}
-                  onChange={(e) => setCode(e.target.value)}
-                  required
-                />
-              </div>
+            <div className={styles.fields}>
+              <AuthField
+                id="code"
+                label="رمز التحقق"
+                icon={<MessageCodeIcon />}
+                ltr
+                inputMode="numeric"
+                maxLength={6}
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                required
+              />
             </div>
             <button className={styles.button} type="submit" disabled={loading}>
+              <span className={styles.buttonArrow}>←</span>
               {loading ? "جارٍ التحقق..." : "تحقّق"}
             </button>
           </form>
@@ -138,22 +139,32 @@ export default function RegisterPage() {
 
         {step === "password" && (
           <form onSubmit={register}>
-            <PasswordInput
-              id="password"
-              label="كلمة المرور (8 أحرف على الأقل)"
-              value={password}
-              onChange={setPassword}
-              autoComplete="new-password"
-              minLength={8}
-              required
-            />
+            <div className={styles.fields}>
+              <PasswordInput
+                id="password"
+                label="كلمة المرور (8 أحرف على الأقل)"
+                value={password}
+                onChange={setPassword}
+                autoComplete="new-password"
+                minLength={8}
+                placeholder="أدخل كلمة المرور"
+                required
+              />
+            </div>
             <button className={styles.button} type="submit" disabled={loading}>
+              <span className={styles.buttonArrow}>←</span>
               {loading ? "جارٍ إنشاء الحساب..." : "إنشاء الحساب"}
             </button>
           </form>
         )}
 
-        <p className={styles.linksRow}>
+        <div className={styles.divider}>
+          <span />
+          <p>أو</p>
+          <span />
+        </div>
+
+        <p className={styles.bottomLink}>
           لديك حساب؟ <Link href="/login">تسجيل الدخول</Link>
         </p>
       </div>

@@ -54,6 +54,11 @@ const NAV_LABELS: Record<Lang, Record<NavLink["key"], string>> = {
   en: { home: "Home", discover: "Discover", cart: "Cart", orders: "Orders", following: "Following", account: "Account" },
 };
 
+// These own a full-bleed design (background photo, glass card) with
+// no navigation of their own - AppShell renders bare on them, see the
+// pathname check below.
+const AUTH_PAGE_PATHS = new Set(["/login", "/register", "/reset-password", "/reactivate"]);
+
 // Sprint 13: the one app shell every page renders inside - a sticky
 // header on desktop (logo, search, main links, account/workspace menu)
 // and a bottom navigation on mobile. Pure presentation: it only reads
@@ -147,6 +152,24 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   const links = desktopLinks();
   const tabs = mobileTabs(Boolean(token));
+
+  // These are standalone, pre-session pages with their own full-bleed
+  // design (background photo, glass card) - no header/search/account
+  // menu or bottom tab bar belongs on top of them. LangEffect still
+  // runs so <html lang/dir> stays correct for whichever page the
+  // customer lands on next.
+  if (AUTH_PAGE_PATHS.has(pathname)) {
+    // Deliberately NOT the shared .app-main class - that reserves
+    // header/bottom-nav space (globals.css) neither of which renders
+    // here, which would just leave a dead gap under the auth pages'
+    // own full-viewport .page layout.
+    return (
+      <>
+        <LangEffect />
+        <main>{children}</main>
+      </>
+    );
+  }
 
   return (
     <>

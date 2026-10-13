@@ -5,189 +5,272 @@
  * globals.css is never touched by this file; nothing here can affect
  * any other page.
  *
- * No background photo is embedded here - no original (non-screenshot)
- * image asset for this design was available to add as a real project
- * file, and a browser screenshot was explicitly ruled out as a
- * background source. The "soft blurred interior" mood is approximated
- * with two large, heavily blurred colour blobs instead (see
- * .page::before/.page::after below).
+ * This is a literal port of the user-supplied reference stylesheet -
+ * only selector names changed (to apply across three pages instead of
+ * one "login-*" prefixed set, and to fit CSS Modules), with the exact
+ * same variables, measurements, and breakpoints. "login-field"
+ * (reference) -> ".field" (here), "login-input-wrapper" -> ".inputWrap",
+ * "login-button" -> ".button", etc. - see the trailing comment on each
+ * block for its reference-stylesheet name where the rename isn't
+ * obvious.
  */
 
 .page {
-  --auth-maroon: #6b2436;
-  --auth-maroon-deep: #45141f;
-  --auth-pink: #d98a9a;
-  --auth-pink-soft: #f3dce1;
-  --auth-beige: #f7f0e6;
-  --auth-beige-deep: #ecdfcb;
-  --auth-blue-gray: #4f5f78;
-  --auth-blue-gray-soft: #9aa6ba;
-  --auth-text: #2b2127;
-  --auth-text-muted: #675f6b;
-  --auth-danger: #b0241a;
-  --auth-danger-bg: #fbeae8;
-  --auth-success-text: #2f4d3a;
-  --auth-success-bg: #e9f1ea;
-  --auth-radius: 20px;
-  --auth-radius-sm: 12px;
+  /* Burgundy */
+  --primary: #8f3048;
+  --primary-dark: #742238;
+  --primary-light: #a94860;
 
-  position: relative;
+  /* Muted Dusty Blue */
+  --blue: #9fb4c5;
+  --blue-light: #c3d2de;
+  --blue-soft: #d9e3ea;
+  --blue-dark: #718a9e;
+
+  /* Beige / Cream */
+  --beige: #ead8cb;
+  --cream: #f4e8de;
+
+  /* Text */
+  --text-dark: #70263a;
+  --text-gray: #777276;
+  --text-light: #9a9496;
+
+  /* Glass */
+  --glass: rgba(248, 239, 230, 0.42);
+  --glass-input: rgba(255, 250, 246, 0.28);
+  --glass-border: rgba(255, 255, 255, 0.72);
+
   min-height: 100vh;
-  min-height: 100dvh;
+  min-height: 100svh;
+  width: 100%;
+  margin: 0;
+  padding: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow-x: hidden;
-  overflow-y: auto;
-  padding: 24px 16px;
-  background: linear-gradient(
-    160deg,
-    var(--auth-beige) 0%,
-    var(--auth-beige-deep) 55%,
-    var(--auth-pink-soft) 100%
-  );
+  position: relative;
+  overflow: hidden;
+  direction: rtl;
+
+  /* reference: body { background: #dce6ed } - kept as the paint-time
+     fallback colour while the real photo loads, same role it plays in
+     the reference stylesheet. */
+  background-color: #dce6ed;
+  background-image: url("/images/auth-background.png");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
 }
 
-.page::before,
+/* reference: .login-page::before (background decoration) */
+.page::before {
+  content: "";
+  position: absolute;
+  inset: -30px;
+  background: radial-gradient(circle at 12% 25%, rgba(143, 48, 72, 0.12), transparent 18%),
+    radial-gradient(circle at 85% 18%, rgba(159, 180, 197, 0.42), transparent 30%),
+    radial-gradient(circle at 72% 80%, rgba(143, 48, 72, 0.1), transparent 22%);
+  filter: blur(15px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* reference: .login-page::after (soft blue arch) */
 .page::after {
   content: "";
   position: absolute;
-  z-index: 0;
-  pointer-events: none;
+  width: 600px;
+  height: 600px;
+  right: -230px;
+  top: -180px;
   border-radius: 50%;
-  filter: blur(70px);
+  border: 85px solid rgba(159, 180, 197, 0.22);
+  pointer-events: none;
+  z-index: 0;
 }
 
-.page::before {
-  inset-inline-start: -12%;
-  top: -12%;
-  width: 58vw;
-  height: 58vw;
-  max-width: 480px;
-  max-height: 480px;
-  background: radial-gradient(circle, var(--auth-maroon) 0%, transparent 70%);
-  opacity: 0.32;
-}
-
-.page::after {
-  inset-inline-end: -14%;
-  bottom: -16%;
-  width: 52vw;
-  height: 52vw;
-  max-width: 440px;
-  max-height: 440px;
-  background: radial-gradient(circle, var(--auth-blue-gray) 0%, transparent 70%);
-  opacity: 0.28;
-}
-
+/* reference: .login-card */
 .card {
-  position: relative;
-  z-index: 1;
   width: min(420px, calc(100% - 32px));
-  max-height: calc(100dvh - 48px);
+  padding: 2px 48px;
+  position: relative;
+  z-index: 2;
+  direction: rtl;
+  background: var(--glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border);
+  border-radius: 28px;
+  box-shadow: 0 25px 70px rgba(74, 49, 55, 0.1), 0 8px 25px rgba(113, 138, 158, 0.08);
+  box-sizing: border-box;
+  flex-shrink: 1;
+  max-height: calc(100svh - 40px);
   overflow-y: auto;
-  background: rgba(255, 253, 249, 0.74);
-  border: 1px solid rgba(255, 255, 255, 0.55);
-  border-radius: var(--auth-radius);
-  box-shadow:
-    0 20px 50px rgba(69, 20, 31, 0.18),
-    0 2px 8px rgba(69, 20, 31, 0.08);
-  backdrop-filter: blur(18px) saturate(140%);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
-  padding: 32px 28px;
-  color: var(--auth-text);
 }
 
-@media (max-width: 420px) {
-  .card {
-    padding: 24px 18px;
-  }
+/* reference: .login-logo (+ svg) */
+.logo {
+  width: 65px;
+  height: 65px;
+  margin: 20px auto 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(145deg, #a94860, #7d293f);
+  border-radius: 17px;
+  box-shadow: 0 10px 22px rgba(143, 48, 72, 0.2);
 }
 
-@media (max-height: 560px) {
-  .page {
-    align-items: flex-start;
-    padding-top: 16px;
-  }
-  .card {
-    padding: 20px 18px;
-  }
+.logo svg {
+  width: 42px;
+  height: 42px;
+  fill: white;
 }
 
-.brand {
-  margin: 0 0 4px;
-  font-size: 1.35rem;
+/* reference: .login-header (+ h1, p) */
+.header {
+  text-align: center;
+  margin-bottom: 38px;
+}
+
+.header h1 {
+  margin: 0 0 8px;
+  color: var(--text-dark);
+  font-size: 32px;
   font-weight: 700;
-  text-align: center;
-  color: var(--auth-maroon-deep);
+  line-height: 1.4;
 }
 
-.stepHint {
-  margin: -6px 0 18px;
-  text-align: center;
-  font-size: 0.85rem;
-  color: var(--auth-blue-gray);
+.header p {
+  margin: 0;
+  color: var(--text-gray);
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.8;
 }
 
-.helperText {
-  margin: 0 0 16px;
-  font-size: 0.86rem;
-  line-height: 1.55;
-  color: var(--auth-text-muted);
-}
-
-.field {
+/* reference: .login-fields */
+.fields {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-bottom: 16px;
+  gap: 23px;
+  margin-bottom: 26px;
 }
 
-.label {
-  font-size: 0.88rem;
-  font-weight: 600;
-  color: var(--auth-text);
-}
-
-.inputWrap {
-  position: relative;
+/* reference: .login-field */
+.field {
+  width: 100%;
   display: flex;
+  flex-direction: column;
+  gap: 9px;
 }
 
+/* reference: .login-field label */
+.fieldLabel {
+  color: var(--text-dark);
+  font-size: 15px;
+  font-weight: 600;
+  padding-right: 4px;
+}
+
+/* reference: .login-input-wrapper */
+.inputWrap {
+  width: 100%;
+  height: 66px;
+  display: flex;
+  align-items: center;
+  position: relative;
+  background: var(--glass-input);
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  border-radius: 17px;
+  transition: border-color 0.25s ease, background 0.25s ease, box-shadow 0.25s ease, transform 0.2s ease;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.inputWrap:hover {
+  background: rgba(255, 250, 246, 0.38);
+  border-color: rgba(255, 255, 255, 0.9);
+}
+
+.inputWrap:focus-within {
+  background: rgba(255, 250, 246, 0.48);
+  border-color: rgba(143, 48, 72, 0.35);
+  box-shadow: 0 0 0 4px rgba(143, 48, 72, 0.07);
+}
+
+/* reference: .input-icon */
+.inputIcon {
+  width: 25px;
+  height: 25px;
+  flex-shrink: 0;
+  color: #555256;
+  margin-right: 19px;
+  transition: color 0.25s ease;
+}
+
+.inputWrap:focus-within .inputIcon {
+  color: var(--primary);
+}
+
+/* reference: .login-input-wrapper input */
 .input {
   width: 100%;
-  min-width: 0;
-  border: 1px solid var(--auth-beige-deep);
-  border-radius: var(--auth-radius-sm);
-  background: rgba(255, 255, 255, 0.7);
-  padding: 11px 14px;
-  font-size: 0.95rem;
-  color: var(--auth-text);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-
-.input:focus {
+  height: 100%;
+  border: none;
   outline: none;
-  border-color: var(--auth-maroon);
-  box-shadow: 0 0 0 3px rgba(107, 36, 54, 0.14);
+  background: transparent;
+  color: #454146;
+  font-family: inherit;
+  font-size: 16px;
+  padding: 0 15px 0 17px;
 }
 
 .input::placeholder {
-  color: var(--auth-blue-gray-soft);
+  color: #9b9698;
+  opacity: 1;
 }
 
-.inputLtr {
+/* globals.css styles every input[type="tel"/"password"/...] directly
+   (element+attribute selectors, no class) with a solid near-white
+   background and a visible border - same specificity as the plain
+   .input class above, so which one wins depends on stylesheet order,
+   not intent. This two-class selector (.inputWrap .input) always
+   outranks it, so the glass .inputWrap is the only thing showing
+   through - never touches globals.css itself. */
+.inputWrap .input {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.inputWrap .input:focus {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  outline: none;
+}
+
+/* reference: #phone */
+.ltrInput {
   direction: ltr;
   text-align: left;
 }
 
-.inputWithToggle .input {
-  padding-inline-end: 42px;
+/* reference: #password */
+.passwordField {
+  direction: rtl;
+  text-align: right;
+  padding-left: 55px;
 }
 
+/* reference: .password-toggle (+ svg) */
 .toggleButton {
+  width: 48px;
+  height: 48px;
   position: absolute;
-  inset-inline-end: 4px;
+  left: 8px;
   top: 50%;
   transform: translateY(-50%);
   display: flex;
@@ -195,65 +278,149 @@
   justify-content: center;
   border: none;
   background: transparent;
-  color: var(--auth-blue-gray);
+  color: #555256;
   cursor: pointer;
-  padding: 7px;
-  border-radius: 8px;
+  border-radius: 12px;
+  transition: color 0.2s ease, background 0.2s ease;
 }
 
 .toggleButton:hover {
-  color: var(--auth-maroon);
+  color: var(--primary);
+  background: rgba(143, 48, 72, 0.06);
 }
 
-.toggleButton:focus-visible {
-  outline: 2px solid var(--auth-maroon);
-  outline-offset: 2px;
+.toggleButton svg {
+  width: 25px;
+  height: 25px;
 }
 
+/* reference: .login-button (+ .login-arrow) */
 .button {
   width: 100%;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
   border: none;
-  border-radius: var(--auth-radius-sm);
-  padding: 12px 16px;
-  font-size: 0.98rem;
-  font-weight: 700;
-  color: #fff;
+  border-radius: 17px;
+  background: linear-gradient(135deg, #a33a55 0%, #8f3048 50%, #7d293f 100%);
+  color: white;
+  font-family: inherit;
+  font-size: 18px;
+  font-weight: 600;
   cursor: pointer;
-  background: linear-gradient(135deg, var(--auth-maroon) 0%, var(--auth-maroon-deep) 100%);
-  box-shadow: 0 8px 20px rgba(107, 36, 54, 0.25);
-  transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+  box-shadow: 0 12px 25px rgba(143, 48, 72, 0.2);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease;
 }
 
 .button:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 10px 24px rgba(107, 36, 54, 0.3);
+  transform: translateY(-2px);
+  box-shadow: 0 16px 32px rgba(143, 48, 72, 0.25);
+  filter: brightness(1.03);
+}
+
+.button:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 8px 18px rgba(143, 48, 72, 0.18);
 }
 
 .button:disabled {
-  opacity: 0.6;
+  opacity: 0.65;
   cursor: not-allowed;
-  transform: none;
 }
 
-.linksRow {
-  margin: 14px 0 0;
+.buttonArrow {
+  position: absolute;
+  left: 28px;
+  font-size: 26px;
+  line-height: 1;
+  transition: transform 0.2s ease;
+}
+
+.button:hover:not(:disabled) .buttonArrow {
+  transform: translateX(-4px);
+}
+
+/* reference: .login-forgot (+ a) - reused for every single-link row
+   (the reactivation link on /login, the step helper link, etc.) */
+.linkRow {
   text-align: center;
-  font-size: 0.88rem;
-  color: var(--auth-text-muted);
+  margin-top: 20px;
 }
 
-.linksRow:first-of-type {
-  margin-top: 18px;
-}
-
-.linksRow :global(a) {
-  color: var(--auth-maroon);
-  font-weight: 600;
+.linkRow :global(a) {
+  color: #316b98;
+  font-size: 15px;
+  font-weight: 500;
   text-decoration: none;
+  transition: color 0.2s ease;
 }
 
-.linksRow :global(a:hover) {
+.linkRow :global(a:hover) {
+  color: var(--primary);
   text-decoration: underline;
+}
+
+/* reference: .login-divider (+ span, p) */
+.divider {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 10px 0;
+}
+
+.divider span {
+  height: 1px;
+  flex: 1;
+  background: rgba(112, 38, 58, 0.18);
+}
+
+.divider p {
+  margin: 0;
+  color: #777276;
+  font-size: 14px;
+}
+
+/* reference: .login-register (+ a) */
+.bottomLink {
+  margin: 0;
+  line-height: 1.8;
+  text-align: center;
+  color: #858084;
+  font-size: 15px;
+}
+
+.bottomLink :global(a) {
+  margin-right: 6px;
+  color: var(--text-dark);
+  font-weight: 700;
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+.bottomLink :global(a:hover) {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
+/* Not in the reference stylesheet (login-only) - same visual language
+   (muted, centered, same scale as .header p) for the extra step/
+   helper copy register's 3-step flow and reset-password need. */
+.stepHint {
+  text-align: center;
+  color: var(--text-gray);
+  font-size: 14px;
+  margin: -10px 0 18px;
+}
+
+.helperText {
+  color: var(--text-gray);
+  font-size: 15px;
+  line-height: 1.7;
+  margin: 0 0 20px;
+  text-align: center;
 }
 
 /* Restyles the shared <ErrorBanner>/notice-banner markup (plain,
@@ -262,29 +429,367 @@
    edited, so every other page keeps the original look untouched. */
 .card :global(.error-banner) {
   width: 100%;
-  margin: 0 0 16px;
-  background: var(--auth-danger-bg);
-  color: var(--auth-danger);
+  margin: 0 0 18px;
+  background: rgba(176, 36, 26, 0.1);
+  color: #8a241a;
   border: 1px solid rgba(176, 36, 26, 0.25);
-  border-radius: var(--auth-radius-sm);
-  padding: 10px 14px;
-  font-size: 0.88rem;
+  border-radius: 14px;
+  padding: 12px 14px;
+  font-size: 14px;
 }
 
 .card :global(.notice-banner) {
   width: 100%;
-  margin: 0;
-  background: var(--auth-success-bg);
-  color: var(--auth-success-text);
+  margin: 0 0 18px;
+  background: rgba(47, 77, 58, 0.1);
+  color: #2f4d3a;
   border: 1px solid rgba(47, 77, 58, 0.22);
-  border-radius: var(--auth-radius-sm);
-  padding: 12px 14px;
-  font-size: 0.9rem;
+  border-radius: 14px;
+  padding: 14px;
+  font-size: 15px;
   text-align: center;
-  line-height: 1.6;
+  line-height: 1.7;
 }
 
 .card :global(.notice-banner a) {
-  color: var(--auth-maroon);
+  color: var(--primary);
   font-weight: 700;
+}
+
+/* =====================================================
+   TABLET (reference: @media max-width: 700px)
+   ===================================================== */
+@media (max-width: 700px) {
+  .page {
+    padding: 16px;
+  }
+
+  .card {
+    width: min(420px, 100%);
+    padding: 2px clamp(24px, 7vw, 40px);
+    border-radius: 25px;
+  }
+
+  .logo {
+    width: 60px;
+    height: 60px;
+    margin: 17px auto 17px;
+    border-radius: 16px;
+  }
+
+  .logo svg {
+    width: 37px;
+    height: 37px;
+  }
+
+  .header {
+    margin-bottom: 29px;
+  }
+
+  .header h1 {
+    font-size: 29px;
+  }
+
+  .header p {
+    font-size: 15px;
+  }
+
+  .fields {
+    gap: 18px;
+    margin-bottom: 21px;
+  }
+
+  .field {
+    gap: 7px;
+  }
+
+  .fieldLabel {
+    font-size: 14px;
+  }
+
+  .inputWrap {
+    height: 60px;
+    border-radius: 15px;
+  }
+
+  .inputIcon {
+    width: 23px;
+    height: 23px;
+    margin-right: 16px;
+  }
+
+  .input {
+    font-size: 15px;
+  }
+
+  .toggleButton {
+    width: 44px;
+    height: 44px;
+  }
+
+  .toggleButton svg {
+    width: 23px;
+    height: 23px;
+  }
+
+  .button {
+    height: 42px;
+    border-radius: 15px;
+    font-size: 16px;
+  }
+
+  .buttonArrow {
+    left: 22px;
+    font-size: 23px;
+  }
+
+  .linkRow {
+    margin-top: 15px;
+  }
+
+  .linkRow :global(a) {
+    font-size: 14px;
+  }
+
+  .divider {
+    margin: 8px 0;
+  }
+
+  .bottomLink {
+    font-size: 14px;
+    line-height: 1.6;
+  }
+}
+
+/* =====================================================
+   MOBILE (reference: @media max-width: 480px)
+   ===================================================== */
+@media (max-width: 480px) {
+  .page {
+    min-height: 100svh;
+    padding: 12px;
+    overflow-y: auto;
+    align-items: center;
+  }
+
+  .card {
+    width: 100%;
+    max-width: 390px;
+    padding: 0 clamp(18px, 6vw, 25px);
+    border-radius: 22px;
+  }
+
+  .logo {
+    width: 54px;
+    height: 54px;
+    margin: 14px auto 14px;
+    border-radius: 14px;
+  }
+
+  .logo svg {
+    width: 31px;
+    height: 31px;
+  }
+
+  .header {
+    margin-bottom: 23px;
+  }
+
+  .header h1 {
+    margin-bottom: 5px;
+    font-size: clamp(23px, 7vw, 27px);
+    line-height: 1.35;
+  }
+
+  .header p {
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  .fields {
+    gap: 15px;
+    margin-bottom: 18px;
+  }
+
+  .field {
+    gap: 6px;
+  }
+
+  .fieldLabel {
+    font-size: 13px;
+  }
+
+  .inputWrap {
+    height: 53px;
+    border-radius: 14px;
+  }
+
+  .inputIcon {
+    width: 21px;
+    height: 21px;
+    margin-right: 14px;
+  }
+
+  .input {
+    font-size: 14px;
+    padding: 0 12px;
+  }
+
+  .passwordField {
+    padding-left: 48px;
+  }
+
+  .toggleButton {
+    width: 42px;
+    height: 42px;
+    left: 5px;
+  }
+
+  .toggleButton svg {
+    width: 21px;
+    height: 21px;
+  }
+
+  .button {
+    height: 42px;
+    border-radius: 14px;
+    font-size: 15px;
+  }
+
+  .buttonArrow {
+    left: 18px;
+    font-size: 21px;
+  }
+
+  .linkRow {
+    margin-top: 13px;
+  }
+
+  .linkRow :global(a) {
+    font-size: 13px;
+  }
+
+  .divider {
+    gap: 12px;
+    margin: 8px 0;
+  }
+
+  .divider p {
+    font-size: 12px;
+  }
+
+  .bottomLink {
+    font-size: 13px;
+    line-height: 1.5;
+    padding-bottom: 14px;
+  }
+}
+
+/* =====================================================
+   VERY SMALL PHONES (reference: @media max-width: 360px)
+   ===================================================== */
+@media (max-width: 360px) {
+  .page {
+    padding: 8px;
+  }
+
+  .card {
+    padding-left: 15px;
+    padding-right: 15px;
+    border-radius: 19px;
+  }
+
+  .logo {
+    width: 48px;
+    height: 48px;
+    margin-top: 10px;
+    margin-bottom: 10px;
+    border-radius: 13px;
+  }
+
+  .logo svg {
+    width: 28px;
+    height: 28px;
+  }
+
+  .header {
+    margin-bottom: 19px;
+  }
+
+  .header h1 {
+    font-size: 22px;
+  }
+
+  .header p {
+    font-size: 12px;
+  }
+
+  .fields {
+    gap: 12px;
+    margin-bottom: 15px;
+  }
+
+  .inputWrap {
+    height: 49px;
+  }
+
+  .button {
+    height: 40px;
+    font-size: 14px;
+  }
+
+  .linkRow {
+    margin-top: 10px;
+  }
+
+  .divider {
+    margin: 6px 0;
+  }
+
+  .bottomLink {
+    padding-bottom: 10px;
+    font-size: 12px;
+  }
+}
+
+/* =====================================================
+   SHORT MOBILE SCREENS
+   (reference: @media max-height: 700px and max-width: 480px)
+   ===================================================== */
+@media (max-height: 700px) and (max-width: 480px) {
+  .page {
+    align-items: flex-start;
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+
+  .logo {
+    margin-top: 8px;
+    margin-bottom: 8px;
+  }
+
+  .header {
+    margin-bottom: 17px;
+  }
+
+  .fields {
+    gap: 11px;
+    margin-bottom: 14px;
+  }
+
+  .inputWrap {
+    height: 48px;
+  }
+
+  .button {
+    height: 40px;
+  }
+
+  .linkRow {
+    margin-top: 9px;
+  }
+
+  .divider {
+    margin: 5px 0;
+  }
 }

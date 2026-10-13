@@ -3,8 +3,11 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
-import { ErrorBanner } from "@/components/States";
+import AuthField from "@/components/AuthField";
+import AuthLogo from "@/components/AuthLogo";
+import { MessageCodeIcon, PhoneIcon } from "@/components/AuthIcons";
 import PasswordInput from "@/components/PasswordInput";
+import { ErrorBanner } from "@/components/States";
 import { ApiError, apiFetch, newIdempotencyKey } from "@/lib/api";
 import { normalisePhone } from "@/lib/address";
 import { setSessionToken } from "@/lib/session";
@@ -85,31 +88,34 @@ export default function ResetPasswordPage() {
   return (
     <div className={styles.page}>
       <div className={styles.card}>
-        <div className={styles.brand}>استعادة كلمة المرور</div>
+        <AuthLogo />
+        <div className={styles.header}>
+          <h1>استعادة كلمة المرور</h1>
+          {step === "phone" && <p>أدخلي رقم هاتفك وسنرسل رمز تحقق لتعيين كلمة مرور جديدة</p>}
+          {step === "confirm" && <p>أدخلي الرمز المرسل إليك وكلمة المرور الجديدة</p>}
+          {step === "done" && <p>تم تغيير كلمة المرور بنجاح</p>}
+        </div>
+
         {error && <ErrorBanner message={error} />}
 
         {step === "phone" && (
           <form onSubmit={requestCode}>
-            <p className={styles.helperText}>أدخلي رقم هاتفك وسنرسل رمز تحقق لتعيين كلمة مرور جديدة.</p>
-            <div className={styles.field}>
-              <label className={styles.label} htmlFor="rp-phone">
-                رقم الهاتف
-              </label>
-              <div className={styles.inputWrap}>
-                <input
-                  id="rp-phone"
-                  className={`${styles.input} ${styles.inputLtr}`}
-                  type="tel"
-                  dir="ltr"
-                  autoComplete="username"
-                  placeholder="+970590000000"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  required
-                />
-              </div>
+            <div className={styles.fields}>
+              <AuthField
+                id="rp-phone"
+                label="رقم الهاتف"
+                icon={<PhoneIcon />}
+                ltr
+                type="tel"
+                autoComplete="username"
+                placeholder="+970 59 XXX XXXX"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                required
+              />
             </div>
             <button className={styles.button} type="submit" disabled={loading}>
+              <span className={styles.buttonArrow}>←</span>
               {loading ? "جارٍ الإرسال..." : "إرسال رمز التحقق"}
             </button>
           </form>
@@ -118,35 +124,33 @@ export default function ResetPasswordPage() {
         {step === "confirm" && (
           <form onSubmit={confirmReset}>
             <p className={styles.helperText}>
-              إن كان الرقم مسجّلاً فقد أُرسل إليه رمز من 6 أرقام. أدخلي الرمز وكلمة المرور الجديدة.
+              إن كان الرقم مسجّلاً فقد أُرسل إليه رمز من 6 أرقام.
             </p>
-            <div className={styles.field}>
-              <label className={styles.label} htmlFor="rp-code">
-                رمز التحقق
-              </label>
-              <div className={styles.inputWrap}>
-                <input
-                  id="rp-code"
-                  className={`${styles.input} ${styles.inputLtr}`}
-                  inputMode="numeric"
-                  dir="ltr"
-                  maxLength={6}
-                  value={code}
-                  onChange={(e) => setCode(e.target.value)}
-                  required
-                />
-              </div>
+            <div className={styles.fields}>
+              <AuthField
+                id="rp-code"
+                label="رمز التحقق"
+                icon={<MessageCodeIcon />}
+                ltr
+                inputMode="numeric"
+                maxLength={6}
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                required
+              />
+              <PasswordInput
+                id="rp-password"
+                label="كلمة المرور الجديدة (8 أحرف على الأقل)"
+                value={password}
+                onChange={setPassword}
+                autoComplete="new-password"
+                minLength={8}
+                placeholder="أدخل كلمة المرور"
+                required
+              />
             </div>
-            <PasswordInput
-              id="rp-password"
-              label="كلمة المرور الجديدة (8 أحرف على الأقل)"
-              value={password}
-              onChange={setPassword}
-              autoComplete="new-password"
-              minLength={8}
-              required
-            />
             <button className={styles.button} type="submit" disabled={loading}>
+              <span className={styles.buttonArrow}>←</span>
               {loading ? "جارٍ الحفظ..." : "تعيين كلمة المرور"}
             </button>
           </form>
@@ -158,9 +162,9 @@ export default function ResetPasswordPage() {
           </div>
         )}
 
-        <p className={styles.linksRow}>
+        <div className={styles.linkRow}>
           <Link href="/login">العودة لتسجيل الدخول</Link>
-        </p>
+        </div>
       </div>
     </div>
   );

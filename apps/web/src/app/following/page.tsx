@@ -11,6 +11,8 @@ import { CardsPageDto, StoreSummaryDto } from "@/lib/types";
 import { useFetch } from "@/lib/useFetch";
 import { useHydrated, useSessionToken } from "@/lib/useSession";
 
+const LOGIN_REDIRECT = "/login?next=/following";
+
 // Sprint 13 (RB-STOREF-003): "أتابعه" - the stores the signed-in
 // customer follows. A horizontal strip of followed-store logos, then
 // the same global product cards as Home, limited to eligible products
@@ -32,27 +34,23 @@ export default function FollowingPage() {
   useEffect(() => {
     if (stores.status === 401 || feed.status === 401) {
       clearSession();
-      router.replace("/login?next=/following");
+      router.replace(LOGIN_REDIRECT);
     }
   }, [stores.status, feed.status, router]);
 
-  if (!hydrated) {
+  // No session at all (never logged in, or already cleared) - go
+  // straight to /login?next=/following rather than showing a "sign in"
+  // card first, same as /orders' own unauthenticated redirect.
+  useEffect(() => {
+    if (hydrated && !token) {
+      router.replace(LOGIN_REDIRECT);
+    }
+  }, [hydrated, token, router]);
+
+  if (!hydrated || !token) {
     return (
       <div className="page-shell">
         <div className="skeleton" style={{ height: 96, width: "100%", maxWidth: 1240 }} />
-      </div>
-    );
-  }
-
-  if (!token) {
-    return (
-      <div className="page-shell">
-        <EmptyState
-          title="سجّلي الدخول لمتابعة المتاجر"
-          message="تابعي متاجرك المفضلة لتصلك منتجاتها هنا."
-          actionHref="/login?next=/following"
-          actionLabel="تسجيل الدخول"
-        />
       </div>
     );
   }
