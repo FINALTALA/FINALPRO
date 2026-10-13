@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { apiFetch, ApiError, newIdempotencyKey } from "@/lib/api";
 import { clearSession, getSessionToken } from "@/lib/session";
+import ChangeAddressPanel from "@/components/ChangeAddressPanel";
 
 interface OrderItem {
   id: string;
@@ -265,7 +266,7 @@ export default function OrdersPage() {
             o.status === "DELIVERED" && o.fulfilment_method === "DELIVERY";
           const hasOpenReport = !!o.not_received_reported_at;
           return (
-            <div key={o.id} className="card">
+            <div key={o.id} className="card" data-order-id={o.id}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                 <div>
                   <div style={{ fontWeight: 600 }}>{o.vendor_display_name}</div>
@@ -366,7 +367,7 @@ export default function OrdersPage() {
               )}
 
               {o.status === "PLACED" && (
-                <div style={{ marginTop: 12 }}>
+                <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
                   <button
                     className="button button-secondary"
                     disabled={busyId === o.id}
@@ -374,6 +375,16 @@ export default function OrdersPage() {
                   >
                     إلغاء الطلب
                   </button>
+                  {/* Sprint 22 (PDR-029): new feature on this existing
+                      page - its own UI text is bilingual, the
+                      surrounding page stays as-is. */}
+                  {o.fulfilment_method === "DELIVERY" && (
+                    <ChangeAddressPanel
+                      branchOrderId={o.id}
+                      onCancelOrder={() => cancelWholeOrder(o.id)}
+                      onChanged={load}
+                    />
+                  )}
                 </div>
               )}
 

@@ -23,6 +23,10 @@ import { Prisma } from '../../generated/prisma/client';
  * Global fixed lock order this project now follows everywhere more
  * than one of these locks is taken together (documented once here,
  * not re-derived per call site):
+ *   0) customer-account-lock.util.ts's lockCustomerAccountState/
+ *      lockVendorRowsSorted (Sprint 22, DELETE /customers/me and
+ *      checkout.service.ts's confirm() only - precedes everything
+ *      else below whenever either is taken)
  *   1) phone advisory lock (pre-existing, inviteStaff/acceptStaffInvite only)
  *   2) THIS branch-operational-status advisory lock
  *   3) vendor row `SELECT ... FOR UPDATE` (pre-existing)

@@ -12,6 +12,11 @@ export const WIRE_OTP_PURPOSES = [
   // this exact same generic request/verify pair - see
   // VendorsController.inviteStaff() / AuthController.acceptStaffInvite().
   'staff_invite',
+  // Sprint 22 (FR-AUTH-014, PDR-034): issued only by the dedicated
+  // POST /auth/reactivate-request (never by requestPasswordReset) -
+  // see that endpoint's own comment for why the two must stay fully
+  // independent.
+  'account_reactivation',
 ] as const;
 export type WireOtpPurpose = (typeof WIRE_OTP_PURPOSES)[number];
 
@@ -20,6 +25,7 @@ const WIRE_TO_PRISMA: Record<WireOtpPurpose, OtpPurpose> = {
   password_reset: OtpPurpose.PASSWORD_RESET,
   phone_change: OtpPurpose.PHONE_CHANGE,
   staff_invite: OtpPurpose.STAFF_INVITE,
+  account_reactivation: OtpPurpose.ACCOUNT_REACTIVATION,
 };
 
 export function toPrismaOtpPurpose(wire: WireOtpPurpose): OtpPurpose {

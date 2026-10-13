@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AuditModule } from '../audit/audit.module';
 import { AuthModule } from '../auth/auth.module';
 import { OutboxModule } from '../outbox/outbox.module';
+import { BranchOrderAddressChangeService } from './branch-order-address-change.service';
 import { BranchOrderCancellationService } from './branch-order-cancellation.service';
 import { BranchOrderRescheduleService } from './branch-order-reschedule.service';
 import { BranchOrderService } from './branch-order.service';
@@ -34,6 +35,7 @@ import { FulfilmentSweepService } from './fulfilment-sweep.service';
     BranchOrderService,
     BranchOrderCancellationService,
     BranchOrderRescheduleService,
+    BranchOrderAddressChangeService,
     FulfilmentReconciliationService,
     FulfilmentSweepService,
     FulfilmentExceptionSweepService,
@@ -42,6 +44,7 @@ import { FulfilmentSweepService } from './fulfilment-sweep.service';
     BranchOrderService,
     BranchOrderCancellationService,
     BranchOrderRescheduleService,
+    BranchOrderAddressChangeService,
     FulfilmentReconciliationService,
     FulfilmentSweepService,
     FulfilmentExceptionSweepService,

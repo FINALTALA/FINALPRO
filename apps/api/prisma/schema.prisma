@@ -49,6 +49,21 @@ model User {
   /// Sprint 3 addition - see PlatformRole. Null (the default) for every
   /// regular customer/vendor account.
   platformRole    PlatformRole?
+  /// Sprint 22 (FR-AUTH-014, PDR-034): null = active. Set by
+  /// `DELETE /customers/me` (a deactivation, never a hard delete) in
+  /// the SAME transaction as sessionVersion++ - every session issued
+  /// before that moment is already unusable via SessionAuthGuard's own
+  /// sessionVersion check, so login()/reactivate-confirm are the only
+  /// two places that additionally read this field directly (a brand
+  /// new session attempt has no stale sessionVersion to be caught by).
+  /// Recovery is OTP-gated for exactly 30 days from this timestamp
+  /// (PDR-034's own literal number) - what happens after that window,
+  /// and which "nonessential personal data" gets hidden while
+  /// deactivated, are both still OPEN DECISIONs (BR-018/NFR-RETAIN-001,
+  /// Q11/OPEN-009) - deliberately NOT built here: no purge job, no
+  /// anonymization, no PII-hiding. This column alone is the full extent
+  /// of what Sprint 22 builds for retention.
+  deactivatedAt   DateTime?
   createdAt       DateTime      @default(now())
 
   customerProfile              CustomerProfile?
@@ -95,9 +110,9 @@ model CustomerProfile {
 
 /// Part 3, G.3 (FR-AUTH-008): map pin + landmark + up to two phone
 /// numbers, supporting BR-020's two-phone-number delivery-confirmation
-/// requirement. Sprint 2 (BL-AUTH-004) ships only creation - the
-/// saved-addresses management screen (list/edit/delete) is BL-AUTH-004b,
-/// a Should/stretch item deferred past the FYP Must scope.
+/// requirement. Sprint 2 (BL-AUTH-004) shipped only creation; Sprint 22
+/// (PDR-029, BL-AUTH-004b) adds the full management screen (default/
+/// edit/delete) below.
 model Address {
   id           String              @id @default(uuid())
   customerId   String
@@ -120,6 +135,26 @@ model Address {
   /// source/classification undecided - building a geo-boundary engine
   /// ahead of that decision would be guessing at an unapproved design.
   zone         DeliveryZoneRegion?
+  /// Sprint 22: at most one non-archived default per customer - backed
+  /// by a hand-written partial unique index (customerId) WHERE
+  /// isDefault=true AND archivedAt IS NULL (not representable in
+  /// Prisma's schema DSL, same already-established pattern as this
+  /// schema's other partial indexes). The archivedAt filter matters:
+  /// without it, an archived row that still happened to carry
+  /// isDefault=true would wrongly block a new legitimate default from
+  /// ever being set. Every write to this column goes through
+  /// lockCustomerAddressState(tx, customerId) first - never set
+  /// directly without that lock.
+  isDefault    Boolean             @default(false)
+  /// Sprint 22: soft-delete. `DELETE /customers/me/addresses/:id` hard-
+  /// deletes an address with zero BranchOrder references ever (nothing
+  /// to protect), but a referenced address - even by a long-terminal,
+  /// historical order - cannot be hard-deleted at all:
+  /// BranchOrder.address has onDelete:Restrict, by design, forever.
+  /// Archiving instead keeps that historical order's own address
+  /// readable while removing the row from the customer's own list/
+  /// picker. Null = active.
+  archivedAt   DateTime?
   createdAt    DateTime            @default(now())
 
   checkoutReservationSlots CheckoutReservationSlot[]
@@ -139,6 +174,16 @@ enum OtpPurpose {
   /// same way PASSWORD_RESET is (only issued when something real is
   /// waiting on the other end - see AuthController.requestOtp).
   STAFF_INVITE
+  /// Sprint 22 (FR-AUTH-014, PDR-034): proves phone ownership before
+  /// `POST /auth/reactivate-confirm` reactivates a deactivated account.
+  /// Deliberately NOT routed through requestPasswordReset() - that
+  /// endpoint's confirm step (confirmPasswordReset) hardcodes
+  /// checkCode(..., 'PASSWORD_RESET', ...), so an OTP issued under a
+  /// different purpose could never be verified there regardless of
+  /// which endpoint issued it. This purpose has its own fully
+  /// independent request/verify/confirm path instead - see
+  /// AuthController.requestReactivation()/reactivateConfirm().
+  ACCOUNT_REACTIVATION
 }
 
 /// Backs `POST /auth/otp/request` / `POST /auth/otp/verify` (Part 4,

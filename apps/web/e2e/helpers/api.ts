@@ -62,7 +62,25 @@ export async function call<T = unknown>(
   return { status: res.status, body: (text ? JSON.parse(text) : {}) as T };
 }
 
-function lastOtpFor(phone: string, attempt = 0): string {
+// Sprint 22: the byte length of the log file right now - pass as
+// `sinceOffset` to waitForOtp() whenever the SAME phone number is used
+// for a second OTP later in the same test (e.g. phone-change then
+// reactivation, both for the new number). Without it, waitForOtp()'s
+// own "last match in the whole file" search can race: if it runs its
+// first read before the NEW request's line is written but the OLD
+// line for that same phone already exists, it happily returns the
+// STALE code instead of waiting for the new one - a real bug this
+// exact scenario hit (OTP_INVALID from reusing the phone-change code
+// for the reactivation step).
+export function otpLogOffset(): number {
+  try {
+    return readFileSync(API_LOG_FILE, "utf8").length;
+  } catch {
+    return 0;
+  }
+}
+
+function lastOtpFor(phone: string, sinceOffset: number, attempt = 0): string {
   let log = "";
   try {
     log = readFileSync(API_LOG_FILE, "utf8");
@@ -73,25 +91,27 @@ function lastOtpFor(phone: string, attempt = 0): string {
   const re = new RegExp(`OTP for ${escaped}: (\\d+)`, "g");
   let match: RegExpExecArray | null;
   let last: RegExpExecArray | null = null;
-  while ((match = re.exec(log)) !== null) last = match;
+  while ((match = re.exec(log)) !== null) {
+    if (match.index >= sinceOffset) last = match;
+  }
   if (!last) {
     if (attempt >= 20) {
-      throw new Error(`No OTP was ever logged for ${phone} in ${API_LOG_FILE}`);
+      throw new Error(`No OTP was ever logged for ${phone} in ${API_LOG_FILE} (since offset ${sinceOffset})`);
     }
     throw new Error("retry");
   }
   return last[1];
 }
 
-async function waitForOtp(phone: string): Promise<string> {
+export async function waitForOtp(phone: string, sinceOffset = 0): Promise<string> {
   for (let attempt = 0; attempt < 20; attempt++) {
     try {
-      return lastOtpFor(phone, attempt);
+      return lastOtpFor(phone, sinceOffset, attempt);
     } catch {
       await new Promise((r) => setTimeout(r, 150));
     }
   }
-  throw new Error(`No OTP was ever logged for ${phone} in ${API_LOG_FILE}`);
+  throw new Error(`No OTP was ever logged for ${phone} in ${API_LOG_FILE} (since offset ${sinceOffset})`);
 }
 
 export async function signup(phone: string, password: string): Promise<string> {
@@ -258,6 +278,144 @@ export async function redeemReturn(
     idempotencyKey: unique("redeem"),
     body: { code, receiving_branch_id: receivingBranchId, item_condition: itemCondition },
   });
+}
+
+// Sprint 22 (FR-AUTH-006/008/014, PDR-029): account/addresses UI
+// fixtures. requestOtpAndRead()/requestReactivationAndRead() wrap the
+// request+log-read pair every OTP-gated S22 flow needs, mirroring
+// signup()'s own two calls above.
+export async function requestOtpAndRead(phone: string, purpose: string): Promise<string> {
+  await call("/auth/otp/request", { method: "POST", body: { phone, purpose } });
+  return waitForOtp(phone);
+}
+
+export async function requestReactivationAndRead(phone: string): Promise<string> {
+  await call("/auth/reactivate-request", { method: "POST", body: { phone } });
+  return waitForOtp(phone);
+}
+
+export async function createAddress(
+  token: string,
+  overrides: Partial<{ zone: string; phone_number_1: string; label: string }> = {},
+): Promise<{ id: string }> {
+  const res = await call<{ id: string }>("/customers/me/addresses", {
+    method: "POST",
+    token,
+    body: {
+      label: overrides.label ?? "البيت",
+      lat: 31.9,
+      lng: 35.2,
+      phone_number_1: overrides.phone_number_1 ?? "+970591234567",
+      zone: overrides.zone ?? "WEST_BANK",
+    },
+  });
+  if (res.status !== 201) {
+    throw new Error(`createAddress failed (status ${res.status}): ${JSON.stringify(res.body)}`);
+  }
+  return res.body;
+}
+
+export async function setDeliveryZoneFee(
+  ownerToken: string,
+  vendorId: string,
+  region: string,
+  fee: number,
+): Promise<void> {
+  const res = await call(`/vendors/${vendorId}/delivery-zones/${region}`, {
+    method: "PUT",
+    token: ownerToken,
+    body: { enabled: true, fee },
+  });
+  if (res.status !== 200) {
+    throw new Error(`setDeliveryZoneFee failed (status ${res.status}): ${JSON.stringify(res.body)}`);
+  }
+}
+
+export async function createDeliveryWindow(
+  ownerToken: string,
+  vendorId: string,
+  branchId: string,
+  dayOfWeek: number,
+  capacity = 5,
+): Promise<string> {
+  const res = await call<{ id: string }>(
+    `/vendors/${vendorId}/branches/${branchId}/delivery-windows`,
+    {
+      method: "POST",
+      token: ownerToken,
+      body: { day_of_week: dayOfWeek, start_time: "09:00", end_time: "18:00", capacity },
+    },
+  );
+  if (res.status !== 201) {
+    throw new Error(`createDeliveryWindow failed (status ${res.status}): ${JSON.stringify(res.body)}`);
+  }
+  return res.body.id;
+}
+
+// Checkout requires a slot date within the next 3 days
+// (INVALID_SLOT_DATE) - mirroring sprint22-account.e2e-spec.ts's own
+// nextDateForDayOfWeek()/dayOfWeekFor(), this picks a fixed, small
+// daysAhead FIRST and derives the matching day_of_week from it, rather
+// than picking a day_of_week and searching for its next occurrence
+// (which can land up to 7 days out and violate that limit).
+const DAYS_AHEAD = 1;
+
+export function nextScheduledDate(): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + DAYS_AHEAD);
+  return d.toISOString().slice(0, 10);
+}
+
+export function scheduledDayOfWeek(): number {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + DAYS_AHEAD);
+  return d.getUTCDay();
+}
+
+/** Places a DELIVERY BranchOrder (ONLINE) at the given address, left PLACED. */
+export async function placeDeliveryOrder(
+  ownerToken: string,
+  customerToken: string,
+  vendorId: string,
+  branchId: string,
+  variantId: string,
+  addressId: string,
+): Promise<{ branchOrderId: string }> {
+  const windowId = await createDeliveryWindow(ownerToken, vendorId, branchId, scheduledDayOfWeek());
+  const cartItemId = await addToCart(customerToken, vendorId, variantId, 1);
+  const reserved = await call<{ reservation_id: string }>("/checkout/reserve", {
+    method: "POST",
+    token: customerToken,
+    idempotencyKey: unique("reserve"),
+    body: {
+      terms_accepted: true,
+      terms_version: "2026-10-v1",
+      groups: [
+        {
+          cart_item_ids: [cartItemId],
+          branch_id: branchId,
+          fulfilment_method: "DELIVERY",
+          payment_method: "ONLINE",
+          address_id: addressId,
+          delivery_window_id: windowId,
+          scheduled_date: nextScheduledDate(),
+        },
+      ],
+    },
+  });
+  if (reserved.status !== 201) {
+    throw new Error(`placeDeliveryOrder: reserve failed (status ${reserved.status}): ${JSON.stringify(reserved.body)}`);
+  }
+  const confirmed = await call<{ branch_orders: { id: string }[] }>("/checkout/confirm", {
+    method: "POST",
+    token: customerToken,
+    idempotencyKey: unique("confirm"),
+    body: { reservation_id: reserved.body.reservation_id },
+  });
+  if (confirmed.status !== 201) {
+    throw new Error(`placeDeliveryOrder: confirm failed (status ${confirmed.status}): ${JSON.stringify(confirmed.body)}`);
+  }
+  return { branchOrderId: confirmed.body.branch_orders[0].id };
 }
 
 // Sprint 21b (EPIC-RET): exchange - desired_outcome=EXCHANGE plus the
