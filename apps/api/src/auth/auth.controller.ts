@@ -19,6 +19,8 @@ import * as bcrypt from 'bcryptjs';
 import { Request } from 'express';
 import { AuditLogService } from '../audit/audit-log.service';
 import { lockBranchOperationalStatus } from '../common/branch-operational-lock.util';
+import { lockCustomerAccountState } from '../common/customer-account-lock.util';
+import { loginRequiredResponse } from './login-required-response.util';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { IdempotencyTtl } from '../common/idempotency/idempotency-ttl.decorator';
@@ -31,6 +33,8 @@ import { OtpRequestDto } from './dto/otp-request.dto';
 import { OtpVerifyDto } from './dto/otp-verify.dto';
 import { PasswordResetConfirmDto } from './dto/password-reset-confirm.dto';
 import { PasswordResetRequestDto } from './dto/password-reset-request.dto';
+import { ReactivateConfirmDto } from './dto/reactivate-confirm.dto';
+import { ReactivateRequestDto } from './dto/reactivate-request.dto';
 import { RegisterDto } from './dto/register.dto';
 import { StaffInviteAcceptDto } from './dto/staff-invite-accept.dto';
 import { OtpCheckResult, OtpService } from './otp.service';
@@ -39,6 +43,12 @@ import { PhoneVerificationService } from './phone-verification.service';
 import { SessionService } from './session.service';
 
 const OTP_VERIFY_IDEMPOTENCY_TTL_MS = 5 * 60 * 1000; // Part 4, H.3's "short window (e.g. 5 minutes)"
+
+// PDR-034's own literal number - account recovery by OTP is possible
+// for 30 days from deactivatedAt, no longer. What happens after this
+// window (purge? permanent lockout?) is an explicit OPEN DECISION
+// (BR-018/NFR-RETAIN-001) - not built here.
+const REACTIVATION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
  * confirmPasswordReset's explicit, always-replayable "core operation
@@ -132,6 +142,20 @@ export class AuthController {
       if (invite) {
         await this.otp.issue(dto.phone, purpose);
       }
+    } else if (purpose === 'ACCOUNT_REACTIVATION') {
+      // Sprint 22 (FR-AUTH-014, PDR-034): this purpose is valid for
+      // otp/verify (completing a reactivation), but must NEVER be
+      // issuable through this generic endpoint - only the dedicated
+      // POST /auth/reactivate-request (which gates on account existing
+      // AND deactivated AND within the 30-day window) may call
+      // otp.issue() for it. Allowing it here would both leak account-
+      // existence/deactivation state via whether an SMS arrives, and
+      // bypass the 30-day window entirely.
+      throw new BadRequestException({
+        code: 'ACCOUNT_REACTIVATION_WRONG_ENDPOINT',
+        message:
+          'Use POST /auth/reactivate-request to start account reactivation',
+      });
     } else {
       await this.otp.issue(dto.phone, purpose);
     }
@@ -325,6 +349,20 @@ export class AuthController {
       throw new BadRequestException({
         code: 'INVALID_CREDENTIALS',
         message: 'Phone number or password is incorrect',
+      });
+    }
+
+    // Sprint 22 (FR-AUTH-014, PDR-034): a deactivated account's old
+    // sessions are already unusable via SessionAuthGuard's own
+    // sessionVersion check, but a BRAND NEW login attempt has no stale
+    // sessionVersion to be caught by - the correct password alone must
+    // not be enough to use a deactivated account. No session is issued;
+    // the client is pointed at the reactivation flow instead.
+    if (user.deactivatedAt !== null) {
+      throw new ForbiddenException({
+        code: 'ACCOUNT_DEACTIVATED',
+        message:
+          'This account is deactivated - use the reactivation flow to restore it',
       });
     }
 
@@ -544,6 +582,160 @@ export class AuthController {
     } catch (err) {
       this.logger.error(
         `Password reset for user ${updatedUser.id} committed, but issuing (or durably recording) a session failed - returning the recorded LOGIN_REQUIRED answer so a same-key retry stays consistent: ${(err as Error).message}`,
+      );
+    }
+
+    return responseBody;
+  }
+
+  // Sprint 22 (FR-AUTH-014, PDR-034): fully independent from
+  // requestPasswordReset()/confirmPasswordReset() on purpose -
+  // confirmPasswordReset() hardcodes checkCode(..., 'PASSWORD_RESET',
+  // ...), so an OTP issued under ACCOUNT_REACTIVATION could never be
+  // verified there regardless of which endpoint issued it. Anti-
+  // enumeration: identical response whether the phone doesn't exist,
+  // isn't deactivated, or is outside the 30-day window - a real OTP is
+  // issued only when all three hold.
+  @Post('reactivate-request')
+  @HttpCode(202)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  async requestReactivation(@Body() dto: ReactivateRequestDto) {
+    const user = await this.prisma.user.findUnique({
+      where: { phone: dto.phone },
+    });
+    if (
+      user &&
+      user.deactivatedAt !== null &&
+      Date.now() - user.deactivatedAt.getTime() <= REACTIVATION_WINDOW_MS
+    ) {
+      await this.otp.issue(dto.phone, 'ACCOUNT_REACTIVATION');
+    }
+    return { expires_in_seconds: 300 };
+  }
+
+  @Post('reactivate-confirm')
+  @HttpCode(200)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @IdempotencyTtl(OTP_VERIFY_IDEMPOTENCY_TTL_MS)
+  @UseInterceptors(IdempotencyInterceptor)
+  async reactivateConfirm(
+    @Body() dto: ReactivateConfirmDto,
+    @Req() req: Request,
+  ) {
+    // Review-round requirement: verification_token lives in Redis
+    // (phoneVerification.consume() is a plain redis.getdel()) - it
+    // cannot be made atomic with the Postgres transaction below, the
+    // same way register()'s own verification_token consumption isn't
+    // either. Consumed FIRST, deliberately: if the Postgres transaction
+    // below then fails for any reason, no activation happens and this
+    // token is simply gone - the caller requests a fresh OTP and starts
+    // over. That is an accepted, documented UX cost, not a rollback
+    // bug - nothing on the Postgres side ever partially committed.
+    const verification = await this.phoneVerification.consume(
+      dto.verification_token,
+    );
+    if (
+      !verification ||
+      verification.phone !== dto.phone ||
+      verification.purpose !== 'ACCOUNT_REACTIVATION'
+    ) {
+      throw new BadRequestException({
+        code: 'PHONE_NOT_VERIFIED',
+        message:
+          'This phone number has not been OTP-verified for reactivation, or the verification has expired',
+      });
+    }
+
+    // Fast, non-authoritative fail-fast - requestReactivation() never
+    // issues this purpose's OTP for a phone with no account, so a
+    // valid, consumed verification implies one exists. The REAL,
+    // authoritative check is the fresh re-read under the row lock
+    // inside the transaction below.
+    const preCheckUser = await this.prisma.user.findUniqueOrThrow({
+      where: { phone: dto.phone },
+    });
+
+    const updatedUser = await this.prisma.$transaction(async (tx) => {
+      // Lock FIRST - a concurrent reactivateConfirm() for the SAME user
+      // (two valid tokens somehow both issued) serializes here. The
+      // one that loses the race re-reads deactivatedAt below and sees
+      // it already null - 409, not a double reactivation.
+      await lockCustomerAccountState(tx, preCheckUser.id);
+      const fresh = await tx.user.findUniqueOrThrow({
+        where: { id: preCheckUser.id },
+      });
+      if (fresh.deactivatedAt === null) {
+        throw new ConflictException({
+          code: 'ACCOUNT_NOT_DEACTIVATED',
+          message: 'This account is not currently deactivated',
+        });
+      }
+      if (Date.now() - fresh.deactivatedAt.getTime() > REACTIVATION_WINDOW_MS) {
+        throw new HttpException(
+          {
+            code: 'RECOVERY_WINDOW_EXPIRED',
+            message:
+              'The 30-day reactivation window for this account has expired',
+          },
+          HttpStatus.GONE,
+        );
+      }
+
+      const updated = await tx.user.update({
+        where: { id: fresh.id },
+        data: { deactivatedAt: null, sessionVersion: { increment: 1 } },
+      });
+      await this.auditLog.record(
+        {
+          actorId: updated.id,
+          correlationId: req.correlationId,
+          action: 'user.reactivated',
+          entityType: 'User',
+          entityId: updated.id,
+        },
+        tx,
+      );
+      // Durable, always-replayable response written from INSIDE this
+      // transaction - session issuance below is a pure enhancement on
+      // an already-committed outcome, never a condition of it (same
+      // discipline as confirmPasswordReset()/acceptStaffInvite() above).
+      await this.idempotencyCompletion.complete(
+        tx,
+        req.idempotencyClaimId,
+        loginRequiredResponse({ account_reactivated: true as const }),
+        200,
+        OTP_VERIFY_IDEMPOTENCY_TTL_MS,
+      );
+      return updated;
+    });
+
+    let responseBody: {
+      session_token: string | null;
+      session_status: 'LOGIN_REQUIRED' | 'ISSUED';
+      account_reactivated: true;
+    } = loginRequiredResponse({ account_reactivated: true });
+    try {
+      const token = await this.sessions.create({
+        userId: updatedUser.id,
+        phone: updatedUser.phone,
+        phoneVerifiedAt: updatedUser.phoneVerifiedAt?.toISOString() ?? null,
+        sessionVersion: updatedUser.sessionVersion,
+      });
+      const issued = {
+        session_token: token,
+        session_status: 'ISSUED' as const,
+        account_reactivated: true as const,
+      };
+      if (req.idempotencyClaimId) {
+        await this.prisma.idempotencyKey.update({
+          where: { id: req.idempotencyClaimId },
+          data: { responseBody: issued as Prisma.InputJsonValue },
+        });
+        responseBody = issued;
+      }
+    } catch (err) {
+      this.logger.error(
+        `Account ${updatedUser.id} reactivated, but issuing (or durably recording) a session failed - returning the recorded LOGIN_REQUIRED answer so a same-key retry stays consistent: ${(err as Error).message}`,
       );
     }
 

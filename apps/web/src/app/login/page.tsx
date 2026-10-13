@@ -20,11 +20,13 @@ function LoginForm() {
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [deactivated, setDeactivated] = useState(false);
   const [loading, setLoading] = useState(false);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
+    setDeactivated(false);
     setLoading(true);
     try {
       const res = await apiFetch<{ session_token: string }>("/auth/login", {
@@ -36,6 +38,12 @@ function LoginForm() {
       router.push(next);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "تعذّر الاتصال بالخادم، حاولي مرة أخرى");
+      // Sprint 22 (FR-AUTH-014): a deactivated account's own login
+      // attempt must still lead somewhere - without this, the
+      // reactivation flow (/reactivate) would be undiscoverable.
+      if (err instanceof ApiError && err.code === "ACCOUNT_DEACTIVATED") {
+        setDeactivated(true);
+      }
     } finally {
       setLoading(false);
     }
@@ -46,6 +54,11 @@ function LoginForm() {
       <form className="card" onSubmit={onSubmit}>
         <div className="brand">تسجيل الدخول</div>
         {error && <ErrorBanner message={error} />}
+        {deactivated && (
+          <p className="muted" style={{ textAlign: "center", marginTop: -6 }}>
+            <Link href="/reactivate">استرجاع الحساب المعطّل</Link>
+          </p>
+        )}
         <div className="field">
           <label htmlFor="phone">رقم الهاتف</label>
           <input

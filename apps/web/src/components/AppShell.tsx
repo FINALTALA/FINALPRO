@@ -29,6 +29,10 @@ import {
   useUnreadNotificationCount,
   useWorkspaces,
 } from "@/lib/useSession";
+import { newIdempotencyKey, apiFetch } from "@/lib/api";
+import { Lang, setLang } from "@/lib/i18n";
+import { useLang, useSyncServerLanguagePref, useT } from "@/lib/useLang";
+import LangEffect from "./LangEffect";
 
 const TAB_ICONS: Record<NavLink["key"], ReactNode> = {
   home: <HomeIcon />,
@@ -37,6 +41,17 @@ const TAB_ICONS: Record<NavLink["key"], ReactNode> = {
   orders: <BagIcon />,
   following: <HeartIcon />,
   account: <UserIcon />,
+};
+
+// Sprint 22: AppShell's own nav labels, independent of nav.ts's
+// desktopLinks()/mobileTabs() output (which also feeds the pre-S22
+// /account page's workspace switcher via workspaceEntry() - that
+// output is left untouched/Arabic-only by design, see this file's own
+// i18n comment below). Keyed by NavLink["key"] so both the desktop
+// header and the bottom tab bar share one source.
+const NAV_LABELS: Record<Lang, Record<NavLink["key"], string>> = {
+  ar: { home: "الرئيسية", discover: "اكتشف", cart: "السلة", orders: "طلباتي", following: "أتابعه", account: "حسابي" },
+  en: { home: "Home", discover: "Discover", cart: "Cart", orders: "Orders", following: "Following", account: "Account" },
 };
 
 // Sprint 13: the one app shell every page renders inside - a sticky
@@ -53,6 +68,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const active = useActiveWorkspace();
   const cartCount = useCartCount(token, pathname);
   const unreadCount = useUnreadNotificationCount(token, pathname);
+  const lang = useLang();
+  const t = useT();
+  useSyncServerLanguagePref(token);
   const [query, setQuery] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -103,6 +121,22 @@ export default function AppShell({ children }: { children: ReactNode }) {
     router.replace("/login");
   }
 
+  function toggleLanguage() {
+    const next: Lang = lang === "ar" ? "en" : "ar";
+    setLang(next);
+    if (token) {
+      // Best-effort: the UI has already switched locally regardless of
+      // whether this write succeeds - same resilience as every other
+      // "local state is the source of truth, the server call is a
+      // persistence side-effect" pattern in this codebase.
+      apiFetch("/customers/me", {
+        method: "PATCH",
+        body: { language_pref: next },
+        idempotencyKey: newIdempotencyKey("lang-pref"),
+      }).catch(() => {});
+    }
+  }
+
   const isActiveWorkspace = (i: number) => {
     if (!workspaces || !active) return i === 0 && !active;
     const w = workspaces[i];
@@ -116,17 +150,18 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <>
+      <LangEffect />
       <header className={`app-header${isViaExperience ? " home-header" : ""}`}>
-        {isViaExperience && <div className="home-announcement">متاجر محلية في مكان واحد · مقارنة واضحة للسعر والتوفّر</div>}
+        {isViaExperience && <div className="home-announcement">{t("appshell.announcement")}</div>}
         <div className="app-header-inner">
-          <Link href="/" className="app-logo" aria-label={isViaExperience ? "Via - الرئيسية" : "FINALPRO - الرئيسية"}>
+          <Link href="/" className="app-logo" aria-label={`${isViaExperience ? "Via" : "FINALPRO"} - ${t("nav.home")}`}>
             <span className="app-logo-mark" aria-hidden="true">
               {isViaExperience ? "V" : "F"}
             </span>
             <span>{isViaExperience ? "VIA" : "FINALPRO"}</span>
           </Link>
 
-          <nav className="app-nav" aria-label="التنقل الرئيسي">
+          <nav className="app-nav" aria-label={t("appshell.nav.primary_aria")}>
             {links.map((l) => (
               <Link
                 key={l.key}
@@ -134,7 +169,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 className={isActivePath(pathname, l.href) || (l.key === "discover" && pathname === "/women") ? "active" : ""}
                 aria-current={isActivePath(pathname, l.href) || (l.key === "discover" && pathname === "/women") ? "page" : undefined}
               >
-                {l.label}
+                {NAV_LABELS[lang][l.key]}
                 {l.key === "cart" && cartCount > 0 && (
                   <span className="badge-count">{cartCount}</span>
                 )}
@@ -145,19 +180,28 @@ export default function AppShell({ children }: { children: ReactNode }) {
           <form className="app-search" role="search" onSubmit={onSearch}>
             <input
               type="search"
-              aria-label="ابحث عن منتج أو متجر"
-              placeholder="ابحث عن منتج أو متجر"
+              aria-label={t("appshell.search.placeholder")}
+              placeholder={t("appshell.search.placeholder")}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
-            <button type="submit" aria-label="بحث">
+            <button type="submit" aria-label={t("appshell.search.submit_aria")}>
               <SearchIcon />
             </button>
           </form>
 
           <div className="app-header-actions">
+            <button
+              type="button"
+              className="icon-button lang-switch"
+              aria-label={lang === "ar" ? "التبديل إلى الإنجليزية" : "Switch to Arabic"}
+              onClick={toggleLanguage}
+            >
+              {lang === "ar" ? "EN" : "AR"}
+            </button>
+
             {token && (
-              <Link href="/notifications" className="icon-button" aria-label="الإشعارات">
+              <Link href="/notifications" className="icon-button" aria-label={t("appshell.notifications_aria")}>
                 <BellIcon />
                 {unreadCount > 0 && <span className="badge-count">{unreadCount}</span>}
               </Link>
@@ -166,7 +210,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
             <Link
               href="/following"
               className="icon-button mobile-only"
-              aria-label="أتابعه"
+              aria-label={NAV_LABELS[lang].following}
             >
               <HeartIcon />
             </Link>
@@ -177,16 +221,16 @@ export default function AppShell({ children }: { children: ReactNode }) {
                   className="icon-button desktop-only"
                   aria-haspopup="menu"
                   aria-expanded={menuOpen}
-                  aria-label="الحساب ومساحات العمل"
+                  aria-label={t("appshell.account_menu_aria")}
                   onClick={() => setMenuOpen((v) => !v)}
                 >
                   <UserIcon />
                 </button>
                 {menuOpen && (
                   <div className="account-menu-panel" role="menu">
-                    <div className="account-menu-title">مساحات العمل</div>
+                    <div className="account-menu-title">{t("appshell.workspaces_title")}</div>
                     {workspaces === null && (
-                      <div className="account-menu-title">جارٍ التحميل...</div>
+                      <div className="account-menu-title">{t("common.loading")}</div>
                     )}
                     {workspaces?.map((w, i) => {
                       const entry = workspaceEntry(w);
@@ -205,9 +249,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
                             <small>{entry.subtitle}</small>
                           </span>
                           {entry.disabled ? (
-                            <span className="badge">معلّق</span>
+                            <span className="badge">{t("appshell.badge.suspended")}</span>
                           ) : (
-                            isActiveWorkspace(i) && <span className="badge badge-active">نشطة</span>
+                            isActiveWorkspace(i) && <span className="badge badge-active">{t("appshell.badge.active")}</span>
                           )}
                         </button>
                       );
@@ -219,10 +263,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
                       className="menu-item"
                       onClick={() => setMenuOpen(false)}
                     >
-                      حسابي
+                      {NAV_LABELS[lang].account}
                     </Link>
                     <button role="menuitem" className="menu-item" onClick={() => void signOut()}>
-                      تسجيل الخروج
+                      {t("appshell.sign_out")}
                     </button>
                   </div>
                 )}
@@ -230,10 +274,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
             ) : (
               <span className="desktop-only" style={{ display: "flex", gap: 8 }}>
                 <Link href="/login" className="button-link">
-                  دخول
+                  {t("appshell.sign_in")}
                 </Link>
                 <Link href="/register" className="button">
-                  إنشاء حساب
+                  {t("appshell.sign_up")}
                 </Link>
               </span>
             )}
@@ -243,24 +287,24 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
       <main className={`app-main${isViaExperience ? " home-main" : ""}`}>{children}</main>
 
-      <nav className={`bottom-nav${isViaExperience ? " home-bottom-nav" : ""}`} aria-label="التنقل السفلي">
-        {tabs.map((t) => {
+      <nav className={`bottom-nav${isViaExperience ? " home-bottom-nav" : ""}`} aria-label={t("appshell.nav.bottom_aria")}>
+        {tabs.map((tab) => {
           const activeTab =
-            t.key === "account"
+            tab.key === "account"
               ? isActivePath(pathname, "/account") ||
                 isActivePath(pathname, "/login") ||
                 isActivePath(pathname, "/workspaces")
-              : isActivePath(pathname, t.href) || (t.key === "discover" && pathname === "/women");
+              : isActivePath(pathname, tab.href) || (tab.key === "discover" && pathname === "/women");
           return (
             <Link
-              key={t.key}
-              href={t.href}
+              key={tab.key}
+              href={tab.href}
               className={activeTab ? "active" : ""}
               aria-current={activeTab ? "page" : undefined}
             >
-              {TAB_ICONS[t.key]}
-              <span>{t.label}</span>
-              {t.key === "cart" && cartCount > 0 && (
+              {TAB_ICONS[tab.key]}
+              <span>{NAV_LABELS[lang][tab.key]}</span>
+              {tab.key === "cart" && cartCount > 0 && (
                 <span className="badge-count">{cartCount}</span>
               )}
             </Link>

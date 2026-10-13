@@ -82,6 +82,15 @@ export default function AccountPage() {
           <Link href="/cart" className="hub-tile"><strong>السلة</strong><span>عناصرك المحفوظة</span></Link>
         </div>
 
+        {/* Sprint 22: links into the new account/addresses/phone/deactivate
+            screens - those pages are fully bilingual, this link text stays
+            plain Arabic to match this (pre-S22, untouched) page's own style. */}
+        <div className="hub-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", marginBottom: 8 }}>
+          <Link href="/account/addresses" className="hub-tile"><strong>عناويني</strong><span>إدارة العناوين، تعديلها وحذفها</span></Link>
+          <Link href="/account/phone" className="hub-tile"><strong>تغيير رقم الهاتف</strong><span>تحديث رقم الدخول إلى حسابك</span></Link>
+          <Link href="/account/deactivate" className="hub-tile"><strong>إغلاق الحساب</strong><span>تعطيل حسابك مؤقتاً</span></Link>
+        </div>
+
         <div className="section-heading">
           <h2>عناوين التوصيل</h2>
           {!showAddressForm && (

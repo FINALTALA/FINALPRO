@@ -1,5 +1,6 @@
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -12,6 +13,7 @@ import {
   hasActiveBranchClosure,
   lockBranchOperationalStatus,
 } from '../common/branch-operational-lock.util';
+import { lockCustomerAccountState } from '../common/customer-account-lock.util';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import {
   BranchOrderPaymentMethod,
@@ -57,7 +59,10 @@ import { deliveryNotAvailableBlocker } from './delivery-coverage.util';
 import { buildReturnPolicySnapshot } from '../returns/return-policy.util';
 
 const RESERVATION_TTL_MS = 10 * 60 * 1000;
-const PICKUP_CODE_MAX_ATTEMPTS = 10;
+// Sprint 22: exported - the order-address-change pickup-conversion
+// path issues a fresh pickup code the exact same way, reusing this
+// constant rather than a re-derived copy of it.
+export const PICKUP_CODE_MAX_ATTEMPTS = 10;
 
 // Sprint 20b (FR-CART-012, platform terms only): the one, current
 // version string reserve() requires every request to name exactly -
@@ -95,7 +100,10 @@ function parseDateOnly(s: string): Date {
  * been explicitly set by the owner (never defaulted or inferred - see
  * VendorDeliveryZone's own schema.prisma comment).
  */
-function resolveDeliveryFee(
+// Sprint 22: exported too - BranchOrderAddressChangeService's own
+// zone-support check re-uses this exact same resolution rule, never a
+// re-derived copy of it.
+export function resolveDeliveryFee(
   row: { enabled: boolean; fee: unknown } | null,
 ): number | null {
   if (!row) return null;
@@ -104,13 +112,14 @@ function resolveDeliveryFee(
   return Number(row.fee);
 }
 
-function generatePickupCode(): string {
+// Sprint 22: exported too, same reasoning as PICKUP_CODE_MAX_ATTEMPTS above.
+export function generatePickupCode(): string {
   return Math.floor(Math.random() * 1_000_000)
     .toString()
     .padStart(6, '0');
 }
 
-function isUniqueViolation(err: unknown): boolean {
+export function isUniqueViolation(err: unknown): boolean {
   return (
     err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002'
   );
@@ -1241,7 +1250,37 @@ export class CheckoutService {
       });
     }
 
+    // Sprint 22 (FR-AUTH-014, PDR-034): resolved OUTSIDE the
+    // transaction below - CustomerProfile.userId is an immutable 1:1
+    // mapping (nothing ever changes it), so reading it before any lock
+    // is safe; only User.deactivatedAt itself (read fresh, under the
+    // lock, inside the transaction) needs the staleness protection.
+    const owningProfile = await this.prisma.customerProfile.findUniqueOrThrow({
+      where: { id: customerId },
+      select: { userId: true },
+    });
+
     return this.prisma.$transaction(async (tx) => {
+      // Review-round requirement: this account-state lock is taken
+      // FIRST, before even the reservation lock below - the global
+      // fixed order customer-account-lock.util.ts documents. Closes
+      // the race where DELETE /customers/me and confirm() interleave
+      // such that confirm() reads "not yet deactivated" a moment
+      // before deactivate() commits, then still creates a BranchOrder
+      // for an account that is, by the time anyone reads it again,
+      // already deactivated.
+      await lockCustomerAccountState(tx, owningProfile.userId);
+      const ownerFresh = await tx.user.findUniqueOrThrow({
+        where: { id: owningProfile.userId },
+        select: { deactivatedAt: true },
+      });
+      if (ownerFresh.deactivatedAt !== null) {
+        throw new ForbiddenException({
+          code: 'ACCOUNT_DEACTIVATED',
+          message: 'This account is deactivated - checkout cannot be completed',
+        });
+      }
+
       // Codex review round 3 on commit 3d81c9b (fix #3): lock the
       // reservation row here too, before reading it fresh - a
       // concurrent lockAndSweepStockRow() sweep that decides (indepen-

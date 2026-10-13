@@ -21,6 +21,7 @@ import {
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
 import { OutboxEventService } from '../outbox/outbox-event.service';
+import { BranchOrderAddressChangeService } from './branch-order-address-change.service';
 import { BranchOrderCancellationService } from './branch-order-cancellation.service';
 import {
   computeAmountDue,
@@ -30,6 +31,7 @@ import {
 import { BranchOrderRescheduleService } from './branch-order-reschedule.service';
 import { BranchOrderService } from './branch-order.service';
 import { CancelBranchOrderDto } from './dto/cancel-branch-order.dto';
+import { ChangeBranchOrderAddressDto } from './dto/change-branch-order-address.dto';
 import { ReportNotReceivedDto } from './dto/report-not-received.dto';
 import { RescheduleBranchOrderDto } from './dto/reschedule-branch-order.dto';
 import { FulfilmentReconciliationService } from './fulfilment-reconciliation.service';
@@ -177,6 +179,7 @@ export class CustomerOrdersController {
     private readonly branchOrderService: BranchOrderService,
     private readonly cancellation: BranchOrderCancellationService,
     private readonly reschedule: BranchOrderRescheduleService,
+    private readonly addressChange: BranchOrderAddressChangeService,
     private readonly reconciliation: FulfilmentReconciliationService,
     private readonly outbox: OutboxEventService,
   ) {}
@@ -561,6 +564,102 @@ export class CustomerOrdersController {
       delivery_window_id: result.deliveryWindowId,
       scheduled_date: result.scheduledDate.toISOString().slice(0, 10),
     };
+  }
+
+  // Sprint 22 (PDR-029): "before preparation only" - PLACED, never
+  // PREPARING (unlike reschedule() above, which also allows a slot-
+  // missed PREPARING order). Lock order: BranchOrder (lockAndRequireOwnStatus,
+  // above) -> the CURRENT delivery window (defensive re-lock,
+  // BranchOrderAddressChangeService's own first step) -> the NEW
+  // address row (explicit SELECT ... FOR UPDATE inside that same
+  // service call) - never a bare findUnique for either.
+  @Post(':branchOrderId/change-address')
+  @UseInterceptors(IdempotencyInterceptor)
+  async changeAddress(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('branchOrderId') branchOrderId: string,
+    @Body() dto: ChangeBranchOrderAddressDto,
+    @Req() req: Request,
+  ) {
+    const customerId = await this.requireCustomerId(user);
+    const outcome = await this.prisma.$transaction(async (tx) => {
+      const locked = await this.lockAndRequireOwnStatus(
+        tx,
+        customerId,
+        branchOrderId,
+        ['PLACED'],
+      );
+      return this.addressChange.changeAddress(
+        tx,
+        locked,
+        customerId,
+        dto.address_id,
+        user.id,
+        req.correlationId,
+      );
+    });
+    if (outcome.kind === 'unsupported') {
+      throw new ConflictException({
+        code: 'ADDRESS_CHANGE_UNSUPPORTED',
+        message:
+          'This address cannot be used for this order - cancel, convert to pickup, or try another address',
+        // HttpExceptionFilter's response envelope only reads
+        // code/message/details from a thrown exception body - any
+        // other top-level field is silently dropped, so the
+        // structured reason/allowed_actions must live inside details.
+        details: [
+          {
+            reason: outcome.reason,
+            allowed_actions: [
+              'cancel',
+              'convert_to_pickup',
+              'retry_with_another_address',
+            ],
+          },
+        ],
+      });
+    }
+    return { id: branchOrderId, address_id: outcome.addressId };
+  }
+
+  // Sprint 22 (PDR-029): the customer's own explicit choice once
+  // change-address above reports ADDRESS_CHANGE_UNSUPPORTED - never
+  // triggered automatically by this controller itself.
+  @Post(':branchOrderId/change-address/convert-to-pickup')
+  @UseInterceptors(IdempotencyInterceptor)
+  async convertToPickup(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('branchOrderId') branchOrderId: string,
+    @Req() req: Request,
+  ) {
+    const customerId = await this.requireCustomerId(user);
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const locked = await this.lockAndRequireOwnStatus(
+        tx,
+        customerId,
+        branchOrderId,
+        ['PLACED'],
+      );
+      const result = await this.addressChange.convertToPickup(
+        tx,
+        locked,
+        user.id,
+        req.correlationId,
+      );
+      await this.notifyBranch(
+        tx,
+        locked.vendorId,
+        locked.branchId,
+        'branch_order.converted_to_pickup',
+        {
+          branch_order_id: branchOrderId,
+          vendor_id: locked.vendorId,
+          branch_id: locked.branchId,
+        },
+      );
+      return result;
+    });
+    return { id: branchOrderId, pickup_code: updated.pickupCode };
   }
 
   // PDR-027: after a second failed delivery attempt (ONLINE only),
