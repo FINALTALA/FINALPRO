@@ -74,12 +74,17 @@ export class CustomersController {
   }
 
   // Sprint 22 (FR-AUTH-006/009): the one generic PATCH SRS Part 4 names
-  // literally. language_pref/display_name write immediately, no OTP -
-  // phone is the only field that needs it, since it is the primary
-  // login credential's identifier. Both kinds of change can be
-  // requested in the same call; phone is processed after the plain
-  // fields (order has no observable effect either way, since they
-  // touch disjoint columns).
+  // literally. Both kinds of change can be requested in the same call.
+  //
+  // Review-round fix: when `phone` is present, language_pref/display_name
+  // are NOT written in their own separate, earlier transaction anymore -
+  // that let a request which later failed phone verification (or hit
+  // PHONE_ALREADY_REGISTERED) still durably commit the language/name
+  // change, a partial success behind an error response. Now every field
+  // in the SAME request commits in ONE transaction with the phone
+  // change (or none of them do). When `phone` is absent, language_pref/
+  // display_name still write immediately in their own transaction -
+  // there is no OTP step for them to lose atomicity with.
   @Patch()
   @HttpCode(200)
   @UseInterceptors(IdempotencyInterceptor)
@@ -88,24 +93,24 @@ export class CustomersController {
     @Body() dto: PatchMeDto,
     @Req() req: Request,
   ) {
-    if (dto.language_pref !== undefined || dto.display_name !== undefined) {
-      await this.prisma.$transaction(async (tx) => {
-        if (dto.language_pref !== undefined) {
-          await tx.user.update({
-            where: { id: user.id },
-            data: { languagePref: dto.language_pref },
-          });
-        }
-        if (dto.display_name !== undefined) {
-          await tx.customerProfile.update({
-            where: { userId: user.id },
-            data: { displayName: dto.display_name },
-          });
-        }
-      });
-    }
-
     if (dto.phone === undefined) {
+      if (dto.language_pref !== undefined || dto.display_name !== undefined) {
+        await this.prisma.$transaction(async (tx) => {
+          if (dto.language_pref !== undefined) {
+            await tx.user.update({
+              where: { id: user.id },
+              data: { languagePref: dto.language_pref },
+            });
+          }
+          if (dto.display_name !== undefined) {
+            await tx.customerProfile.update({
+              where: { userId: user.id },
+              data: { displayName: dto.display_name },
+            });
+          }
+        });
+      }
+
       const profile = await this.prisma.customerProfile.findUniqueOrThrow({
         where: { userId: user.id },
         include: { user: true },
@@ -144,9 +149,11 @@ export class CustomersController {
     // Review-round requirement: verification_token lives in Redis, not
     // Postgres - consumed above, before this transaction, the same
     // non-atomic-but-accepted sequence register()/reactivateConfirm()
-    // already use. If the transaction below fails for any reason, no
-    // phone change happens and this token is simply gone - the client
-    // requests a fresh OTP and starts over.
+    // already use. If the transaction below fails for any reason -
+    // including language_pref/display_name's own writes, now folded in
+    // here - NONE of phone/language_pref/display_name changes; the
+    // caller sees a clean error with no partial effect, and this
+    // consumed token is simply gone (request a fresh OTP and retry).
     let updatedUser: {
       id: string;
       phone: string;
@@ -161,8 +168,17 @@ export class CustomersController {
             phone: dto.phone,
             phoneVerifiedAt: new Date(),
             sessionVersion: { increment: 1 },
+            ...(dto.language_pref !== undefined
+              ? { languagePref: dto.language_pref }
+              : {}),
           },
         });
+        if (dto.display_name !== undefined) {
+          await tx.customerProfile.update({
+            where: { userId: user.id },
+            data: { displayName: dto.display_name },
+          });
+        }
         await this.auditLog.record(
           {
             actorId: user.id,

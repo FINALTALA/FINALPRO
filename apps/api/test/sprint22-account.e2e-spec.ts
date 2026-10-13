@@ -449,6 +449,49 @@ describe('Sprint 22 - account and addresses (e2e)', () => {
       expect(res.body.error.code).toBe('PHONE_ALREADY_REGISTERED');
     });
 
+    it('a phone change that fails PHONE_ALREADY_REGISTERED changes nothing else either - language_pref/display_name stay untouched (atomicity)', async () => {
+      const phoneA = uniquePhone();
+      const phoneB = uniquePhone();
+      await signup(phoneB, 'a-strong-password'); // phoneB already taken
+      const tokenA = await signup(phoneA, 'a-strong-password');
+
+      // Establish a known baseline so a silent partial write would be
+      // observable, whatever the schema's own defaults are (asserted
+      // against THIS baseline below, not a hardcoded guess at it).
+      const before = await request(app.getHttpServer())
+        .get('/api/v1/customers/me')
+        .set('Authorization', `Bearer ${tokenA}`)
+        .expect(200);
+      // The request below sends language_pref: 'en' - confirm the
+      // baseline is genuinely different, or a no-op write could pass
+      // this test without actually proving atomicity.
+      expect(before.body.language_pref).not.toBe('en');
+
+      await requestOtp(phoneB, 'phone_change');
+      const verificationToken = await verifyOtp(phoneB, 'phone_change');
+
+      const res = await patchMe(tokenA, {
+        phone: phoneB,
+        verification_token: verificationToken,
+        language_pref: 'en',
+        display_name: 'Should Not Persist',
+      });
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe('PHONE_ALREADY_REGISTERED');
+
+      // Review-round fix: the whole request commits atomically with the
+      // phone change (or not at all) - a request that fails on the
+      // phone half must leave language_pref/display_name/phone exactly
+      // as they were, never a partial success behind the error.
+      const after = await request(app.getHttpServer())
+        .get('/api/v1/customers/me')
+        .set('Authorization', `Bearer ${tokenA}`)
+        .expect(200);
+      expect(after.body.phone).toBe(phoneA);
+      expect(after.body.language_pref).toBe(before.body.language_pref);
+      expect(after.body.display_name).toBe(before.body.display_name);
+    });
+
     it('rejects phone present without a verification_token (DTO validation)', async () => {
       const phone = uniquePhone();
       const token = await signup(phone, 'a-strong-password');
