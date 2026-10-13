@@ -4,8 +4,10 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { FormEvent, Suspense, useState } from "react";
 import { ErrorBanner } from "@/components/States";
+import PasswordInput from "@/components/PasswordInput";
 import { ApiError, apiFetch } from "@/lib/api";
 import { setSessionToken } from "@/lib/session";
+import styles from "../auth-pages.module.css";
 
 // Only same-site relative paths are honoured for ?next= - never an
 // absolute URL (no open redirect).
@@ -50,46 +52,48 @@ function LoginForm() {
   }
 
   return (
-    <div className="page-shell">
-      <form className="card" onSubmit={onSubmit}>
-        <div className="brand">تسجيل الدخول</div>
+    <div className={styles.page}>
+      <form className={styles.card} onSubmit={onSubmit}>
+        <div className={styles.brand}>تسجيل الدخول</div>
         {error && <ErrorBanner message={error} />}
         {deactivated && (
-          <p className="muted" style={{ textAlign: "center", marginTop: -6 }}>
+          <p className={styles.linksRow} style={{ marginTop: -6 }}>
             <Link href="/reactivate">استرجاع الحساب المعطّل</Link>
           </p>
         )}
-        <div className="field">
-          <label htmlFor="phone">رقم الهاتف</label>
-          <input
-            id="phone"
-            type="tel"
-            dir="ltr"
-            autoComplete="username"
-            placeholder="+970590000000"
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            required
-          />
+        <div className={styles.field}>
+          <label className={styles.label} htmlFor="phone">
+            رقم الهاتف
+          </label>
+          <div className={styles.inputWrap}>
+            <input
+              id="phone"
+              className={`${styles.input} ${styles.inputLtr}`}
+              type="tel"
+              dir="ltr"
+              autoComplete="username"
+              placeholder="+970590000000"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              required
+            />
+          </div>
         </div>
-        <div className="field">
-          <label htmlFor="password">كلمة المرور</label>
-          <input
-            id="password"
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-        </div>
-        <button className="button button-block" type="submit" disabled={loading}>
+        <PasswordInput
+          id="password"
+          label="كلمة المرور"
+          value={password}
+          onChange={setPassword}
+          autoComplete="current-password"
+          required
+        />
+        <button className={styles.button} type="submit" disabled={loading}>
           {loading ? "جارٍ الدخول..." : "دخول"}
         </button>
-        <p className="muted" style={{ textAlign: "center", marginBottom: 6 }}>
+        <p className={styles.linksRow}>
           <Link href="/reset-password">نسيتِ كلمة المرور؟</Link>
         </p>
-        <p className="muted" style={{ textAlign: "center", marginBottom: 0 }}>
+        <p className={styles.linksRow}>
           ليس لديك حساب؟ <Link href="/register">إنشاء حساب</Link>
         </p>
       </form>

@@ -1,0 +1,290 @@
+/*
+ * Shared presentation for the three pre-session auth pages only
+ * (login, register, reset-password) - a CSS Module, so every class
+ * name below is scoped/hashed to just the files that import it.
+ * globals.css is never touched by this file; nothing here can affect
+ * any other page.
+ *
+ * No background photo is embedded here - no original (non-screenshot)
+ * image asset for this design was available to add as a real project
+ * file, and a browser screenshot was explicitly ruled out as a
+ * background source. The "soft blurred interior" mood is approximated
+ * with two large, heavily blurred colour blobs instead (see
+ * .page::before/.page::after below).
+ */
+
+.page {
+  --auth-maroon: #6b2436;
+  --auth-maroon-deep: #45141f;
+  --auth-pink: #d98a9a;
+  --auth-pink-soft: #f3dce1;
+  --auth-beige: #f7f0e6;
+  --auth-beige-deep: #ecdfcb;
+  --auth-blue-gray: #4f5f78;
+  --auth-blue-gray-soft: #9aa6ba;
+  --auth-text: #2b2127;
+  --auth-text-muted: #675f6b;
+  --auth-danger: #b0241a;
+  --auth-danger-bg: #fbeae8;
+  --auth-success-text: #2f4d3a;
+  --auth-success-bg: #e9f1ea;
+  --auth-radius: 20px;
+  --auth-radius-sm: 12px;
+
+  position: relative;
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 24px 16px;
+  background: linear-gradient(
+    160deg,
+    var(--auth-beige) 0%,
+    var(--auth-beige-deep) 55%,
+    var(--auth-pink-soft) 100%
+  );
+}
+
+.page::before,
+.page::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  pointer-events: none;
+  border-radius: 50%;
+  filter: blur(70px);
+}
+
+.page::before {
+  inset-inline-start: -12%;
+  top: -12%;
+  width: 58vw;
+  height: 58vw;
+  max-width: 480px;
+  max-height: 480px;
+  background: radial-gradient(circle, var(--auth-maroon) 0%, transparent 70%);
+  opacity: 0.32;
+}
+
+.page::after {
+  inset-inline-end: -14%;
+  bottom: -16%;
+  width: 52vw;
+  height: 52vw;
+  max-width: 440px;
+  max-height: 440px;
+  background: radial-gradient(circle, var(--auth-blue-gray) 0%, transparent 70%);
+  opacity: 0.28;
+}
+
+.card {
+  position: relative;
+  z-index: 1;
+  width: min(420px, calc(100% - 32px));
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
+  background: rgba(255, 253, 249, 0.74);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: var(--auth-radius);
+  box-shadow:
+    0 20px 50px rgba(69, 20, 31, 0.18),
+    0 2px 8px rgba(69, 20, 31, 0.08);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  padding: 32px 28px;
+  color: var(--auth-text);
+}
+
+@media (max-width: 420px) {
+  .card {
+    padding: 24px 18px;
+  }
+}
+
+@media (max-height: 560px) {
+  .page {
+    align-items: flex-start;
+    padding-top: 16px;
+  }
+  .card {
+    padding: 20px 18px;
+  }
+}
+
+.brand {
+  margin: 0 0 4px;
+  font-size: 1.35rem;
+  font-weight: 700;
+  text-align: center;
+  color: var(--auth-maroon-deep);
+}
+
+.stepHint {
+  margin: -6px 0 18px;
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--auth-blue-gray);
+}
+
+.helperText {
+  margin: 0 0 16px;
+  font-size: 0.86rem;
+  line-height: 1.55;
+  color: var(--auth-text-muted);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.label {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--auth-text);
+}
+
+.inputWrap {
+  position: relative;
+  display: flex;
+}
+
+.input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--auth-beige-deep);
+  border-radius: var(--auth-radius-sm);
+  background: rgba(255, 255, 255, 0.7);
+  padding: 11px 14px;
+  font-size: 0.95rem;
+  color: var(--auth-text);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--auth-maroon);
+  box-shadow: 0 0 0 3px rgba(107, 36, 54, 0.14);
+}
+
+.input::placeholder {
+  color: var(--auth-blue-gray-soft);
+}
+
+.inputLtr {
+  direction: ltr;
+  text-align: left;
+}
+
+.inputWithToggle .input {
+  padding-inline-end: 42px;
+}
+
+.toggleButton {
+  position: absolute;
+  inset-inline-end: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--auth-blue-gray);
+  cursor: pointer;
+  padding: 7px;
+  border-radius: 8px;
+}
+
+.toggleButton:hover {
+  color: var(--auth-maroon);
+}
+
+.toggleButton:focus-visible {
+  outline: 2px solid var(--auth-maroon);
+  outline-offset: 2px;
+}
+
+.button {
+  width: 100%;
+  border: none;
+  border-radius: var(--auth-radius-sm);
+  padding: 12px 16px;
+  font-size: 0.98rem;
+  font-weight: 700;
+  color: #fff;
+  cursor: pointer;
+  background: linear-gradient(135deg, var(--auth-maroon) 0%, var(--auth-maroon-deep) 100%);
+  box-shadow: 0 8px 20px rgba(107, 36, 54, 0.25);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+}
+
+.button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(107, 36, 54, 0.3);
+}
+
+.button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.linksRow {
+  margin: 14px 0 0;
+  text-align: center;
+  font-size: 0.88rem;
+  color: var(--auth-text-muted);
+}
+
+.linksRow:first-of-type {
+  margin-top: 18px;
+}
+
+.linksRow :global(a) {
+  color: var(--auth-maroon);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.linksRow :global(a:hover) {
+  text-decoration: underline;
+}
+
+/* Restyles the shared <ErrorBanner>/notice-banner markup (plain,
+   unhashed global class names from globals.css) only when nested
+   inside THIS module's own .card - globals.css itself is never
+   edited, so every other page keeps the original look untouched. */
+.card :global(.error-banner) {
+  width: 100%;
+  margin: 0 0 16px;
+  background: var(--auth-danger-bg);
+  color: var(--auth-danger);
+  border: 1px solid rgba(176, 36, 26, 0.25);
+  border-radius: var(--auth-radius-sm);
+  padding: 10px 14px;
+  font-size: 0.88rem;
+}
+
+.card :global(.notice-banner) {
+  width: 100%;
+  margin: 0;
+  background: var(--auth-success-bg);
+  color: var(--auth-success-text);
+  border: 1px solid rgba(47, 77, 58, 0.22);
+  border-radius: var(--auth-radius-sm);
+  padding: 12px 14px;
+  font-size: 0.9rem;
+  text-align: center;
+  line-height: 1.6;
+}
+
+.card :global(.notice-banner a) {
+  color: var(--auth-maroon);
+  font-weight: 700;
+}
