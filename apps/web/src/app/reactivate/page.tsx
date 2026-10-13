@@ -3,12 +3,16 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
+import AuthField from "@/components/AuthField";
+import AuthLogo from "@/components/AuthLogo";
+import { MessageCodeIcon, PhoneIcon } from "@/components/AuthIcons";
 import { ErrorBanner } from "@/components/States";
 import { ApiError, apiFetch, newIdempotencyKey } from "@/lib/api";
 import { normalisePhone } from "@/lib/address";
 import { registerTranslations } from "@/lib/i18n";
 import { useT } from "@/lib/useLang";
 import { setSessionToken } from "@/lib/session";
+import styles from "../auth-pages.module.css";
 
 registerTranslations({
   ar: {
@@ -124,28 +128,35 @@ export default function ReactivateAccountPage() {
   }
 
   return (
-    <div className="page-shell">
-      <div className="card">
-        <div className="brand">{t("reactivate.title")}</div>
+    <div className={styles.page}>
+      <div className={styles.card}>
+        <AuthLogo />
+        <div className={styles.header}>
+          <h1>{t("reactivate.title")}</h1>
+          {step === "phone" && <p>{t("reactivate.intro")}</p>}
+          {step === "confirm" && <p>{t("reactivate.code_intro")}</p>}
+        </div>
+
         {error && <ErrorBanner message={error} />}
 
         {step === "phone" && (
           <form onSubmit={requestCode}>
-            <p className="muted">{t("reactivate.intro")}</p>
-            <div className="field">
-              <label htmlFor="ra-phone">{t("reactivate.phone_label")}</label>
-              <input
+            <div className={styles.fields}>
+              <AuthField
                 id="ra-phone"
+                label={t("reactivate.phone_label")}
+                icon={<PhoneIcon />}
+                ltr
                 type="tel"
-                dir="ltr"
                 autoComplete="username"
-                placeholder="+970590000000"
+                placeholder="+970 59 XXX XXXX"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 required
               />
             </div>
-            <button className="button button-block" type="submit" disabled={loading}>
+            <button className={styles.button} type="submit" disabled={loading}>
+              <span className={styles.buttonArrow}>←</span>
               {loading ? t("reactivate.sending") : t("reactivate.send_code")}
             </button>
           </form>
@@ -153,20 +164,21 @@ export default function ReactivateAccountPage() {
 
         {step === "confirm" && (
           <form onSubmit={confirmReactivate}>
-            <p className="muted">{t("reactivate.code_intro")}</p>
-            <div className="field">
-              <label htmlFor="ra-code">{t("reactivate.code_label")}</label>
-              <input
+            <div className={styles.fields}>
+              <AuthField
                 id="ra-code"
+                label={t("reactivate.code_label")}
+                icon={<MessageCodeIcon />}
+                ltr
                 inputMode="numeric"
-                dir="ltr"
                 maxLength={6}
                 value={code}
                 onChange={(e) => setCode(e.target.value)}
                 required
               />
             </div>
-            <button className="button button-block" type="submit" disabled={loading}>
+            <button className={styles.button} type="submit" disabled={loading}>
+              <span className={styles.buttonArrow}>←</span>
               {loading ? t("reactivate.confirming") : t("reactivate.confirm")}
             </button>
           </form>
@@ -178,9 +190,9 @@ export default function ReactivateAccountPage() {
           </div>
         )}
 
-        <p className="muted" style={{ textAlign: "center", marginBottom: 0 }}>
+        <div className={styles.linkRow}>
           <Link href="/login">{t("reactivate.back_to_login")}</Link>
-        </p>
+        </div>
       </div>
     </div>
   );
