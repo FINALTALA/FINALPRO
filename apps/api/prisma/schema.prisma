@@ -85,6 +85,9 @@ model User {
   importBatchesCreated         ImportBatch[]
   notifications                Notification[]
   matchReports                 MatchReport[]
+  /// Sprint 23 (PDR-032): PLATFORM_ADMIN's own decisions on
+  /// ReviewReport - dismiss or uphold.
+  reviewDecisions              ReviewReport[]
 
   @@map("users")
 }
@@ -104,6 +107,11 @@ model CustomerProfile {
   orders               CustomerOrder[]
   cartItems            CartItem[]
   checkoutReservations CheckoutReservation[]
+  /// Sprint 23 (PDR-032): reviews this customer has authored (as the
+  /// verified purchaser), and reports this customer has filed against
+  /// someone else's review - two distinct relations, never confused.
+  reviews              Review[]
+  reviewReports        ReviewReport[]
 
   @@map("customer_profiles")
 }
@@ -443,6 +451,8 @@ model Vendor {
   importBatches                 ImportBatch[]
   operatingHours                BranchOperatingHours[]
   closures                      BranchClosure[]
+  /// Sprint 23 (PDR-032): STORE-target reviews against this vendor.
+  reviews                       Review[]
 
   @@map("vendors")
 }
@@ -802,12 +812,12 @@ model StoreBranch {
   /// Sprint 21: returns actually RECEIVED here - may differ from the
   /// originating BranchOrder's own branch (PDR-031's cross-branch
   /// acceptance within the same vendor).
-  returnsReceived          Return[] @relation("ReturnReceivingBranch")
+  returnsReceived          Return[]                  @relation("ReturnReceivingBranch")
   /// Sprint 21b: exchanges whose replacement is reserved/handed over
   /// AT this branch specifically (Return.replacementBranchId) - unlike
   /// returnsReceived above, this is NEVER cross-branch; an exchange's
   /// drop-off and hand-over both happen only here.
-  exchangeReplacementsHere Return[] @relation("ReturnReplacementBranch")
+  exchangeReplacementsHere Return[]                  @relation("ReturnReplacementBranch")
 
   /// Backs the composite FKs on VendorUser/StaffInvite (vendorId,
   /// branchId) -> (vendorId, id) - a plain PK-only unique on `id`
@@ -1415,6 +1425,9 @@ model CanonicalProduct {
   variants           CanonicalProductVariant[]
   vendorOffers       VendorOffer[]
   nameChangeRequests CanonicalNameChangeRequest[]
+  /// Sprint 23 (PDR-032): PRODUCT-target reviews against this canonical
+  /// product.
+  reviews            Review[]
 
   @@index([brandId])
   @@index([categoryId])
@@ -1833,7 +1846,7 @@ model OfferVariant {
   /// variant (Return.replacementOfferVariantId) - never the original
   /// returned item's own variant (that relation is BranchOrderItem's,
   /// via branchOrderItems above).
-  exchangeReplacementFor   Return[] @relation("ReturnReplacementVariant")
+  exchangeReplacementFor   Return[]                  @relation("ReturnReplacementVariant")
 
   @@unique([vendorId, sellerSku])
   @@unique([vendorId, storeInventoryBarcode])
@@ -2557,26 +2570,26 @@ model BranchOrder {
   /// (COD finalizes straight to CANCELLED in the same call that raises
   /// the count to 2; ONLINE rests at DELIVERY_FAILED awaiting the
   /// customer's own refund request). See branch-order-state-machine.ts.
-  deliveryAttemptCount        Int       @default(0)
+  deliveryAttemptCount               Int         @default(0)
   /// Sprint 20a (PDR-027): set the moment this order FIRST enters
   /// DELIVERY_FAILED (attempt 1), cleared back to null on a successful
   /// reschedule. Starts the 48h "no reschedule" clock the sweep polls -
   /// same lazy-reconciliation pattern as confirmReminderSentAt/
   /// deliveredAt, not a real scheduled job.
-  deliveryFailedAt            DateTime?
+  deliveryFailedAt                   DateTime?
   /// Sprint 20a (PDR-025): set the moment the sweep first detects this
   /// order still PLACED/PREPARING past its slot's start time, cleared
   /// back to null on a successful reschedule. Starts the 48h
   /// "no reschedule" clock (COD cancels, ONLINE auto-refunds).
-  slotMissedAt                DateTime?
+  slotMissedAt                       DateTime?
   /// Sprint 20a: dedupe key for the 6-hour pre-slot prep reminder,
   /// deliberately the (window, date) pair this reminder was LAST sent
   /// for - not a bare boolean/timestamp - so a reschedule to a new slot
   /// correctly re-arms the reminder for the NEW slot (comparing against
   /// the order's CURRENT deliveryWindowId/scheduledDate, which a stale
   /// single boolean could never distinguish from the old slot).
-  prepReminderSentForWindowId String?
-  prepReminderSentForDate     DateTime? @db.Date
+  prepReminderSentForWindowId        String?
+  prepReminderSentForDate            DateTime?   @db.Date
   /// Sprint 20a (FR-PAY-001/FR-FUL-012): recorded ONLY as part of the
   /// SAME transaction as a successful mark-delivered/pickup-handover
   /// for a COD order - the server-computed amount actually due at that
@@ -2584,8 +2597,8 @@ model BranchOrder {
   /// delivery fee), never the original `total` and never a staff-
   /// entered figure. Null for ONLINE orders and for any COD order not
   /// yet delivered/picked-up.
-  codCollectedAmount          Decimal?  @db.Decimal(10, 2)
-  codCollectedAt              DateTime?
+  codCollectedAmount                 Decimal?    @db.Decimal(10, 2)
+  codCollectedAt                     DateTime?
   /// Sprint 20a (PDR-028): the whole-order cancellation's own reason -
   /// mandatory when staff cancels (after prep, before Sent), optional/
   /// null for a customer's own pre-prep self-service cancellation. A
@@ -2593,7 +2606,7 @@ model BranchOrder {
   /// item instead (see BranchOrderItem.cancelledReason) - this field is
   /// set only when the WHOLE order (or its last active item) is what
   /// closes out.
-  cancellationReason          String?
+  cancellationReason                 String?
   /// Sprint 20b (FR-CART-014): the customer's own free-text note for
   /// THIS branch-group (e.g. delivery instructions), entered at
   /// reserve() time and carried through to confirm() unchanged -
@@ -2601,13 +2614,13 @@ model BranchOrder {
   /// creation, never surfaced to any Outbox/Notification payload
   /// (staff reads it from this order's own protected detail endpoint,
   /// never from a notification body).
-  customerNote                String?
+  customerNote                       String?
   /// Sprint 20b (FR-CART-014): an operational note the branch's own
   /// staff/owner attach to THIS order, visible ONLY to vendor staff -
   /// never to the customer, never surfaced to any Outbox/Notification
   /// payload. Editable any time, no status restriction (unlike
   /// cancellationReason, which is written once at closing time).
-  internalStoreNote           String?
+  internalStoreNote                  String?
   /// Sprint 21 (FR-RET-001, prerequisite for return-window
   /// computation): mirrors deliveredAt exactly, for PICKUP orders -
   /// written in the same transaction as the PICKED_UP transition
@@ -2615,7 +2628,7 @@ model BranchOrder {
   /// this, a PICKUP order's return window had no honest anchor at all
   /// (updatedAt is unsafe - any later, unrelated write to this row
   /// would silently push a return deadline forward).
-  pickedUpAt                  DateTime?
+  pickedUpAt                         DateTime?
   /// Sprint 21 (PDR-030): the vendor's return policy exactly AS IT WAS
   /// the moment this order was confirmed - written once, in the same
   /// transaction as confirm() (same snapshot-at-confirm convention as
@@ -2628,18 +2641,18 @@ model BranchOrder {
   /// value AT THAT MOMENT, copied verbatim - proof of which policy
   /// revision actually applied, independent of whatever the vendor's
   /// policy has since become.
-  returnPolicySnapshotEnabled    Boolean?
-  returnPolicySnapshotMode       ReturnMode?
-  returnPolicySnapshotWindowDays Int?
-  returnPolicySnapshotFeeIls     Decimal?    @db.Decimal(10, 2)
+  returnPolicySnapshotEnabled        Boolean?
+  returnPolicySnapshotMode           ReturnMode?
+  returnPolicySnapshotWindowDays     Int?
+  returnPolicySnapshotFeeIls         Decimal?    @db.Decimal(10, 2)
   /// Sprint 21b: the SIXTH snapshot field, same convention exactly -
   /// Vendor.exchangeFeeIls at confirm() time, never re-read live. Null
   /// on every order confirmed before S21b (and on every order whose
   /// snapshotted mode never included exchange) - an exchange request
   /// against a null value here is rejected the same "no retroactive
   /// right" way a null returnPolicySnapshotEnabled already is.
-  returnPolicySnapshotExchangeFeeIls Decimal? @db.Decimal(10, 2)
-  returnPolicySnapshotVersion    DateTime?
+  returnPolicySnapshotExchangeFeeIls Decimal?    @db.Decimal(10, 2)
+  returnPolicySnapshotVersion        DateTime?
 
   items   BranchOrderItem[]
   refunds BranchOrderRefund[]
@@ -2690,6 +2703,10 @@ model BranchOrderItem {
   /// partial unique index for exactly which statuses forbid a second
   /// concurrent/duplicate row.
   returns Return[]
+  /// Sprint 23 (PDR-032): up to two reviews against this exact
+  /// purchased line - one PRODUCT, one STORE (see Review's own
+  /// @@unique([sourceBranchOrderItemId, targetType])).
+  reviews Review[]
 
   /// Sprint 21: backs Return's own composite FK (vendorId,
   /// branchOrderItemId) -> (vendorId, id) - same tenant-safety pattern
@@ -2832,13 +2849,13 @@ model BranchOrderRefund {
   return               Return?                    @relation("ReturnRefund", fields: [returnId, branchOrderItemId], references: [id, branchOrderItemId], onDelete: Restrict, onUpdate: Cascade)
   createdAt            DateTime                   @default(now())
 
-  @@index([branchOrderId])
-  @@index([paymentTransactionId])
   /// Required by Prisma for the composite one-to-one relation above -
   /// returnId's own plain @unique already makes this pair unique in
   /// practice; this is the exact-fields-list constraint the relation
   /// attribute itself needs declared on its defining side.
   @@unique([returnId, branchOrderItemId])
+  @@index([branchOrderId])
+  @@index([paymentTransactionId])
   @@map("branch_order_refunds")
 }
 
@@ -2951,7 +2968,7 @@ enum ReturnStatus {
 /// that one-Fulfillment-per-order case; inventing a second entity to
 /// hold the same two timestamps a second time would add nothing.
 model Return {
-  id       String @id @default(uuid())
+  id                String          @id @default(uuid())
   /// Denormalized from BranchOrderItem - backs the composite FKs below
   /// (tenant safety, same pattern as CheckoutReservationItem's own
   /// denormalized fulfilmentMethod/paymentMethod) and the vendor-wide
@@ -2968,7 +2985,7 @@ model Return {
   /// as StoreBranch.verificationPhotoUrl (no upload pipeline exists in
   /// this codebase - the client uploads elsewhere and passes the URL
   /// back). Capped at 5 by DTO validation, not by the schema itself.
-  photoUrls String[]
+  photoUrls  String[]
 
   status ReturnStatus @default(REQUESTED)
 
@@ -2978,7 +2995,7 @@ model Return {
   /// for every pre-S21b row (exchange didn't exist, so every existing
   /// row genuinely IS a return) - no nullable-then-backfill dance
   /// needed the way RefundMethod required.
-  desiredOutcome ReturnOutcome @default(RETURN)
+  desiredOutcome               ReturnOutcome @default(RETURN)
   /// The four fields below are null together for a RETURN outcome,
   /// all four non-null together for EXCHANGE (migration-SQL CHECK
   /// constraint, not representable in Prisma's schema DSL - same
@@ -2994,11 +3011,11 @@ model Return {
   /// replacement's effective price captured AT SUBMIT TIME, never
   /// re-read live later, so a price change between request and
   /// completion never silently changes the settlement.
-  replacementOfferVariantId   String?
-  replacementOfferVariant     OfferVariant? @relation("ReturnReplacementVariant", fields: [vendorId, replacementOfferVariantId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
-  replacementBranchId         String?
-  replacementBranch           StoreBranch?  @relation("ReturnReplacementBranch", fields: [vendorId, replacementBranchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
-  replacementUnitPriceSnapshot Decimal?     @db.Decimal(10, 2)
+  replacementOfferVariantId    String?
+  replacementOfferVariant      OfferVariant? @relation("ReturnReplacementVariant", fields: [vendorId, replacementOfferVariantId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  replacementBranchId          String?
+  replacementBranch            StoreBranch?  @relation("ReturnReplacementBranch", fields: [vendorId, replacementBranchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  replacementUnitPriceSnapshot Decimal?      @db.Decimal(10, 2)
 
   /// Generated ONLY on vendor approval (REQUESTED ->
   /// APPROVED_AWAITING_DROPOFF), never earlier - no refund, no stock
@@ -3025,7 +3042,7 @@ model Return {
   /// ADMIN_REJECTED - null everywhere else. Never surfaced in any
   /// Outbox/Notification payload (same privacy convention as Sprint
   /// 20b's internalStoreNote) - read only via a protected endpoint.
-  rejectionReason String?
+  rejectionReason   String?
 
   /// Escalation: REQUESTED's own 72h timeout, or a customer's dispute
   /// of REJECTED within its window. PLATFORM_ADMIN is the only
@@ -3042,7 +3059,7 @@ model Return {
   /// acceptance within the same vendor) - composite FK, same tenant-
   /// safety pattern as branchOrderItem above.
   receivingBranchId String?
-  receivingBranch   StoreBranch?        @relation("ReturnReceivingBranch", fields: [vendorId, receivingBranchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  receivingBranch   StoreBranch?         @relation("ReturnReceivingBranch", fields: [vendorId, receivingBranchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
   receivedByUserId  String?
   receivedAt        DateTime?
   itemCondition     ReturnItemCondition?
@@ -3094,13 +3111,13 @@ model Return {
 /// price change can never retroactively change what was actually
 /// charged/refunded.
 model ExchangeSettlement {
-  id       String @id @default(uuid())
+  id                String @id @default(uuid())
   /// 1:1 with the Return it settles - composite FK into Return's own
   /// (id, branchOrderItemId) unique target, same tenant-safety pattern
   /// BranchOrderRefund.returnId already established.
-  returnId          String          @unique
+  returnId          String @unique
   branchOrderItemId String
-  return            Return          @relation(fields: [returnId, branchOrderItemId], references: [id, branchOrderItemId], onDelete: Restrict, onUpdate: Cascade)
+  return            Return @relation(fields: [returnId, branchOrderItemId], references: [id, branchOrderItemId], onDelete: Restrict, onUpdate: Cascade)
   vendorId          String
 
   /// The four raw snapshotted inputs to the net formula - kept as
@@ -3119,16 +3136,16 @@ model ExchangeSettlement {
   /// netAmount = replacementTotal - originalTotal + exchangeFeeSnapshot,
   /// ABSOLUTE VALUE (never signed) - the sign lives only in `direction`
   /// below, so a UI never has to interpret a negative number's meaning.
-  originalTotal Decimal @db.Decimal(10, 2)
-  replacementTotal Decimal @db.Decimal(10, 2)
-  netAmount     Decimal @db.Decimal(10, 2)
-  direction     ExchangeSettlementDirection
+  originalTotal    Decimal                     @db.Decimal(10, 2)
+  replacementTotal Decimal                     @db.Decimal(10, 2)
+  netAmount        Decimal                     @db.Decimal(10, 2)
+  direction        ExchangeSettlementDirection
   /// Fixed to CASH this sprint (§3.5: cash at the branch regardless of
   /// the original order's own payment method) - kept as a real enum
   /// column, not a hardcoded constant, so a later sprint that adds a
   /// second method never needs a destructive change here, mirroring
   /// RefundMethod's own precedent.
-  method ExchangeSettlementMethod @default(CASH)
+  method           ExchangeSettlementMethod    @default(CASH)
 
   createdAt DateTime @default(now())
 
@@ -3462,4 +3479,116 @@ model StoreFollow {
   @@unique([userId, vendorId])
   @@index([vendorId])
   @@map("store_follows")
+}
+
+enum ReviewTargetType {
+  PRODUCT
+  STORE
+}
+
+/// Sprint 23 (PDR-032): "reviews are immutable by the customer; reports
+/// may hide them after admin review." VISIBLE is the only state a
+/// newly created review can have. A PENDING report moves it to
+/// REPORTED (still publicly visible - "innocent until decided" - but
+/// excluded from the aggregate rating, see Review's own comment).
+/// PLATFORM_ADMIN's decision then either dismisses it back to VISIBLE
+/// (a later report can move it to REPORTED again) or upholds it to
+/// HIDDEN - the one terminal state, never re-shown, never reachable
+/// from anywhere but an uphold decision.
+enum ReviewModerationStatus {
+  VISIBLE
+  REPORTED
+  HIDDEN
+}
+
+/// Sprint 23 (PDR-032): a report's own lifecycle, independent of (but
+/// driving) Review.moderationStatus above. PENDING until a
+/// PLATFORM_ADMIN decision; DISMISSED leaves the review VISIBLE,
+/// UPHELD moves it to HIDDEN. A decision resolves every PENDING report
+/// against the same review at once (ReviewsService.decide()) - never
+/// one report at a time while others sit open against an
+/// already-decided review.
+enum ReviewReportStatus {
+  PENDING
+  DISMISSED
+  UPHELD
+}
+
+/// Sprint 23 (PDR-032, FR-REV-001/002/003/005/006/008/010): a verified
+/// purchaser's review of either the product they bought (PRODUCT,
+/// targeting the CanonicalProduct the purchased OfferVariant resolves
+/// to) or the store that sold it (STORE, targeting the Vendor) - never
+/// both at once, enforced structurally by the reviews_exactly_one_target
+/// CHECK constraint (hand-written migration SQL - Prisma's schema DSL
+/// can't express a cross-column XOR).
+///
+/// sourceBranchOrderItemId is mandatory and real (never a bare
+/// customerId + canonicalProductId pair asserted by the client) -
+/// eligibility is decided once, at submission, by walking this exact
+/// purchased line: BranchOrderItem -> its order's own COMPLETED status
+/// -> (for PRODUCT) OfferVariant -> CanonicalProductVariant ->
+/// CanonicalProduct, or (for STORE) BranchOrderItem.vendorId directly.
+/// A cancelled line (cancelledAt != null) is never eligible, even
+/// inside an otherwise COMPLETED order. See ReviewsService.submit().
+///
+/// @@unique([sourceBranchOrderItemId, targetType]) (final decision,
+/// Option B): at most one PRODUCT review and one STORE review per
+/// purchased line - never two of the same target type for the same
+/// item, but a customer who buys the same product again (a different
+/// BranchOrderItem) may review it again. Neither column is nullable,
+/// so this is a plain multi-column unique - no partial index needed.
+///
+/// D1 (the roadmap's own open question against this sprint's row) is
+/// explicitly NOT addressed by this model or anywhere else in Sprint
+/// 23 - left MISSING/OPEN per final decision, never silently assumed
+/// covered. Fake-review/anomaly detection (FR-REV-007) is likewise out
+/// of scope this sprint - only purchase eligibility, uniqueness, and
+/// customer reports exist as anti-abuse measures.
+model Review {
+  id                      String                 @id @default(uuid())
+  customerId              String
+  customer                CustomerProfile        @relation(fields: [customerId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  sourceBranchOrderItemId String
+  sourceBranchOrderItem   BranchOrderItem        @relation(fields: [sourceBranchOrderItemId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  targetType              ReviewTargetType
+  /// Set only when targetType = PRODUCT.
+  canonicalProductId      String?
+  canonicalProduct        CanonicalProduct?      @relation(fields: [canonicalProductId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  /// Set only when targetType = STORE.
+  vendorId                String?
+  vendor                  Vendor?                @relation(fields: [vendorId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  rating                  Int
+  body                    String
+  moderationStatus        ReviewModerationStatus @default(VISIBLE)
+  createdAt               DateTime               @default(now())
+
+  reports ReviewReport[]
+
+  @@unique([sourceBranchOrderItemId, targetType])
+  @@index([canonicalProductId, moderationStatus])
+  @@index([vendorId, moderationStatus])
+  @@map("reviews")
+}
+
+/// Sprint 23 (PDR-032: "reports may hide them after admin review").
+/// @@unique([reviewId, reporterId]): one report per (review, reporter)
+/// pair - a customer can't file repeat reports against the same
+/// review; a second attempt is a 409, not a second queue entry.
+/// PLATFORM_ADMIN is the only decider (no new role - BR/PDR scope).
+model ReviewReport {
+  id              String             @id @default(uuid())
+  reviewId        String
+  review          Review             @relation(fields: [reviewId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  reporterId      String
+  reporter        CustomerProfile    @relation(fields: [reporterId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  reason          String
+  status          ReviewReportStatus @default(PENDING)
+  decidedByUserId String?
+  decidedByUser   User?              @relation(fields: [decidedByUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  decidedAt       DateTime?
+  createdAt       DateTime           @default(now())
+
+  @@unique([reviewId, reporterId])
+  @@index([status])
+  @@map("review_reports")
 }

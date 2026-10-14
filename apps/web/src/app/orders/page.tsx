@@ -304,6 +304,14 @@ export default function OrdersPage() {
                           طلب إرجاع
                         </Link>
                       )}
+                    {!it.cancelled_at && o.status === "COMPLETED" && (
+                      <Link
+                        href={`/orders/${o.id}/items/${it.id}/review`}
+                        className="button-link"
+                      >
+                        كتابة مراجعة
+                      </Link>
+                    )}
                   </div>
                 ))}
               </div>

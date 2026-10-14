@@ -219,6 +219,14 @@ export function adminTiles(role: PlatformRoleName): HubTile[] {
         title: "الإرجاعات المتصاعدة",
         description: "إرجاعات اعترض عليها العميل أو تجاوزت مهلة المتجر، بانتظار قرارك",
       },
+      // Sprint 23 (PDR-032, EPIC-REV): the review-report queue -
+      // PLATFORM_ADMIN only (no separate content-moderator role exists
+      // in this codebase).
+      {
+        href: "/admin/reviews",
+        title: "بلاغات المراجعات",
+        description: "مراجعات عليها بلاغ معلَّق، بانتظار تجاهله أو إخفاء المراجعة",
+      },
     );
   }
   return tiles;

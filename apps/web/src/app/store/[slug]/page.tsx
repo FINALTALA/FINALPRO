@@ -22,6 +22,7 @@ interface StorefrontDto {
   facebook_url: string | null;
   whatsapp_url: string | null;
   is_available: boolean;
+  is_verified: boolean;
 }
 
 interface OfferSummaryDto {
@@ -184,6 +185,7 @@ export default function StorefrontPage() {
             <span className={`badge${s.is_available ? " badge-active" : ""}`}>
               {s.is_available ? "متاح الآن" : "المحل غير متاح حالياً"}
             </span>
+            {s.is_verified && <span className="badge badge-active">متجر موثّق</span>}
           </div>
           <div className="storefront-actions">
             <button
@@ -194,6 +196,9 @@ export default function StorefrontPage() {
             >
               {following ? "إلغاء المتابعة" : "تابعي المتجر"}
             </button>
+            <Link href={`/store/${params.slug}/reviews`} className="button-link">
+              المراجعات
+            </Link>
             <button className="button-link" onClick={share} aria-label="مشاركة المتجر">
               <ShareIcon /> مشاركة
             </button>

@@ -162,4 +162,8 @@ export const SUSPENDED_ALLOW_ROUTES: readonly string[] = [
   'GET vendors/:vendorId/branches/:branchId/returns',
   'PATCH vendors/:vendorId/branches/:branchId/returns/:returnId/decision',
   'POST vendors/:vendorId/returns/redeem',
+  // Sprint 23: a public, unguarded read (ReviewReadsController) - "every
+  // read" stays ALLOW, same bucket as every other GET above. A
+  // suspended store's past reviews must stay visible either way.
+  'GET vendors/:vendorId/reviews',
 ];
