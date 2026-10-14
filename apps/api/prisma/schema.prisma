@@ -3488,11 +3488,16 @@ enum ReviewTargetType {
 
 /// Sprint 23 (PDR-032): "reviews are immutable by the customer; reports
 /// may hide them after admin review." VISIBLE is the only state a
-/// newly created review can have; HIDDEN is reachable only through
-/// PLATFORM_ADMIN upholding a ReviewReport (see ReviewReportStatus) -
-/// there is no "re-show" path back to VISIBLE built this sprint.
+/// newly created review can have. A PENDING report moves it to
+/// REPORTED (still publicly visible - "innocent until decided" - but
+/// excluded from the aggregate rating, see Review's own comment).
+/// PLATFORM_ADMIN's decision then either dismisses it back to VISIBLE
+/// (a later report can move it to REPORTED again) or upholds it to
+/// HIDDEN - the one terminal state, never re-shown, never reachable
+/// from anywhere but an uphold decision.
 enum ReviewModerationStatus {
   VISIBLE
+  REPORTED
   HIDDEN
 }
 

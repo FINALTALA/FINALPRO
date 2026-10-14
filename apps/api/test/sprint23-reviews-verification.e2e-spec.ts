@@ -160,7 +160,10 @@ describe('Sprint 23 - reviews and the verification badge (e2e)', () => {
     variantId: string;
   }> {
     const brand = await prisma.brand.create({
-      data: { name: unique('Brand'), normalizedName: unique('brand').toLowerCase() },
+      data: {
+        name: unique('Brand'),
+        normalizedName: unique('brand').toLowerCase(),
+      },
     });
     const category = await prisma.category.create({
       data: { nameAr: unique('فئة'), nameEn: unique('Cat') },
@@ -280,10 +283,23 @@ describe('Sprint 23 - reviews and the verification badge (e2e)', () => {
     const branchOrderId = confirmed.body.branch_orders[0].id as string;
     const pickupCode = confirmed.body.branch_orders[0].pickup_code as string;
 
-    await staffAction(owner, vendorId, branchId, branchOrderId, 'start-preparation').expect(201);
-    await staffAction(owner, vendorId, branchId, branchOrderId, 'pickup-handover', {
-      pickup_code: pickupCode,
-    }).expect(201);
+    await staffAction(
+      owner,
+      vendorId,
+      branchId,
+      branchOrderId,
+      'start-preparation',
+    ).expect(201);
+    await staffAction(
+      owner,
+      vendorId,
+      branchId,
+      branchOrderId,
+      'pickup-handover',
+      {
+        pickup_code: pickupCode,
+      },
+    ).expect(201);
 
     const item = await prisma.branchOrderItem.findFirstOrThrow({
       where: { branchOrderId },
@@ -369,7 +385,12 @@ describe('Sprint 23 - reviews and the verification badge (e2e)', () => {
     it('a STORE review succeeds once the order is COMPLETED', async () => {
       const owner = await signup(uniquePhone(), 'owner-password-2');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
-      const offerVariantId = await createOfferWithStock(vendorId, branchId!, 50, 5);
+      const offerVariantId = await createOfferWithStock(
+        vendorId,
+        branchId!,
+        50,
+        5,
+      );
       const customer = await signup(uniquePhone(), 'customer-password-2');
       const { itemId } = await placeAndCompleteOrder(
         owner,
@@ -395,7 +416,12 @@ describe('Sprint 23 - reviews and the verification badge (e2e)', () => {
     it('is rejected before the order reaches COMPLETED', async () => {
       const owner = await signup(uniquePhone(), 'owner-password-3');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
-      const offerVariantId = await createOfferWithStock(vendorId, branchId!, 50, 5);
+      const offerVariantId = await createOfferWithStock(
+        vendorId,
+        branchId!,
+        50,
+        5,
+      );
       const customer = await signup(uniquePhone(), 'customer-password-3');
 
       const cartItemId = await addToCart(customer, vendorId, offerVariantId, 1);
@@ -442,7 +468,12 @@ describe('Sprint 23 - reviews and the verification badge (e2e)', () => {
     it('a cancelled item is never reviewable, even once its order is otherwise COMPLETED', async () => {
       const owner = await signup(uniquePhone(), 'owner-password-4');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
-      const offerVariantId = await createOfferWithStock(vendorId, branchId!, 50, 5);
+      const offerVariantId = await createOfferWithStock(
+        vendorId,
+        branchId!,
+        50,
+        5,
+      );
       const customer = await signup(uniquePhone(), 'customer-password-4');
       const { itemId } = await placeAndCompleteOrder(
         owner,
@@ -475,7 +506,12 @@ describe('Sprint 23 - reviews and the verification badge (e2e)', () => {
     it('a PRODUCT review on an unmatched (standalone) listing is rejected', async () => {
       const owner = await signup(uniquePhone(), 'owner-password-5');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
-      const offerVariantId = await createOfferWithStock(vendorId, branchId!, 50, 5); // no canonicalVariantId
+      const offerVariantId = await createOfferWithStock(
+        vendorId,
+        branchId!,
+        50,
+        5,
+      ); // no canonicalVariantId
       const customer = await signup(uniquePhone(), 'customer-password-5');
       const { itemId } = await placeAndCompleteOrder(
         owner,
@@ -497,10 +533,15 @@ describe('Sprint 23 - reviews and the verification badge (e2e)', () => {
       expect(res.body.error.code).toBe('PRODUCT_NOT_ELIGIBLE_FOR_REVIEW');
     });
 
-    it('a different customer cannot use someone else\'s purchased item - 404, never 403 (BOLA-safe)', async () => {
+    it("a different customer cannot use someone else's purchased item - 404, never 403 (BOLA-safe)", async () => {
       const owner = await signup(uniquePhone(), 'owner-password-6');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
-      const offerVariantId = await createOfferWithStock(vendorId, branchId!, 50, 5);
+      const offerVariantId = await createOfferWithStock(
+        vendorId,
+        branchId!,
+        50,
+        5,
+      );
       const customerA = await signup(uniquePhone(), 'customer-password-6a');
       const customerB = await signup(uniquePhone(), 'customer-password-6b');
       const { itemId } = await placeAndCompleteOrder(
@@ -611,7 +652,12 @@ describe('Sprint 23 - reviews and the verification badge (e2e)', () => {
     it('two concurrent submissions for the same (item, target_type) race on the DB unique index - one wins, one gets 409', async () => {
       const owner = await signup(uniquePhone(), 'owner-password-9');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
-      const offerVariantId = await createOfferWithStock(vendorId, branchId!, 50, 5);
+      const offerVariantId = await createOfferWithStock(
+        vendorId,
+        branchId!,
+        50,
+        5,
+      );
       const customer = await signup(uniquePhone(), 'customer-password-9');
       const { itemId } = await placeAndCompleteOrder(
         owner,
@@ -738,7 +784,12 @@ describe('Sprint 23 - reviews and the verification badge (e2e)', () => {
     }> {
       const owner = await signup(uniquePhone(), 'owner-password-10');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
-      const offerVariantId = await createOfferWithStock(vendorId, branchId!, 50, 5);
+      const offerVariantId = await createOfferWithStock(
+        vendorId,
+        branchId!,
+        50,
+        5,
+      );
       const author = await signup(uniquePhone(), 'author-password-10');
       const { itemId } = await placeAndCompleteOrder(
         owner,
@@ -762,11 +813,72 @@ describe('Sprint 23 - reviews and the verification badge (e2e)', () => {
       return { reviewId: created.body.id, reporterA, reporterB };
     }
 
-    it('a report starts PENDING; a duplicate report by the same reporter is rejected', async () => {
+    it('the review author cannot report their own review - no ReviewReport or AuditLog row is created', async () => {
+      const owner = await signup(uniquePhone(), 'owner-password-10z');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const offerVariantId = await createOfferWithStock(
+        vendorId,
+        branchId!,
+        50,
+        5,
+      );
+      const author = await signup(uniquePhone(), 'author-password-10z');
+      const { itemId } = await placeAndCompleteOrder(
+        owner,
+        author,
+        vendorId,
+        branchId!,
+        offerVariantId,
+      );
+      const created = await run(
+        submitReview(author, {
+          source_branch_order_item_id: itemId,
+          target_type: 'STORE',
+          rating: 5,
+          body: 'لا يمكنني الإبلاغ عن مراجعتي الخاصة',
+        }),
+      );
+      expect(created.status).toBe(201);
+
+      const auditCountBefore = await prisma.auditLog.count({
+        where: { entityType: 'ReviewReport' },
+      });
+      const selfReport = await run(
+        reportReview(author, created.body.id, 'محاولة إبلاغ ذاتي'),
+      );
+      expect(selfReport.status).toBe(409);
+      expect(selfReport.body.error.code).toBe('CANNOT_REPORT_OWN_REVIEW');
+
+      const reports = await prisma.reviewReport.findMany({
+        where: { reviewId: created.body.id },
+      });
+      expect(reports).toHaveLength(0);
+      const auditCountAfter = await prisma.auditLog.count({
+        where: { entityType: 'ReviewReport' },
+      });
+      expect(auditCountAfter).toBe(auditCountBefore);
+
+      const review = await prisma.review.findUniqueOrThrow({
+        where: { id: created.body.id },
+      });
+      expect(review.moderationStatus).toBe('VISIBLE');
+    });
+
+    it('the first report moves VISIBLE -> REPORTED; a duplicate report by the same reporter is rejected', async () => {
       const { reviewId, reporterA } = await createVisibleReview();
+      const before = await prisma.review.findUniqueOrThrow({
+        where: { id: reviewId },
+      });
+      expect(before.moderationStatus).toBe('VISIBLE');
+
       const first = await run(reportReview(reporterA, reviewId, 'محتوى مسيء'));
       expect(first.status).toBe(201);
       expect(first.body.status).toBe('PENDING');
+
+      const afterFirst = await prisma.review.findUniqueOrThrow({
+        where: { id: reviewId },
+      });
+      expect(afterFirst.moderationStatus).toBe('REPORTED');
 
       const duplicate = await run(
         reportReview(reporterA, reviewId, 'نفس البلاغ مجدداً'),
@@ -775,7 +887,7 @@ describe('Sprint 23 - reviews and the verification badge (e2e)', () => {
       expect(duplicate.body.error.code).toBe('REVIEW_ALREADY_REPORTED');
     });
 
-    it('dismiss leaves the review VISIBLE and resolves every pending report to DISMISSED', async () => {
+    it('dismiss moves REPORTED back to VISIBLE and closes every pending report to DISMISSED; a later report from a different customer moves it to REPORTED again', async () => {
       const { reviewId, reporterA, reporterB } = await createVisibleReview();
       await run(reportReview(reporterA, reviewId, 'سبب أول')).then((r) =>
         expect(r.status).toBe(201),
@@ -783,38 +895,68 @@ describe('Sprint 23 - reviews and the verification badge (e2e)', () => {
       await run(reportReview(reporterB, reviewId, 'سبب ثانٍ')).then((r) =>
         expect(r.status).toBe(201),
       );
+      const reported = await prisma.review.findUniqueOrThrow({
+        where: { id: reviewId },
+      });
+      expect(reported.moderationStatus).toBe('REPORTED');
 
       const admin = await platformAdmin();
       const decision = await run(decideReport(admin, reviewId, 'dismiss'));
       expect(decision.status).toBe(200);
       expect(decision.body.moderation_status).toBe('VISIBLE');
 
-      const reports = await prisma.reviewReport.findMany({ where: { reviewId } });
+      const reports = await prisma.reviewReport.findMany({
+        where: { reviewId },
+      });
       expect(reports).toHaveLength(2);
       expect(reports.every((r) => r.status === 'DISMISSED')).toBe(true);
 
+      const visibleAgain = await prisma.review.findUniqueOrThrow({
+        where: { id: reviewId },
+      });
+      expect(visibleAgain.moderationStatus).toBe('VISIBLE');
+
       const stillPublic = await request(app.getHttpServer())
-        .get(`/api/v1/vendors/${
-          (await prisma.review.findUniqueOrThrow({ where: { id: reviewId } })).vendorId
-        }/reviews`)
+        .get(`/api/v1/vendors/${reported.vendorId}/reviews`)
         .expect(200);
-      expect(
-        stillPublic.body.reviews.some((r: any) => r.id === reviewId),
-      ).toBe(true);
+      expect(stillPublic.body.reviews.some((r: any) => r.id === reviewId)).toBe(
+        true,
+      );
+
+      // A fresh report from a DIFFERENT customer after dismissal moves
+      // it back to REPORTED - dismissal is not a permanent immunity.
+      const reporterC = await signup(
+        uniquePhone(),
+        'reporter-password-10c-again',
+      );
+      const second = await run(
+        reportReview(reporterC, reviewId, 'سبب جديد بعد التجاهل'),
+      );
+      expect(second.status).toBe(201);
+      const reReported = await prisma.review.findUniqueOrThrow({
+        where: { id: reviewId },
+      });
+      expect(reReported.moderationStatus).toBe('REPORTED');
     });
 
-    it('uphold HIDES the review and a non-PENDING review can no longer be reported or re-decided', async () => {
+    it('uphold moves REPORTED to HIDDEN (final) - a non-PENDING review can no longer be reported or re-decided', async () => {
       const { reviewId, reporterA } = await createVisibleReview();
       await run(reportReview(reporterA, reviewId, 'سبب للإخفاء')).then((r) =>
         expect(r.status).toBe(201),
       );
+      const reported = await prisma.review.findUniqueOrThrow({
+        where: { id: reviewId },
+      });
+      expect(reported.moderationStatus).toBe('REPORTED');
 
       const admin = await platformAdmin();
       const decision = await run(decideReport(admin, reviewId, 'uphold'));
       expect(decision.status).toBe(200);
       expect(decision.body.moderation_status).toBe('HIDDEN');
 
-      const review = await prisma.review.findUniqueOrThrow({ where: { id: reviewId } });
+      const review = await prisma.review.findUniqueOrThrow({
+        where: { id: reviewId },
+      });
       expect(review.moderationStatus).toBe('HIDDEN');
 
       const reporterC = await signup(uniquePhone(), 'reporter-password-10c');
@@ -867,7 +1009,12 @@ describe('Sprint 23 - reviews and the verification badge (e2e)', () => {
     it('withholds the aggregate below 3 VISIBLE reviews and shows it at 3, and never counts a HIDDEN review', async () => {
       const owner = await signup(uniquePhone(), 'owner-password-11');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
-      const offerVariantId = await createOfferWithStock(vendorId, branchId!, 50, 10);
+      const offerVariantId = await createOfferWithStock(
+        vendorId,
+        branchId!,
+        50,
+        10,
+      );
       const admin = await platformAdmin();
 
       const ratings = [5, 4, 3];
@@ -923,10 +1070,80 @@ describe('Sprint 23 - reviews and the verification badge (e2e)', () => {
       ).toBe(false);
     });
 
+    it('a REPORTED (not yet decided) review stays publicly visible but is excluded from the aggregate - only HIDDEN is excluded from the list', async () => {
+      const owner = await signup(uniquePhone(), 'owner-password-11b');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const offerVariantId = await createOfferWithStock(
+        vendorId,
+        branchId!,
+        50,
+        10,
+      );
+
+      // 4 reviews (not 3) so that reporting one still leaves 3 VISIBLE
+      // - enough to show a real average, not conflated with the
+      // separate "withheld below 3" rule.
+      const reviewIds: string[] = [];
+      for (const rating of [5, 4, 3, 2]) {
+        const customer = await signup(uniquePhone(), unique('pw-11b'));
+        const { itemId } = await placeAndCompleteOrder(
+          owner,
+          customer,
+          vendorId,
+          branchId!,
+          offerVariantId,
+        );
+        const created = await run(
+          submitReview(customer, {
+            source_branch_order_item_id: itemId,
+            target_type: 'STORE',
+            rating,
+            body: unique('نص مراجعة للإبلاغ'),
+          }),
+        );
+        expect(created.status).toBe(201);
+        reviewIds.push(created.body.id);
+      }
+
+      const before = await request(app.getHttpServer())
+        .get(`/api/v1/vendors/${vendorId}/reviews`)
+        .expect(200);
+      expect(before.body.aggregate.count).toBe(4);
+      expect(before.body.aggregate.average).toBe(3.5);
+
+      // Report (but do not decide) the 5-star review - moves it to
+      // REPORTED, never HIDDEN by a report alone.
+      const reporter = await signup(uniquePhone(), 'reporter-password-11b');
+      await run(reportReview(reporter, reviewIds[0], 'سبب للإبلاغ فقط')).then(
+        (r) => expect(r.status).toBe(201),
+      );
+      const reported = await prisma.review.findUniqueOrThrow({
+        where: { id: reviewIds[0] },
+      });
+      expect(reported.moderationStatus).toBe('REPORTED');
+
+      const afterReport = await request(app.getHttpServer())
+        .get(`/api/v1/vendors/${vendorId}/reviews`)
+        .expect(200);
+      // Still in the public list (only HIDDEN is excluded)...
+      expect(
+        afterReport.body.reviews.some((r: any) => r.id === reviewIds[0]),
+      ).toBe(true);
+      // ...but no longer counted toward the aggregate (VISIBLE only):
+      // 3 VISIBLE reviews (4, 3, 2) left, average 3, not the 3.5 from all 4.
+      expect(afterReport.body.aggregate.count).toBe(3);
+      expect(afterReport.body.aggregate.average).toBe(3);
+    });
+
     it('shows displayName when set, and the verified-customer fallback otherwise', async () => {
       const owner = await signup(uniquePhone(), 'owner-password-12');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
-      const offerVariantId = await createOfferWithStock(vendorId, branchId!, 50, 5);
+      const offerVariantId = await createOfferWithStock(
+        vendorId,
+        branchId!,
+        50,
+        5,
+      );
 
       const customer = await signup(uniquePhone(), 'customer-password-12');
       await request(app.getHttpServer())
@@ -992,7 +1209,10 @@ describe('Sprint 23 - reviews and the verification badge (e2e)', () => {
   describe('verification badge (storefront is_verified)', () => {
     it('PHYSICAL: false with no approved branch, true once the only branch is APPROVED', async () => {
       const owner = await signup(uniquePhone(), 'owner-password-13');
-      const { vendorId, slug } = await createVendorWithBranch(owner, 'PHYSICAL');
+      const { vendorId, slug } = await createVendorWithBranch(
+        owner,
+        'PHYSICAL',
+      );
       await prisma.vendor.update({
         where: { id: vendorId },
         data: { storefrontPublished: true, status: 'ACTIVE' },
@@ -1015,7 +1235,10 @@ describe('Sprint 23 - reviews and the verification badge (e2e)', () => {
 
     it('PHYSICAL: a second, unapproved branch keeps it false even though the first is APPROVED', async () => {
       const owner = await signup(uniquePhone(), 'owner-password-14');
-      const { vendorId, branchId, slug } = await createVendorWithBranch(owner, 'PHYSICAL');
+      const { vendorId, branchId, slug } = await createVendorWithBranch(
+        owner,
+        'PHYSICAL',
+      );
       await prisma.vendor.update({
         where: { id: vendorId },
         data: { storefrontPublished: true, status: 'ACTIVE' },
@@ -1036,7 +1259,10 @@ describe('Sprint 23 - reviews and the verification badge (e2e)', () => {
 
     it('PHYSICAL: an archived unapproved branch is ignored - only active branches count', async () => {
       const owner = await signup(uniquePhone(), 'owner-password-15');
-      const { vendorId, branchId, slug } = await createVendorWithBranch(owner, 'PHYSICAL');
+      const { vendorId, branchId, slug } = await createVendorWithBranch(
+        owner,
+        'PHYSICAL',
+      );
       await prisma.vendor.update({
         where: { id: vendorId },
         data: { storefrontPublished: true, status: 'ACTIVE' },
@@ -1063,7 +1289,10 @@ describe('Sprint 23 - reviews and the verification badge (e2e)', () => {
 
     it('ONLINE_ONLY: false with no warehouse evidence, true once the latest snapshot is APPROVED', async () => {
       const owner = await signup(uniquePhone(), 'owner-password-16');
-      const { vendorId, slug } = await createVendorWithBranch(owner, 'ONLINE_ONLY');
+      const { vendorId, slug } = await createVendorWithBranch(
+        owner,
+        'ONLINE_ONLY',
+      );
       await prisma.vendor.update({
         where: { id: vendorId },
         data: { storefrontPublished: true, status: 'ACTIVE' },
@@ -1108,7 +1337,10 @@ describe('Sprint 23 - reviews and the verification badge (e2e)', () => {
 
     it('HYBRID: needs BOTH the physical-branch rule and an APPROVED warehouse snapshot', async () => {
       const owner = await signup(uniquePhone(), 'owner-password-17');
-      const { vendorId, branchId, slug } = await createVendorWithBranch(owner, 'HYBRID');
+      const { vendorId, branchId, slug } = await createVendorWithBranch(
+        owner,
+        'HYBRID',
+      );
       await prisma.vendor.update({
         where: { id: vendorId },
         data: { storefrontPublished: true, status: 'ACTIVE' },

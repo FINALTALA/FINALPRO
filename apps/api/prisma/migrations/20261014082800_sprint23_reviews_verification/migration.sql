@@ -6,7 +6,7 @@
 CREATE TYPE "ReviewTargetType" AS ENUM ('PRODUCT', 'STORE');
 
 -- CreateEnum
-CREATE TYPE "ReviewModerationStatus" AS ENUM ('VISIBLE', 'HIDDEN');
+CREATE TYPE "ReviewModerationStatus" AS ENUM ('VISIBLE', 'REPORTED', 'HIDDEN');
 
 -- CreateEnum
 CREATE TYPE "ReviewReportStatus" AS ENUM ('PENDING', 'DISMISSED', 'UPHELD');

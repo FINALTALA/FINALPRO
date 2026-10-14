@@ -192,7 +192,13 @@ export class ReviewsService {
    * Sprint 23 (PDR-032: "reports may hide them after admin review").
    * Locks the review row first so a report filed the instant a
    * PLATFORM_ADMIN decision lands can never land against a stale
-   * (not-yet-HIDDEN) read.
+   * (not-yet-HIDDEN) read. The first PENDING report against an
+   * otherwise-VISIBLE review moves it to REPORTED (still publicly
+   * visible - see vendorReviews()/listForProduct() - but excluded from
+   * the aggregate); a review already REPORTED (or already HIDDEN,
+   * rejected above) stays exactly as it is - a second reporter's
+   * report is additional evidence for the same queue entry, never a
+   * second transition.
    */
   async report(
     customerId: string,
@@ -216,6 +222,12 @@ export class ReviewsService {
           message: 'This review has already been hidden',
         });
       }
+      if (review.customerId === customerId) {
+        throw new ConflictException({
+          code: 'CANNOT_REPORT_OWN_REVIEW',
+          message: 'You cannot report your own review',
+        });
+      }
 
       let created;
       try {
@@ -230,6 +242,13 @@ export class ReviewsService {
           });
         }
         throw err;
+      }
+
+      if (review.moderationStatus === 'VISIBLE') {
+        await tx.review.update({
+          where: { id: reviewId },
+          data: { moderationStatus: 'REPORTED' },
+        });
       }
 
       await this.auditLog.record(
@@ -313,14 +332,14 @@ export class ReviewsService {
         },
       });
 
-      let moderationStatus = review.moderationStatus;
-      if (decision === 'uphold') {
-        moderationStatus = 'HIDDEN';
-        await tx.review.update({
-          where: { id: reviewId },
-          data: { moderationStatus: 'HIDDEN' },
-        });
-      }
+      // Always written explicitly, both directions: dismiss ->
+      // REPORTED back to VISIBLE (a later report can move it to
+      // REPORTED again); uphold -> HIDDEN, the one terminal state.
+      const moderationStatus = decision === 'uphold' ? 'HIDDEN' : 'VISIBLE';
+      await tx.review.update({
+        where: { id: reviewId },
+        data: { moderationStatus },
+      });
 
       await this.auditLog.record(
         {
@@ -357,12 +376,20 @@ export class ReviewsService {
       });
     }
     const rows = await this.prisma.review.findMany({
-      where: { canonicalProductId, moderationStatus: 'VISIBLE' },
+      where: { canonicalProductId, moderationStatus: { not: 'HIDDEN' } },
       include: { customer: { select: { displayName: true } } },
       orderBy: { createdAt: 'desc' },
     });
     return {
-      aggregate: computeAggregateRating(rows.map((r) => r.rating)),
+      // Only HIDDEN is excluded from the public list (a REPORTED
+      // review stays visible until an admin actually decides) - but
+      // the aggregate counts VISIBLE only, per the approved decision
+      // (a review under an open report doesn't yet count).
+      aggregate: computeAggregateRating(
+        rows
+          .filter((r) => r.moderationStatus === 'VISIBLE')
+          .map((r) => r.rating),
+      ),
       reviews: rows.map(reviewDto),
     };
   }
@@ -400,12 +427,18 @@ export class ReviewsService {
 
   private async vendorReviews(vendorId: string) {
     const rows = await this.prisma.review.findMany({
-      where: { vendorId, moderationStatus: 'VISIBLE' },
+      where: { vendorId, moderationStatus: { not: 'HIDDEN' } },
       include: { customer: { select: { displayName: true } } },
       orderBy: { createdAt: 'desc' },
     });
     return {
-      aggregate: computeAggregateRating(rows.map((r) => r.rating)),
+      // Same REPORTED-visible-but-not-aggregated rule as
+      // listForProduct() above.
+      aggregate: computeAggregateRating(
+        rows
+          .filter((r) => r.moderationStatus === 'VISIBLE')
+          .map((r) => r.rating),
+      ),
       reviews: rows.map(reviewDto),
     };
   }
