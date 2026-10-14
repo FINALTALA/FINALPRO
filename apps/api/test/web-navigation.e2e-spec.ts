@@ -189,6 +189,7 @@ describe('Sprint 13 - web navigation model', () => {
       // tiles (the platform catalog - categories/brands/canonical
       // products) - this assertion is updated to match, not relaxed.
       // Sprint 20a: one more - the branch-order cancel/refund override.
+      // Sprint 23: one more - the review-report queue.
       expect(adminTiles('PLATFORM_ADMIN').map((t) => t.href)).toEqual([
         '/admin/verification',
         '/admin/vendors',
@@ -198,6 +199,7 @@ describe('Sprint 13 - web navigation model', () => {
         '/admin/canonical-products',
         '/admin/branch-orders',
         '/admin/returns',
+        '/admin/reviews',
       ]);
     });
 

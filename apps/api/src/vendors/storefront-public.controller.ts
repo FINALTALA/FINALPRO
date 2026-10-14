@@ -11,6 +11,14 @@ import { PrismaService } from '../prisma/prisma.service';
 // expose beyond what's returned here (there is nothing extra there,
 // in fact - the two DTOs happen to carry the same public fields plus
 // is_published) stays behind that separate, authenticated controller.
+//
+// Sprint 23 (final decision #9): is_verified is the one exception to
+// "never includes warehouse" above - it exposes a DERIVED boolean
+// only, never any raw Warehouse field (lat/lng/addressNote stay
+// exactly as hidden as before). PHYSICAL: every active (non-archived)
+// physical branch must be APPROVED, and at least one must exist.
+// ONLINE_ONLY: the latest WarehouseVerificationEvidence snapshot must
+// be APPROVED. HYBRID: both.
 @Controller('storefronts')
 export class StorefrontPublicController {
   constructor(private readonly prisma: PrismaService) {}
@@ -24,6 +32,10 @@ export class StorefrontPublicController {
         message: 'No store found for this URL',
       });
     }
+    const isVerified = await this.computeIsVerified(
+      vendor.id,
+      vendor.storeType,
+    );
 
     // "إن كان المحل غير متاح، يبقى الاسم/الهوية ظاهرين مع حالة واضحة" -
     // identity always shows; is_available combines the owner's own
@@ -45,6 +57,46 @@ export class StorefrontPublicController {
       facebook_url: vendor.facebookUrl,
       whatsapp_url: vendor.whatsappUrl,
       is_available: isAvailable,
+      is_verified: isVerified,
     };
+  }
+
+  private async computeIsVerified(
+    vendorId: string,
+    storeType: string,
+  ): Promise<boolean> {
+    const needsPhysical = storeType === 'PHYSICAL' || storeType === 'HYBRID';
+    const needsWarehouse =
+      storeType === 'ONLINE_ONLY' || storeType === 'HYBRID';
+
+    const [physicalOk, warehouseOk] = await Promise.all([
+      needsPhysical ? this.allActivePhysicalBranchesApproved(vendorId) : true,
+      needsWarehouse ? this.latestWarehouseEvidenceApproved(vendorId) : true,
+    ]);
+    return physicalOk && warehouseOk;
+  }
+
+  private async allActivePhysicalBranchesApproved(
+    vendorId: string,
+  ): Promise<boolean> {
+    const branches = await this.prisma.storeBranch.findMany({
+      where: { vendorId, isPhysical: true, archivedAt: null },
+      select: { verificationStatus: true },
+    });
+    return (
+      branches.length > 0 &&
+      branches.every((b) => b.verificationStatus === 'APPROVED')
+    );
+  }
+
+  private async latestWarehouseEvidenceApproved(
+    vendorId: string,
+  ): Promise<boolean> {
+    const latest = await this.prisma.warehouseVerificationEvidence.findFirst({
+      where: { vendorId },
+      orderBy: [{ submittedAt: 'desc' }, { id: 'desc' }],
+      select: { status: true },
+    });
+    return latest?.status === 'APPROVED';
   }
 }

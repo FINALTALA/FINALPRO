@@ -5,9 +5,11 @@ import { IdempotencyModule } from '../common/idempotency/idempotency.module';
 import { OrdersModule } from '../orders/orders.module';
 import { OutboxModule } from '../outbox/outbox.module';
 import { ReturnsModule } from '../returns/returns.module';
+import { ReviewsModule } from '../reviews/reviews.module';
 import { AdminBranchOrdersController } from './admin-branch-orders.controller';
 import { AdminOutboxController } from './admin-outbox.controller';
 import { AdminReturnsController } from './admin-returns.controller';
+import { AdminReviewsController } from './admin-reviews.controller';
 import { AdminVendorsController } from './admin-vendors.controller';
 import { VerificationQueueController } from './verification-queue.controller';
 
@@ -17,7 +19,8 @@ import { VerificationQueueController } from './verification-queue.controller';
 // codebase - BranchOrderCancellationService is only resolvable if
 // this module imports the module that exports it. Sprint 21:
 // AdminReturnsController needs ReturnsModule for the same reason
-// (ReturnsService).
+// (ReturnsService). Sprint 23: AdminReviewsController needs
+// ReviewsModule (ReviewsService).
 @Module({
   imports: [
     AuditModule,
@@ -26,6 +29,7 @@ import { VerificationQueueController } from './verification-queue.controller';
     OrdersModule,
     OutboxModule,
     ReturnsModule,
+    ReviewsModule,
   ],
   controllers: [
     VerificationQueueController,
@@ -33,6 +37,7 @@ import { VerificationQueueController } from './verification-queue.controller';
     AdminOutboxController,
     AdminBranchOrdersController,
     AdminReturnsController,
+    AdminReviewsController,
   ],
 })
 export class PlatformAdminModule {}
