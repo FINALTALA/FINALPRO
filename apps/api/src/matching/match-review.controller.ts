@@ -33,6 +33,8 @@ import {
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { Prisma } from '../../generated/prisma/client';
+import { enqueueFavoriteNotification } from '../favorites/favorite-alerts.util';
+import { OutboxEventService } from '../outbox/outbox-event.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CanonicalNamingService } from './canonical-naming.service';
 import { MatchReviewDecisionDto } from './dto/match-review-decision.dto';
@@ -190,6 +192,7 @@ export class MatchReviewController {
     private readonly canonicalNaming: CanonicalNamingService,
     private readonly auditLog: AuditLogService,
     private readonly idempotencyCompletion: IdempotencyCompletionService,
+    private readonly outbox: OutboxEventService,
   ) {}
 
   private async requireVariant(
@@ -389,6 +392,23 @@ export class MatchReviewController {
           user.id,
           req.correlationId,
         );
+
+        // Sprint 24 (FR-FAV-006): the non-exact-match counterpart to
+        // vendor-offers.controller.ts's own confirmMatch() - same
+        // "fires exactly once" reasoning: this branch only ever runs
+        // when candidate.status was PENDING (checked above), the one
+        // real NULL -> set transition for this offer variant's
+        // canonicalVariantId.
+        await enqueueFavoriteNotification(tx, this.outbox, {
+          eventType: 'favorite.new_offer_matched',
+          alertType: 'NEW_OFFER',
+          canonicalProductId: canonicalVariant.canonicalProductId,
+          payload: {
+            vendor_id: vendorId,
+            canonical_product_id: canonicalVariant.canonicalProductId,
+            offer_variant_id: variantId,
+          },
+        });
       }
 
       await this.auditLog.record(

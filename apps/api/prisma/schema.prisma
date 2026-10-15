@@ -88,6 +88,11 @@ model User {
   /// Sprint 23 (PDR-032): PLATFORM_ADMIN's own decisions on
   /// ReviewReport - dismiss or uphold.
   reviewDecisions              ReviewReport[]
+  /// Sprint 24 (FR-FAV-001): PRODUCT/OFFER favorites - STORE
+  /// favoriting stays StoreFollow (final decision #6).
+  favorites                    Favorite[]
+  comparisonSets               ComparisonSet[]
+  notificationPreferences      NotificationPreference[]
 
   @@map("users")
 }
@@ -1140,6 +1145,19 @@ enum NotificationType {
   /// Sprint 20a (PDR-025/027): a refund fired automatically (no human
   /// approval step).
   REFUND_AUTOMATIC
+  /// Sprint 24 (FR-FAV-003): a favorited product/offer's effective
+  /// price dropped - either a manual edit or a scheduled discount
+  /// activating (both choke points fire this).
+  FAVORITE_PRICE_DROP
+  /// Sprint 24 (FR-FAV-004): a favorited OFFER's stock went from
+  /// unavailable in every active physical branch to available in at
+  /// least one - OFFER favorites only (final decision #4, no
+  /// PRODUCT-level restock alert this sprint).
+  FAVORITE_BACK_IN_STOCK
+  /// Sprint 24 (FR-FAV-006): a new vendor offer was matched/confirmed
+  /// against a favorited canonical product - fires exactly once, on
+  /// the real canonicalVariantId NULL -> set transition.
+  FAVORITE_NEW_OFFER
 }
 
 enum NotificationTargetType {
@@ -1147,6 +1165,10 @@ enum NotificationTargetType {
   STOCK
   VENDOR
   OFFER
+  /// Sprint 24: a PRODUCT-level favorite event (price-drop, new-offer)
+  /// that isn't tied to one specific offer - targetId is the
+  /// canonicalProductId.
+  CANONICAL_PRODUCT
 }
 
 /// Sprint 19 (§8 plan): bounded fan-out for an outbox event with
@@ -1428,6 +1450,11 @@ model CanonicalProduct {
   /// Sprint 23 (PDR-032): PRODUCT-target reviews against this canonical
   /// product.
   reviews            Review[]
+  /// Sprint 24 (FR-FAV-001/FR-COMP-002): PRODUCT-level favorites, and
+  /// this product's appearances across every customer's saved
+  /// comparison sets.
+  favorites          Favorite[]
+  comparisonSetItems ComparisonSetItem[]
 
   @@index([brandId])
   @@index([categoryId])
@@ -1847,6 +1874,9 @@ model OfferVariant {
   /// returned item's own variant (that relation is BranchOrderItem's,
   /// via branchOrderItems above).
   exchangeReplacementFor   Return[]                  @relation("ReturnReplacementVariant")
+  /// Sprint 24 (FR-FAV-001): OFFER-level favorites of this exact
+  /// listing.
+  favorites                Favorite[]
 
   @@unique([vendorId, sellerSku])
   @@unique([vendorId, storeInventoryBarcode])
@@ -3591,4 +3621,123 @@ model ReviewReport {
   @@unique([reviewId, reporterId])
   @@index([status])
   @@map("review_reports")
+}
+
+enum FavoriteTargetType {
+  PRODUCT
+  OFFER
+}
+
+/// Sprint 24 (FR-FAV-001, final decision #6): PRODUCT and OFFER
+/// favorites only - STORE favoriting stays exactly StoreFollow, never
+/// duplicated here. Same exactly-one-target XOR shape as Review
+/// (reviews_exactly_one_target) - a hand-written migration CHECK
+/// (favorites_exactly_one_target) backs it, Prisma's schema DSL can't
+/// express a cross-column XOR. Two plain multi-column uniques, not one
+/// combined one: a combined @@unique([userId, targetType,
+/// canonicalProductId, offerVariantId]) would never actually block a
+/// duplicate PRODUCT favorite, since offerVariantId is NULL on every
+/// PRODUCT row and NULL is never equal to NULL in a unique index.
+/// Adding is an upsert (update: {}), the same idempotent-under-
+/// concurrency shape StoreFollow.follow() already uses and already
+/// relies on in production - two concurrent "add the same favorite"
+/// requests resolve to exactly one row via Postgres's own ON CONFLICT
+/// handling, no application lock needed.
+///
+/// Target validated at add time against the same public-eligibility
+/// definitions ComparisonService already uses as the single source of
+/// truth (eligibleProductWhere for PRODUCT, findEligibleOffers for
+/// OFFER - the latter means an unmatched/standalone listing cannot be
+/// favorited, a direct consequence of reusing that exact definition).
+/// Re-checked live on every read, never purged - a target that stops
+/// being eligible after being favorited (vendor suspended, offer
+/// archived) simply stops appearing in GET /favorites.
+///
+/// offerVariantId is a PLAIN fk (OfferVariant.id is globally unique via
+/// its own @id) - no composite (vendorId, id) FK needed, since a
+/// favorite has no vendor-tenant-scoping concern of its own the way
+/// BranchStock/CartItem do.
+model Favorite {
+  id                 String             @id @default(uuid())
+  userId             String
+  user               User               @relation(fields: [userId], references: [id])
+  targetType         FavoriteTargetType
+  /// Set only when targetType = PRODUCT.
+  canonicalProductId String?
+  canonicalProduct   CanonicalProduct?  @relation(fields: [canonicalProductId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  /// Set only when targetType = OFFER.
+  offerVariantId     String?
+  offerVariant       OfferVariant?      @relation(fields: [offerVariantId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  createdAt          DateTime           @default(now())
+
+  @@unique([userId, canonicalProductId])
+  @@unique([userId, offerVariantId])
+  @@map("favorites")
+}
+
+/// Sprint 24 (FR-COMP-001/002/007): a saved, shareable comparison set -
+/// up to 4 items (final decision #7: no cap on how many sets a
+/// customer may save, only on items per set). shareSlug is a random
+/// opaque token - the ONLY thing the public share route ever accepts,
+/// never the internal id (BOLA-safety: an internal id is sequential/
+/// guessable in intent even if UUID-random in practice, and mixing the
+/// owner-route id-space with the public route would blur that
+/// boundary). Mode 1 (same-product offers) vs mode 2 (competing
+/// products) is never a stored field - it's derived from whether every
+/// item shares one canonicalProductId or spans several, decided at
+/// read time, not write time.
+///
+/// Item-count discipline (final correction): every mutation - the
+/// initial create (1-4 items, DTO-validated) and every later add/
+/// remove - locks this row (`SELECT ... FOR UPDATE`) FIRST, then
+/// re-counts, then decides. add is the only direction with a ceiling
+/// (409 COMPARISON_SET_FULL at 4); remove has no floor - a SAVED set
+/// may sit at 0 items until the customer explicitly deletes it or adds
+/// something back. Never auto-deleted by removing its last item.
+model ComparisonSet {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  shareSlug String   @unique
+  createdAt DateTime @default(now())
+
+  items ComparisonSetItem[]
+
+  @@map("comparison_sets")
+}
+
+model ComparisonSetItem {
+  id                 String           @id @default(uuid())
+  comparisonSetId    String
+  comparisonSet      ComparisonSet    @relation(fields: [comparisonSetId], references: [id], onDelete: Cascade)
+  canonicalProductId String
+  canonicalProduct   CanonicalProduct @relation(fields: [canonicalProductId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  addedAt            DateTime         @default(now())
+
+  @@unique([comparisonSetId, canonicalProductId])
+  @@map("comparison_set_items")
+}
+
+enum FavoriteAlertType {
+  PRICE_DROP
+  BACK_IN_STOCK
+  NEW_OFFER
+}
+
+/// Sprint 24 (FR-FAV-005, final decision #5): per-alert-type on/off
+/// only - no frequency/digest control, since no grouping/batching is
+/// built this sprint (every qualifying event is its own immediate
+/// notification, same as StoreFollow). Absence of a row for a given
+/// (userId, alertType) means enabled=true - opt-out, not opt-in -
+/// checked at OutboxDeliveryTarget snapshot time, never at relay-
+/// delivery time.
+model NotificationPreference {
+  id        String            @id @default(uuid())
+  userId    String
+  user      User              @relation(fields: [userId], references: [id])
+  alertType FavoriteAlertType
+  enabled   Boolean           @default(true)
+
+  @@unique([userId, alertType])
+  @@map("notification_preferences")
 }

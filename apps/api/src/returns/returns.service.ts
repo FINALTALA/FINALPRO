@@ -9,9 +9,11 @@ import { Prisma } from '../../generated/prisma/client';
 import { AuditLogService } from '../audit/audit-log.service';
 import { lockBranchOperationalStatus } from '../common/branch-operational-lock.util';
 import {
+  lockOfferWideForRestock,
+  lockOffersWideForRestock,
   lockSweepOrCreateStockRow,
-  lockSweepOrCreateStockRowsSorted,
 } from '../checkout/stock-lock.util';
+import { enqueueFavoriteNotification } from '../favorites/favorite-alerts.util';
 import {
   computeEffectivePrice,
   toDecimal,
@@ -1043,20 +1045,25 @@ export class ReturnsService {
       );
 
       if (dto.item_condition === 'RESELLABLE') {
-        await this.incrementBranchStockWithLock(
-          tx,
-          vendorId,
-          dto.receiving_branch_id,
-          item.offerVariantId,
-          item.quantity,
-        );
-        const stock = await tx.branchStock.findUniqueOrThrow({
+        // Sprint 24 (FR-FAV-004): the offer-wide restock primitive
+        // replaces the old single-key incrementBranchStockWithLock -
+        // same real write, now with a correct, phantom-row-free
+        // offer-wide BEFORE/AFTER for the back-in-stock alert decision.
+        const siblingBranches = await tx.storeBranch.findMany({
           where: {
-            branchId_offerVariantId: {
-              branchId: dto.receiving_branch_id,
-              offerVariantId: item.offerVariantId,
-            },
+            vendorId,
+            isPhysical: true,
+            archivedAt: null,
+            id: { not: dto.receiving_branch_id },
           },
+          select: { id: true },
+        });
+        const restock = await lockOfferWideForRestock(tx, {
+          vendorId,
+          branchId: dto.receiving_branch_id,
+          offerVariantId: item.offerVariantId,
+          quantityDelta: item.quantity,
+          siblingBranchIds: siblingBranches.map((b) => b.id),
         });
         await tx.stockMovement.create({
           data: {
@@ -1064,12 +1071,23 @@ export class ReturnsService {
             branchId: dto.receiving_branch_id,
             offerVariantId: item.offerVariantId,
             quantityDelta: item.quantity,
-            resultingQuantity: stock.quantity,
+            resultingQuantity: restock.targetStock.quantity,
             reason: 'RETURN_RESTOCK',
             reasonNote: `Return ${r.id} - item received resellable`,
             actorId: actorUserId,
           },
         });
+        if (restock.before === 0 && (restock.after ?? 0) > 0) {
+          await enqueueFavoriteNotification(tx, this.outbox, {
+            eventType: 'favorite.back_in_stock',
+            alertType: 'BACK_IN_STOCK',
+            offerVariantId: item.offerVariantId,
+            payload: {
+              vendor_id: vendorId,
+              offer_variant_id: item.offerVariantId,
+            },
+          });
+        }
       }
 
       await tx.return.update({
@@ -1128,13 +1146,14 @@ export class ReturnsService {
    * happens in between). Lock order: Return (caller already holds it)
    * -> branch-operational-status (caller already took it) ->
    * BranchOrderItem (caller already holds it) -> the two BranchStock
-   * rows below, locked TOGETHER via lockSweepOrCreateStockRowsSorted
-   * (never two sequential standalone single-key calls - a real
-   * review-round finding: each standalone call independently
-   * discovers-and-locks its own reservation set, which can deadlock
-   * against a concurrent checkout reserve() or a second exchange
-   * touching the same two keys in the opposite order - see that
-   * function's own comment).
+   * rows below, locked TOGETHER via one lockOffersWideForRestock batch
+   * (Sprint 24, FR-FAV-004 - superseded the original
+   * lockSweepOrCreateStockRowsSorted call here, same reasoning: never
+   * two sequential standalone single-key calls - a real review-round
+   * finding: each standalone call independently discovers-and-locks
+   * its own reservation set, which can deadlock against a concurrent
+   * checkout reserve() or a second exchange touching the same two keys
+   * in the opposite order - see that function's own comment).
    */
   private async fulfillExchange(
     tx: Prisma.TransactionClient,
@@ -1171,36 +1190,61 @@ export class ReturnsService {
     const replacementVariantId = r.replacementOfferVariantId!;
     const now = new Date();
 
-    const lockedStocks = await lockSweepOrCreateStockRowsSorted(tx, [
-      { vendorId, branchId, offerVariantId: item.offerVariantId },
-      { vendorId, branchId, offerVariantId: replacementVariantId },
+    // Sprint 24 (FR-FAV-004): ONE batched call for both legs - never
+    // two separate lockOffersWideForRestock-family calls in the same
+    // transaction, which would reopen the exact AB-BA lock-order
+    // hazard S21b's own round-1 fix already closed once (a second
+    // concurrent exchange touching the same two offer variants in the
+    // opposite order could otherwise deadlock against this one). The
+    // replacement leg releases its approval-time reservation hold
+    // (reservedQuantityDelta, NOT the expired-reservation sweep - this
+    // is a deliberate, non-expired release) in the SAME update as its
+    // quantity decrement; the original-item leg only participates when
+    // RESELLABLE, with its own sibling branches, so it alone drives the
+    // back-in-stock alert decision - the replacement leg carries no
+    // siblings and never contributes to or triggers one.
+    const siblingBranches =
+      itemCondition === 'RESELLABLE'
+        ? await tx.storeBranch.findMany({
+            where: {
+              vendorId,
+              isPhysical: true,
+              archivedAt: null,
+              id: { not: branchId },
+            },
+            select: { id: true },
+          })
+        : [];
+    const results = await lockOffersWideForRestock(tx, [
+      {
+        vendorId,
+        branchId,
+        offerVariantId: replacementVariantId,
+        quantityDelta: -item.quantity,
+        reservedQuantityDelta: -item.quantity,
+      },
+      ...(itemCondition === 'RESELLABLE'
+        ? [
+            {
+              vendorId,
+              branchId,
+              offerVariantId: item.offerVariantId,
+              quantityDelta: item.quantity,
+              siblingBranchIds: siblingBranches.map((b) => b.id),
+            },
+          ]
+        : []),
     ]);
-    const originalStock = lockedStocks.get(
-      `${branchId}:${item.offerVariantId}`,
-    )!;
-    const replacementStock = lockedStocks.get(
+    const replacementStock = results.get(
       `${branchId}:${replacementVariantId}`,
     )!;
-
-    // Release the reservation taken at approval time and decrement the
-    // real quantity - the replacement physically leaves the shelf now.
-    await tx.branchStock.update({
-      where: { id: replacementStock.id },
-      data: {
-        reservedQuantity: { decrement: item.quantity },
-        quantity: { decrement: item.quantity },
-      },
-    });
-    const updatedReplacementStock = await tx.branchStock.findUniqueOrThrow({
-      where: { id: replacementStock.id },
-    });
     await tx.stockMovement.create({
       data: {
         vendorId,
         branchId,
         offerVariantId: replacementVariantId,
         quantityDelta: -item.quantity,
-        resultingQuantity: updatedReplacementStock.quantity,
+        resultingQuantity: replacementStock.targetStock.quantity,
         reason: 'EXCHANGE_FULFILLED',
         reasonNote: `Return ${r.id} - replacement handed over`,
         actorId: actorUserId,
@@ -1208,25 +1252,30 @@ export class ReturnsService {
     });
 
     if (itemCondition === 'RESELLABLE') {
-      await tx.branchStock.update({
-        where: { id: originalStock.id },
-        data: { quantity: { increment: item.quantity } },
-      });
-      const updatedOriginalStock = await tx.branchStock.findUniqueOrThrow({
-        where: { id: originalStock.id },
-      });
+      const originalStock = results.get(`${branchId}:${item.offerVariantId}`)!;
       await tx.stockMovement.create({
         data: {
           vendorId,
           branchId,
           offerVariantId: item.offerVariantId,
           quantityDelta: item.quantity,
-          resultingQuantity: updatedOriginalStock.quantity,
+          resultingQuantity: originalStock.targetStock.quantity,
           reason: 'RETURN_RESTOCK',
           reasonNote: `Return ${r.id} - exchanged item received resellable`,
           actorId: actorUserId,
         },
       });
+      if (originalStock.before === 0 && (originalStock.after ?? 0) > 0) {
+        await enqueueFavoriteNotification(tx, this.outbox, {
+          eventType: 'favorite.back_in_stock',
+          alertType: 'BACK_IN_STOCK',
+          offerVariantId: item.offerVariantId,
+          payload: {
+            vendor_id: vendorId,
+            offer_variant_id: item.offerVariantId,
+          },
+        });
+      }
     }
 
     const calc = computeExchangeSettlement(
@@ -1287,29 +1336,6 @@ export class ReturnsService {
 
   private decimalToFixed(value: unknown): string {
     return value == null ? '0.00' : toDecimal(value).toFixed(2);
-  }
-
-  private async incrementBranchStockWithLock(
-    tx: Prisma.TransactionClient,
-    vendorId: string,
-    branchId: string,
-    offerVariantId: string,
-    incrementBy: number,
-  ): Promise<void> {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('finalpro:branch_stock:' || ${branchId} || ':' || ${offerVariantId}))`;
-    const existing = await tx.branchStock.findUnique({
-      where: { branchId_offerVariantId: { branchId, offerVariantId } },
-    });
-    if (existing) {
-      await tx.branchStock.update({
-        where: { id: existing.id },
-        data: { quantity: { increment: incrementBy } },
-      });
-    } else {
-      await tx.branchStock.create({
-        data: { vendorId, branchId, offerVariantId, quantity: incrementBy },
-      });
-    }
   }
 
   // ============================================================

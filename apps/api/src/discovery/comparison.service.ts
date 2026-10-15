@@ -22,6 +22,16 @@ export interface EligibleOffer {
   price: number;
   availability: AvailabilityBucket;
   imageUrl: string | null;
+  /// Sprint 24 (FR-COMP-003).
+  condition: string;
+  /// Sprint 24 (FR-COMP-006, BR-004/NFR-STALE-002): the proxy for
+  /// "when was this price last confirmed" - the latest PriceHistory
+  /// row's own changedAt for this variant, or (if the price has never
+  /// changed since the listing was created) the variant's own
+  /// createdAt. There is no separate "reconfirmed without changing"
+  /// action anywhere in this schema - this is the most honest
+  /// available signal, not a new default invented for this sprint.
+  priceLastConfirmedAt: Date;
 }
 
 export interface ComparisonCard {
@@ -174,6 +184,11 @@ export class ComparisonService {
           select: { url: true, kind: true },
           orderBy: { createdAt: 'asc' },
         },
+        priceHistory: {
+          select: { changedAt: true },
+          orderBy: { changedAt: 'desc' },
+          take: 1,
+        },
       },
     });
 
@@ -216,6 +231,8 @@ export class ComparisonService {
         price: computeEffectivePrice(v),
         availability: bucketForStock(totalStock),
         imageUrl: primaryMediaUrl(v.media),
+        condition: v.condition,
+        priceLastConfirmedAt: v.priceHistory[0]?.changedAt ?? v.createdAt,
       };
     });
   }

@@ -28,7 +28,11 @@ import { VendorMembershipGuard } from '../auth/vendor-membership.guard';
 import { RequireVendorRole } from '../auth/vendor-role.decorator';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
-import { lockAndSweepStockRow } from '../checkout/stock-lock.util';
+import {
+  lockAndSweepStockRow,
+  lockOfferWideForRestock,
+} from '../checkout/stock-lock.util';
+import { enqueueFavoriteNotification } from '../favorites/favorite-alerts.util';
 import {
   decodeCursor,
   encodeCursor,
@@ -485,46 +489,76 @@ export class InventoryController {
     }
 
     const body = await this.prisma.$transaction(async (tx) => {
-      const newStockId = randomUUID();
-      await tx.$executeRaw`
-        INSERT INTO branch_stock (id, "vendorId", "branchId", "offerVariantId", quantity, "createdAt", "updatedAt")
-        VALUES (${newStockId}, ${vendorId}, ${branchId}, ${offerVariantId}, 0, now(), now())
-        ON CONFLICT ("branchId", "offerVariantId") DO NOTHING
-      `;
-      // Codex review round 2 on commit d0ea80d: the "- reservedQuantity"
-      // guard below is only correct against a FRESH reservedQuantity -
-      // a hold that expired 10 minutes ago but was never swept (because
-      // nobody has since tried to RE-reserve against this exact row)
-      // would otherwise sit there blocking a legitimate physical sale
-      // indefinitely, which is not what "lazy expiry" is supposed to
-      // mean. lockAndSweepStockRow() locks this row and releases any
-      // expired holds on it - the same shared primitive reserve() uses
-      // - before the conditional UPDATE below even runs, so this sale
-      // is judged against the TRUE current hold, not a stale one.
-      await lockAndSweepStockRow(tx, vendorId, branchId, offerVariantId);
-      // The guard is a no-op for every INCREASE (quantity_delta > 0):
-      // quantity already >= reservedQuantity by this table's own CHECK
-      // invariant, so adding a positive delta can never make the
-      // condition false - restocking is never blocked. See
-      // BranchStock.reservedQuantity's own schema.prisma comment for
-      // the full design. Note: lastPhysicalCountAt is deliberately NOT
-      // touched by this UPDATE - see this method's own comment above.
-      const updated = await tx.$queryRaw<{ id: string; quantity: number }[]>`
-        UPDATE branch_stock
-        SET quantity = quantity + ${dto.quantity_delta}, "updatedAt" = now()
-        WHERE "branchId" = ${branchId}
-          AND "offerVariantId" = ${offerVariantId}
-          AND quantity + ${dto.quantity_delta} - "reservedQuantity" >= 0
-        RETURNING id, quantity
-      `;
-      if (updated.length === 0) {
-        throw new ConflictException({
-          code: 'INSUFFICIENT_STOCK',
-          message:
-            'This movement would take branch stock below zero - not applied',
+      let resultingQuantity: number;
+      // Sprint 24 (FR-FAV-004): set only when this movement went
+      // through the offer-wide restock primitive below (quantity_delta
+      // > 0) - undefined for every decrease, which never needs an
+      // alert decision.
+      let restockBefore: number | undefined;
+      let restockAfter: number | undefined;
+
+      if (dto.quantity_delta > 0) {
+        // The only direction that can cross 0 -> positive. Uses the
+        // SAME batched primitive every other quantity-increasing
+        // writer now shares (stock-lock.util.ts) - full active-branch
+        // set for a correct, phantom-row-free BEFORE/AFTER, never the
+        // plain atomic conditional UPDATE below (whose floor-check is
+        // a structural no-op for an increase anyway, per this
+        // method's own pre-existing comment).
+        const siblingBranches = await tx.storeBranch.findMany({
+          where: {
+            vendorId,
+            isPhysical: true,
+            archivedAt: null,
+            id: { not: branchId },
+          },
+          select: { id: true },
         });
+        const restock = await lockOfferWideForRestock(tx, {
+          vendorId,
+          branchId,
+          offerVariantId,
+          quantityDelta: dto.quantity_delta,
+          siblingBranchIds: siblingBranches.map((b) => b.id),
+        });
+        resultingQuantity = restock.targetStock.quantity;
+        restockBefore = restock.before;
+        restockAfter = restock.after;
+      } else {
+        const newStockId = randomUUID();
+        await tx.$executeRaw`
+          INSERT INTO branch_stock (id, "vendorId", "branchId", "offerVariantId", quantity, "createdAt", "updatedAt")
+          VALUES (${newStockId}, ${vendorId}, ${branchId}, ${offerVariantId}, 0, now(), now())
+          ON CONFLICT ("branchId", "offerVariantId") DO NOTHING
+        `;
+        // Codex review round 2 on commit d0ea80d: the "- reservedQuantity"
+        // guard below is only correct against a FRESH reservedQuantity -
+        // a hold that expired 10 minutes ago but was never swept (because
+        // nobody has since tried to RE-reserve against this exact row)
+        // would otherwise sit there blocking a legitimate physical sale
+        // indefinitely, which is not what "lazy expiry" is supposed to
+        // mean. lockAndSweepStockRow() locks this row and releases any
+        // expired holds on it - the same shared primitive reserve() uses
+        // - before the conditional UPDATE below even runs, so this sale
+        // is judged against the TRUE current hold, not a stale one.
+        await lockAndSweepStockRow(tx, vendorId, branchId, offerVariantId);
+        const updated = await tx.$queryRaw<{ id: string; quantity: number }[]>`
+          UPDATE branch_stock
+          SET quantity = quantity + ${dto.quantity_delta}, "updatedAt" = now()
+          WHERE "branchId" = ${branchId}
+            AND "offerVariantId" = ${offerVariantId}
+            AND quantity + ${dto.quantity_delta} - "reservedQuantity" >= 0
+          RETURNING id, quantity
+        `;
+        if (updated.length === 0) {
+          throw new ConflictException({
+            code: 'INSUFFICIENT_STOCK',
+            message:
+              'This movement would take branch stock below zero - not applied',
+          });
+        }
+        resultingQuantity = updated[0].quantity;
       }
-      const resultingQuantity = updated[0].quantity;
 
       const movement = await tx.stockMovement.create({
         data: {
@@ -538,6 +572,18 @@ export class InventoryController {
           actorId: user.id,
         },
       });
+
+      // Sprint 24 (FR-FAV-004, OFFER favorites only - final decision
+      // #4): fires only on a genuine sold-out-everywhere -> available
+      // transition, never on a single branch's local crossing.
+      if (restockBefore === 0 && (restockAfter ?? 0) > 0) {
+        await enqueueFavoriteNotification(tx, this.outbox, {
+          eventType: 'favorite.back_in_stock',
+          alertType: 'BACK_IN_STOCK',
+          offerVariantId,
+          payload: { vendor_id: vendorId, offer_variant_id: offerVariantId },
+        });
+      }
 
       await this.auditLog.record(
         {

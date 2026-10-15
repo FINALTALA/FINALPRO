@@ -38,6 +38,7 @@ import {
   liveReservedQuantityByKey,
   totalAvailableStockLive,
 } from '../common/availability.util';
+import { enqueueFavoriteNotification } from '../favorites/favorite-alerts.util';
 import { CanonicalNamingService } from '../matching/canonical-naming.service';
 import { MatchingService } from '../matching/matching.service';
 import { OutboxEventService } from '../outbox/outbox-event.service';
@@ -1332,6 +1333,28 @@ export class VendorOffersController {
             vendorId,
             { offer_variant_id: variantId },
           );
+          // Sprint 24 (FR-FAV-003): the same immediate price-drop also
+          // fans out to Favorite rows - both a PRODUCT favorite of this
+          // variant's canonical product (if matched) and an OFFER
+          // favorite of this exact listing get the one combined,
+          // recipient-deduped event (enqueueFavoriteNotification's own
+          // DISTINCT + ON CONFLICT DO NOTHING).
+          let canonicalProductId: string | undefined;
+          if (updated.canonicalVariantId) {
+            const canonicalVariant =
+              await tx.canonicalProductVariant.findUnique({
+                where: { id: updated.canonicalVariantId },
+                select: { canonicalProductId: true },
+              });
+            canonicalProductId = canonicalVariant?.canonicalProductId;
+          }
+          await enqueueFavoriteNotification(tx, this.outbox, {
+            eventType: 'favorite.price_dropped',
+            alertType: 'PRICE_DROP',
+            canonicalProductId,
+            offerVariantId: variantId,
+            payload: { vendor_id: vendorId, offer_variant_id: variantId },
+          });
         }
         await tx.priceHistory.create({
           data: {
@@ -1608,6 +1631,22 @@ export class VendorOffersController {
           user.id,
           req.correlationId,
         );
+
+        // Sprint 24 (FR-FAV-006): fires exactly once - this whole
+        // branch only ever runs when variant.matchProposalStatus was
+        // PENDING (checked above), the one real NULL -> set transition
+        // for canonicalVariantId; a retry/re-confirm on an
+        // already-CONFIRMED variant never reaches here again.
+        await enqueueFavoriteNotification(tx, this.outbox, {
+          eventType: 'favorite.new_offer_matched',
+          alertType: 'NEW_OFFER',
+          canonicalProductId: proposedVariant.canonicalProductId,
+          payload: {
+            vendor_id: vendorId,
+            canonical_product_id: proposedVariant.canonicalProductId,
+            offer_variant_id: variantId,
+          },
+        });
       }
 
       await this.auditLog.record(

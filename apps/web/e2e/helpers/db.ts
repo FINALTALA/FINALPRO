@@ -114,6 +114,63 @@ export async function createOfferWithTwoVariants(
   return { originalVariantId: original.id, replacementVariantId: replacement.id };
 }
 
+// Sprint 24 (FR-FAV-001/FR-COMP-*): a CONFIRMED-match offer, same
+// shape `createOfferWithStock` above builds but additionally linked
+// to a real CanonicalProduct/CanonicalProductVariant - the one
+// eligibility bar FavoritesService.add()/ComparisonService both
+// require (OfferVariant.canonicalVariantId set), which the plain
+// unmatched fixture above deliberately does not satisfy.
+let matchedSeq = 0;
+export async function createMatchedOfferWithStock(
+  vendorId: string,
+  branchId: string,
+  price: number,
+  quantity: number,
+): Promise<{ canonicalProductId: string; offerVariantId: string }> {
+  matchedSeq += 1;
+  await makeVendorEligible(vendorId);
+  const brand = await prisma.brand.create({
+    data: { name: `PW Brand ${matchedSeq}`, normalizedName: `pw-brand-${Date.now()}-${matchedSeq}` },
+  });
+  const category = await prisma.category.create({
+    data: { nameAr: "فئة تجريبية", nameEn: `PW Category ${matchedSeq}` },
+  });
+  const canonicalProduct = await prisma.canonicalProduct.create({
+    data: {
+      brandId: brand.id,
+      categoryId: category.id,
+      modelName: `PW Model ${Date.now()}-${matchedSeq}`,
+      canonicalNameAr: "منتج تجريبي للمقارنة",
+      canonicalNameEn: "PW comparison product",
+      status: "PUBLISHED",
+    },
+  });
+  const canonicalVariant = await prisma.canonicalProductVariant.create({
+    data: {
+      canonicalProductId: canonicalProduct.id,
+      structuralAttributes: {},
+      platformProductBarcode: `pw-platform-${Date.now()}-${matchedSeq}`,
+    },
+  });
+  const offer = await prisma.vendorOffer.create({
+    data: { vendorId, titleAr: "منتج تجريبي", titleEn: "Test product", status: "ACTIVE" },
+  });
+  const variant = await prisma.offerVariant.create({
+    data: {
+      vendorId,
+      vendorOfferId: offer.id,
+      sellerSku: `pw-matched-sku-${Date.now()}-${matchedSeq}`,
+      basePrice: price,
+      storeInventoryBarcode: `pw-matched-barcode-${Date.now()}-${matchedSeq}`,
+      canonicalVariantId: canonicalVariant.id,
+    },
+  });
+  await prisma.branchStock.create({
+    data: { vendorId, branchId, offerVariantId: variant.id, quantity },
+  });
+  return { canonicalProductId: canonicalProduct.id, offerVariantId: variant.id };
+}
+
 export async function itemIdForOrder(branchOrderId: string): Promise<string> {
   const item = await prisma.branchOrderItem.findFirstOrThrow({
     where: { branchOrderId },

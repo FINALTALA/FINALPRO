@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AuditModule } from '../audit/audit.module';
 import { AuthModule } from '../auth/auth.module';
 import { IdempotencyModule } from '../common/idempotency/idempotency.module';
+import { OutboxModule } from '../outbox/outbox.module';
 import { CanonicalNamingService } from './canonical-naming.service';
 import { CanonicalProductLifecycleService } from './canonical-product-lifecycle.service';
 import { CanonicalProductMergeService } from './canonical-product-merge.service';
@@ -12,7 +13,7 @@ import { MatchReviewController } from './match-review.controller';
 import { MatchingService } from './matching.service';
 
 @Module({
-  imports: [AuditModule, AuthModule, IdempotencyModule],
+  imports: [AuditModule, AuthModule, IdempotencyModule, OutboxModule],
   controllers: [
     CanonicalProductsController,
     MatchReviewController,

@@ -339,3 +339,264 @@ export async function lockSweepOrCreateStockRow(
   }
   return created;
 }
+
+/**
+ * Sprint 24 (FR-FAV-004): one entry in a lockOffersWideForRestock()
+ * batch. Every mutation's own (branchId, offerVariantId) is a REAL
+ * write - the branch whose stock is actually changing by
+ * `quantityDelta` (positive = increase, negative = decrease). `
+ * siblingBranchIds`, when present, marks this mutation as
+ * restock-alert-eligible: every OTHER active, non-archived physical
+ * branch of this vendor that also carries this offerVariant, read-only,
+ * used solely to compute the offer-wide BEFORE/AFTER total. A plain
+ * decrease (e.g. an exchange replacement hand-over) omits
+ * `siblingBranchIds` entirely - it still gets the full sweep-then-write
+ * treatment below, it just never contributes to or triggers a
+ * back-in-stock alert.
+ */
+export interface RestockMutation {
+  vendorId: string;
+  branchId: string;
+  offerVariantId: string;
+  quantityDelta: number;
+  /** Optional - applied alongside quantityDelta in the SAME update,
+   * for a write that also needs to release/take a reservation hold
+   * NOT tracked via CheckoutReservationItem (e.g. an exchange's own
+   * approval-time reservedQuantity bracket - see fulfillExchange()).
+   * Independent of the expired-reservation sweep below, which always
+   * runs regardless and is folded into the same final write. */
+  reservedQuantityDelta?: number;
+  siblingBranchIds?: string[];
+}
+
+export interface RestockMutationResult {
+  targetStock: LockedStock;
+  /** Only set when this mutation carried `siblingBranchIds`. */
+  before?: number;
+  after?: number;
+}
+
+function offerKey(branchId: string, offerVariantId: string): string {
+  return `${branchId}:${offerVariantId}`;
+}
+
+/**
+ * Sprint 24 (FR-FAV-004, four correction rounds to get this right -
+ * see the plan's own §6 history if this ever needs re-deriving):
+ * the ONE primitive every quantity-increasing writer (manual/POS
+ * movement, regular-return restock, exchange's RESELLABLE-original-
+ * item leg, order-cancellation's stock restore) and every quantity-
+ * decreasing writer that shares a transaction with one of those
+ * (exchange's replacement hand-over) goes through, batched across
+ * every offerVariant the transaction touches - never sequential
+ * per-offer calls, which would reopen the exact AB-BA lock-order
+ * deadlock S21b's own round-1 fix already had to close once
+ * (operation A locking offers [X, Y] while operation B locks [Y, X]).
+ *
+ * Deliberately NOT built on lockSweepOrCreateStockRowsSorted: that
+ * primitive materializes a `quantity: 0` row for every key it's given
+ * that doesn't already exist - correct for its own callers (which
+ * only ever pass keys they're about to legitimately write), wrong
+ * here, where `siblingBranchIds` are read-only inputs used purely to
+ * compute a total. A restock in one branch must never create phantom
+ * zero-stock rows in every OTHER branch just because an alert decision
+ * needed to read their current totals.
+ *
+ * Lock order, matching this file's own established sequence exactly
+ * (advisory locks -> expired-reservation discovery -> reservation
+ * locks -> stock-row locks), batched across the FULL set this call
+ * touches rather than per-mutation:
+ *   1. Union of every mutation's own TARGET key plus every
+ *      alert-eligible mutation's SIBLING keys, deduped, sorted once by
+ *      the same global `branchId:offerVariantId` order every other
+ *      primitive in this file uses. This single combined sort is what
+ *      actually neutralizes caller order as a deadlock vector - two
+ *      transactions passing the same offers in opposite literal order
+ *      still acquire locks in the identical sequence.
+ *   2. pg_advisory_xact_lock for every key in that one order.
+ *   3. Expired-reservation discovery for every MUTATION TARGET key
+ *      (never sibling keys - nothing is ever swept on a branch this
+ *      call isn't writing to) - one batched call.
+ *   4. lockReservationRowsSorted() on the discovered ids.
+ *   5. FOR UPDATE on every row that actually EXISTS across the full
+ *      union - sibling keys read-only (contribute to BEFORE, nothing
+ *      else), target keys get the real sweep-then-delta treatment
+ *      every pre-existing single-key writer already got (this is what
+ *      preserves exchange's own replacement-leg sweep behavior - a
+ *      decreasing mutation is swept exactly as before, just inside
+ *      this batched pass instead of its own standalone call).
+ *
+ * BEFORE/AFTER are computed only for alert-eligible mutations, from
+ * the one consistent pre-write snapshot taken in step 5 - never
+ * re-queried mid-loop, so two mutations in the same batch that happen
+ * to share a key (not a real scenario for this sprint's own callers,
+ * noted for completeness) both read the same serialized snapshot
+ * rather than observing each other's not-yet-applied deltas.
+ */
+export async function lockOffersWideForRestock(
+  tx: Prisma.TransactionClient,
+  mutations: RestockMutation[],
+): Promise<Map<string, RestockMutationResult>> {
+  interface KeyInfo {
+    branchId: string;
+    offerVariantId: string;
+  }
+  const allKeysMap = new Map<string, KeyInfo>();
+  for (const m of mutations) {
+    allKeysMap.set(offerKey(m.branchId, m.offerVariantId), {
+      branchId: m.branchId,
+      offerVariantId: m.offerVariantId,
+    });
+    for (const sib of m.siblingBranchIds ?? []) {
+      allKeysMap.set(offerKey(sib, m.offerVariantId), {
+        branchId: sib,
+        offerVariantId: m.offerVariantId,
+      });
+    }
+  }
+  const allKeys = [...allKeysMap.values()].sort((a, b) =>
+    offerKey(a.branchId, a.offerVariantId).localeCompare(
+      offerKey(b.branchId, b.offerVariantId),
+    ),
+  );
+
+  // Step 1-2: advisory locks for the full union, sorted.
+  for (const k of allKeys) {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('finalpro:branch_stock:' || ${k.branchId} || ':' || ${k.offerVariantId}))`;
+  }
+
+  // Step 3-4: expired-reservation discovery + lock, for every
+  // MUTATION TARGET key only - never sibling keys.
+  const targetKeys: StockKey[] = mutations.map((m) => ({
+    vendorId: m.vendorId,
+    branchId: m.branchId,
+    offerVariantId: m.offerVariantId,
+  }));
+  const reservationIds = (
+    await findExpiredReservationIdsForStockKeys(tx, targetKeys)
+  ).sort();
+  await lockReservationRowsSorted(tx, reservationIds);
+
+  // Step 5: FOR UPDATE on every EXISTING row across the full union -
+  // one query, never a per-key loop (which would re-open the exact
+  // per-key-discovery hazard this file's own round-4 comment already
+  // warns about elsewhere).
+  const pairs = allKeys.map(
+    (k) => Prisma.sql`(${k.branchId}, ${k.offerVariantId})`,
+  );
+  const existingRows = await tx.$queryRaw<
+    {
+      id: string;
+      branchId: string;
+      offerVariantId: string;
+      quantity: number;
+      reservedQuantity: number;
+    }[]
+  >`
+    SELECT id, "branchId", "offerVariantId", quantity, "reservedQuantity"
+    FROM branch_stock
+    WHERE ("branchId", "offerVariantId") IN (${Prisma.join(pairs)})
+    FOR UPDATE
+  `;
+  const existingByKey = new Map(
+    existingRows.map((r) => [offerKey(r.branchId, r.offerVariantId), r]),
+  );
+
+  const results = new Map<string, RestockMutationResult>();
+  for (const m of mutations) {
+    const tKey = offerKey(m.branchId, m.offerVariantId);
+    const existingTarget = existingByKey.get(tKey);
+
+    let before: number | undefined;
+    if (m.siblingBranchIds) {
+      before = existingTarget?.quantity ?? 0;
+      for (const sib of m.siblingBranchIds) {
+        before +=
+          existingByKey.get(offerKey(sib, m.offerVariantId))?.quantity ?? 0;
+      }
+    }
+
+    let targetStock: LockedStock;
+    if (existingTarget) {
+      // Sweep: release whichever already-locked reservation(s) had an
+      // expired item on THIS specific target key - same release logic
+      // as lockAndSweepStockRowAssumingReservationsLocked, just reading
+      // from the reservation locks this batch already took above
+      // instead of taking its own.
+      const expiredHere = await tx.checkoutReservationItem.findMany({
+        where: {
+          vendorId: m.vendorId,
+          branchId: m.branchId,
+          offerVariantId: m.offerVariantId,
+          reservationId: { in: reservationIds },
+          reservation: { expiresAt: { lt: new Date() } },
+        },
+      });
+      let reservedQuantity = existingTarget.reservedQuantity;
+      if (expiredHere.length > 0) {
+        const releasedQty = expiredHere.reduce((sum, e) => sum + e.quantity, 0);
+        await tx.checkoutReservationItem.deleteMany({
+          where: { id: { in: expiredHere.map((e) => e.id) } },
+        });
+        reservedQuantity -= releasedQty;
+      }
+      // Folded into ONE final update with the sweep's own adjustment
+      // (if any) above - never two separate writes to reservedQuantity,
+      // which would risk the second overwriting the first.
+      reservedQuantity += m.reservedQuantityDelta ?? 0;
+      await tx.branchStock.update({
+        where: { id: existingTarget.id },
+        data: {
+          quantity: { increment: m.quantityDelta },
+          reservedQuantity,
+        },
+      });
+      targetStock = {
+        id: existingTarget.id,
+        quantity: existingTarget.quantity + m.quantityDelta,
+        reservedQuantity,
+      };
+    } else {
+      if (m.quantityDelta < 0) {
+        throw new Error(
+          `lockOffersWideForRestock: cannot decrement a nonexistent branch_stock row (${tKey})`,
+        );
+      }
+      const created = await tx.branchStock.create({
+        data: {
+          vendorId: m.vendorId,
+          branchId: m.branchId,
+          offerVariantId: m.offerVariantId,
+          quantity: m.quantityDelta,
+        },
+      });
+      targetStock = {
+        id: created.id,
+        quantity: created.quantity,
+        reservedQuantity: 0,
+      };
+    }
+
+    let after: number | undefined;
+    if (m.siblingBranchIds) {
+      after =
+        (before ?? 0) - (existingTarget?.quantity ?? 0) + targetStock.quantity;
+    }
+
+    results.set(tKey, { targetStock, before, after });
+  }
+
+  return results;
+}
+
+/** Single-mutation wrapper over lockOffersWideForRestock() - for the
+ * two call sites that only ever touch one offerVariant per transaction
+ * (plain manual/POS movement, plain regular-return restock). No
+ * duplicated logic - just a one-element batch. */
+export async function lockOfferWideForRestock(
+  tx: Prisma.TransactionClient,
+  mutation: RestockMutation,
+): Promise<RestockMutationResult> {
+  const results = await lockOffersWideForRestock(tx, [mutation]);
+  return results.get(offerKey(mutation.branchId, mutation.offerVariantId))!;
+}
