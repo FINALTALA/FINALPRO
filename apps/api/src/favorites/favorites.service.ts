@@ -116,10 +116,21 @@ export class FavoritesService {
     return { favorited: true };
   }
 
+  /** BOLA-safe: scoped by (id, userId) together, and - review-round
+   * fix - a non-existent id and someone else's id now get the exact
+   * same 404, matching the approved plan's own requirement, never a
+   * quiet 200 no-op that would let an attacker's own request succeed
+   * silently regardless of ownership. */
   async remove(userId: string, favoriteId: string) {
-    await this.prisma.favorite.deleteMany({
+    const result = await this.prisma.favorite.deleteMany({
       where: { id: favoriteId, userId },
     });
+    if (result.count === 0) {
+      throw new NotFoundException({
+        code: 'FAVORITE_NOT_FOUND',
+        message: 'Favorite not found',
+      });
+    }
     return { favorited: false };
   }
 

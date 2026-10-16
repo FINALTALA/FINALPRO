@@ -136,10 +136,21 @@ export class ComparisonSetsService {
     });
   }
 
+  /** BOLA-safe: scoped by (id, userId) together, and - review-round
+   * fix - a non-existent id and someone else's set id now get the
+   * exact same 404, matching every other owned-resource lookup in
+   * this service (lockOwnSet's own convention), never a quiet
+   * no-op. */
   async delete(userId: string, setId: string): Promise<void> {
-    await this.prisma.comparisonSet.deleteMany({
+    const result = await this.prisma.comparisonSet.deleteMany({
       where: { id: setId, userId },
     });
+    if (result.count === 0) {
+      throw new NotFoundException({
+        code: 'COMPARISON_SET_NOT_FOUND',
+        message: 'Comparison set not found',
+      });
+    }
   }
 
   async list(userId: string) {

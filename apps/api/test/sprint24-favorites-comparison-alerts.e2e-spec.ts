@@ -832,12 +832,26 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
       const attackRes = await request(http())
         .delete(`/api/v1/favorites/${row.id}`)
         .set('Authorization', `Bearer ${attacker}`)
-        .expect(200);
-      // DELETE is a plain idempotent delete scoped to the caller - a
-      // non-owned id simply matches zero rows, same 200 shape as a
-      // real deletion (deleteMany), never a distinguishing error.
-      expect(attackRes.body.favorited).toBe(false);
+        .expect(404);
+      // Review-round fix: a non-owned id is now the exact same 404 as
+      // a non-existent one, never a quiet 200 no-op.
+      expect(attackRes.body.error.code).toBe('FAVORITE_NOT_FOUND');
       expect(await prisma.favorite.count({ where: { id: row.id } })).toBe(1);
+
+      // The identical 404 for a genuinely non-existent id too - BOLA-
+      // safe means these two cases are indistinguishable to the caller.
+      const missingRes = await request(http())
+        .delete(`/api/v1/favorites/does-not-exist`)
+        .set('Authorization', `Bearer ${attacker}`)
+        .expect(404);
+      expect(missingRes.body.error.code).toBe('FAVORITE_NOT_FOUND');
+
+      // The actual owner can still remove it normally.
+      await request(http())
+        .delete(`/api/v1/favorites/${row.id}`)
+        .set('Authorization', `Bearer ${victim}`)
+        .expect(200);
+      expect(await prisma.favorite.count({ where: { id: row.id } })).toBe(0);
     });
 
     it('FR-FAV-005: every alert type defaults to enabled=true with no row; set/get round-trips an opt-out', async () => {
@@ -993,10 +1007,13 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
         )
         .set('Authorization', `Bearer ${attacker}`)
         .expect(404);
-      await request(http())
+      const deleteRes = await request(http())
         .delete(`/api/v1/customers/me/comparison-sets/${setId}`)
         .set('Authorization', `Bearer ${attacker}`)
-        .expect(200); // deleteMany scoped to attacker's own userId: 0 rows, same 200 shape
+        .expect(404);
+      // Review-round fix: a non-owned set id is now the exact same 404
+      // as a non-existent one, never a quiet 200 no-op.
+      expect(deleteRes.body.error.code).toBe('COMPARISON_SET_NOT_FOUND');
       expect(await prisma.comparisonSet.count({ where: { id: setId } })).toBe(
         1,
       );
@@ -1005,6 +1022,22 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
           where: { comparisonSetId: setId },
         }),
       ).toBe(1);
+
+      // The identical 404 for a genuinely non-existent set id too.
+      const missingRes = await request(http())
+        .delete(`/api/v1/customers/me/comparison-sets/does-not-exist`)
+        .set('Authorization', `Bearer ${attacker}`)
+        .expect(404);
+      expect(missingRes.body.error.code).toBe('COMPARISON_SET_NOT_FOUND');
+
+      // The actual owner can still delete it normally.
+      await request(http())
+        .delete(`/api/v1/customers/me/comparison-sets/${setId}`)
+        .set('Authorization', `Bearer ${owner2}`)
+        .expect(200);
+      expect(await prisma.comparisonSet.count({ where: { id: setId } })).toBe(
+        0,
+      );
     });
 
     it('a set sitting at 4 items refuses a 5th with 409 COMPARISON_SET_FULL', async () => {
@@ -1280,6 +1313,126 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
       expect(target.quantity).toBe(5);
     });
 
+    // Review-round fix: two mutations in ONE batch call sharing the
+    // SAME (branchId, offerVariantId) target are now normalized
+    // (merged) before any lock is taken - never silently processed
+    // twice against a stale pre-loop snapshot (which previously could
+    // compute reservedQuantity from data that ignored the first
+    // mutation's own write, and would have let the second
+    // `results.set()` silently discard the first entry). Deliberately
+    // calls the primitive directly with a genuinely duplicate target,
+    // rather than relying on any caller already de-duplicating -
+    // branch-order-cancellation.service.ts's own qtyByOffer merge is a
+    // separate, additional safeguard, never the only one.
+    it('DUPLICATE TARGET: two mutations on the same key in one batch call are merged deterministically - quantityDelta summed, reservedQuantityDelta summed, before/after computed once, never last-write-wins', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId: branchA } =
+        await createVendorWithBranch(owner);
+      await makeVendorEligible(vendorId);
+      const branchB = await addBranch(owner, vendorId, 'Branch B');
+      const variantId = await createOfferWithStock(vendorId, branchA, 50, 0);
+      await prisma.branchStock.create({
+        data: {
+          vendorId,
+          branchId: branchB,
+          offerVariantId: variantId,
+          quantity: 3,
+        },
+      });
+      // createOfferWithStock(..., 0) never creates a branchA row at
+      // all (quantity 0 means "nothing to insert") - create it
+      // directly. reservedQuantity starts at 4 (enough headroom to
+      // cover BOTH the sweep release AND the explicit
+      // reservedQuantityDelta releases from each of the two merged
+      // mutations below: 1 + 2 + 1 = 4) - quantity must start at least
+      // as high (the branch_stock_reserved_not_exceed_quantity CHECK).
+      await prisma.branchStock.create({
+        data: {
+          vendorId,
+          branchId: branchA,
+          offerVariantId: variantId,
+          quantity: 4,
+          reservedQuantity: 4,
+        },
+      });
+      const customerPhone = uniquePhone();
+      await signup(customerPhone, 'a-strong-password');
+      const customerProfile = await prisma.customerProfile.findFirstOrThrow({
+        where: { user: { phone: customerPhone } },
+      });
+      await createExpiredReservationItem(
+        unique('dup-target-res'),
+        customerProfile.id,
+        vendorId,
+        branchA,
+        variantId,
+        1,
+      );
+
+      const results = await prisma.$transaction((tx) =>
+        lockOffersWideForRestock(tx, [
+          {
+            vendorId,
+            branchId: branchA,
+            offerVariantId: variantId,
+            quantityDelta: 5,
+            reservedQuantityDelta: -2,
+            siblingBranchIds: [branchB],
+          },
+          {
+            vendorId,
+            branchId: branchA,
+            offerVariantId: variantId,
+            quantityDelta: 3,
+            reservedQuantityDelta: -1,
+          },
+        ]),
+      );
+
+      // Exactly one result for the shared key - never two, never the
+      // second silently overwriting the first.
+      expect(results.size).toBe(1);
+      const merged = results.get(`${branchA}:${variantId}`)!;
+      // quantityDelta summed: 4 (start) + 5 + 3 = 12.
+      expect(merged.targetStock.quantity).toBe(12);
+      // reservedQuantity: 4 (start) - 1 (sweep) - 2 - 1 (both deltas) = 0.
+      expect(merged.targetStock.reservedQuantity).toBe(0);
+      // before/after computed ONCE, from the single merged mutation's
+      // own siblingBranchIds (unioned from whichever source carried
+      // them) - offer-wide: branchA(4) + branchB(3) = 7 before,
+      // branchA(12) + branchB(3) = 15 after.
+      expect(merged.before).toBe(7);
+      expect(merged.after).toBe(15);
+
+      const final = await prisma.branchStock.findUniqueOrThrow({
+        where: {
+          branchId_offerVariantId: {
+            branchId: branchA,
+            offerVariantId: variantId,
+          },
+        },
+      });
+      expect(final.quantity).toBe(12);
+      expect(final.reservedQuantity).toBe(0);
+      // The sweep genuinely ran exactly once - the expired item is gone.
+      expect(
+        await prisma.checkoutReservationItem.count({
+          where: { offerVariantId: variantId, branchId: branchA },
+        }),
+      ).toBe(0);
+      // No phantom row was created in branchB just because it was a
+      // read-only sibling.
+      const branchBStock = await prisma.branchStock.findUniqueOrThrow({
+        where: {
+          branchId_offerVariantId: {
+            branchId: branchB,
+            offerVariantId: variantId,
+          },
+        },
+      });
+      expect(branchBStock.quantity).toBe(3);
+    });
+
     // ============================================================
     // Deterministic concurrency: two batched lockOffersWideForRestock
     // calls touching the SAME two offer keys in REVERSED array order,
@@ -1405,6 +1558,84 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
         expect(finalHigh.quantity).toBe(12);
         expect(finalLow.reservedQuantity).toBe(0);
         expect(finalHigh.reservedQuantity).toBe(0);
+      });
+
+      // Review-round fix: the step-5 FOR UPDATE now carries an
+      // explicit ORDER BY matching the advisory-lock order exactly -
+      // this proves the ACTUAL row lock is acquired keyLow-then-
+      // keyHigh, never inferred from the caller's own array order
+      // (which here deliberately lists keyHigh FIRST). A third,
+      // independent transaction trying to lock ONLY keyLow directly
+      // can only ALSO block if the batch already holds it - if the
+      // batch had instead followed its own (reversed) array order, it
+      // would still be waiting on keyHigh alone and would never have
+      // touched keyLow yet, so this probe would succeed immediately.
+      it("actually acquires the row lock in the global sorted order (keyLow before keyHigh), proven by blocking a direct probe on keyLow - never inferred from the caller's own (reversed) array order", async () => {
+        const owner = await signup(uniquePhone(), 'a-strong-password');
+        const { vendorId, branchId } = await createVendorWithBranch(owner);
+        const variantX = await createOfferWithStock(vendorId, branchId, 50, 10);
+        const variantY = await createOfferWithStock(vendorId, branchId, 60, 10);
+        const [keyLow, keyHigh] = [variantX, variantY].sort();
+        const keyHighStock = await prisma.branchStock.findUniqueOrThrow({
+          where: {
+            branchId_offerVariantId: { branchId, offerVariantId: keyHigh },
+          },
+        });
+        const keyLowStock = await prisma.branchStock.findUniqueOrThrow({
+          where: {
+            branchId_offerVariantId: { branchId, offerVariantId: keyLow },
+          },
+        });
+
+        // A plain FOR UPDATE on keyHigh ONLY - deliberately outside
+        // this file's own advisory-lock convention, so the batch below
+        // is forced to actually reach and block inside its row-level
+        // FOR UPDATE query, not merely at the earlier advisory stage.
+        const holdDone = deferred();
+        const releaseHold = deferred();
+        const holder = prisma.$transaction(async (tx) => {
+          await tx.$queryRaw`SELECT id FROM branch_stock WHERE id = ${keyHighStock.id} FOR UPDATE`;
+          holdDone.resolve();
+          await releaseHold.promise;
+          return 'holder-done';
+        });
+        await holdDone.promise;
+
+        // The mutations array deliberately lists keyHigh FIRST - the
+        // opposite of the global sort - to prove array order has no
+        // bearing on the real lock sequence.
+        const batch = prisma.$transaction((tx) =>
+          lockOffersWideForRestock(tx, [
+            { vendorId, branchId, offerVariantId: keyHigh, quantityDelta: 1 },
+            { vendorId, branchId, offerVariantId: keyLow, quantityDelta: 1 },
+          ]),
+        );
+        expect(await settledWithin(batch, 500)).toBe(false);
+        expect(await someoneWaitsOnLock('%FROM branch_stock%FOR UPDATE%')).toBe(
+          true,
+        );
+
+        // The proof: a THIRD, independent transaction trying to lock
+        // ONLY keyLow directly must ALSO block right now - the only
+        // way that is possible is if the still-blocked batch already
+        // holds keyLow's row lock, meaning it acquired keyLow BEFORE
+        // ever attempting keyHigh, in the global sorted order.
+        const probe = prisma.$transaction(async (tx) => {
+          await tx.$queryRaw`SELECT id FROM branch_stock WHERE id = ${keyLowStock.id} FOR UPDATE`;
+          return 'probe-done';
+        });
+        expect(await settledWithin(probe, 500)).toBe(false);
+
+        releaseHold.resolve();
+        const [holderResult, batchResult, probeResult] = await Promise.all([
+          holder,
+          batch,
+          probe,
+        ]);
+        expect(holderResult).toBe('holder-done');
+        expect(probeResult).toBe('probe-done');
+        expect(batchResult.get(`${branchId}:${keyLow}`)).toBeDefined();
+        expect(batchResult.get(`${branchId}:${keyHigh}`)).toBeDefined();
       });
     });
   });

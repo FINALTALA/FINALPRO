@@ -428,21 +428,69 @@ function offerKey(branchId: string, offerVariantId: string): string {
  *
  * BEFORE/AFTER are computed only for alert-eligible mutations, from
  * the one consistent pre-write snapshot taken in step 5 - never
- * re-queried mid-loop, so two mutations in the same batch that happen
- * to share a key (not a real scenario for this sprint's own callers,
- * noted for completeness) both read the same serialized snapshot
- * rather than observing each other's not-yet-applied deltas.
+ * re-queried mid-loop.
+ *
+ * Review-round fix: two mutations in the same batch sharing a target
+ * key are normalized (merged) BEFORE any lock is taken, never left to
+ * `results.set()`'s own last-write-wins overwrite (which previously
+ * could compute `reservedQuantity` off the pre-loop snapshot a second
+ * time, silently discarding the first mutation's own write) - see the
+ * normalization step below. This never depends on any caller already
+ * de-duplicating its own mutation list.
+ *
+ * Review-round fix: the step-5 `FOR UPDATE` now carries an explicit
+ * `ORDER BY "branchId", "offerVariantId"` matching the exact same
+ * global order the advisory-lock loop already uses - row-lock
+ * acquisition order was previously left to Postgres's own unspecified
+ * scan order for that one multi-row statement, which is not
+ * guaranteed to agree with the advisory-lock order and could in
+ * principle still deadlock two batches touching an overlapping key
+ * set in reversed order, defeating the whole point of the advisory
+ * pre-pass. The two must match exactly, explicitly, not by accident.
  */
 export async function lockOffersWideForRestock(
   tx: Prisma.TransactionClient,
   mutations: RestockMutation[],
 ): Promise<Map<string, RestockMutationResult>> {
+  // Normalize: two mutations targeting the SAME (branchId,
+  // offerVariantId) are merged into one before anything else happens -
+  // quantityDelta/reservedQuantityDelta summed, siblingBranchIds
+  // unioned (so the merged mutation stays alert-eligible if ANY of its
+  // sources was) - never silently processed twice against a stale
+  // snapshot, and never assumed away as "not a real scenario."
+  const mergedByKey = new Map<string, RestockMutation>();
+  for (const m of mutations) {
+    const key = offerKey(m.branchId, m.offerVariantId);
+    const existing = mergedByKey.get(key);
+    if (!existing) {
+      mergedByKey.set(key, { ...m });
+      continue;
+    }
+    if (existing.vendorId !== m.vendorId) {
+      throw new Error(
+        `lockOffersWideForRestock: conflicting vendorId for the same target key (${key})`,
+      );
+    }
+    existing.quantityDelta += m.quantityDelta;
+    existing.reservedQuantityDelta =
+      (existing.reservedQuantityDelta ?? 0) + (m.reservedQuantityDelta ?? 0);
+    if (m.siblingBranchIds) {
+      existing.siblingBranchIds = [
+        ...new Set([
+          ...(existing.siblingBranchIds ?? []),
+          ...m.siblingBranchIds,
+        ]),
+      ];
+    }
+  }
+  const normalizedMutations = [...mergedByKey.values()];
+
   interface KeyInfo {
     branchId: string;
     offerVariantId: string;
   }
   const allKeysMap = new Map<string, KeyInfo>();
-  for (const m of mutations) {
+  for (const m of normalizedMutations) {
     allKeysMap.set(offerKey(m.branchId, m.offerVariantId), {
       branchId: m.branchId,
       offerVariantId: m.offerVariantId,
@@ -467,7 +515,7 @@ export async function lockOffersWideForRestock(
 
   // Step 3-4: expired-reservation discovery + lock, for every
   // MUTATION TARGET key only - never sibling keys.
-  const targetKeys: StockKey[] = mutations.map((m) => ({
+  const targetKeys: StockKey[] = normalizedMutations.map((m) => ({
     vendorId: m.vendorId,
     branchId: m.branchId,
     offerVariantId: m.offerVariantId,
@@ -480,7 +528,9 @@ export async function lockOffersWideForRestock(
   // Step 5: FOR UPDATE on every EXISTING row across the full union -
   // one query, never a per-key loop (which would re-open the exact
   // per-key-discovery hazard this file's own round-4 comment already
-  // warns about elsewhere).
+  // warns about elsewhere) - with an explicit ORDER BY matching the
+  // advisory-lock order exactly, so Postgres's own row-lock
+  // acquisition order is never left unspecified.
   const pairs = allKeys.map(
     (k) => Prisma.sql`(${k.branchId}, ${k.offerVariantId})`,
   );
@@ -496,6 +546,7 @@ export async function lockOffersWideForRestock(
     SELECT id, "branchId", "offerVariantId", quantity, "reservedQuantity"
     FROM branch_stock
     WHERE ("branchId", "offerVariantId") IN (${Prisma.join(pairs)})
+    ORDER BY "branchId", "offerVariantId"
     FOR UPDATE
   `;
   const existingByKey = new Map(
@@ -503,7 +554,7 @@ export async function lockOffersWideForRestock(
   );
 
   const results = new Map<string, RestockMutationResult>();
-  for (const m of mutations) {
+  for (const m of normalizedMutations) {
     const tKey = offerKey(m.branchId, m.offerVariantId);
     const existingTarget = existingByKey.get(tKey);
 
