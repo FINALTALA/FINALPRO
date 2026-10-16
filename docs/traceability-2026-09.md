@@ -7,7 +7,41 @@
 **Scope:** the full SRS, Parts 0–9. Every `FR-*` ID in [SRS Part 2](srs/02-functional-requirements.md) (244 rows, including the E.0 September amendment), every `PDR-*` ID in [`approved-product-decisions-2026-09.md`](approved-product-decisions-2026-09.md) (36 rows, including the 2026-09-26 PDR-035/036 amendment), every `BR-*` (34) and `NFR-*` (32) in Part 3/4, and every remaining requirement, decision, screen, failure scenario, backlog item and state-machine transition in Parts 0, 1, and 3–9 — covered in the appendix starting at §6, with each ID-range explicitly expanded (no row stands for more than one ID; see §0 for the two narrow, explicitly-justified exceptions — the `O.1`/`O.2` test-level classification and the `BO`/module-matrix/recommendations rollup — neither of which carries an independent DONE/PARTIAL/MISSING status of its own).
 **Update rule:** this file is reviewed again after every sprint. Each review edits it in place under a new dated version note, rather than creating a new file, so it stays the one living record.
 
-## v14 — S22-account-addresses applied, 2026-10-13
+## v15 — S24-favorites-comparison-alerts applied, 2026-10-15
+
+`S24` (branch `feat/sprint-24-favorites-comparison-alerts`) builds FR-FAV-001/002/003/004/005(E.16)/006, FR-COMP-001/002/004/005/006/007, and extends the FR-COMP-003 delivery-fee/warranty/rating fields - saved favorites (product/offer), saved comparison sets with a public share link, cross-product comparison, price-staleness and diff-highlighting, and the three favorite-driven alert types (price drop, back-in-stock, new offer), wired through the existing transactional-outbox/relay pattern (ADR-006). **Deliberately NOT built this sprint, agreed in advance in the plan's own decisions (#1-#7) and documented honestly below rather than silently claimed**: a "best value" formula (no approved scoring exists), distance/ETA in the comparison row (no geolocation/ETA infrastructure exists anywhere in this codebase), alert grouping/frequency control (every qualifying event is its own immediate notification), and a back-in-stock alert for a PRODUCT favorite (OFFER favorites only, decision #4 - a product can have many offers, and "back in stock" is only a crisp, well-defined event at the single-offer level).
+
+Built (backend): `Favorite` (PRODUCT/OFFER, BOLA-safe, idempotent upsert, re-validated against the exact same public-eligibility definitions `ComparisonService` already uses) and `NotificationPreference` (per-alert-type opt-out, absence-of-row = enabled); `ComparisonSet`/`ComparisonSetItem` (owner CRUD + a separate, slug-only public share route, 4-item cap enforced under a row lock proven safe with a real 2-concurrent-adds-at-3-items race test, live re-filtered eligibility on every read so an item that stops being eligible is flagged `available:false`, never silently dropped); `lockOffersWideForRestock()` - the one new batched stock-locking primitive every quantity-increasing writer (manual/POS movement, regular-return restock, exchange's RESELLABLE-original-item leg, order-cancellation's own stock-restore) and the one quantity-decreasing writer sharing a transaction with one of those (exchange's replacement hand-over) now goes through, replacing ad-hoc single-key calls and closing a real class of cross-writer deadlock risk (four correction rounds during planning, each tied to a concrete adversarial scenario - lock order, phantom-row creation, sequential-call AB-BA deadlocks, and sweep-vs-deliberate-release double-counting - proven individually with dedicated deterministic-concurrency tests, not just "it passed once"); `GET /canonical-products/:id/comparison` extended with zone-explicit delivery fee (reusing `resolveDeliveryFee()` verbatim, never a new default), warranty (`"غير متوفر"` only when genuinely unset), seller rating, a price-staleness flag (`PriceHistory`'s own latest `changedAt`, or the variant's `createdAt` if the price never changed, against the already-approved 30-day threshold), a diff block, and a cheapest-offer tag with a plain Arabic reason; `GET /comparison/cross` (mode 2 - 2 to 4 competing canonical products, each represented by its own cheapest eligible offer, same diff/cheapest-tag shape).
+
+Built (frontend, new self-contained pages only - `ProductCard.tsx`/`nav.ts`/`globals.css`/home/women/auth pages were NOT touched, per this project's standing frontend-protection rule): `/account/favorites` (list + remove + the three alert toggles), `/compare/sets` (list + create), `/compare/sets/[id]` (add/remove items, copy share link, delete), `/compare/shared/[slug]` (public, slug-only), `/compare/cross` (2-4 product ids, zone picker, diff/cheapest display). The existing `/compare/[canonicalProductId]` page was extended in place (already covered by the approved plan) with a zone picker, the new warranty/staleness/rating/delivery-fee fields, the backend's own cheapest tag/reason (replacing the old index-based `i===0` guess), a diff block, and "add to favorites"/"save to a new comparison set" actions. `apps/web/src/lib/notifications.ts` (a shared-but-unprotected lib file) was extended with the three new notification types and their destinations - the two offer-scoped alerts route to `/account/favorites` (no buildable store URL exists from an offerVariantId alone, same fallback shape the pre-existing followed-store types already use), the new-offer alert routes to the exact product's own `/compare/:id` page.
+
+**The one existing-page touch, applied only after an explicit diff-and-approve round**: a one-line "المفضلة" tile on `/account`'s existing hub-grid, shown to the product owner as an exact diff before applying (this project's standing rule for any existing, daily-used page) - approved with one change: the page itself lives at `/account/favorites`, not a top-level `/favorites`, specifically so this hub-grid entry is its one coherent entry point. Nothing else on `/account` (or `globals.css`/`ProductCard.tsx`/`nav.ts`) was touched.
+
+**A real regression the full backend test suite caught, not this sprint's own new assertions**: `FavoritesModule` was missing `AuthModule` in its `imports` - every route on `FavoritesController` is guarded by `SessionAuthGuard`, which depends on `SessionService` (exported by `AuthModule`); without that import, NestJS's DI container cannot resolve the guard at all, so the module would fail to even bootstrap in a real running app. This had never been caught because no e2e test had exercised a real `app.init()` against this module before - a `nest build` (pure TypeScript compilation) never instantiates the DI graph, so the bug was invisible until the first full `TestingModule.compile()` + `app.init()` in this sprint's own e2e suite surfaced it immediately. Fixed by adding `AuthModule` to `FavoritesModule`'s `imports`.
+
+**A second real bug the full regression run caught (the sprint24 file in isolation never would have)**: the sprint24 e2e spec's own deadlock-proof concurrency test copied `sprint21b-exchange.e2e-spec.ts`'s exact `R_LOW`/`R_HIGH` deterministic-UUID helper verbatim (`00000000-...`/`ffffffff-...` literal prefixes) - harmless when either file runs alone, but a real primary-key collision on `checkout_reservations` once both files run in the same pass against the one shared database (parallel jest workers, one Postgres instance). Fixed by giving the sprint24 file its own distinct prefix pair (`11111111-...`/`eeeeeeee-...`); only the internal LOW-sorts-before-HIGH property ever mattered, not matching the other file's specific values.
+
+Also fixed in the same pass: `comparison.service.spec.ts` (pre-existing unit test) needed its `EligibleOffer` fixture helper extended with the two new required fields (`condition`, `priceLastConfirmedAt`) this sprint added to that interface; `comparison-sets.service.ts`'s own `lowest_price` was a bare number where every other price in this frontend is a formatted `"X.XX"` string (caught while writing the Playwright spec, before it ever reached a real browser).
+
+Verified: 257 unit tests (+12, the new `favorites`/`comparison-sets` pure-logic coverage already existed via the e2e suite instead - the +12 is `comparison.service.spec.ts`'s own fixture-extension requiring no new test cases, net zero real delta; the file count is unchanged at 31), 885 e2e tests across 42 suites (+27 in the new `sprint24-favorites-comparison-alerts.e2e-spec.ts`: BOLA on Favorite/ComparisonSet, idempotent add, live-eligibility re-filtering, the 4-item-cap concurrency race, the reversed-mutation-order deadlock-proof test, the no-phantom-row test, order-cancellation's own batched restore + its duplicate-offerVariant merge + its concurrency-vs-a-second-writer test, the exchange-replacement-leg-vs-a-real-expired-reservation test, price-drop/back-in-stock/new-offer alert delivery at every real trigger point with opt-out verification, and the comparison-endpoint's zone/warranty/staleness/diff/cheapest-tag/cross-mode coverage), 29 Playwright browser tests (+3 in the new `favorites-comparison-s24.spec.ts`; one pre-existing, unrelated failure observed and left untouched - `account-s22.spec.ts`'s own phone-change/reactivate test hits a strict-mode locator ambiguity between the password field and its show/hide toggle button, a pre-existing test fragility this sprint did not introduce and is out of scope to fix), 2x clean-room green on the full backend suite (fresh `migrate reset`, `migrate diff --exit-code` showing only the same 4 pre-existing cosmetic drift lines every prior clean-room pass has also shown).
+
+Status changes:
+
+- `FR-FAV-001` ❌→✅: `Favorite` (PRODUCT/OFFER) now built; STORE favoriting stays exactly `StoreFollow`, by explicit decision, never duplicated.
+- `FR-FAV-002`/`FR-COMP-001`/`BL-COMP-001` ❌→✅: saved comparison sets (up to 4 items, share link) now built.
+- `FR-FAV-003`/`BL-NOTIF-004` ❌→✅: price-drop alerts at both the manual-PATCH and scheduled-discount-sweep choke points.
+- `FR-FAV-004` ❌→✅ (within the approved OFFER-only scope - see decision #4 above): back-in-stock alerts, offer-wide across every physical branch, never a single branch's local crossing.
+- `FR-FAV-005 (E.16)` ❌→🟡 PARTIAL: per-alert-type opt-out now built; frequency/grouping explicitly out of scope this sprint (decision #5).
+- `FR-FAV-006` ❌→✅: new-matched-offer alerts on an already-favorited product, fired exactly once per confirmation.
+- `FR-COMP-002`/`BL-COMP-004`/`FR-COMP-007` 🟡→✅: cross-product comparison (mode 2) and saved/shared comparison sets now built alongside the existing per-product comparison/share link.
+- `FR-COMP-003` stays 🟡 PARTIAL, note updated: condition/warranty/delivery-fee/rating now built; distance/ETA stay out of scope (no infrastructure exists, decision #2).
+- `FR-COMP-004` ❌→✅: the diff-highlighting block now built for both comparison modes.
+- `FR-COMP-005`/`BL-COMP-002` stays 🟡 PARTIAL, note updated: cheapest-tag-with-reason now built; "best value" stays out of scope (no approved formula, decision #1).
+- `FR-COMP-006` ❌→✅: the price-staleness flag now built (30-day threshold, already-approved BR-004/NFR-STALE-002).
+- `FR-COMP-008` stays 🟡 PARTIAL, note updated: the new screens follow the same responsive/RTL conventions as the rest of the app, still visual-only verification, no automated UI test for this specific clause.
+- `PDR-002`/`FR-AUTH-013`/`BL-NOTIF-003` 🟡→✅: favorites are the last missing piece of the registered-customer's browse/compare/favorite/follow/buy set.
+
+
 
 `S22` (branch `feat/sprint-22-account-addresses`) builds FR-AUTH-006 (phone change), FR-AUTH-014/PDR-034 (account deactivation + 30-day reactivation), FR-AUTH-008/PDR-029 (address default/edit/delete + order-level change-address), and a real, scoped i18n foundation (FR-AUTH-009/NFR-L10N-001). **Deliberately NOT built this sprint, agreed in advance and documented honestly below rather than silently claimed**: BR-018/NFR-RETAIN-001 (retention policy, purge, anonymization, PII-hiding) — only the 30-day reactivation window itself was built, which is a recovery deadline, not a retention policy; and retranslating any pre-S22 screen (S1–S21b) — the i18n dictionary/switcher is applied to `AppShell`, shared UI, and S22's own new screens only, by explicit prior agreement, not an oversight.
 
@@ -224,7 +258,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 ### E.0 — September 2026 amendment
 | ID | Requirement | Backend | Authz | UI | Test | Status | Sprint |
 |---|---|---|---|---|---|---|---|
-| FR-AUTH-013 (E.0) | ضيف يتصفح فقط؛ السلة/المتابعة/checkout بحساب؛ المفضلات/المراجعات/التنبيهات بحساب | session guard؛ CartItem على السيرفر | session | /login, /cart | S10,S14,AUTH | 🟡 PARTIAL | S24 |
+| FR-AUTH-013 (E.0) | ضيف يتصفح فقط؛ السلة/المتابعة/checkout بحساب؛ المفضلات/المراجعات/التنبيهات بحساب | session guard؛ CartItem على السيرفر؛ المفضلات (S24) والمراجعات (S23) محمية بحساب أيضاً | session | /login, /cart, /favorites (S24), /orders/[id]/items/[id]/review (S23) | S10,S14,AUTH,S23,S24 | ✅ DONE | S24 |
 | FR-AUTH-014 (E.0) | تعطيل الحساب واسترجاعه 30 يوماً | **مبني بالكامل (S22)**: `DELETE /customers/me` يعطّل (قفل User→Vendors المملوكة مرتَّبة→فحص آخر OWNER نشط لكل متجر غير مغلق→فحص طلب نشط→كتابة deactivatedAt/sessionVersion)، idempotent عند التكرار؛ `login()` يرفض 403 ACCOUNT_DEACTIVATED؛ استرجاع مستقل تماماً عن password-reset: `POST /auth/reactivate-request` (مضاد تعداد) → `/auth/otp/verify` (purpose=account_reactivation) → `/auth/reactivate-confirm` (قفل حقيقي، إعادة فحص النافذة 30 يوماً تحت القفل) | session (الحساب نفسه) | /account/deactivate، /reactivate (من /login عند 403) (S22) | S22 + اختبارات حتمية (سباق checkout، سباقَا مالكين، سباق reactivate مزدوج) | ✅ DONE | - |
 | FR-VEND-012 (E.0) | physical/online-only/hybrid، مستودع مخفي، نقاط استلام | Vendor.storeType، Warehouse، PickupPoint؛ PUT store-type/warehouse، POST/GET pickup-points. تحقّق ONLINE_ONLY محدَّد الآن بـPDR-035 (2026-09-26): دبوس عنوان المستودع بدل صورة/دبوس الفرع؛ لم يُبنَ بعد | OWNER | لا | S5 | 🟡 PARTIAL | S15 |
 | FR-VEND-013 (E.0) | مالك/موظف كصلاحيات على نفس الحساب؛ موظف لفرع واحد | VendorUser(role,branchId,status)؛ staff-invites وaccept API؛ نقل/تعليق/إعادة تفعيل (S18b) | OWNER يدعو وينقل ويعلّق | مبدّل في /account؛ /vendor/:id/staff (نقل/تعليق/إعادة تفعيل، S18b)؛ لا صفحة دعوة أو قبول | S4,NAV,S18b | 🟡 PARTIAL | S15 |
@@ -359,14 +393,14 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 ### E.7–E.8 — المقارنة والتسعير
 | ID | Requirement | Backend | Authz | UI | Test | Status | Sprint |
 |---|---|---|---|---|---|---|---|
-| FR-COMP-001 | مجموعة مقارنة حتى 4 | لا (المقارنة لكل منتج أساسي) | - | لا | لا | ❌ MISSING | S24 |
-| FR-COMP-002 | وضعان: عروض المنتج نفسه أو منتجات منافسة | وضع المنتج الواحد فقط | عام | /compare/:id | S8 | 🟡 PARTIAL | S24 |
-| FR-COMP-003 | خصائص الفئة + سعر وخصم وحالة وضمان وتوصيل وتقييم ومسافة ووقت | السعر والتوفر واللون/المقاس فقط | عام | /compare/:id | S8 | 🟡 PARTIAL | S24 |
-| FR-COMP-004 | إبراز التشابه والاختلاف | لا | - | لا | لا | ❌ MISSING | S24 |
-| FR-COMP-005 | وسم الأرخص وأفضل قيمة مع السبب | ترتيب تصاعدي بلا وسم ولا سبب | عام | /compare/:id | S8 | 🟡 PARTIAL | S24 |
-| FR-COMP-006 | تنبيه بيانات قديمة | لا | - | لا | لا | ❌ MISSING | S24 |
-| FR-COMP-007 | رابط مشاركة ومجموعة محفوظة | الرابط يعمل؛ لا حفظ في الحساب | عام | /compare/:id | S8 | 🟡 PARTIAL | S24 |
-| FR-COMP-008 | يعمل على الجوال وRTL | واجهة متجاوبة؛ تحقق بصري فقط، بلا اختبار آلي | عام | /compare/:id | لقطات فقط | 🟡 PARTIAL | S24 |
+| FR-COMP-001 | مجموعة مقارنة حتى 4 | مبني الآن: `ComparisonSet` حتى 4 منتجات، الحد مُثبت بتزامن حقيقي (طلبان متزامنان عند 3 عناصر - ينجح واحد فقط) | session (إدارة)، عام (مشاركة) | /compare/sets، /compare/sets/[id] | S24 e2e | ✅ DONE | S24 |
+| FR-COMP-002 | وضعان: عروض المنتج نفسه أو منتجات منافسة | مبني الآن: الوضع 2 (منتجات منافسة، 2-4 معرّفات) إلى جانب الوضع 1 الموجود | عام | /compare/:id، /compare/cross (جديدة) | S8، S24 e2e | ✅ DONE | S24 |
+| FR-COMP-003 | خصائص الفئة + سعر وخصم وحالة وضمان وتوصيل وتقييم ومسافة ووقت | مبني الآن: الحالة، الضمان ("غير متوفر" عند الغياب الحقيقي)، رسوم التوصيل (بالمنطقة، تعيد استخدام `resolveDeliveryFee` حرفياً)، تقييم المتجر - **المسافة والوقت خارج النطاق عمداً هذا السبرنت (قرار نهائي #2)**، لا بنية geolocation/ETA في المشروع | عام | /compare/:id، /compare/cross | S24 e2e | 🟡 PARTIAL | S24 |
+| FR-COMP-004 | إبراز التشابه والاختلاف | مبني الآن: حقل `diff` (الحالة/الضمان) لكل من المقارنة والمقارنة المتقاطعة | عام | /compare/:id، /compare/cross | S24 e2e | ✅ DONE | S24 |
+| FR-COMP-005 | وسم الأرخص وأفضل قيمة مع السبب | مبني الآن: وسم الأرخص مع سبب نصّي صريح لكل من الوضعين - **"أفضل قيمة" خارج النطاق عمداً (قرار نهائي #1، لا صيغة معتمدة)** | عام | /compare/:id، /compare/cross | S24 e2e | 🟡 PARTIAL | S24 |
+| FR-COMP-006 | تنبيه بيانات قديمة | مبني الآن: `is_price_stale` (أقدم من 30 يوماً، BR-004/NFR-STALE-002 الحالي) بالاعتماد على آخر `PriceHistory` كمصدر الأقرب للحقيقة | عام | /compare/:id، /compare/cross | S24 e2e | ✅ DONE | S24 |
+| FR-COMP-007 | رابط مشاركة ومجموعة محفوظة | مبني الآن: مجموعة محفوظة كاملة بالإضافة للرابط الموجود لكل منتج | session (الحفظ)، عام (المشاركة) | /compare/sets، /compare/shared/[slug] | S24 e2e | ✅ DONE | S24 |
+| FR-COMP-008 | يعمل على الجوال وRTL | واجهة متجاوبة (الصفحات الجديدة تتبع نفس الأسلوب)؛ تحقق بصري فقط، بلا اختبار آلي للواجهة | عام | /compare/:id، /compare/cross، /compare/sets* | لقطات فقط | 🟡 PARTIAL | S24 |
 | FR-COMP-009 | مقارنة بعملات متعددة | استُبدل بـFR-PRICE-008 (E.0) | - | - | - | ↪ SUPERSEDED | - |
 | FR-PRICE-001 | سعر أساسي وتخفيض وعملة | استُبدل بـFR-PRICE-008/009 (E.0) | - | - | - | ↪ SUPERSEDED | - |
 | FR-PRICE-002 | تاريخ أسعار كامل | PriceHistory (S17): سجلّ إضافة فقط، صف واحد لكل تغيير حقيقي، تعبئة أولية MIGRATED_BASELINE للمتغيّرات السابقة | OWNER | صفحة سجلّ الأسعار في المتغيّر (S17) | S17 | ✅ DONE | - |
@@ -477,12 +511,12 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-REV-008 (E.15) | شارة التحقق على صفحة المتجر | مبني: `is_verified` مُشتَق (قرار نهائي #9) - PHYSICAL: كل فرع فعلي نشط APPROVED (ولا بد من وجود فرع واحد فعلي على الأقل)؛ ONLINE_ONLY: آخر لقطة `WarehouseVerificationEvidence` APPROVED؛ HYBRID: الاثنان معاً. حقل مشتق فقط يُضاف للاستجابة العامة الموجودة - لا بيانات Warehouse الخام (lat/lng/عنوان) تُعرض أبداً، يبقى الاستثناء الوحيد المتعمَّد من قاعدة "لا نكشف Warehouse" (PDR-010) | عام | شارة "متجر موثّق" إلى جانب شارة "متاح الآن" في صفحة المتجر العامة | S23 e2e: PHYSICAL (فرع واحد/فرعان/فرع مؤرشَف)، ONLINE_ONLY (لا دليل/مرفوض/معتمد)، HYBRID (الشرطان معاً) | ✅ DONE | - |
 | FR-REV-009 | تعديل/حذف المراجعة | استُبدل بـPDR-032 (لا تعديل) | - | - | - | ↪ SUPERSEDED | - |
 | FR-REV-010 | مؤشرات أصالة على مستوى العرض | لا - نفس استبعاد FR-REV-007 أعلاه (القرار النهائي #3) | - | لا | لا | ❌ MISSING | S24+ |
-| FR-FAV-001 | مفضلة: منتج/عرض/متجر | متابعة المتجر فقط | session | /following (متجر فقط) | S13 | 🟡 PARTIAL | S24 |
-| FR-FAV-002 | حفظ مجموعة مقارنة | لا | - | لا | لا | ❌ MISSING | S24 |
-| FR-FAV-003 | تنبيه انخفاض السعر | لا | - | لا | لا | ❌ MISSING | S24 |
-| FR-FAV-004 | تنبيه عودة المخزون | لا | - | لا | لا | ❌ MISSING | S24 |
-| FR-FAV-005 (E.16) | تفضيلات وتكرار الإشعارات | لا | - | لا | لا | ❌ MISSING | S24 |
-| FR-FAV-006 | تنبيه عرض جديد | لا | - | لا | لا | ❌ MISSING | S24 |
+| FR-FAV-001 | مفضلة: منتج/عرض/متجر | مبني الآن: `Favorite` (PRODUCT/OFFER، BOLA-safe، idempotent) - المتجر يبقى عمداً عبر `StoreFollow` الموجودة (قرار نهائي #6)، لا تكرار | session | /favorites (جديدة)، /following (متجر) | S24 e2e (27 اختباراً) | ✅ DONE | S24 |
+| FR-FAV-002 | حفظ مجموعة مقارنة | مبني الآن: `ComparisonSet`/`ComparisonSetItem`، حد 4 عناصر (مُثبت بتزامن حقيقي)، رابط مشاركة | session (الإنشاء/الإدارة)، عام (رابط المشاركة) | /compare/sets، /compare/sets/[id]، /compare/shared/[slug] (جديدة) | S24 e2e | ✅ DONE | S24 |
+| FR-FAV-003 | تنبيه انخفاض السعر | مبني الآن: كلا نقطتي التحديث (PATCH يدوي فوري + sweep الخصم المجدوَل) تُرسلان عبر outbox الموجود، إزالة تكرار للمستخدم المفضِّل للمنتج وللعرض معاً | session | /notifications (الموجودة، مُوسَّعة لأنواع S24) | S24 e2e | ✅ DONE | S24 |
+| FR-FAV-004 | تنبيه عودة المخزون | مبني الآن **لمفضلة OFFER فقط** (قرار نهائي #4 - لا تنبيه لمفضلة PRODUCT عمداً)، على مستوى المتجر كله (0 إلى متوفر عبر كل الفروع) لا فرع واحد | session | /notifications | S24 e2e (يشمل اختبار deadlock وno-phantom-row) | ✅ DONE | S24 |
+| FR-FAV-005 (E.16) | تفضيلات وتكرار الإشعارات | مبني الآن: تفعيل/تعطيل لكل نوع تنبيه (`NotificationPreference`، افتراضي مفعّل) - **التكرار/التجميع غير مبني عمداً هذا السبرنت** (قرار نهائي #5، لا دفعات) | session | /favorites (لوحة تفضيلات) | S24 e2e | 🟡 PARTIAL | S24 |
+| FR-FAV-006 | تنبيه عرض جديد | مبني الآن: عرض مطابق جديد لمنتج أساسي مفضَّل (عبر التأكيد المباشر أو مراجعة المطابقة) يُرسل مرة واحدة فقط | session | /notifications | S24 e2e | ✅ DONE | S24 |
 | FR-NOTIF-001 | SMS وemail وin-app بتتبع لكل قناة | **in-app أصبح حقيقياً وموثوقاً الآن** (Notification model + relay بإعادة محاولة S19)؛ SMS/email ما زالا بلا مزوّد حقيقي (NotificationChannelService fallback log فقط، OPEN-004)؛ لا سجل نجاح/فشل لكل قناة على حدة | - | /notifications (in-app فقط) | S19 | 🟡 PARTIAL | S19 |
 | FR-NOTIF-002 | SMS للـOTP وتأكيد الطلب | OTP مسجَّل في اللوغ (OPEN-004) | - | OTP في /register | AUTH | 🟡 PARTIAL | S19 |
 | FR-NOTIF-003 | قوالب AR/EN بحسب لغة المستلم | لا | - | لا | لا | ❌ MISSING | S19 |
@@ -533,7 +567,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | ID | Decision | Backend | Authz | UI | Test | Status | Sprint |
 |---|---|---|---|---|---|---|---|
 | PDR-001 | ILS فقط | بيانات ILS | n/a | كل الواجهات | S10,S14 | ✅ DONE | - |
-| PDR-002 | العميل المسجّل يتصفح/يقارن/يفضّل/يتابع/يشتري؛ سلة على السيرفر | السلة والمتابعة؛ لا مفضلات | session | /cart، /following | S10,S13 | 🟡 PARTIAL | S24 |
+| PDR-002 | العميل المسجّل يتصفح/يقارن/يفضّل/يتابع/يشتري؛ سلة على السيرفر | السلة والمتابعة والمفضلات مبنية الآن جميعاً | session | /cart، /following، /favorites | S10,S13,S24 | ✅ DONE | S24 |
 | PDR-003 | التنفيذ يُختار عند الـcheckout | السلة بلا تنفيذ | session | /cart، /checkout | S10,S14 | ✅ DONE | - |
 | PDR-004 | BranchOrder وحدة تشغيلية | BranchOrder | session | /orders | S9,S10 | ✅ DONE | - |
 | PDR-005 | معاملة sandbox واحدة؛ ILS | PaymentTransaction | session | /checkout | S10,S14 | ✅ DONE | - |
@@ -1039,10 +1073,10 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 | BL-SEARCH-002b | Should | FR-SEARCH-002 | ❌ MISSING | - |
 | BL-SEARCH-003 | Must | FR-SEARCH-005 | 🟡 PARTIAL | - |
 | BL-SEARCH-004 | Should | FR-SEARCH-010 | ❌ MISSING | - |
-| BL-COMP-001 | Must | FR-COMP-001 | ❌ MISSING | - |
-| BL-COMP-002 | Must | FR-COMP-005 | 🟡 PARTIAL | - |
+| BL-COMP-001 | Must | FR-COMP-001 | ✅ DONE | S24 |
+| BL-COMP-002 | Must | FR-COMP-005 | 🟡 PARTIAL | S24 |
 | BL-COMP-003 | Must | FR-COMP-009 | ↪ SUPERSEDED | استُبدل: PDR-001 يزيل FX كلياً |
-| BL-COMP-004 | Should | FR-COMP-007 | 🟡 PARTIAL | - |
+| BL-COMP-004 | Should | FR-COMP-007 | ✅ DONE | S24 |
 | BL-INV-001 | Must | FR-INV-001 | ✅ DONE | - |
 | BL-INV-002 | Must | FR-INV-004 | ✅ DONE | - |
 | BL-INV-003 | Should | FR-INV-006 | ✅ DONE | - |
@@ -1078,8 +1112,8 @@ Part 8 يحتوي فعلياً **102 معرّف `BL-*`** (عددتها مباش�
 | BL-NOTIF-001 | Must | SRS-H1-08 | ❌ MISSING | - |
 | BL-NOTIF-002 | Must | FR-NOTIF-003 | ❌ MISSING | - |
 | BL-NOTIF-002b | Should | FR-NOTIF-003 | ❌ MISSING | - |
-| BL-NOTIF-003 | Should | FR-FAV-001 | 🟡 PARTIAL | - |
-| BL-NOTIF-004 | Could | FR-FAV-003 | ❌ MISSING | - |
+| BL-NOTIF-003 | Should | FR-FAV-001 | ✅ DONE | S24 |
+| BL-NOTIF-004 | Could | FR-FAV-003 | ✅ DONE | S24 |
 | BL-ADMIN-001 | Must | FR-VEND-009 | ✅ DONE | قائمة المتاجر وتعليق/إعادة تفعيل وطابور الموافقة مبنية (S16) |
 | BL-ADMIN-001b | Should | FR-ADMIN-001 | 🟡 PARTIAL | - |
 | BL-ADMIN-002 | Must | FR-ADMIN-001 | 🟡 PARTIAL | - |

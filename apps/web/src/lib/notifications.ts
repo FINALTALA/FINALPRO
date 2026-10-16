@@ -8,7 +8,12 @@ import { SUSPENSION_REASON_LABEL } from "./admin";
 // `data` into Arabic copy and a destination link, matching this
 // codebase's established VERIFICATION_LABEL-style convention.
 
-export type NotificationTargetType = "BRANCH_ORDER" | "STOCK" | "VENDOR" | "OFFER";
+export type NotificationTargetType =
+  | "BRANCH_ORDER"
+  | "STOCK"
+  | "VENDOR"
+  | "OFFER"
+  | "CANONICAL_PRODUCT";
 
 export type NotificationType =
   | "STOCK_ADJUSTMENT"
@@ -21,7 +26,10 @@ export type NotificationType =
   | "NEW_ORDER_FOR_EMPLOYEE"
   | "LOW_STOCK_AFTER_RESERVE"
   | "FOLLOWED_STORE_NEW_PRODUCT"
-  | "FOLLOWED_STORE_DISCOUNT";
+  | "FOLLOWED_STORE_DISCOUNT"
+  | "FAVORITE_PRICE_DROP"
+  | "FAVORITE_BACK_IN_STOCK"
+  | "FAVORITE_NEW_OFFER";
 
 export interface NotificationDto {
   id: string;
@@ -52,6 +60,9 @@ export const NOTIFICATION_TYPE_LABEL: Record<NotificationType, string> = {
   LOW_STOCK_AFTER_RESERVE: "المخزون منخفض على أحد المنتجات",
   FOLLOWED_STORE_NEW_PRODUCT: "منتج جديد من متجر تتابعينه",
   FOLLOWED_STORE_DISCOUNT: "خصم جديد من متجر تتابعينه",
+  FAVORITE_PRICE_DROP: "انخفض سعر أحد منتجاتك المفضلة",
+  FAVORITE_BACK_IN_STOCK: "عاد أحد منتجاتك المفضلة للمخزون",
+  FAVORITE_NEW_OFFER: "عرض جديد لأحد منتجاتك المفضلة",
 };
 
 const STOCK_REASON_LABEL: Record<string, string> = {
@@ -104,6 +115,16 @@ export function notificationHref(n: NotificationDto): string {
     case "FOLLOWED_STORE_NEW_PRODUCT":
     case "FOLLOWED_STORE_DISCOUNT":
       return "/following";
+    // FAVORITE_PRICE_DROP/FAVORITE_BACK_IN_STOCK only carry an
+    // offerVariantId, not a store slug/offer id - no buildable product
+    // URL exists from that alone, so (same fallback shape as the
+    // followed-store types above) this routes to the customer's own
+    // favorites list rather than guessing a broken link.
+    case "FAVORITE_PRICE_DROP":
+    case "FAVORITE_BACK_IN_STOCK":
+      return "/account/favorites";
+    case "FAVORITE_NEW_OFFER":
+      return n.target_id ? `/compare/${n.target_id}` : "/account/favorites";
     case "DELIVERY_CONFIRM_REQUESTED":
     case "ORDER_AUTO_CONFIRMED":
     case "DELIVERY_CONFIRM_REMINDER":

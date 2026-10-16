@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import { PeriodicTask } from '../common/periodic-task.util';
+import { enqueueFavoriteNotification } from '../favorites/favorite-alerts.util';
 import { OutboxEventService } from '../outbox/outbox-event.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -129,6 +130,35 @@ export class DiscountActivationSweepService
           SELECT gen_random_uuid()::text, ${outboxEvent.id}, "userId"
           FROM store_follows WHERE "vendorId" = ${candidate.vendorId}
         `;
+
+        // Sprint 24 (FR-FAV-003): a scheduled discount activating is a
+        // genuine real price drop - the favorite-alert fan-out must not
+        // be limited to the manual-PATCH choke point alone. Resolves
+        // the variant's matched canonical product (if any) so PRODUCT
+        // favorites are covered too, not just OFFER favorites of this
+        // exact listing.
+        const variant = await tx.offerVariant.findUnique({
+          where: { id: candidate.id },
+          select: { canonicalVariantId: true },
+        });
+        let canonicalProductId: string | undefined;
+        if (variant?.canonicalVariantId) {
+          const canonicalVariant = await tx.canonicalProductVariant.findUnique({
+            where: { id: variant.canonicalVariantId },
+            select: { canonicalProductId: true },
+          });
+          canonicalProductId = canonicalVariant?.canonicalProductId;
+        }
+        await enqueueFavoriteNotification(tx, this.outbox, {
+          eventType: 'favorite.price_dropped',
+          alertType: 'PRICE_DROP',
+          canonicalProductId,
+          offerVariantId: candidate.id,
+          payload: {
+            vendor_id: candidate.vendorId,
+            offer_variant_id: candidate.id,
+          },
+        });
       });
       return true;
     } catch (err) {

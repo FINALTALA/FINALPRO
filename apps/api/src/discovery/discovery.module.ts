@@ -1,13 +1,29 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
-import { ComparisonController } from './comparison.controller';
+import { ReviewsModule } from '../reviews/reviews.module';
+import {
+  ComparisonSetsController,
+  ComparisonSetsSharedController,
+} from './comparison-sets.controller';
+import { ComparisonSetsService } from './comparison-sets.service';
+import {
+  ComparisonController,
+  CrossComparisonController,
+} from './comparison.controller';
 import { ComparisonService } from './comparison.service';
 import { DiscoveryController } from './discovery.controller';
 import { FollowingController } from './following.controller';
 
 @Module({
-  imports: [AuthModule],
-  controllers: [DiscoveryController, ComparisonController, FollowingController],
-  providers: [ComparisonService],
+  imports: [AuthModule, ReviewsModule],
+  controllers: [
+    DiscoveryController,
+    ComparisonController,
+    CrossComparisonController,
+    FollowingController,
+    ComparisonSetsController,
+    ComparisonSetsSharedController,
+  ],
+  providers: [ComparisonService, ComparisonSetsService],
 })
 export class DiscoveryModule {}

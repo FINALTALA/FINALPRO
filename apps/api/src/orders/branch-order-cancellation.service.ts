@@ -11,7 +11,10 @@ import {
   Prisma,
 } from '../../generated/prisma/client';
 import { AuditLogService } from '../audit/audit-log.service';
+import { lockOffersWideForRestock } from '../checkout/stock-lock.util';
+import { enqueueFavoriteNotification } from '../favorites/favorite-alerts.util';
 import { toDecimal } from '../offers/pricing/effective-price.util';
+import { OutboxEventService } from '../outbox/outbox-event.service';
 import { BranchOrderService } from './branch-order.service';
 
 // Money fields are `unknown` deliberately - every caller passes a
@@ -52,9 +55,14 @@ interface ActiveItemRow {
  *
  * Lock order, always: BranchOrder (by the caller, before either method
  * here is invoked) -> BranchOrderItem(s) being cancelled, sorted by id
- * -> the distinct BranchStock row(s) those items touch, sorted the
- * same way stock-lock.util.ts's own multi-row callers already sort.
- * Refund-row insertion needs no separate lock: @@unique(
+ * -> the distinct BranchStock row(s) those items touch, via
+ * stock-lock.util.ts's own lockOffersWideForRestock (Sprint 24,
+ * FR-FAV-004) - one batched call covering every distinct offerVariant
+ * this cancellation restores, never a loop of single-offer calls (see
+ * that function's own comment for why: looping would reopen the S21b
+ * AB-BA deadlock class across two concurrent multi-item cancellations
+ * touching the same offers in opposite order). Refund-row insertion
+ * needs no separate lock: @@unique(
  * branchOrderItemId) and the partial unique index on (branchOrderId)
  * WHERE reason='DELIVERY_FEE' make a duplicate insert fail at the DB
  * level, caught the same SAVEPOINT-protected way as every other
@@ -66,6 +74,7 @@ export class BranchOrderCancellationService {
   constructor(
     private readonly auditLog: AuditLogService,
     private readonly branchOrderService: BranchOrderService,
+    private readonly outbox: OutboxEventService,
   ) {}
 
   /**
@@ -313,18 +322,6 @@ export class BranchOrderCancellationService {
     return items;
   }
 
-  private async lockStockRowsSorted(
-    tx: Prisma.TransactionClient,
-    vendorId: string,
-    branchId: string,
-    offerVariantIds: string[],
-  ): Promise<void> {
-    const sorted = [...new Set(offerVariantIds)].sort();
-    for (const offerVariantId of sorted) {
-      await tx.$queryRaw`SELECT id FROM branch_stock WHERE "vendorId" = ${vendorId} AND "branchId" = ${branchId} AND "offerVariantId" = ${offerVariantId} FOR UPDATE`;
-    }
-  }
-
   /**
    * The one place that actually writes cancelledAt/refund rows/stock
    * restoration/the final BranchOrder transition - every public method
@@ -350,11 +347,57 @@ export class BranchOrderCancellationService {
         message: 'This branch order has no active items left to cancel',
       });
     }
-    await this.lockStockRowsSorted(
+    // Caught by an e2e run, not by inspection: checkout's OWN confirm
+    // step (checkout.service.ts, the sortedItems loop) decrements BOTH
+    // quantity and reservedQuantity together at the moment an order is
+    // placed - the temporary hold (reservedQuantity) is released
+    // there, and quantity is permanently reduced (a real sale, not
+    // just a hold). By the time a BranchOrder reaches PLACED,
+    // reservedQuantity already carries none of this order's
+    // contribution, so decrementing it further here drove it negative
+    // and tripped BranchStock's own CHECK constraint on every single
+    // cancellation. The correct inverse of checkout's sale is to
+    // increment `quantity` back up - undoing the sale, exactly
+    // symmetric to how it was removed - never touching
+    // reservedQuantity, which has nothing to do with an already-placed
+    // order.
+    //
+    // Sprint 24 (FR-FAV-004): merged by offerVariantId FIRST - two
+    // active items of the same BranchOrder CAN share an offerVariantId
+    // (nothing in checkout prevents two separate line items for the
+    // same offer), and lockOffersWideForRestock's own per-mutation loop
+    // reads its pre-write snapshot once up front, so passing the same
+    // target key twice in one batch would silently drop one item's
+    // quantity from the write. One mutation per distinct offerVariantId,
+    // one batched call for the WHOLE set this cancellation restores -
+    // never a loop of single-offer calls (this service's own top
+    // comment explains why).
+    const qtyByOffer = new Map<string, number>();
+    for (const item of items) {
+      qtyByOffer.set(
+        item.offerVariantId,
+        (qtyByOffer.get(item.offerVariantId) ?? 0) + item.quantity,
+      );
+    }
+    const siblingBranches = await tx.storeBranch.findMany({
+      where: {
+        vendorId: order.vendorId,
+        isPhysical: true,
+        archivedAt: null,
+        id: { not: order.branchId },
+      },
+      select: { id: true },
+    });
+    const siblingBranchIds = siblingBranches.map((b) => b.id);
+    const restockResults = await lockOffersWideForRestock(
       tx,
-      order.vendorId,
-      order.branchId,
-      items.map((i) => i.offerVariantId),
+      [...qtyByOffer.entries()].map(([offerVariantId, quantity]) => ({
+        vendorId: order.vendorId,
+        branchId: order.branchId,
+        offerVariantId,
+        quantityDelta: quantity,
+        siblingBranchIds,
+      })),
     );
 
     const isOnline = order.paymentMethod === 'ONLINE';
@@ -364,28 +407,6 @@ export class BranchOrderCancellationService {
       await tx.branchOrderItem.update({
         where: { id: item.id },
         data: { cancelledAt: new Date(), cancelledReason: reasonText },
-      });
-      // Caught by an e2e run, not by inspection: checkout's OWN confirm
-      // step (checkout.service.ts, the sortedItems loop) decrements
-      // BOTH quantity and reservedQuantity together at the moment an
-      // order is placed - the temporary hold (reservedQuantity) is
-      // released there, and quantity is permanently reduced (a real
-      // sale, not just a hold). By the time a BranchOrder reaches
-      // PLACED, reservedQuantity already carries none of this order's
-      // contribution, so decrementing it further here drove it
-      // negative and tripped BranchStock's own CHECK constraint on
-      // every single cancellation. The correct inverse of checkout's
-      // sale is to increment `quantity` back up - undoing the sale,
-      // exactly symmetric to how it was removed - never touching
-      // reservedQuantity, which has nothing to do with an already-
-      // placed order.
-      await tx.branchStock.updateMany({
-        where: {
-          vendorId: order.vendorId,
-          branchId: order.branchId,
-          offerVariantId: item.offerVariantId,
-        },
-        data: { quantity: { increment: item.quantity } },
       });
       if (isOnline) {
         const itemAmount = toDecimal(item.unitPrice).times(item.quantity);
@@ -406,6 +427,26 @@ export class BranchOrderCancellationService {
           },
         });
         refundedAmount = refundedAmount.plus(itemAmount);
+      }
+    }
+
+    // Sprint 24 (FR-FAV-004, final decision #4): OFFER favorites only -
+    // fires per distinct offerVariant restored, only on a genuine
+    // sold-out-everywhere -> available transition (never a single
+    // branch's local crossing), same gate as inventory.controller.ts's
+    // own manual-restock alert.
+    for (const offerVariantId of qtyByOffer.keys()) {
+      const restock = restockResults.get(`${order.branchId}:${offerVariantId}`);
+      if (restock?.before === 0 && (restock.after ?? 0) > 0) {
+        await enqueueFavoriteNotification(tx, this.outbox, {
+          eventType: 'favorite.back_in_stock',
+          alertType: 'BACK_IN_STOCK',
+          offerVariantId,
+          payload: {
+            vendor_id: order.vendorId,
+            offer_variant_id: offerVariantId,
+          },
+        });
       }
     }
 

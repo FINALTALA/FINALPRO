@@ -10,6 +10,7 @@ import { CorrelationIdMiddleware } from './common/middleware/correlation-id.midd
 import { CustomersModule } from './customers/customers.module';
 import { DeliveryWindowsModule } from './delivery-windows/delivery-windows.module';
 import { DiscoveryModule } from './discovery/discovery.module';
+import { FavoritesModule } from './favorites/favorites.module';
 import { HealthModule } from './health/health.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { MatchingModule } from './matching/matching.module';
@@ -56,6 +57,7 @@ import { WarehouseVerificationModule } from './warehouse-verification/warehouse-
     CheckoutModule,
     ReturnsModule,
     ReviewsModule,
+    FavoritesModule,
   ],
   providers: [
     {

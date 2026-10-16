@@ -14,6 +14,8 @@ function offer(overrides: Partial<EligibleOffer>): EligibleOffer {
     price: 100,
     availability: 'available',
     imageUrl: null,
+    condition: 'NEW',
+    priceLastConfirmedAt: new Date('2026-01-01T00:00:00Z'),
     ...overrides,
   };
 }

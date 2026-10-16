@@ -442,4 +442,19 @@ export class ReviewsService {
       reviews: rows.map(reviewDto),
     };
   }
+
+  /**
+   * Sprint 24 (FR-COMP-003 "seller rating"): a lightweight,
+   * ratings-only lookup for comparison - never fetches the review rows
+   * themselves (vendorReviews() above does that, for the real reviews
+   * page). Same VISIBLE-only aggregate rule as everywhere else in this
+   * file.
+   */
+  async getVendorRatingSummary(vendorId: string) {
+    const rows = await this.prisma.review.findMany({
+      where: { vendorId, moderationStatus: 'VISIBLE' },
+      select: { rating: true },
+    });
+    return computeAggregateRating(rows.map((r) => r.rating));
+  }
 }

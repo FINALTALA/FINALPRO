@@ -171,15 +171,44 @@ const EVENT_TYPE_MAP: Record<string, EventMapping> = {
 
 const FOLLOWER_EVENT_TYPE_MAP: Record<
   string,
-  { type: NotificationType; targetIdField: string }
+  {
+    type: NotificationType;
+    targetIdField: string;
+    targetType: NotificationTargetType;
+  }
 > = {
   'offer.published_for_followers': {
     type: 'FOLLOWED_STORE_NEW_PRODUCT',
     targetIdField: 'offer_id',
+    targetType: 'OFFER',
   },
   'offer.discount_activated_for_followers': {
     type: 'FOLLOWED_STORE_DISCOUNT',
     targetIdField: 'offer_variant_id',
+    targetType: 'OFFER',
+  },
+  // Sprint 24 (FR-FAV-003): fires for both PRODUCT and OFFER favorites
+  // of the SAME offer - a price belongs to one specific listing either
+  // way, so every recipient gets the same OFFER-scoped deep link
+  // regardless of which way they favorited.
+  'favorite.price_dropped': {
+    type: 'FAVORITE_PRICE_DROP',
+    targetIdField: 'offer_variant_id',
+    targetType: 'OFFER',
+  },
+  // Sprint 24 (FR-FAV-004, final decision #4): OFFER favorites only.
+  'favorite.back_in_stock': {
+    type: 'FAVORITE_BACK_IN_STOCK',
+    targetIdField: 'offer_variant_id',
+    targetType: 'OFFER',
+  },
+  // Sprint 24 (FR-FAV-006): PRODUCT favorites only - an OFFER favorite
+  // is about one existing listing, never relevant to "a new OTHER
+  // listing appeared."
+  'favorite.new_offer_matched': {
+    type: 'FAVORITE_NEW_OFFER',
+    targetIdField: 'canonical_product_id',
+    targetType: 'CANONICAL_PRODUCT',
   },
 };
 
@@ -472,7 +501,11 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
     tx: Prisma.TransactionClient,
     outboxEventId: string,
     eventType: string,
-    mapping: { type: NotificationType; targetIdField: string },
+    mapping: {
+      type: NotificationType;
+      targetIdField: string;
+      targetType: NotificationTargetType;
+    },
     payload: Record<string, unknown>,
     notifyItems: NotifyItem[],
   ): Promise<boolean> {
@@ -495,7 +528,7 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
         outboxEventId,
         target.recipientUserId,
         mapping.type,
-        'OFFER',
+        mapping.targetType,
         targetId,
         safeData,
         vendorId,
@@ -505,7 +538,7 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
         notifyItems.push({
           recipientUserId: target.recipientUserId,
           type: mapping.type,
-          targetType: 'OFFER',
+          targetType: mapping.targetType,
           targetId,
           data: safeData,
         });

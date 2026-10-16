@@ -79,6 +79,7 @@ export default function AccountPage() {
         <div className="hub-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", marginBottom: 8 }}>
           <Link href="/orders" className="hub-tile"><strong>طلباتي</strong><span>تتبّع طلباتك وأكّدي الاستلام</span></Link>
           <Link href="/following" className="hub-tile"><strong>أتابعه</strong><span>المتاجر التي تتابعينها</span></Link>
+          <Link href="/account/favorites" className="hub-tile"><strong>المفضلة</strong><span>المنتجات والعروض المحفوظة</span></Link>
           <Link href="/cart" className="hub-tile"><strong>السلة</strong><span>عناصرك المحفوظة</span></Link>
         </div>
 
