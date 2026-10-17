@@ -83,3 +83,26 @@ export function buildSafeAuditSummary(
 export function toCsvRow(fields: (string | null)[]): string {
   return fields.map((f) => `"${(f ?? '').replace(/"/g, '""')}"`).join(',');
 }
+
+/**
+ * Review-round fix (CSV formula injection): `toCsvRow()`'s quoting
+ * only protects this CSV's own column structure - it does nothing to
+ * stop Excel/Google Sheets from interpreting a cell whose value
+ * STARTS WITH `=`, `+`, `-`, or `@` (or a leading tab/CR/LF before
+ * one of those) as an executable formula once the file is opened,
+ * entirely independent of the surrounding quotes. Any exported
+ * column can carry attacker-influenced data (`entityId`, `action`,
+ * `correlationId`, the redacted `summary`), so every DATA-row value
+ * - never the fixed, developer-written header row, which can't be
+ * attacker-controlled - is passed through this first. Prefixing a
+ * literal apostrophe is the standard mitigation: every major
+ * spreadsheet app treats a leading `'` as "force this cell to plain
+ * text" and strips it from the displayed value, so the cell renders
+ * as the literal original text instead of running as a formula.
+ */
+const CSV_FORMULA_TRIGGER = /^[=+\-@\t\r\n]/;
+
+export function sanitizeCsvFormulaField(value: string | null): string | null {
+  if (value === null) return null;
+  return CSV_FORMULA_TRIGGER.test(value) ? `'${value}` : value;
+}

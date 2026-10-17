@@ -621,6 +621,34 @@ describe('Sprint 25 - admin audit logs, feature flags, vendor performance (e2e)'
       expect(list.body.items[0].summary).toContain('PREPARING');
     });
 
+    it('CSV FORMULA INJECTION: a value beginning with =, +, -, or @ is neutralized with a leading apostrophe, never exported as a live formula', async () => {
+      const admin = await platformAdmin();
+      const marker = unique('formula-marker');
+      const dangerousValues = ['=1+1', '+1+1', '-1+1', '@SUM(1,1)'];
+      await prisma.auditLog.createMany({
+        data: dangerousValues.map((v, i) => ({
+          correlationId: unique('corr'),
+          action: v,
+          entityType: 'Formula',
+          entityId: `${marker}-${i}`,
+        })),
+      });
+
+      const csv = await request(http())
+        .get('/api/v1/admin/audit-logs/export?entity_type=Formula')
+        .set('Authorization', `Bearer ${admin}`)
+        .expect(200);
+
+      for (const v of dangerousValues) {
+        // The raw dangerous value must never appear as its own
+        // unprefixed quoted CSV field - only the apostrophe-prefixed,
+        // spreadsheet-safe form (Excel/Sheets treat a leading "'" as
+        // "force this cell to text" and strip it from what's shown).
+        expect(csv.text).not.toContain(`"${v}"`);
+        expect(csv.text).toContain(`"'${v}"`);
+      }
+    });
+
     it('export rejects with 400 EXPORT_TOO_LARGE when the matching set exceeds the row limit, never a silent partial export', async () => {
       const admin = await platformAdmin();
       const marker = unique('bulk-marker');

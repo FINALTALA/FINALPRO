@@ -15,6 +15,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import {
   buildAuditLogWhere,
   buildSafeAuditSummary,
+  sanitizeCsvFormulaField,
   toCsvRow,
 } from './audit-log-export.util';
 import {
@@ -175,16 +176,18 @@ export class AdminAuditLogsController {
       'summary',
     ]);
     const lines = rows.map((row) =>
-      toCsvRow([
-        row.id,
-        row.occurredAt.toISOString(),
-        row.actorId,
-        row.correlationId,
-        row.action,
-        row.entityType,
-        row.entityId,
-        buildSafeAuditSummary(row.action, row.beforeState, row.afterState),
-      ]),
+      toCsvRow(
+        [
+          row.id,
+          row.occurredAt.toISOString(),
+          row.actorId,
+          row.correlationId,
+          row.action,
+          row.entityType,
+          row.entityId,
+          buildSafeAuditSummary(row.action, row.beforeState, row.afterState),
+        ].map(sanitizeCsvFormulaField),
+      ),
     );
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
