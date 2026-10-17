@@ -166,4 +166,8 @@ export const SUSPENDED_ALLOW_ROUTES: readonly string[] = [
   // read" stays ALLOW, same bucket as every other GET above. A
   // suspended store's past reviews must stay visible either way.
   'GET vendors/:vendorId/reviews',
+  // Sprint 25: the vendor's own performance dashboard - a read, same
+  // bucket as every other GET above. Feature-flag-gated separately
+  // (FEATURE_DISABLED), unrelated to suspension.
+  'GET vendors/:vendorId/performance',
 ];

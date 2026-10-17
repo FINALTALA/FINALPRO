@@ -11,6 +11,7 @@ import { CustomersModule } from './customers/customers.module';
 import { DeliveryWindowsModule } from './delivery-windows/delivery-windows.module';
 import { DiscoveryModule } from './discovery/discovery.module';
 import { FavoritesModule } from './favorites/favorites.module';
+import { FeatureFlagsModule } from './feature-flags/feature-flags.module';
 import { HealthModule } from './health/health.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { MatchingModule } from './matching/matching.module';
@@ -23,6 +24,7 @@ import { RedisModule } from './redis/redis.module';
 import { ReturnsModule } from './returns/returns.module';
 import { ReviewsModule } from './reviews/reviews.module';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
+import { VendorPerformanceModule } from './vendor-performance/vendor-performance.module';
 import { VendorVerificationModule } from './vendor-verification/vendor-verification.module';
 import { VendorsModule } from './vendors/vendors.module';
 import { WarehouseVerificationModule } from './warehouse-verification/warehouse-verification.module';
@@ -58,6 +60,8 @@ import { WarehouseVerificationModule } from './warehouse-verification/warehouse-
     ReturnsModule,
     ReviewsModule,
     FavoritesModule,
+    FeatureFlagsModule,
+    VendorPerformanceModule,
   ],
   providers: [
     {
