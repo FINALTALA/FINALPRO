@@ -26,7 +26,9 @@
    creates a frame around this campaign hero. */
 .home.home {
   display: block;
+  max-width: 100%;
   padding: 0 0 40px;
+  overflow-x: clip;
 }
 
 .hero {
@@ -40,7 +42,7 @@
   min-height: max(100svh, 56.25vw);
   margin: 0;
   overflow: visible;
-  background: #6c4a25;
+  background: var(--via-cream);
 }
 
 .heroImage {
@@ -57,7 +59,7 @@
 /* The foreground keeps the complete campaign photograph visible. A softly
    blurred copy fills screens whose aspect ratio differs from the artwork. */
 .hero::after {
-  content: "";
+  content: none;
   position: absolute;
   inset: -24px;
   z-index: -3;
