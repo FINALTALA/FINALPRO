@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
 import {
@@ -33,6 +34,7 @@ import { newIdempotencyKey, apiFetch } from "@/lib/api";
 import { Lang, setLang } from "@/lib/i18n";
 import { useLang, useSyncServerLanguagePref, useT } from "@/lib/useLang";
 import LangEffect from "./LangEffect";
+import homeStyles from "@/app/home-via.module.css";
 
 const TAB_ICONS: Record<NavLink["key"], ReactNode> = {
   home: <HomeIcon />,
@@ -66,6 +68,7 @@ const AUTH_PAGE_PATHS = new Set(["/login", "/register", "/reset-password", "/rea
 // real protection for every route it links to.
 export default function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const isHomePage = pathname === "/";
   const isViaExperience = pathname === "/" || pathname === "/women";
   const router = useRouter();
   const token = useSessionToken();
@@ -78,7 +81,53 @@ export default function AppShell({ children }: { children: ReactNode }) {
   useSyncServerLanguagePref(token);
   const [query, setQuery] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [homeSearchOpen, setHomeSearchOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const homeSearchInputRef = useRef<HTMLInputElement>(null);
+  const homeHeaderRef = useRef<HTMLElement>(null);
+
+  // The campaign header belongs to the first screen only. As the visitor
+  // leaves that screen, it glides upward and fades instead of staying over
+  // the catalogue content below.
+  useEffect(() => {
+    if (!isHomePage) return;
+
+    let frame = 0;
+    const updateHeader = () => {
+      frame = 0;
+      const hero = document.querySelector<HTMLElement>(`.${homeStyles.hero}`);
+      // The campaign fades into the category area before the hero element's
+      // literal bottom. Begin the header exit at that visual fade, not after
+      // the full element has already scrolled away.
+      const heroEnd = hero
+        ? hero.getBoundingClientRect().top + window.scrollY + hero.offsetHeight
+        : window.innerHeight;
+      const fadeStart = heroEnd - Math.min(340, hero?.offsetHeight ? hero.offsetHeight * .34 : 340);
+      const progress = Math.min(Math.max((window.scrollY - fadeStart) / 230, 0), 1);
+      const header = homeHeaderRef.current;
+      if (!header) return;
+      header.style.setProperty("--via-home-header-scroll", String(progress));
+      header.style.pointerEvents = progress >= 1 ? "none" : "";
+    };
+    const onScroll = () => {
+      if (!frame) frame = window.requestAnimationFrame(updateHeader);
+    };
+
+    updateHeader();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
+  }, [isHomePage]);
+
+  useEffect(() => {
+    if (!homeSearchOpen) return;
+    const frame = window.requestAnimationFrame(() => homeSearchInputRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [homeSearchOpen]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -174,8 +223,67 @@ export default function AppShell({ children }: { children: ReactNode }) {
   return (
     <>
       <LangEffect />
+      {isHomePage ? (
+        <header ref={homeHeaderRef} className={homeStyles.homeHeader}>
+          <div className={homeStyles.headerInner}>
+            <Link href="/" className={homeStyles.brand} aria-label="VIA - الرئيسية">
+              <Image className={homeStyles.brandLogo} src="/images/via-logo.svg" alt="" width={70} height={56} priority />
+              <span className={homeStyles.brandName}>ViA</span>
+            </Link>
+
+            <nav className={homeStyles.homeNav} aria-label="التنقل الرئيسي">
+              <Link href="/" className={`${homeStyles.navLink} ${homeStyles.navCurrent}`} aria-current="page">
+                الرئيسية
+              </Link>
+              <Link href="/following" className={homeStyles.navLink}>أتابعه</Link>
+              <Link href="/trending" className={homeStyles.navLink}>الترند</Link>
+              <Link href="/ads" className={homeStyles.navLink}>الإعلانات</Link>
+              <span className={homeStyles.navPending} aria-disabled="true">عن VIA</span>
+            </nav>
+
+            <div className={homeStyles.headerTools}>
+              <form
+                className={`${homeStyles.homeSearch}${homeSearchOpen ? ` ${homeStyles.homeSearchOpen}` : ""}`}
+                role="search"
+                onSubmit={onSearch}
+              >
+                <input
+                  ref={homeSearchInputRef}
+                  className={homeStyles.homeSearchInput}
+                  type="search"
+                  aria-label={t("appshell.search.placeholder")}
+                  placeholder={t("appshell.search.placeholder")}
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") setHomeSearchOpen(false);
+                  }}
+                />
+                <button
+                  type="button"
+                  className={homeStyles.searchToggle}
+                  aria-label={t("appshell.search.submit_aria")}
+                  aria-expanded={homeSearchOpen}
+                  onClick={() => setHomeSearchOpen(true)}
+                >
+                  <SearchIcon />
+                </button>
+              </form>
+              <Link href="/account" className={homeStyles.toolLink} aria-label={NAV_LABELS[lang].account}>
+                <UserIcon />
+              </Link>
+              <Link href="/account/favorites" className={homeStyles.toolLink} aria-label="المفضلة">
+                <HeartIcon />
+              </Link>
+              <Link href="/cart" className={homeStyles.toolLink} aria-label={NAV_LABELS[lang].cart}>
+                <CartIcon />
+                {cartCount > 0 && <span className="badge-count">{cartCount}</span>}
+              </Link>
+            </div>
+          </div>
+        </header>
+      ) : (
       <header className={`app-header${isViaExperience ? " home-header" : ""}`}>
-        {isViaExperience && <div className="home-announcement">{t("appshell.announcement")}</div>}
         <div className="app-header-inner">
           <Link href="/" className="app-logo" aria-label={`${isViaExperience ? "Via" : "FINALPRO"} - ${t("nav.home")}`}>
             <span className="app-logo-mark" aria-hidden="true">
@@ -214,15 +322,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
           </form>
 
           <div className="app-header-actions">
-            <button
-              type="button"
-              className="icon-button lang-switch"
-              aria-label={lang === "ar" ? "التبديل إلى الإنجليزية" : "Switch to Arabic"}
-              onClick={toggleLanguage}
-            >
-              {lang === "ar" ? "EN" : "AR"}
-            </button>
-
             {token && (
               <Link href="/notifications" className="icon-button" aria-label={t("appshell.notifications_aria")}>
                 <BellIcon />
@@ -295,18 +394,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 )}
               </div>
             ) : (
-              <span className="desktop-only" style={{ display: "flex", gap: 8 }}>
-                <Link href="/login" className="button-link">
-                  {t("appshell.sign_in")}
-                </Link>
-                <Link href="/register" className="button">
-                  {t("appshell.sign_up")}
-                </Link>
-              </span>
+              <></>                // add it later sign in and sign up buttons in a _
             )}
           </div>
         </div>
       </header>
+      )}
 
       <main className={`app-main${isViaExperience ? " home-main" : ""}`}>{children}</main>
 
@@ -334,6 +427,17 @@ export default function AppShell({ children }: { children: ReactNode }) {
           );
         })}
       </nav>
-    </>
-  );
+
+<footer className="app-footer">
+  <button
+    type="button"
+    className="icon-button lang-switch"
+    aria-label={lang === "ar" ? "التبديل إلى الإنجليزية" : "Switch to Arabic"}
+    onClick={toggleLanguage}
+  >
+    {lang === "ar" ? "EN" : "AR"}
+  </button>
+</footer>
+ </>
+);
 }

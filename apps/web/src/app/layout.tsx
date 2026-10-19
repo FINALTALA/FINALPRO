@@ -3,8 +3,11 @@ import AppShell from "@/components/AppShell";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "FINALPRO - قارني الأسعار بين متاجر فلسطين",
+  title: "Via - قارني الأسعار بين متاجر فلسطين",
   description: "منصّة مقارنة أسعار متعددة المتاجر: اكتشفي المنتجات وقارني الأسعار واشتري من المتجر الأنسب.",
+  icons: {
+    icon: "/images/via-logo.svg",
+  },
 };
 
 export const viewport: Viewport = {
