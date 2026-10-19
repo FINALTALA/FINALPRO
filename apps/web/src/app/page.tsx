@@ -1,13 +1,15 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import ProductCard from "@/components/ProductCard";
 import StoreCircle from "@/components/StoreCircle";
 import Footer from "@/components/Footer";
 import { EmptyState, ErrorBanner, SkeletonGrid } from "@/components/States";
 import { useFetch } from "@/lib/useFetch";
-import { CardsPageDto, SEGMENTS, StoreSummaryDto } from "@/lib/types";
+import { CardsPageDto, StoreSummaryDto } from "@/lib/types";
 import { BagIcon, CompassIcon, UserIcon } from "@/components/Icons";
+import styles from "./home-via.module.css";
 
 // Home-page v2 (visual refresh over the Sprint 13 home). Everything
 // under the hero that looks like a real product/store is still real
@@ -61,14 +63,14 @@ const INFO_BLOCKS = [
   },
 ];
 
-const HOME_SEGMENT_COPY: Record<string, string> = {
-  women: "بساطة جميلة",
-  men: "أناقة في كل تفصيل",
-  kids: "لحظات صغيرة، وفرحة كبيرة",
-  accessories: "لمسة أخيرة، إطلالة كاملة",
-  watches: "دقة تبدو في كل لحظة",
-  shoes: "توازن بين الراحة والهوية",
-};
+const FEATURED_CATEGORIES = [
+  { key: "women", label: "نساء", image: "/images/home-category-women.webp" },
+  { key: "men", label: "رجال", image: "/images/home-category-men.webp" },
+  { key: "kids", label: "أطفال", image: "/images/home-category-kids.webp" },
+  { key: "accessories", label: "إكسسوارات", image: "/images/category-accessories.png" },
+  { key: "watches", label: "ساعات", image: "/images/category-watches.png" },
+  { key: "shoes", label: "أحذية", image: "/images/category-shoes.png" },
+] as const;
 
 function segmentHref(key: string): string {
   return key === "women" ? "/women" : `/discovery?segment=${key}`;
@@ -77,12 +79,11 @@ function segmentHref(key: string): string {
 export default function Home() {
   const products = useFetch<CardsPageDto>("/discovery/all?page_size=4");
   const stores = useFetch<{ items: StoreSummaryDto[] }> ("/discovery/stores?limit=12");
-  const segments = SEGMENTS.filter((s) => s.key !== "all");
   const featuredStores = stores.data?.items.slice(0, 3) ?? [];
 
   return (
-    <div className="page-shell home-editorial">
-      <nav className="home-category-nav" aria-label="تسوّقي حسب الفئة">
+    <div className={`${styles.home} page-shell home-editorial`}>
+      {/*<nav className="home-category-nav" aria-label="تسوّقي حسب الفئة">
         <Link className="home-category-link home-category-link-all" href="/discovery">جميع المنتجات</Link>
         {SEGMENTS.filter((s) => s.key !== "all").map((s) => (
           <Link key={s.key} className={"home-category-link home-category-link-" + s.key} href={segmentHref(s.key)}>
@@ -90,46 +91,75 @@ export default function Home() {
             {s.label}
           </Link>
         ))}
-      </nav>
-      <section className="hero" aria-labelledby="home-hero-title">
-        {/* Decorative campaign photography; product photos remain API data. */}
+      </nav>*/}  {/*this was a nav in the top for women and men we thought we dont want it but may change our mindes later */}
+      <section className={styles.hero} aria-labelledby="home-hero-title">
+        {/* TODO: replace this existing local image with the approved VIA family
+            campaign asset once it is added to public/images. Product cards
+            below continue to come from the live API. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img className="home-hero-image" src="/images/home-hero.webp" alt="" fetchPriority="high" width={1248} height={848} />
-        <div className="hero-content">
-          <span className="home-eyebrow">نساء · رجال · أطفال · إكسسوارات · ساعات · أحذية</span>
-          <h1 id="home-hero-title">أناقة أصيلة، تُختار بثقة.</h1>
-          <p>
-            اكتشفي العبايات والأزياء الراقية من متاجر الضفة المحلية، وقارني
-            التصاميم والأسعار لتجدي ما يلائم ذوقكِ بسهولة.
-          </p>
-          <div className="hero-cta">
-            <Link href="/discovery" className="button">
-              استكشف المنتجات
+        <img className={styles.heroImage} src="/images/via-hero.png" alt="" fetchPriority="high" width={1248} height={848} />
+        <Image
+          className={styles.heroWordmark}
+          src="/images/Via_transparent.svg"
+          alt=""
+          width={800}
+          height={379}
+          priority
+        />
+        <div className={styles.heroContent}>
+          <div className={styles.heroText}>
+            <p className={styles.heroKicker}>✧&nbsp; تسوّق محلي، بخيارات أوضح &nbsp;✧</p>
+            <h1 id="home-hero-title" className={styles.heroTitle}>
+              <span className={styles.heroTitleLine}>قارني، اختاري،</span><br />
+              <span className={styles.heroTitleLine}>واطلبي بثقة.</span>
+            </h1>
+            <p className={styles.heroCopy}>
+              اكتشفي أزياء المتاجر المحلية في مكان واحد، وقارني الأسعار والتفاصيل بسهولة.
+            </p>
+          </div>
+          <div className={styles.heroActions}>
+            <Link href="/discovery" className={styles.heroPrimary}>
+              ابدئي المقارنة
             </Link>
-            <a href="#how-to-compare" className="button button-secondary">كيف نقارن الأسعار؟</a>
+            <a href="#how-to-compare" className={styles.heroSecondary}>كيف تعمل المقارنة؟</a>
           </div>
         </div>
-        <span className="hero-note">صورة ترويجية</span>
       </section>
 
-      <div className="wide-shell">
-        <div className="section-heading">
+      <div className={`wide-shell ${styles.categoryIntro}`}>
+        <div className={`section-heading ${styles.categoryHeading}`}>
           <div><h2>لكل ذوق، عالمه</h2><p>ستة فئات رئيسية، تجربة شراء واحدة ومتنوعة.</p></div>
         </div>
-        <div className="home-segment-grid">
-          {segments.map((s) => (
-            <Link key={s.key} href={segmentHref(s.key)} className={`segment-tile segment-tile-${s.key}`}>
-              <div className={`editorial-photo editorial-photo-${s.key}`} />
-              <div className="home-category-caption">
-                <div>
-                  <span className="segment-tile-label">{s.label}</span>
-                  <p>{HOME_SEGMENT_COPY[s.key] ?? "اختيارك يبدأ هنا"}</p>
-                </div>
-                <span className="button button-secondary">استكشف</span>
-              </div>
-            </Link>
-          ))}
-        </div>
+        <section className={styles.categoryCarousel} aria-label="تسوّقي حسب الفئة">
+          <div className={styles.categoryTrack}>
+            {FEATURED_CATEGORIES.map((category) => (
+              <Link
+                key={category.key}
+                href={segmentHref(category.key)}
+                className={styles.categoryCircle}
+                aria-label={`استكشفي ${category.label}`}
+              >
+                <span className={styles.categoryImage}>
+                  <Image src={category.image} alt="" fill sizes="(max-width: 760px) 26vw, 150px" />
+                </span>
+                <span className={styles.categoryLabel}>{category.label}</span>
+              </Link>
+            ))}
+          </div>
+        </section>
+
+        {/* Static promo banner - placeholder pending a real CMS (FR-CMS-001, Phase 2). */}
+        <Link href={segmentHref(SEGMENT_PROMOS[0].key)} className={styles.womenPromo}>
+          <div className={styles.womenPromoCopy}>
+            <span className={styles.womenPromoEyebrow}>أناقة تُحكى</span>
+            <h2>لكِ ولصغيركِ، إطلالة من القلب.</h2>
+            <p>اختاري قطعًا محلية تجمع الراحة والجمال، وقارني الأسعار بكل وضوح.</p>
+            <span className={styles.womenPromoCta}>تصفّحي تشكيلة النساء</span>
+          </div>
+          <div className={styles.womenPromoFigures} aria-hidden="true">
+            <Image src="/images/via_woman_child_transparent.svg" alt="" fill sizes="(max-width: 760px) 82vw, 430px" />
+          </div>
+        </Link>
 
         <div className="section-heading">
           <div><h2>وصل حديثاً</h2><p>مختارات من المتاجر، مع أقل سعر متاح لكل منتج.</p></div>
@@ -152,15 +182,6 @@ export default function Home() {
             ))}
           </div>
         )}
-
-        {/* Static promo banner - placeholder pending a real CMS (FR-CMS-001, Phase 2). */}
-        <Link href={segmentHref(SEGMENT_PROMOS[0].key)} className="promo-banner promo-banner-women">
-          <div className="promo-banner-text">
-            <span className="home-eyebrow">تجدد الموسم، أسلوبك</span><h2>حين تكون البساطة أجمل التفاصيل.</h2>
-            <p>{SEGMENT_PROMOS[0].body}</p>
-            <span className="button">{SEGMENT_PROMOS[0].cta}</span>
-          </div><div className="editorial-photo editorial-photo-women" role="img" aria-label="صورة ترويجية لأزياء النساء" />
-        </Link>
 
         {/* Static promo banner - placeholder pending a real CMS (FR-CMS-001, Phase 2). */}
         <Link href={`/discovery?segment=${SEGMENT_PROMOS[1].key}`} className="promo-banner promo-banner-accessories">

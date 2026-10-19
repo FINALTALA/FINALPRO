@@ -30,11 +30,11 @@
  * persistent dev database.
  */
 
-// Sprint 24: shrunk again from 357_000 to fit a 29th lane under the
-// 10,000,000 ceiling (29 * 344_000 = 9_976_000) - no test asserts a
+// Sprint 25: shrunk again from 344_000 to fit a 30th lane under the
+// 10,000,000 ceiling (30 * 333_000 = 9_990_000) - no test asserts a
 // literal phone value (see this file's own header comment), so
 // changing which raw digits a lane's numbers land on is safe.
-const LANE_WIDTH = 344_000; // usable numbers per lane: base .. base + LANE_WIDTH - 1
+const LANE_WIDTH = 333_000; // usable numbers per lane: base .. base + LANE_WIDTH - 1
 
 // Order is arbitrary but stable - reordering shifts every later lane's
 // numbers. That's harmless (no test asserts a literal phone value) but
@@ -70,6 +70,7 @@ const LANES = [
   'sprint22-account-addresses',
   'sprint23-reviews-verification',
   'sprint24-favorites-comparison-alerts',
+  'sprint25-admin-audit-flags-vendor-performance',
 ] as const;
 
 export type PhoneLane = (typeof LANES)[number];

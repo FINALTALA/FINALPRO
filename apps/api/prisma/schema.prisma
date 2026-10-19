@@ -990,6 +990,31 @@ model AuditLog {
   @@map("audit_logs")
 }
 
+/// Sprint 25 (FR-ADMIN-004): a fixed, code-defined registry of
+/// supported keys (see feature-flags.registry.ts) - this table is
+/// never written to for a key outside that registry (PUT rejects with
+/// 400 UNKNOWN_FEATURE_FLAG
+/// before ever reaching a write). Absence of a row for a known key
+/// means `enabled: false` - the registry's own, only default; a row is
+/// created lazily on the FIRST write that actually changes the
+/// effective value away from that default (never on a no-op PUT that
+/// merely confirms it), so "no row yet" and "row with enabled: false"
+/// are deliberately treated as the exact same state everywhere this is
+/// read, never distinguished. "Who changed it and when" is never
+/// duplicated here - it lives only in `AuditLog`
+/// (`entityType: 'FeatureFlag', entityId: key`), which already carries
+/// a real `actorId` FK.
+model FeatureFlag {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  enabled     Boolean  @default(false)
+  description String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("feature_flags")
+}
+
 /// Sprint 19: PENDING/FAILED are both claimable (the relay's claim
 /// query selects WHERE status IN ('PENDING','FAILED')) - PENDING means
 /// "never attempted yet", FAILED means "attempted at least once,

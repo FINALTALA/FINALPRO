@@ -227,6 +227,26 @@ export function adminTiles(role: PlatformRoleName): HubTile[] {
         title: "بلاغات المراجعات",
         description: "مراجعات عليها بلاغ معلَّق، بانتظار تجاهله أو إخفاء المراجعة",
       },
+      // Sprint 25 (FR-ADMIN-005): سجل التدقيق الكامل - PLATFORM_ADMIN
+      // فقط، بحث/تصدير عبر كل الكيانات المتتبَّعة.
+      {
+        href: "/admin/audit-logs",
+        title: "سجل التدقيق",
+        description: "بحث وتصدير سجل كل العمليات المتتبَّعة في النظام",
+      },
+      // Sprint 25 (FR-ADMIN-004): تبديل الأعلام المعتمدة - PLATFORM_ADMIN
+      // فقط، registry ثابت في الكود لا إنشاء حر.
+      {
+        href: "/admin/feature-flags",
+        title: "أعلام الميزات",
+        description: "تفعيل أو تعطيل الميزات المعتمدة",
+      },
+      // Sprint 25 (FR-VEND-011): مؤشرات أداء كل متجر - PLATFORM_ADMIN فقط.
+      {
+        href: "/admin/vendors/performance",
+        title: "أداء المتاجر",
+        description: "معدل الإلغاء وزمن الاستجابة والتقييم لكل متجر",
+      },
     );
   }
   return tiles;

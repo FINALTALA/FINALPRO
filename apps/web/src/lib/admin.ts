@@ -110,6 +110,12 @@ const ERROR_MESSAGES: Record<string, string> = {
   // same INVALID_BRANCH_ORDER_TRANSITION every other order action uses.
   INVALID_BRANCH_ORDER_TRANSITION:
     "لا يمكن الإلغاء القسري إلا والطلب في حالة «قيد الانتظار» أو «قيد التجهيز».",
+  // Sprint 25: audit logs, feature flags, vendor performance.
+  UNKNOWN_FEATURE_FLAG: "هذا المفتاح غير معروف في نظام أعلام الميزات.",
+  EXPORT_TOO_LARGE:
+    "النتائج أكثر من الحد المسموح للتصدير. ضيّقي نطاق التصفية (مثل مدى زمني أقصر) وحاولي مجدداً.",
+  FEATURE_DISABLED: "هذه الميزة غير مفعّلة حالياً.",
+  INVALID_DATE: "تاريخ غير صالح.",
 };
 
 /** Turns an API failure into the Arabic message shown to the user. */
