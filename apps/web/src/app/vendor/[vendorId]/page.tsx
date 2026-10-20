@@ -7,29 +7,12 @@ import { EmptyState } from "@/components/States";
 import { ownerHubTiles, workspaceEntry } from "@/lib/nav";
 import { useFetch } from "@/lib/useFetch";
 import { useHydrated, useSessionToken, useWorkspaces } from "@/lib/useSession";
+import PerformanceSection from "./PerformanceSection";
 
 interface OwnerStorefrontDto {
   slug: string;
   display_name: string;
   is_published: boolean;
-}
-
-interface VendorPerformanceDto {
-  cancellation_rate: number | null;
-  average_response_time_hours: number | null;
-  responded_orders_count: number;
-  rating_average: number | null;
-  rating_count: number;
-}
-
-function formatPercent(v: number | null): string {
-  if (v === null) return "-";
-  return `${(v * 100).toFixed(1)}%`;
-}
-
-function formatHours(v: number | null): string {
-  if (v === null) return "-";
-  return `${v.toFixed(1)} ساعة`;
 }
 
 // Sprint 13: the owner dashboard - direct links to everything an owner
@@ -52,15 +35,6 @@ export default function OwnerHubPage() {
     isOwner ? `/vendors/${params.vendorId}/storefront` : null,
     true,
   );
-  // Sprint 25 (FR-VEND-011, FR-VPORTAL-007): the section is omitted
-  // entirely (not an error banner) when the dashboard flag is off -
-  // the API returns a plain 404 FEATURE_DISABLED for that case, which
-  // isn't a failure worth alarming the owner about.
-  const performance = useFetch<VendorPerformanceDto>(
-    isOwner ? `/vendors/${params.vendorId}/performance` : null,
-    true,
-  );
-
   useEffect(() => {
     if (!hydrated) return;
     if (!token) {
@@ -124,33 +98,9 @@ export default function OwnerHubPage() {
           ))}
         </div>
 
-        {performance.data && (
-          <div className="card" style={{ maxWidth: "none", marginTop: 16 }}>
-            <h3 style={{ marginTop: 0 }}>مؤشرات الأداء (آخر 30 يوماً)</h3>
-            <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
-              <div>
-                <div className="muted">معدّل الإلغاء</div>
-                <div style={{ fontWeight: 600 }}>{formatPercent(performance.data.cancellation_rate)}</div>
-              </div>
-              <div>
-                <div className="muted">متوسط زمن الاستجابة</div>
-                <div style={{ fontWeight: 600 }}>{formatHours(performance.data.average_response_time_hours)}</div>
-              </div>
-              <div>
-                <div className="muted">عدد الطلبات المستجاب لها</div>
-                <div style={{ fontWeight: 600 }}>{performance.data.responded_orders_count}</div>
-              </div>
-              <div>
-                <div className="muted">التقييم</div>
-                <div style={{ fontWeight: 600 }}>
-                  {performance.data.rating_average === null
-                    ? "-"
-                    : `${performance.data.rating_average.toFixed(1)} (${performance.data.rating_count})`}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* Sprint 25: loading / error+retry / not-enough-data / charts -
+            and nothing at all while the dashboard flag is off. */}
+        {isOwner && <PerformanceSection vendorId={params.vendorId} />}
       </div>
     </div>
   );

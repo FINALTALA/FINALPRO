@@ -7,6 +7,42 @@
 **Scope:** the full SRS, Parts 0–9. Every `FR-*` ID in [SRS Part 2](srs/02-functional-requirements.md) (244 rows, including the E.0 September amendment), every `PDR-*` ID in [`approved-product-decisions-2026-09.md`](approved-product-decisions-2026-09.md) (36 rows, including the 2026-09-26 PDR-035/036 amendment), every `BR-*` (34) and `NFR-*` (32) in Part 3/4, and every remaining requirement, decision, screen, failure scenario, backlog item and state-machine transition in Parts 0, 1, and 3–9 — covered in the appendix starting at §6, with each ID-range explicitly expanded (no row stands for more than one ID; see §0 for the two narrow, explicitly-justified exceptions — the `O.1`/`O.2` test-level classification and the `BO`/module-matrix/recommendations rollup — neither of which carries an independent DONE/PARTIAL/MISSING status of its own).
 **Update rule:** this file is reviewed again after every sprint. Each review edits it in place under a new dated version note, rather than creating a new file, so it stays the one living record.
 
+## v17 — S25 closing review round applied, 2026-10-21
+
+Product-owner-approved closing round for `S25`, after a full requirement-by-requirement review (SRS Part 2/5/8/9 + this file + the S25 code and tests). No new feature scope; every change below closes a gap that review found.
+
+Fixed (backend):
+- `FR-ADMIN-005`: **correlation-ID search** (Part 5 "Audit log" screen, Part 4 H.1) was missing - `?correlation_id=` was silently ignored and returned every row. Added to the one shared filter builder (`buildAuditLogWhere`), so `GET /admin/audit-logs` and `/export` both honour it identically. `AuditLog.correlationId` was already indexed - no migration.
+- `FR-VEND-011` / `FR-VPORTAL-007(E.20)`: `GET /vendors/:id/performance` now also returns `terminal_orders_count`, `cancelled_orders_count` and `weekly` - the same 30-day window split into consecutive 7-day buckets (oldest = the 2-day remainder), each with the same null-not-zero rules - feeding the owner dashboard's charts. Computed from the rows already loaded; no new query.
+- Not S25 code, found by re-running S16 here: `POST vendors/:vendorId/uploads` (S26, uncommitted) was missing from `SUSPENDED_DENY_ROUTES` (the controller already had `@BlockWhenSuspended()`); classified DENY alongside the media/storefront routes it feeds. That fix (and its S26 suspended-store test) ships with the S26 commit, not the S25 closing commit.
+
+Fixed (frontend):
+- `/admin/audit-logs`: correlation-ID filter field and a correlation-ID column; clicking an ID filters to every row written while serving that request. The CSV export sends the same filters.
+- Owner `/vendor/:id` performance section (new `PerformanceSection.tsx`): loading skeleton, error state with **retry**, "لا توجد بيانات كافية بعد" when there are no finished/responded orders in the window, and two charts (weekly finished orders stacked completed/cancelled with a legend; weekly average response time) with per-week hover/focus tooltips and a "عرض البيانات كجدول" table fallback (Part 5: "charts include a data-table fallback"). Series colours validated (lightness, chroma, CVD ΔE 12.3, contrast) on the card surface. Still hidden entirely while the flag is off.
+
+Fixed (tests):
+- **Flaky test, root cause**: the feature flag is one global row and the spec never reset it - the "absent key" tests only passed by running first, the CONCURRENCY test's "never-configured key" premise was false, and its concurrent `true`/`false` pair left a random final state, so the next test ("gated by the feature flag", which assumes OFF) failed whenever `true` won (observed). Now every test starts and ends with no `FeatureFlag` row; AuditLog stays append-only - each test asserts only on the rows written during itself (baseline of pre-existing ids). The CONCURRENCY test now asserts its own premise (no row) before racing.
+- New: 401 (no session) and 403 (`VERIFICATION_REVIEWER`) on all five S25 admin endpoints, and the refused PUTs change nothing; correlation-ID filter in list + CSV export + combined with another filter; weekly buckets tile the window exactly, place a back-dated order in its own week, use null-not-zero, and sum to the totals.
+
+Product-owner decisions recorded this round:
+- Feature flags stay **one global toggle**; Part 5's per-environment toggle is deferred (not built, not claimed).
+- The audit-log `summary` allowlist stays at its two reviewed action types (`branch_order.status_changed`, `feature_flag.changed`); every other action keeps `summary: null`.
+- The 17 S25-tagged rows never built in S25 are **moved out of S25** to three unscheduled backlog groups (rows updated in place): `BACKLOG-ADMIN` (FR-ADMIN-001/002/003/006/007, plus G-AD-03's remainder and G-AD-05), `BACKLOG-FINANCE` (FR-VEND-010, FR-IMPORT-013, FR-INV-008, FR-PAY-005/007/008), `BACKLOG-ANALYTICS` (FR-ANALYTICS-001..006). S25 is no longer accountable for them.
+- `NFR-SEC-003` stays 🟡 PARTIAL: the audit-log retention duration (**OPEN-009**) remains an open decision.
+- The **22 cross-cutting rows** still tagged S25 (BR-003, NFR-PERF-001/002/003, NFR-SCALE-001, NFR-IMPORT-001, NFR-REL-001/003, NFR-PRIV-001, NFR-A11Y-001, NFR-RTL-001, NFR-OBS-002, NFR-MAINT-001, NFR-TEST-001, NFR-AUDIT-001, SRS-H1-09, SRS-K1-STATES-01/03, L-28, L-30, SRS-N-05, SRS-P-15) are **moved to `BACKLOG-QUALITY (من S25)`** with their original ids and statuses unchanged - none is marked done; S25 is recorded as their source only. Every moved row (the 17 and these 22) now names S25 as its source the same way. `BL-ADMIN-003` keeps `S25` - it was delivered there (✅ DONE).
+
+Correction to v16: v16 said no Playwright test existed for S25. The S25 review-round commit `1d21fda` added `apps/web/e2e/admin-audit-flags-vendor-performance-s25.spec.ts` (5 browser tests); all 5 were run and pass (Edge, isolated API + throwaway DB). v16's "+21" e2e count was also superseded by `1d21fda` (+1, CSV formula injection).
+
+Verified this round (each run on its own fresh database): `sprint25-admin-audit-flags-vendor-performance.e2e-spec.ts` **25/25 on 7 of 8 runs** (was 21/22 and flaky); the one other run returned a single 500 in the CONCURRENCY test that never reproduced - 3 further runs with full server logs showed 0 server errors, and ~90 truly concurrent first-write races against a running API produced no 500 and never a duplicate row (the only failures were the API's own 100 req/min throttle tripped by the stress loop); the same "Server has closed the connection" signature seen in other suites on this Windows/Docker host is the suspected cause, not proven. `sprint16-vendor-route-classification` 4/4 (was 2/4); `sprint16-vendor-suspension` 22/22; `sprint26-storefront-profile` 14/14; `web-navigation` 13/13; Playwright S25 5/5 on a fresh database with the final UI; `nest build`, `next build`, `tsc`, `eslint` clean.
+
+**20-run concurrency verification (product-owner requested, 2026-10-21)** - because one earlier run had returned a single 500 in the CONCURRENCY test. Method: 20 sequential runs of the **whole** S25 spec (the 500 was first seen in full-file context, not in isolation), each on its own freshly created and migrated database (`finalpro_c25_01..20`, `CREATE EXTENSION postgis` + `prisma migrate deploy`, Redis logical DB 9 flushed), command per run: `npx jest --config ./test/jest-e2e.json test/sprint25-admin-audit-flags-vendor-performance.e2e-spec.ts --runInBand --testTimeout=120000` with `DATABASE_URL` pointed at that run's database. For each run the API log (the Jest output - the Nest app runs in-process) and the PostgreSQL container log for that run's exact time window were kept; PostgreSQL `log_connections`/`log_disconnections` were switched on for the duration (and reset afterwards) so that any server-side drop would be visible.
+
+Result: **20/20 runs green, 25/25 tests each; the CONCURRENCY test passed in all 20**; 0 `ERROR [HttpExceptionFilter]` lines, 0 "Server has closed the connection" lines across the 20 API logs; PostgreSQL logged 815 authorized connections and 837 normal disconnections (window overlap) with **0 abnormal ones** (no unexpected EOF, reset, receive failure or termination) and no FATAL/ERROR. Together with the ~90 truly concurrent first-write races against a running API (no 500, never a duplicate row) and the code path itself - `pg_advisory_xact_lock` taken before the row lookup, `create` only on the locked "absent" branch, the unique `key` constraint never reached - no reproducible code defect exists. The single earlier 500 is classified as an **external, transient connection drop**: its error text was Prisma's "Server has closed the connection", the same signature seen in unrelated suites on this Windows/Docker Desktop host (S24 comparison, S26 storefront) and never with a server-side cause in the PostgreSQL log. Not proven for that one run (its server log was not kept), and no code change was made for it.
+
+Status changes:
+- `FR-ADMIN-005` stays ✅ DONE - now including the correlation-ID search Part 5 requires.
+- `FR-ADMIN-001/002/003/006/007`, `FR-VEND-010`, `FR-IMPORT-013`, `FR-INV-008`, `FR-PAY-005/007/008`, `FR-ANALYTICS-001..006`: status unchanged (❌/🟡), Sprint column S25 → BACKLOG-*.
+
 ## v16 — S25-admin-audit-flags-vendor-performance applied, 2026-10-17
 
 `S25` (branch `feat/sprint-25-admin-audit-flags-vendor-performance`) builds FR-ADMIN-004 (feature flags), FR-ADMIN-005 (audit-log search/export), FR-VEND-011 (vendor performance indicators), and the performance/SLA-reporting half of FR-VPORTAL-007(E.20) — the review-response half of that same requirement stays explicitly deferred, per its own literal text, not by a sprint decision. **Deliberately out of scope, matching the final negotiated plan, not an oversight**: FR-ADMIN-001/002/003/006/007 (broader admin screens, configurable role lists, fraud dashboards, data export) — none of these were part of this sprint's negotiated scope despite an earlier planning draft tagging them `S25`; those rows are left exactly as they were.
@@ -342,7 +378,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-VEND-007 | أدوار موظفين مقسمة | استُبدل بـFR-VEND-013 (E.0) | - | - | - | ↪ SUPERSEDED | - |
 | FR-VEND-008 | دورة حالة المتجر مع Suspended/Cancelled | APPLIED>UNDER_REVIEW>APPROVED/REJECTED>ACTIVE⇄SUSPENDED مبنية ومختبرة (S16)؛ CANCELLED (المالك يغلق الحساب) غير مبنية — انظر FR-VEND-008-CANCELLED في §15b | ADMIN | /admin/vendors | S3,VV,S16 | 🟡 PARTIAL | — (قرار جديد) |
 | FR-VEND-009 | تعليق/إعادة تفعيل بسبب وتدقيق | POST /admin/vendors/:vendorId/suspend و/reactivate (VendorSuspension، reason_code + reason 10–1000، AuditLog، Outbox بلا نص السبب، منع تعارض المصالح)؛ GET /admin/vendors وتفاصيل التاريخ | PLATFORM_ADMIN | /admin/vendors، /admin/vendors/:vendorId | S16 | ✅ DONE | - |
-| FR-VEND-010 | معلومات الدفع/التسوية | لا | - | لا | لا | ❌ MISSING | S25 |
+| FR-VEND-010 | معلومات الدفع/التسوية | لا | - | لا | لا | ❌ MISSING | BACKLOG-FINANCE (من S25) |
 | FR-VEND-011 | مؤشرات أداء المتجر | **مبني (S25)**: `VendorPerformanceService.computeForVendor()` — نافذة متحركة 30 يوماً (UTC) على `BranchOrder.createdAt`: معدّل الإلغاء (CANCELLED+REFUNDED / COMPLETED+CANCELLED+REFUNDED، null لا 0 عند عدم وجود طلبات نهائية)، متوسط زمن الاستجابة حتى أول `PREPARING` حقيقي (الطلبات التي لم تبلغ PREPARING تُستثنى كليّاً مع `responded_orders_count` ظاهر دائماً بجانب المتوسط)، والتقييم (نفس `ReviewsService.getVendorRatingSummary()` العلني من S23). خلف علم ميزة `vendor_performance_dashboard_enabled` (معطَّل افتراضياً حتى يُفعّله الأدمن) | OWNER فقط (`VendorMembershipGuard`+`@RequireVendorRole('OWNER')`، 404 BOLA)؛ PLATFORM_ADMIN لقائمة كل المتاجر | قسم داخل `/vendor/:id` (المالك)؛ `/admin/vendors/performance` (الأدمن، صفحة مستقلة بترقيم مؤشَّر على `Vendor.createdAt`/`id` الثابت، لا على أي مؤشّر محسوب) | S25 e2e: null عند عدم وجود طلبات نهائية، استثناء الطلبات غير المكتملة من البسط/المقام، استثناء الطلبات التي لم تبلغ PREPARING من متوسط الاستجابة، BOLA، بوابة العلم على الواجهتين | ✅ DONE | - |
 
 ### E.3 — الكتالوج
@@ -392,7 +428,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-IMPORT-010 | استيراد الصور بالروابط/أرشيف | PDR §6: استيراد الروابط مؤجل، الرفع اليدوي لاحقاً | - | - | - | ⏸ DEFERRED | - |
 | FR-IMPORT-011 | ربط أعمدة قابل للضبط | لا | - | لا | لا | ❌ MISSING | S17 |
 | FR-IMPORT-012 | إعادة محاولة الصفوف الفاشلة فقط | ImportIdentifierRecord؛ failed_rows_csv بأعمدة القالب نفسها + error_reason (S17) — تنزيل ثم إعادة رفع، وليس زر "إعادة محاولة" داخل التطبيق بنقرة واحدة | OWNER | زر تنزيل الصفوف الفاشلة (S17) | S7,S17 | ✅ DONE | - |
-| FR-IMPORT-013 | تقرير تسوية | لا | - | لا | لا | ❌ MISSING | S25 |
+| FR-IMPORT-013 | تقرير تسوية | لا | - | لا | لا | ❌ MISSING | BACKLOG-FINANCE (من S25) |
 | FR-IMPORT-014 | أولوية المصدر وحفظ القيمة الخاسرة | لا | - | لا | لا | ❌ MISSING | S17 |
 
 ### E.6 — البحث
@@ -446,7 +482,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-INV-005 | تحديث يدوي للمخزون | POST movements (DAMAGE/LOSS/SALE خصم فقط؛ COUNT_CORRECTION باتجاهين)/stock API (S18a أضافت SALE) | OWNER/موظف | صفحة مخزون الفرع: نموذج الحركة (S18a) | S6,S18a | ✅ DONE | - |
 | FR-INV-006 | تنبيه مخزون قديم | lastPhysicalCountAt + is_stale (قديم = لا جرد فعلي منذ 7 أيام، NFR-STALE-001) (S18a) | OWNER/موظف | شارة "جرد قديم" في صفحة مخزون الفرع (S18a) | S18a | ✅ DONE | - |
 | FR-INV-007 | مخزون أمان | safetyStockThreshold لكل (فرع، variant)؛ 0=معطّل؛ is_low_stock = threshold>0 AND available<=threshold؛ PUT safety-stock (OWNER فقط) (S18a) | OWNER | حقل حد الأمان (owner فقط) في صفحة مخزون الفرع (S18a) | S18a | ✅ DONE | - |
-| FR-INV-008 (E.9) | تقرير تسوية المخزون | لا | - | لا | لا | ❌ MISSING | S25 |
+| FR-INV-008 (E.9) | تقرير تسوية المخزون | لا | - | لا | لا | ❌ MISSING | BACKLOG-FINANCE (من S25) |
 
 ### E.10 — السلة والـcheckout
 | ID | Requirement | Backend | Authz | UI | Test | Status | Sprint |
@@ -486,10 +522,10 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-PAY-002 | تفويض والتقاط إلكتروني (FYP: sandbox بقرار PDR) | شحن sandbox | session | /checkout | S10,S14 | ✅ DONE | - |
 | FR-PAY-003 | توزيع دفع متعدد البائعين على الطلبات الفرعية | معاملة واحدة للمدفوع إلكترونياً؛ التوزيع لكل BranchOrder لم أتحقق منه | session | /checkout | S10 | 🟡 PARTIAL | S20a |
 | FR-PAY-004 | استرداد كامل/جزئي لكل صنف مع رسوم التوصيل | سجل `BranchOrderRefund` لكل صنف + رسوم التوصيل (مرة واحدة فقط لكل طلب، بـpartial unique index حقيقي)؛ استرداد تلقائي (PDR-025/027)، بموافقة الموظف، أو إلغاء قسري من الأدمن (PLACED/PREPARING فقط). **لا استرداد يدوي بمبلغ منفصل عن الأصناف** — أُزيل عمداً (مراجعة 2026-10-08): كان يكسر سقف computeRemainingRefundable لأنه غير مرتبط بصنف، يحتاج سجل تخصيص حقيقي (S21) | عميل/موظف/PLATFORM_ADMIN | /orders، صفحة طلبات الفرع، /admin/branch-orders | S20a | ✅ DONE | - |
-| FR-PAY-005 | العمولة تُسجَّل ولا تُحصَّل | لا | - | لا | لا | 🟡 PARTIAL | S25 |
+| FR-PAY-005 | العمولة تُسجَّل ولا تُحصَّل | لا | - | لا | لا | 🟡 PARTIAL | BACKLOG-FINANCE (من S25) |
 | FR-PAY-006 | فوترة الاشتراك كتيار دفع مستقل | VendorSubscription فقط؛ لا سجلات دفع | OWNER | لا | S3 | 🟡 PARTIAL | S15 |
-| FR-PAY-007 | سجل مالي مدقَّق غير قابل للتعديل | AuditLog للإلحاق فقط؛ ليس كل أحداث الدفع مؤكدة؛ لا عارض | - | لا | S1 | 🟡 PARTIAL | S25 |
-| FR-PAY-008 | فاتورة/إيصال (PDR §3.4: لا إيصال مطبوع للعميل) | لا | - | لا | لا | ❌ MISSING | S25 |
+| FR-PAY-007 | سجل مالي مدقَّق غير قابل للتعديل | AuditLog للإلحاق فقط؛ ليس كل أحداث الدفع مؤكدة؛ لا عارض | - | لا | S1 | 🟡 PARTIAL | BACKLOG-FINANCE (من S25) |
+| FR-PAY-008 | فاتورة/إيصال (PDR §3.4: لا إيصال مطبوع للعميل) | لا | - | لا | لا | ❌ MISSING | BACKLOG-FINANCE (من S25) |
 | FR-PAY-009 | تعويض عند عدم اتساق الدفع والطلب | rollback داخل txn واحدة | session | /checkout | S10,S14 | ✅ DONE | - |
 | FR-PAY-010 (E.12) | معالجة chargeback (تحتاج بوابة حقيقية) | PDR §6: البوابة الحقيقية مؤجلة | - | - | - | ⏸ DEFERRED | - |
 
@@ -557,13 +593,13 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-SUP-004 | استرداد بصلاحية موظف دعم | PDR §6 | - | - | - | ⏸ DEFERRED | - |
 | FR-SUP-005 | جدول العميل الموحد للوكيل | PDR §6 | - | - | - | ⏸ DEFERRED | - |
 | FR-SUP-006 | قاعدة معرفة/FAQ ثنائية اللغة | لا (لم تُذكر في PDR §6) — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
-| FR-ADMIN-001 | شاشات إدارة لكل كيان | شاشات S16: طابور التحقق، المتاجر (تعليق/إعادة تفعيل)، طلبات تغيير الاسم؛ باقي الكيانات (تصنيفات، علامات، منتجات أساسية، طلبات، دفعات…) API فقط أو غير مبنية؛ تصحيح تطابق المنصة غير مبني (لا سياسة معتمدة) | ADMIN/REVIEWER | /admin/* (الشريحة المذكورة فقط) | S3,S7,VV,S16 | 🟡 PARTIAL | S25 |
-| FR-ADMIN-002 | قوائم غير مضمّنة في الكود | المناطق والقطاعات enums ثابتة (OPEN-012) | - | لا | لا | ❌ MISSING | S25 |
-| FR-ADMIN-003 | أدوار وصلاحيات قابلة للضبط | قيمتان ثابتتان لـPlatformRole | - | لا | لا | ❌ MISSING | S25 |
+| FR-ADMIN-001 | شاشات إدارة لكل كيان | شاشات S16: طابور التحقق، المتاجر (تعليق/إعادة تفعيل)، طلبات تغيير الاسم؛ باقي الكيانات (تصنيفات، علامات، منتجات أساسية، طلبات، دفعات…) API فقط أو غير مبنية؛ تصحيح تطابق المنصة غير مبني (لا سياسة معتمدة) | ADMIN/REVIEWER | /admin/* (الشريحة المذكورة فقط) | S3,S7,VV,S16 | 🟡 PARTIAL | BACKLOG-ADMIN (من S25) |
+| FR-ADMIN-002 | قوائم غير مضمّنة في الكود | المناطق والقطاعات enums ثابتة (OPEN-012) | - | لا | لا | ❌ MISSING | BACKLOG-ADMIN (من S25) |
+| FR-ADMIN-003 | أدوار وصلاحيات قابلة للضبط | قيمتان ثابتتان لـPlatformRole | - | لا | لا | ❌ MISSING | BACKLOG-ADMIN (من S25) |
 | FR-ADMIN-004 | feature flags | **مبني (S25)**: registry ثابت في الكود (`FEATURE_FLAG_REGISTRY`، لا إنشاء مفتاح حر عبر API) — علم واحد حقيقي الآن `vendor_performance_dashboard_enabled` يتحكم بقدرة فعلية مبنية في نفس السبرنت (لا علم شكلي)؛ غياب الصف = `false` (الافتراض الوحيد)، أول `PUT` يغيّر القيمة الفعلية فقط يُنشئ الصف ويكتب AuditLog (`beforeState`/`afterState` حقيقيان دائماً، لا `null`)؛ قفل `pg_advisory_xact_lock` يمنع تعارض أول-كتابة على مفتاح لم يُهيَّأ بعد؛ لا endpoint قراءة علني — كل صفحة محمية تتعامل مع 404 `FEATURE_DISABLED` الخاصة بها | PLATFORM_ADMIN فقط (`PlatformRoleGuard`) | `/admin/feature-flags` (قائمة كل مفاتيح الـregistry دوماً، حتى بلا صف قاعدة بيانات، مع تبديل) | S25 e2e: قائمة كل المفاتيح، رفض مفتاح غير معروف 400، no-op غياب+false بلا صف وبلا AuditLog، أول true يُنشئ الصف بـbefore/after صحيحين، تكرار نفس القيمة no-op، تبديل عكسي، سباق حقيقي على أول كتابة متزامنة | ✅ DONE | - |
 | FR-ADMIN-005 | بحث/تصدير سجل التدقيق | **مبني (S25)**: `GET /admin/audit-logs` (تصفية entity_type/entity_id/actor_id/action/from/to، ترقيم مؤشَّر حتمي `occurredAt DESC, id DESC` ثنائي العمود لحل تعادل الطابع الزمني)؛ `GET /admin/audit-logs/export` بنفس التصفية تماماً إلى CSV؛ حد تصدير 50,000 صف مفروض عبر `take: 50001` في نفس الاستعلام الحتمي (لا `count()` منفصل يسبق الجلب — لا نافذة سباق)، رفض 400 `EXPORT_TOO_LARGE` بلا تصدير جزئي صامت أبداً؛ **تعتيم صريح بقائمة سماح** (`buildSafeAuditSummary`) — فقط أنواع أحداث مراجَعة تُعرض كملخّص آمن (`branch_order.status_changed`, `feature_flag.changed`)، وأي نوع آخر (مثل `address.created` المؤكَّد أنه يحمل lat/lng خاماً) يُعرض بملخّص `null` لا تمريراً جزئياً أبداً | PLATFORM_ADMIN فقط | `/admin/audit-logs` (تصفية كاملة + تحميل أكثر + تصدير CSV) | S25 e2e: ترقيم متعادل الطابع الزمني، كل أبعاد التصفية، تسريب بيانات حساسة (اختبار سلبي صريح)، ملخّص نوع مراجَع، رفض تصدير 50,001 صف | ✅ DONE | - |
-| FR-ADMIN-006 | لوحات إشارات الاحتيال | لا | - | لا | لا | ❌ MISSING | S25 |
-| FR-ADMIN-007 | تصدير البيانات | لا | - | لا | لا | ❌ MISSING | S25 |
+| FR-ADMIN-006 | لوحات إشارات الاحتيال | لا | - | لا | لا | ❌ MISSING | BACKLOG-ADMIN (من S25) |
+| FR-ADMIN-007 | تصدير البيانات | لا | - | لا | لا | ❌ MISSING | BACKLOG-ADMIN (من S25) |
 | FR-VPORTAL-001 | لوحة: طلبات تحتاج انتباهاً واشتراك وKPIs | مركز روابط فقط | OWNER | /vendor/:id | NAV | 🟡 PARTIAL | S18 |
 | FR-VPORTAL-002 | إدارة المنتجات والمخزون والتسعير | إنشاء/تعديل/أرشفة عرض ومتغيّر، أسعار وخصومات، وسائط (S17) | OWNER | /vendor/:id/offers وكل الصفحات الفرعية (جديد/تعديل/متغيّر/وسائط، S17) | S3,S17 | ✅ DONE | - |
 | FR-VPORTAL-003 | استيراد وسجل وأخطاء | API الاستيراد + ImportBatch (سجل ملخّص، S17) | OWNER | /vendor/:id/offers/import (تقرير + سجلّ الدفعات، S17) | S7,S17 | ✅ DONE | - |
@@ -580,12 +616,12 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | FR-CMS-003 | وسم الإعلان | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
 | FR-CMS-004 | الإحالة/الأفلييت (Phase 2+) | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
 | FR-CMS-005 | روابط عميقة ويب/موبايل | لا — DEFERRED BY APPROVED DECISION (approved-product-decisions-2026-09.md §6، 2026-09-26) | - | لا | لا | ⏸ DEFERRED | - |
-| FR-ANALYTICS-001 | لوحات بحسب الدور | لا | - | لا | لا | ❌ MISSING | S25 |
-| FR-ANALYTICS-002 | جودة الكتالوج والتطابق | لا | - | لا | لا | ❌ MISSING | S25 |
-| FR-ANALYTICS-003 | دقة المخزون وحداثة الأسعار | لا | - | لا | لا | ❌ MISSING | S25 |
-| FR-ANALYTICS-004 | أداء البحث | لا | - | لا | لا | ❌ MISSING | S25 |
-| FR-ANALYTICS-005 | تقارير المبيعات/الفوترة/المرتجعات | لا | - | لا | لا | ❌ MISSING | S25 |
-| FR-ANALYTICS-006 | تحليلات قمع السلوك | لا | - | لا | لا | ❌ MISSING | S25 |
+| FR-ANALYTICS-001 | لوحات بحسب الدور | لا | - | لا | لا | ❌ MISSING | BACKLOG-ANALYTICS (من S25) |
+| FR-ANALYTICS-002 | جودة الكتالوج والتطابق | لا | - | لا | لا | ❌ MISSING | BACKLOG-ANALYTICS (من S25) |
+| FR-ANALYTICS-003 | دقة المخزون وحداثة الأسعار | لا | - | لا | لا | ❌ MISSING | BACKLOG-ANALYTICS (من S25) |
+| FR-ANALYTICS-004 | أداء البحث | لا | - | لا | لا | ❌ MISSING | BACKLOG-ANALYTICS (من S25) |
+| FR-ANALYTICS-005 | تقارير المبيعات/الفوترة/المرتجعات | لا | - | لا | لا | ❌ MISSING | BACKLOG-ANALYTICS (من S25) |
+| FR-ANALYTICS-006 | تحليلات قمع السلوك | لا | - | لا | لا | ❌ MISSING | BACKLOG-ANALYTICS (من S25) |
 
 ### PDR-001..036
 | ID | Decision | Backend | Authz | UI | Test | Status | Sprint |
@@ -645,9 +681,9 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 |---|---|---|---|
 | G-AD-01 | طابور المراجع وقرار التحقق من الواجهة | FR-VEND-003 | ✅ S16 (مبني) |
 | G-AD-02 | تعليق وإعادة تفعيل المتجر بسبب وتدقيق | FR-VEND-008/009 | ✅ S16 (مبني؛ CANCELLED خارجه) |
-| G-AD-03 | تنقّل طابور التطابق وتصحيح الأدمن | FR-ADMIN-001 | 🟡 S16 جزئي: شاشة طلبات تغيير الاسم فقط؛ تصحيح تطابق المنصة غير مبني (لا سياسة معتمدة) → S25 |
+| G-AD-03 | تنقّل طابور التطابق وتصحيح الأدمن | FR-ADMIN-001 | 🟡 S16 جزئي: شاشة طلبات تغيير الاسم فقط؛ تصحيح تطابق المنصة غير مبني (لا سياسة معتمدة) → BACKLOG-ADMIN |
 | G-AD-04 | عارض سجل التدقيق وتصديره | FR-ADMIN-005 | ✅ S25 (مبني) |
-| G-AD-05 | إدارة الأدوار وقوائم الإعدادات (يعتمد على OPEN-012) | FR-ADMIN-002/003 | S25 |
+| G-AD-05 | إدارة الأدوار وقوائم الإعدادات (يعتمد على OPEN-012) | FR-ADMIN-002/003 | BACKLOG-ADMIN (من S25) |
 
 ### Catalog
 | Gap | القدرة | يغطي | Sprint |
@@ -706,7 +742,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | S22 | الحساب: تغيير الهاتف، التعطيل، اللغة، إدارة العناوين (افتراضي/تعديل/حذف/تغيير قبل التحضير) | 8 | لا شيء | قواعد الاحتفاظ بالبيانات (OPEN-009). **لا قرار خريطة مطلوب — محسوم بلا مزوّد خارجي (§0.1)** |
 | S23 | المراجعات وشارة التحقق | 8 — **منفَّذ (2026-10-14)، مبني بالكامل تقريباً وفق PDR-032 ضيّق النطاق إلى منتج/متجر فقط (FR-REV-001/002/005/006/008(E.15)، BR-016 → ✅ DONE؛ FR-REV-003/004/009 → ↪ SUPERSEDED/⏸ DEFERRED)** | S20a (الطلبات المكتملة) | **D1 يبقى صريحاً MISSING/OPEN - لم يُنفَّذ ولم يُفترَض تغطيته، حسب قرارك النهائي رقم 1.** رصد الأنماط الشاذة (`FR-REV-007`/`010`) خارج النطاق عمداً أيضاً (قرارك النهائي رقم 3) - مؤجَّل لـS24+ |
 | S24 | المفضلات والتنبيهات ومجموعات المقارنة ومقارنة أعمق | 16 | S17 (تاريخ الأسعار)، S19 | لا شيء جديد |
-| S25 | التحليلات وأدوات الأدمن (سجل التدقيق، الأدوار، التصدير) وتقارير الفوترة والتسوية | 21 (+1: FR-ADMIN-001 المتبقي) — **منفَّذ جزئياً (2026-10-17)، بنطاق مُتفاوَض عليه أضيق من التقدير الأصلي أعلاه عمداً، لا سهواً**: فقط `FR-ADMIN-004` (feature flags)، `FR-ADMIN-005` (سجل التدقيق بحث/تصدير)، `FR-VEND-011` (مؤشرات أداء المتجر)، وشطر التقارير من `FR-VPORTAL-007(E.20)` → ✅ DONE/🟡 PARTIAL. **بقي خارج هذا السبرنت بقرار نهائي أثناء التخطيط**: `FR-ADMIN-001/002/003/006/007` (شاشات أدمن أوسع، قوائم أدوار قابلة للضبط، لوحات احتيال، تصدير بيانات عام) وتقارير الفوترة/التسوية بالكامل (`FR-VEND-010`) - كل هذه تبقى ❌ MISSING | معظم ما سبق | OPEN-012 (مصدر حدود المناطق)؛ البنود المتبقية أعلاه بلا سياسة/تقدير معتمد بعد |
+| S25 | التحليلات وأدوات الأدمن: feature flags، سجل التدقيق (بحث/تصدير)، مؤشرات أداء المتجر | **4 — مُغلَق (2026-10-21، v17)**: `FR-ADMIN-004`، `FR-ADMIN-005`، `FR-VEND-011` → ✅ DONE؛ `FR-VPORTAL-007(E.20)` → 🟡 PARTIAL (شطر الرد على المراجعات مؤجَّل بنص المتطلب نفسه). **البنود الـ17 غير المنفَّذة نُقلت من S25 بقرار المالك (v17)** إلى ثلاث مجموعات backlog غير مجدولة: `BACKLOG-ADMIN` (FR-ADMIN-001/002/003/006/007)، `BACKLOG-FINANCE` (FR-VEND-010، FR-IMPORT-013، FR-INV-008، FR-PAY-005/007/008)، `BACKLOG-ANALYTICS` (FR-ANALYTICS-001..006) - S25 لم يعد مسؤولاً عنها | S24 | OPEN-009 (مدة الاحتفاظ بسجل التدقيق) يبقى مفتوحاً؛ OPEN-012 لـBACKLOG-ADMIN |
 | **— (قرار جديد)** | إغلاق المتجر CANCELLED (FR-VEND-008 المتبقي) وطلب استئناف التعليق (PDR §3.5) | 3 | — | **ليست سبرنتاً مجدولاً.** كلاهما بلا سياسة معتمدة (من يُغلق، أثر الإغلاق على الطلبات والبيانات، مدة الاستئناف، المرفقات) — انظر §15b. |
 | **— (قرار جديد)** | "أقرب فرع" فعلياً (PDR-023، FR-CART-018) | 2 | — | **ليست سبرنتاً مجدولاً.** تحتاج: (أ) قراراً بأن التقريب الحتمي الحالي غير كافٍ، و(ب) مصدر مسافة موثوق (إحداثيات الفرع + إحداثيات العميل + دالة مسافة، أو مزوّد خارجي). بلا هذين لا يوجد عمل قابل للتقدير. |
 
@@ -753,7 +789,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 |---|---|---|---|---|---|---|---|
 | BR-001 | معرّف دقيق يربط تلقائياً؛ غير ذلك يحتاج مراجعة بشرية | proposal + match-confirmation (ليس ربطاً تلقائياً حقيقياً حتى للمطابقة الدقيقة — يمر بنفس خطوة تأكيد المالك، هذا لم يتغيّر) | OWNER | تأكيد/رفض من صفحة المتغيّر (S17) | S6,S7,S17 | 🟡 PARTIAL | S17 |
 | BR-002 | البائع يملك فقط سجلاته (Vendor/Branch/Offer/Variant)؛ الكتالوج الأساسي والتصنيف ملك المنصة دائماً | VendorMembershipGuard + RequireVendorRole('OWNER') على كل مسار بائع؛ POST/PATCH/DELETE على categories/brands/canonical-products محصورة بـPLATFORM_ADMIN | OWNER + PLATFORM_ADMIN | — (backend) | S3,S4,S6,S7,VV | ✅ DONE | - |
-| BR-003 | كل قائمة انتقاء (فئات، أسباب إرجاع، فئات تذاكر) قابلة للضبط إدارياً، لا hardcoded | Regions/segments/PlatformRole/StockMovementReason/OfferCondition كلها Prisma enums ثابتة في الكود | - | لا | لا | ❌ MISSING | S25 |
+| BR-003 | كل قائمة انتقاء (فئات، أسباب إرجاع، فئات تذاكر) قابلة للضبط إدارياً، لا hardcoded | Regions/segments/PlatformRole/StockMovementReason/OfferCondition كلها Prisma enums ثابتة في الكود | - | لا | لا | ❌ MISSING | BACKLOG-QUALITY (من S25) |
 | BR-004 | سعر لم يُعاد تأكيده ضمن نافذة التقادم يُعلَّم قديماً في المقارنة/البحث | لا | - | لا | لا | ❌ MISSING | S17 |
 | BR-005 | مخزون قديم يُعلَّم؛ لا يُعتمد كحقيقة لمنع checkout بلا إعادة تحقق أحدث | إعادة التحقق عند الـcheckout DONE (FR-CART-002)؛ علم "قديم" (is_stale، lastPhysicalCountAt، 7 أيام) موجود الآن (S18a) ولا يُستخدم في checkout — إعادة التحقق تبقى المصدر الوحيد هناك | session | /checkout؛ شارة "جرد قديم" في صفحة مخزون الفرع (S18a) | S10,S18a | ✅ DONE | - |
 | BR-006 | التوصيل مؤهل فقط داخل منطقة الفرع؛ الاستلام مؤهل دائماً | فحص المنطقة في quote/reserve + PICKUP_REQUIRES_PHYSICAL_BRANCH | session | /checkout | S10,S14 | ✅ DONE | - |
@@ -792,28 +828,28 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 
 | ID | Requirement (paraphrase) | Backend/evidence | Status | Sprint |
 |---|---|---|---|---|
-| NFR-PERF-001 | صفحة تفاصيل المنتج p95 ≤2s على 3G | لا قياس أداء رسمي موجود في المستودع | ❌ MISSING | S25 |
-| NFR-PERF-002 | نتائج البحث p95 ≤1.5s حتى 10,000 عرض | لا قياس | ❌ MISSING | S25 |
-| NFR-PERF-003 | checkout حتى إنشاء الطلب p95 ≤3s (باستثناء البوابة) | لا قياس رسمي؛ زمن e2e الحالي (~100ms لكل طلب في بيئة الاختبار) مؤشر غير رسمي فقط | ❌ MISSING | S25 |
-| NFR-SCALE-001 | تحمّل 50 جلسة متزامنة في بيئة العرض | لا اختبار حمل | ❌ MISSING | S25 |
-| NFR-IMPORT-001 | استيراد 1000 صف خلال 5 دقائق | لا قياس؛ الاستيراد الحالي يُختبر بأحجام صغيرة فقط | ❌ MISSING | S25 |
+| NFR-PERF-001 | صفحة تفاصيل المنتج p95 ≤2s على 3G | لا قياس أداء رسمي موجود في المستودع | ❌ MISSING | BACKLOG-QUALITY (من S25) |
+| NFR-PERF-002 | نتائج البحث p95 ≤1.5s حتى 10,000 عرض | لا قياس | ❌ MISSING | BACKLOG-QUALITY (من S25) |
+| NFR-PERF-003 | checkout حتى إنشاء الطلب p95 ≤3s (باستثناء البوابة) | لا قياس رسمي؛ زمن e2e الحالي (~100ms لكل طلب في بيئة الاختبار) مؤشر غير رسمي فقط | ❌ MISSING | BACKLOG-QUALITY (من S25) |
+| NFR-SCALE-001 | تحمّل 50 جلسة متزامنة في بيئة العرض | لا اختبار حمل | ❌ MISSING | BACKLOG-QUALITY (من S25) |
+| NFR-IMPORT-001 | استيراد 1000 صف خلال 5 دقائق | لا قياس؛ الاستيراد الحالي يُختبر بأحجام صغيرة فقط | ❌ MISSING | BACKLOG-QUALITY (من S25) |
 | NFR-AVAIL-001 | 99.5% شهرياً للإنتاج؛ لا SLA رسمي لبيئة FYP | لا بنية إنتاج فعلية بعد | n/a | قرار-نطاق |
-| NFR-REL-001 | RPO ≤ ساعة عبر نسخ احتياطي كل ساعة | لا نسخ احتياطي مجدول موجود في هذا المستودع | ❌ MISSING | S25 |
+| NFR-REL-001 | RPO ≤ ساعة عبر نسخ احتياطي كل ساعة | لا نسخ احتياطي مجدول موجود في هذا المستودع | ❌ MISSING | BACKLOG-QUALITY (من S25) |
 | NFR-REL-002 | RTO ≤4 ساعات للإنتاج | لا خطة تعافي موثقة أو مختبرة | ❌ MISSING | قرار-نطاق |
-| NFR-REL-003 | job مجدول يكتشف ويعلّم (لا يحل تلقائياً) حالات "دفع نجح/طلب فشل" | rollback داخل نفس المعاملة يمنع الحالة أصلاً في المسار الحالي؛ لا job تسوية منفصل موجود لأن الحالة لم تُلاحظ بعد في هذا التصميم أحادي المعاملة | 🟡 PARTIAL | S25 |
+| NFR-REL-003 | job مجدول يكتشف ويعلّم (لا يحل تلقائياً) حالات "دفع نجح/طلب فشل" | rollback داخل نفس المعاملة يمنع الحالة أصلاً في المسار الحالي؛ لا job تسوية منفصل موجود لأن الحالة لم تُلاحظ بعد في هذا التصميم أحادي المعاملة | 🟡 PARTIAL | BACKLOG-QUALITY (من S25) |
 | NFR-SEC-001 | TLS 1.2+ على كل شيء، لا HTTP نص صريح | بيئة تطوير محلية فقط بلا TLS؛ غير منطبق للإنتاج بعد | n/a | قرار-نطاق |
 | NFR-SEC-002 | كلمات المرور بتجزئة مملحة حديثة | `bcryptjs`، `bcrypt.hash(..., 10)` في auth.controller.ts | ✅ DONE | - |
 | NFR-SEC-003 | كل حدث AuditLog محتفَظ به وقابل للاستعلام لمدة الاحتفاظ | `AuditLog` جدول إلحاق فقط موجود؛ **واجهة الاستعلام والتصدير مبنية الآن (S25، FR-ADMIN-005)**؛ مدة الاحتفاظ نفسها (كم تُحفَظ السجلات قبل الحذف/الأرشفة) تبقى معلّقة (OPEN-009) — لا حذف أو أرشفة تلقائية مبنية هذا السبرنت | 🟡 PARTIAL | - |
-| NFR-PRIV-001 | PII العميل مرئي فقط للأدوار المصرَّح لها، مفروض في طبقة الـAPI | الموظف يرى الاسم/الهاتف/الكود فقط دون العنوان (FR-NOTIF-005 DONE)؛ لم أتحقق من كل مسار عرض عنوان آخر | 🟡 PARTIAL | S25 |
-| NFR-A11Y-001 | WCAG 2.1 AA على المسارات الأساسية | 18 ملفاً فقط تستخدم aria-/role؛ لا تدقيق رسمي | 🟡 PARTIAL | S25 |
+| NFR-PRIV-001 | PII العميل مرئي فقط للأدوار المصرَّح لها، مفروض في طبقة الـAPI | الموظف يرى الاسم/الهاتف/الكود فقط دون العنوان (FR-NOTIF-005 DONE)؛ لم أتحقق من كل مسار عرض عنوان آخر | 🟡 PARTIAL | BACKLOG-QUALITY (من S25) |
+| NFR-A11Y-001 | WCAG 2.1 AA على المسارات الأساسية | 18 ملفاً فقط تستخدم aria-/role؛ لا تدقيق رسمي | 🟡 PARTIAL | BACKLOG-QUALITY (من S25) |
 | NFR-L10N-001 | كل نص يخرج بالعربية والإنجليزية من مصدر ترجمة | **مصدر ترجمة حقيقي مبني الآن (S22)**: قاموس `lib/i18n.ts` + `useT()`، مطبَّق على AppShell والواجهة المشتركة وشاشات S22 الجديدة فقط - مبدّل لغة حقيقي (ar/en) يُحفظ محلياً وعلى الحساب (User.languagePref)؛ **بقية الشاشات (S1-S21b) لا تزال عربية فقط حرفياً، لم تُعَد ترجمتها عمداً هذا السبرنت** | 🟡 PARTIAL — الأساس حقيقي الآن، التغطية جزئية | قرار-نطاق |
-| NFR-RTL-001 | كامل الواجهة (لا النص فقط) تُرآى بشكل صحيح بـRTL | `<html lang="ar" dir="rtl">` عام على التطبيق، **ويتبدَّل فعلياً إلى `lang="en" dir="ltr"` عند اختيار الإنجليزية (S22، تأثير جانبي على كل الصفحات حتى القديمة منها لأن `<html>` عنصر واحد مشترك)**؛ لا تدقيق شامل للتخطيط/الأيقونات لكل الشاشات القديمة تحت LTR | 🟡 PARTIAL | S25 |
+| NFR-RTL-001 | كامل الواجهة (لا النص فقط) تُرآى بشكل صحيح بـRTL | `<html lang="ar" dir="rtl">` عام على التطبيق، **ويتبدَّل فعلياً إلى `lang="en" dir="ltr"` عند اختيار الإنجليزية (S22، تأثير جانبي على كل الصفحات حتى القديمة منها لأن `<html>` عنصر واحد مشترك)**؛ لا تدقيق شامل للتخطيط/الأيقونات لكل الشاشات القديمة تحت LTR | 🟡 PARTIAL | BACKLOG-QUALITY (من S25) |
 | NFR-MOBILE-001 | كل الشاشات قابلة للاستخدام عند 400px، وعلى Android/iOS | استجابة الويب مبنية ومُتحقَّق منها بلقطات الجوال؛ لا بناء Android/iOS (Capacitor) إطلاقاً | 🟡 PARTIAL | قرار-نطاق |
 | NFR-BW-001 | صور بصيغة مضغوطة متجاوبة (WebP إلخ) | لا معالجة/ضغط صور موجودة؛ الصور روابط خام | ❌ MISSING | S17 |
 | NFR-OBS-001 | كل طلب قابل للتتبع عبر X-Correlation-Id في اللوغ وAuditLog والـwebhooks | `CorrelationIdMiddleware` + مُدرَج في كل رد خطأ وكل AuditLog | ✅ DONE | - |
-| NFR-OBS-002 | كل تكامل خارجي يعرض معدل نجاح/زمن استجابة/آخر فشل للوحة الأدمن | لا لوحة تكامل؛ لا تكامل خارجي حقيقي أصلاً (كل شيء sandbox/محلي) | ❌ MISSING | S25 |
-| NFR-MAINT-001 | كل قائمة انتقاء تُغيَّر بإعداد إداري لا نشر كود | نفس BR-003: enums ثابتة في الكود | ❌ MISSING | S25 |
-| NFR-TEST-001 | كل آلة حالة في Part 2 E.11 لها اختبار آلي لكل انتقال صالح وانتقال غير صالح واحد على الأقل | آلات E.11 القديمة (VendorSuborder/Payment القديم) غير مبنية أصلاً بهذا الشكل؛ آلة BranchOrderStatus الفعلية موسَّعة (DELIVERY_FAILED/REFUND_REQUESTED) بتغطية شاملة الآن لمحور `deliveryAttemptCount` (`branch-order-state-machine.spec.ts`: كل انتقال صالح + كل هدف غير صالح من كل حالة جديدة بشكل مصرَّح)؛ لا إثبات شمولية مماثل لبقية آلات المشروع بعد | 🟡 PARTIAL | S25 |
+| NFR-OBS-002 | كل تكامل خارجي يعرض معدل نجاح/زمن استجابة/آخر فشل للوحة الأدمن | لا لوحة تكامل؛ لا تكامل خارجي حقيقي أصلاً (كل شيء sandbox/محلي) | ❌ MISSING | BACKLOG-QUALITY (من S25) |
+| NFR-MAINT-001 | كل قائمة انتقاء تُغيَّر بإعداد إداري لا نشر كود | نفس BR-003: enums ثابتة في الكود | ❌ MISSING | BACKLOG-QUALITY (من S25) |
+| NFR-TEST-001 | كل آلة حالة في Part 2 E.11 لها اختبار آلي لكل انتقال صالح وانتقال غير صالح واحد على الأقل | آلات E.11 القديمة (VendorSuborder/Payment القديم) غير مبنية أصلاً بهذا الشكل؛ آلة BranchOrderStatus الفعلية موسَّعة (DELIVERY_FAILED/REFUND_REQUESTED) بتغطية شاملة الآن لمحور `deliveryAttemptCount` (`branch-order-state-machine.spec.ts`: كل انتقال صالح + كل هدف غير صالح من كل حالة جديدة بشكل مصرَّح)؛ لا إثبات شمولية مماثل لبقية آلات المشروع بعد | 🟡 PARTIAL | BACKLOG-QUALITY (من S25) |
 | NFR-BACKUP-001 | نسخ احتياطي كل ساعة على الأقل، والتحقق من قابلية الاستعادة دورياً | لا نسخ احتياطي مُدار في هذا المشروع (بيئة تطوير) | ❌ MISSING | قرار-نطاق |
 | NFR-DR-001 | دليل تعافي من كوارث موثّق ومُجرَّب مرة قبل إطلاق الإنتاج | لا يوجد | ❌ MISSING | قرار-نطاق |
 | NFR-RETAIN-001 | سجلات معاملاتية محتفَظ بها حسب BR-018 | BR-018 نفسه لا يزال MISSING - قرار صريح لـS22، لا purge/retention مبني | ❌ MISSING | قرار-نطاق |
@@ -823,7 +859,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | NFR-IMG-001 | حد أقصى لحجم الصورة المرفوعة (10MB افتراضي) | لا رفع صور مبني أصلاً (روابط فقط) | ❌ MISSING | S17 |
 | NFR-STALE-001 | تأخير تعليم المخزون قديماً: 7 أيام يدوي / 24 ساعة API، قابل للضبط | الشق اليدوي موجود الآن: is_stale إن مرّ 7 أيام منذ lastPhysicalCountAt (S18a) — لكنه ثابت بالكود لا "قابل للضبط"، ولا مصدر تقادم API/تغذية مؤتمتة من نوعه | 🟡 PARTIAL | S18 |
 | NFR-STALE-002 | تأخير تعليم السعر قديماً: 30 يوماً، قابل للضبط | لا تعليم تقادم سعر موجود | ❌ MISSING | S17 |
-| NFR-AUDIT-001 | 100% من انتقالات الحالة وكل فعل إداري متجاوِز يُنتج صف AuditLog | نسبة عالية من الانتقالات المبنية فعلاً تُدقَّق (checkout، تحقق، اشتراك، مخزون)؛ فعل "التجاوز الإداري" (BR-019) مبني الآن ومُدقَّق دائماً؛ "100%" الشامل عبر كل المشروع غير مؤكَّد شمولاً | 🟡 PARTIAL | S25 |
+| NFR-AUDIT-001 | 100% من انتقالات الحالة وكل فعل إداري متجاوِز يُنتج صف AuditLog | نسبة عالية من الانتقالات المبنية فعلاً تُدقَّق (checkout، تحقق، اشتراك، مخزون)؛ فعل "التجاوز الإداري" (BR-019) مبني الآن ومُدقَّق دائماً؛ "100%" الشامل عبر كل المشروع غير مؤكَّد شمولاً | 🟡 PARTIAL | BACKLOG-QUALITY (من S25) |
 
 **عدّاد NFR:** 32 صفاً، أُعيد فرزها مباشرة من الجدول أعلاه بعد S18a: DONE=2 (SEC-002، OBS-001)، PARTIAL=11 (REL-003، SEC-003، PRIV-001، A11Y-001، RTL-001، MOBILE-001، TEST-001، BROWSER-001، SEO-001، AUDIT-001، STALE-001)، MISSING=17 (الباقي)، n/a (غير منطبق على بيئة تطوير حالياً، لا يُحسب DONE/MISSING)=2 (NFR-AVAIL-001، NFR-SEC-001). المجموع 2+11+17+2=32. (قبل S18a: PARTIAL=10، MISSING=18 — NFR-STALE-001 انتقل MISSING←PARTIAL. النسخة v2 كانت ذكرت 2/13/15 خطأً؛ صُحِّحت في v3/§16.)
 
@@ -871,7 +907,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | SRS-H1-06 | توقيع HMAC-SHA256 صادر لأي webhook من المنصة | لا webhooks صادرة من المنصة أصلاً (لا تكامل خارجي حقيقي) | ❌ MISSING | قرار-نطاق |
 | SRS-H1-07 | توقيع وارد مُتحقَّق منه لبوابة الدفع/التوصيل (معلّق على OPEN-001) | لا بوابة حقيقية؛ sandbox فقط | ❌ MISSING | قرار-نطاق |
 | SRS-H1-08 | إعادة محاولة exponential backoff + dead-letter queue مرئية للأدمن | **exponential backoff وDEAD_LETTER مبنيان ومختبران بالكامل** (outbox relay، S19)؛ "مرئية للأدمن" عبر API فقط (`GET /admin/outbox/dead-letter`، PLATFORM_ADMIN) — لا صفحة واجهة مخصصة بعد | 🟡 PARTIAL | S19 |
-| SRS-H1-09 | مراقبة تكامل خارجي: معدل نجاح/زمن/آخر فشل في لوحة الأدمن | لا لوحة، لا تكامل خارجي حقيقي | ❌ MISSING | S25 |
+| SRS-H1-09 | مراقبة تكامل خارجي: معدل نجاح/زمن/آخر فشل في لوحة الأدمن | لا لوحة، لا تكامل خارجي حقيقي | ❌ MISSING | BACKLOG-QUALITY (من S25) |
 | SRS-H1-10 | ترقيم صفحات بـcursor، حد افتراضي 20، أقصى 100 | الترقيم الفعلي `take`/`limit` بسيط (offset-style عبر معاملات بسيطة)، ليس cursor-based | 🟡 PARTIAL | S18b |
 
 ### H.2/H.3 (النسخة الأصلية قبل تعديل PDR)
@@ -915,9 +951,9 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 
 | ID | البوابة | ملاحظة | Status | Sprint |
 |---|---|---|---|---|
-| SRS-K1-STATES-01 | العميل (ويب) | حالات فارغة/تحميل/خطأ أساسية موجودة في بعض الصفحات (سلة، طلبات)؛ لا نمط موحّد مؤكَّد لكل شاشة | 🟡 PARTIAL | S25 |
+| SRS-K1-STATES-01 | العميل (ويب) | حالات فارغة/تحميل/خطأ أساسية موجودة في بعض الصفحات (سلة، طلبات)؛ لا نمط موحّد مؤكَّد لكل شاشة | 🟡 PARTIAL | BACKLOG-QUALITY (من S25) |
 | SRS-K1-STATES-02 | مساحة المالك/الموظف | معظم الشاشات API-only فلا حالات UI أصلاً | ❌ MISSING | S15-S18 |
-| SRS-K1-STATES-03 | الإدارة | شاشات S16 لها loading/empty/error/forbidden/success؛ عارض التدقيق وإدارة الأدوار لاحقاً | 🟡 PARTIAL | S25 |
+| SRS-K1-STATES-03 | الإدارة | شاشات S16 لها loading/empty/error/forbidden/success؛ عارض التدقيق وإدارة الأدوار لاحقاً | 🟡 PARTIAL | BACKLOG-QUALITY (من S25) |
 | SRS-K1-STATES-04 | الدعم | لا واجهة إطلاقاً (FR-SUP مؤجّل بحسب الـSRS، ليس PDR) | ❌ MISSING | قرار-نطاق |
 
 ### L-01..L-32 — سيناريوهات الفشل (معرّفات أصلية من الـSRS)
@@ -951,9 +987,9 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | L-25 | فشل استيراد جزئي | نجاح جزئي مع تقرير أخطاء لكل صف موجود | ✅ DONE | - |
 | L-26 | نقص محتوى بلغة واحدة | لا fallback مؤشَّر بصرياً؛ الحقول ثنائية اللغة موجودة لكن العرض عربي فقط حالياً | 🟡 PARTIAL | S22 |
 | L-27 | صورة مفقودة/غير لائقة | لا placeholder موحّد مؤكَّد؛ لا طابور إشراف صور | ❌ MISSING | S17b |
-| L-28 | إدخال ضار (حقن) | `ValidationPipe` عام + Prisma يمنع حقن SQL بالتصميم؛ لم أتحقق من تعقيم كل حقل نصي حر للعرض | 🟡 PARTIAL | S25 |
+| L-28 | إدخال ضار (حقن) | `ValidationPipe` عام + Prisma يمنع حقن SQL بالتصميم؛ لم أتحقق من تعقيم كل حقل نصي حر للعرض | 🟡 PARTIAL | BACKLOG-QUALITY (من S25) |
 | L-29 | تلاعب بالمراجعات | مراجعات مبنية الآن (S23) مع أهلية شراء موثّق + فريدية (منتج/متجر لكل عنصر طلب) + بلاغات العملاء وحسم PLATFORM_ADMIN - لكن **لا رصد آلي لأنماط شاذة (FR-REV-007/010)، خارج النطاق عمداً (قرارك النهائي رقم 3)** | 🟡 PARTIAL (الأساسيات مبنية، الرصد الآلي غائب عمداً) | S24+ |
-| L-30 | انقطاع منصة/تكامل | لا مراقبة حالة/تكامل معروضة | ❌ MISSING | S25 |
+| L-30 | انقطاع منصة/تكامل | لا مراقبة حالة/تكامل معروضة | ❌ MISSING | BACKLOG-QUALITY (من S25) |
 | L-31 | طلب متعدد العملات | استُبدل: PDR-001 يزيل تعدد العملات كلياً | ↪ SUPERSEDED | - |
 | L-32 | webhook خارج الترتيب/مرجع مجهول | لا webhooks واردة أصلاً | ❌ MISSING | قرار-نطاق |
 
@@ -984,7 +1020,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | SRS-N-02 | عتبات المراجعة: ≥0.85 "محتمل" لكن يُراجَع دائماً؛ 0.5-0.85 بلا تفضيل؛ <0.5 لا يُعرض كمرشح | لم أتحقق من وجود هذه العتبات حرفياً في الكود | 🟡 PARTIAL | S17b |
 | SRS-N-03 | استبعاد تشابه السعر من درجة الثقة | متسق مع عدم وجود أي منطق سعر في match-review الذي رأيته | ✅ DONE (بالغياب المتسق) | - |
 | SRS-N-04 | منع تلقائي: مستعمل مقابل جديد، وحزمة مقابل مكوّن فردي | لا `condition`/`product_type` تُستخدَم كحاجز صريح في منطق المطابقة الذي رأيته | ❌ MISSING | S17b |
-| SRS-N-05 | تقييم جودة البيانات (اكتمال، شذوذ سعر) كإرشاد لا بوابة نشر | لا تسجيل اكتمال أو شذوذ سعر موجود | ❌ MISSING | S25 |
+| SRS-N-05 | تقييم جودة البيانات (اكتمال، شذوذ سعر) كإرشاد لا بوابة نشر | لا تسجيل اكتمال أو شذوذ سعر موجود | ❌ MISSING | BACKLOG-QUALITY (من S25) |
 
 ### O.1 — مستويات الاختبار (تصنيف لا متطلب مستقل)
 
@@ -1029,7 +1065,7 @@ Test abbreviations: S3…S14 = `sprintN-*.e2e-spec.ts`; AUTH = `auth.e2e-spec`; 
 | SRS-P-12 | معالجة jobs فاشلة (dead-letter) | **dead-letter خاص بـoutbox مبني ومختبر الآن** (S19) — ليس نظام طابور jobs عاماً (لا BullMQ، لا نوع job آخر يستخدمه) | 🟡 PARTIAL | S19 |
 | SRS-P-13 | إعادة تشغيل webhook | لا webhooks واردة | ❌ MISSING | قرار-نطاق |
 | SRS-P-14 | أدلة تشغيل للحالات الحرجة | لا يوجد | ❌ MISSING | قرار-نطاق |
-| SRS-P-15 | تصحيح بيانات عبر إجراء مدقَّق لا تعديل مباشر | لا واجهة تصحيح بيانات إدارية؛ أي تصحيح فعلي يتم عبر سكربتات/قاعدة مباشرة (خارج AuditLog) | ❌ MISSING | S25 |
+| SRS-P-15 | تصحيح بيانات عبر إجراء مدقَّق لا تعديل مباشر | لا واجهة تصحيح بيانات إدارية؛ أي تصحيح فعلي يتم عبر سكربتات/قاعدة مباشرة (خارج AuditLog) | ❌ MISSING | BACKLOG-QUALITY (من S25) |
 
 ## §12 — Part 7: القرارات (BDR القديمة فقط؛ ADR مغطاة في §11، BDR-016+ = PDR أعلاه)
 
