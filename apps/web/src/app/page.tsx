@@ -11,40 +11,6 @@ import { CardsPageDto, StoreSummaryDto } from "@/lib/types";
 import { BagIcon, CompassIcon, UserIcon } from "@/components/Icons";
 import styles from "./home-via.module.css";
 
-// Home-page v2 (visual refresh over the Sprint 13 home). Everything
-// under the hero that looks like a real product/store is still real
-// API data - nothing invented. Three sections are explicitly static,
-// decorative placeholders pending a real CMS (out of FYP scope, see
-// docs/approved-product-decisions-2026-09.md §6, FR-CMS-001): the
-// three segment-promo banners and the "how comparison works" example
-// card below, which uses generic placeholder store names and is
-// labelled as an example rather than presented as real data.
-const SEGMENT_PROMOS: {
-  key: string;
-  title: string;
-  body: string;
-  cta: string;
-}[] = [
-  {
-    key: "women",
-    title: "تشكيلة النساء",
-    body: "فساتين وعبايات وبلوزات من متاجر محلية متعددة، مع أسعار واضحة للمقارنة.",
-    cta: "تصفّحي تشكيلة النساء",
-  },
-  {
-    key: "accessories",
-    title: "لمسة أخيرة",
-    body: "شنط وإكسسوارات تكمل إطلالتك، قارني أسعارها بين المتاجر قبل ما تختاري.",
-    cta: "اكتشفي الإكسسوارات",
-  },
-  {
-    key: "kids",
-    title: "عالم الأطفال",
-    body: "ملابس ومستلزمات للأطفال من متاجر موثوقة على المنصّة.",
-    cta: "تصفّحي تشكيلة الأطفال",
-  },
-];
-
 const INFO_BLOCKS = [
   {
     icon: <UserIcon />,
@@ -149,17 +115,33 @@ export default function Home() {
         </section>
 
         {/* Static promo banner - placeholder pending a real CMS (FR-CMS-001, Phase 2). */}
-        <Link href={segmentHref(SEGMENT_PROMOS[0].key)} className={styles.womenPromo}>
-          <div className={styles.womenPromoCopy}>
-            <span className={styles.womenPromoEyebrow}>أناقة تُحكى</span>
-            <h2>لكِ ولصغيركِ، إطلالة من القلب.</h2>
-            <p>اختاري قطعًا محلية تجمع الراحة والجمال، وقارني الأسعار بكل وضوح.</p>
-            <span className={styles.womenPromoCta}>تصفّحي تشكيلة النساء</span>
-          </div>
-          <div className={styles.womenPromoFigures} aria-hidden="true">
-            <Image src="/images/via_woman_child_transparent.svg" alt="" fill sizes="(max-width: 760px) 82vw, 430px" />
-          </div>
-        </Link>
+        <div className={`${styles.promoFrame} ${styles.trendingPromoFrame}`}>
+          <Link href="/trending" className={styles.womenPromo}>
+            <div className={styles.womenPromoCopy}>
+              <span className={styles.womenPromoEyebrow}>الأكثر رواجًا</span>
+              <h2>قطع تخطف الأنظار</h2>
+              <p>اكتشفي التصاميم التي تتصدر اختيارات الموسم، حيث تلتقي الأناقة بالتفاصيل المميزة.</p>
+              <span className={styles.womenPromoCta}><span aria-hidden="true">←</span> تصفّحي الأكثر رواجًا</span>
+            </div>
+            <div className={styles.womenPromoFigures} aria-hidden="true">
+              <Image src="/images/Joyful Mother and Baby Portrait.png" alt="" fill sizes="(max-width: 760px) 82vw, 430px" />
+            </div>
+          </Link>
+        </div>
+
+        <div className={`${styles.promoFrame} ${styles.salesPromoFrame}`}>
+          <Link href="/sales" className={`${styles.womenPromo} ${styles.salesPromo}`}>
+            <div className={styles.womenPromoCopy}>
+              <span className={styles.womenPromoEyebrow}>تنزيلات الموسم</span>
+              <h2>أسعار أخف، اختيارات أجمل</h2>
+              <p>اكتشفي التخفيضات من المتاجر المحلية، وقارني الأسعار لتجدي ما يناسبك بسعرٍ أفضل.</p>
+              <span className={styles.womenPromoCta}><span aria-hidden="true">←</span> تصفّحي التنزيلات</span>
+            </div>
+            <div className={styles.womenPromoFigures} aria-hidden="true">
+              <Image src="/images/Seated Man in Keffiyeh and Olive Jacket (1).png" alt="" fill sizes="(max-width: 760px) 82vw, 430px" />
+            </div>
+          </Link>
+        </div>
 
         <div className="section-heading">
           <div><h2>وصل حديثاً</h2><p>مختارات من المتاجر، مع أقل سعر متاح لكل منتج.</p></div>
@@ -183,36 +165,15 @@ export default function Home() {
           </div>
         )}
 
-        {/* Static promo banner - placeholder pending a real CMS (FR-CMS-001, Phase 2). */}
-        <Link href={`/discovery?segment=${SEGMENT_PROMOS[1].key}`} className="promo-banner promo-banner-accessories">
-          <div className="promo-banner-text">
-            <h2>لمسة أخيرة، فرق جميل.</h2>
-            <p>{SEGMENT_PROMOS[1].body}</p>
-            <span className="button">{SEGMENT_PROMOS[1].cta}</span>
-          </div><div className="editorial-photo editorial-photo-accessories" role="img" aria-label="صورة ترويجية للإكسسوارات" />
-        </Link>
-
-        {/* Illustrative example only - generic placeholder names, not real stores/prices. */}
-        <section id="how-to-compare" className="home-comparison"><div className="home-comparison-copy"><span className="home-eyebrow">قارني نفس المنتج، مع نفس الاختيار</span><h2>الأسلوب لك، والسعر أمامك بوضوح.</h2><p>حددي اللون والمقاس للمقارنة بين عروض المنتج نفسه. راجعي السعر والتوفر والفرع قبل اختيار المتجر المناسب.</p><Link href="/discovery" className="button">جرّبي مقارنة الأسعار</Link></div><div className="compare-example">
-          <span className="compare-example-tag">مثال توضيحي · أسعار غير فعلية</span>
-          <h3>نفس المنتج · نفس اللون · مقاس M</h3>
-          <div className="compare-example-row">
-            <span className="home-example-avatar home-example-avatar-a" aria-hidden="true">أ</span><span>متجر أ</span>
-            <strong>240 ₪</strong>
-            <span className="badge badge-active">الأقل سعراً</span>
-          </div>
-          <div className="compare-example-row">
-            <span className="home-example-avatar home-example-avatar-b" aria-hidden="true">ب</span><span>متجر ب</span>
-            <strong>255 ₪</strong>
-          </div>
-          <div className="compare-example-row">
-            <span className="home-example-avatar home-example-avatar-c" aria-hidden="true">ج</span><span>متجر ج</span>
-            <strong>270 ₪</strong>
-          </div>
-          <Link href="/discovery" className="button button-block">
-            جرّبي مقارنة حقيقية
-          </Link>
-        </div></section>
+        <div className="info-row">
+          {INFO_BLOCKS.map((b) => (
+            <div key={b.title} className="info-block">
+              <span className="home-info-icon">{b.icon}</span>
+              <strong>{b.title}</strong>
+              <p>{b.body}</p>
+            </div>
+          ))}
+        </div>
 
         {stores.loading && <SkeletonGrid count={3} />}
         {stores.error && <><ErrorBanner message={stores.error} /><button className="button button-secondary" onClick={() => window.location.reload()}>إعادة المحاولة</button></>}
@@ -238,24 +199,6 @@ export default function Home() {
           </>
         )}
 
-        <div className="info-row">
-          {INFO_BLOCKS.map((b) => (
-            <div key={b.title} className="info-block">
-              <span className="home-info-icon">{b.icon}</span>
-              <strong>{b.title}</strong>
-              <p>{b.body}</p>
-            </div>
-          ))}
-        </div>
-
-        {/* Static promo banner - placeholder pending a real CMS (FR-CMS-001, Phase 2). */}
-        <Link href={`/discovery?segment=${SEGMENT_PROMOS[2].key}`} className="promo-banner promo-banner-kids">
-          <div className="promo-banner-text">
-            <h2>راحة صغيرة، فرحة كبيرة</h2>
-            <p>{SEGMENT_PROMOS[2].body}</p>
-            <span className="button">{SEGMENT_PROMOS[2].cta}</span>
-          </div><div className="editorial-photo editorial-photo-kids" role="img" aria-label="صورة ترويجية لأزياء الأطفال" />
-        </Link>
       </div>
 
       <Footer />

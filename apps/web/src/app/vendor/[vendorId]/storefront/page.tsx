@@ -141,12 +141,14 @@ export default function StorefrontSettingsPage() {
     // Send only the fields the owner actually changed. Demo stores keep
     // relative asset paths (/demo-assets/...) that the API's URL
     // validation rightly rejects as user input - re-sending an
-    // untouched value would make every save fail.
+    // untouched value would make every save fail. Sprint 26: a field
+    // emptied by the owner is sent as "" - the API's explicit "remove
+    // this" (it then disappears from the public store page too).
     const original = toForm(dto);
     const body: Record<string, string> = {};
     for (const key of Object.keys(form) as (keyof FormState)[]) {
       const value = form[key].trim();
-      if (value !== "" && value !== original[key].trim()) body[key] = value;
+      if (value !== original[key].trim()) body[key] = value;
     }
     if (Object.keys(body).length === 0) {
       setError(null);
@@ -279,18 +281,30 @@ export default function StorefrontSettingsPage() {
           />
         </div>
         <div className="field">
-          <label>لون الغلاف (اختياري بدل الصورة)</label>
-          <input
-            value={form.cover_color}
-            onChange={(e) => updateField("cover_color", e.target.value)}
-            placeholder="#4338ca"
-          />
+          <label>لون الغلاف (اختياري - يظهر كلمسة لونية خفيفة أعلى صفحة المتجر)</label>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              type="color"
+              aria-label="اختيار لون الغلاف"
+              value={/^#[0-9a-fA-F]{6}$/.test(form.cover_color) ? form.cover_color : "#4a1626"}
+              onChange={(e) => updateField("cover_color", e.target.value)}
+              style={{ width: 48, height: 40, padding: 2, flex: "0 0 auto" }}
+            />
+            <input
+              value={form.cover_color}
+              onChange={(e) => updateField("cover_color", e.target.value)}
+              placeholder="#4a1626"
+              dir="ltr"
+            />
+          </div>
         </div>
         <div className="field">
           <label>رابط إنستغرام</label>
           <input
             value={form.instagram_url}
             onChange={(e) => updateField("instagram_url", e.target.value)}
+            placeholder="https://instagram.com/اسم-المتجر"
+            dir="ltr"
           />
         </div>
         <div className="field">
@@ -298,6 +312,8 @@ export default function StorefrontSettingsPage() {
           <input
             value={form.facebook_url}
             onChange={(e) => updateField("facebook_url", e.target.value)}
+            placeholder="https://facebook.com/اسم-المتجر"
+            dir="ltr"
           />
         </div>
         <div className="field">
@@ -305,8 +321,14 @@ export default function StorefrontSettingsPage() {
           <input
             value={form.whatsapp_url}
             onChange={(e) => updateField("whatsapp_url", e.target.value)}
+            placeholder="https://wa.me/970591234567"
+            dir="ltr"
           />
         </div>
+        <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+          كل ما تدخلينه هنا يظهر للزبائن في صفحة المتجر: الشعار والغلاف والنبذة، وأيقونات
+          التواصل لكل رابط موجود (وزر واتساب ثابت على الجوال). امسحي أي حقل واحفظي لإخفائه.
+        </p>
 
         <button className="button" onClick={save} disabled={saving}>
           حفظ التغييرات
@@ -345,7 +367,7 @@ export default function StorefrontSettingsPage() {
 
       <div style={{ maxWidth: 560, width: "100%", marginTop: 16 }}>
         <Link href={`/vendor/${params.vendorId}/sections`} className="button-link">
-          إدارة أقسام المتجر ←
+          إدارة تصنيفات المتجر (التي يختار منها الزبائن) ←
         </Link>
         <div style={{ height: 8 }} />
         <Link href={`/vendor/${params.vendorId}/delivery-windows`} className="button-link">

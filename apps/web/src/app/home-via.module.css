@@ -6,6 +6,30 @@
   font-display: swap;
 }
 
+@font-face {
+  font-family: "Via Arslan Wessam";
+  src: url("/fonts/(A) Arslan Wessam B (A) Arslan Wessam B.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Via Far Vosta";
+  src: url("/fonts/Far.Vosta Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Via Baloo";
+  src: url("/fonts/BalooBhaijaan2-SemiBold.ttf") format("truetype");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
 :global(:root) {
   /* Reusable identity token: use this variable wherever the VIA wordmark is
      needed, without changing the Arabic UI font. */
@@ -19,6 +43,29 @@
   --via-cream: #f7f2ea;
   --via-wine: #4a1626;
   --via-gold: #cda55e;
+  font-family: "Finalpro Noto", "Segoe UI", sans-serif;
+}
+
+/* Keep ordinary interface copy highly readable; display and action faces are
+   assigned below to create a deliberate hierarchy. */
+.home *,
+.homeHeader * {
+  font-family: "Finalpro Noto", "Segoe UI", sans-serif !important;
+}
+
+.home :is(h1, h2, h3, h4, h5, h6),
+.home .womenPromoEyebrow {
+  font-family: "Via Arslan Wessam", "Finalpro Amiri", Georgia, serif !important;
+}
+
+.home p {
+  font-family: "Via Far Vosta", "Finalpro Noto", sans-serif !important;
+}
+
+.home button,
+.home .button,
+.home .womenPromoCta {
+  font-family: "Via Baloo", "Finalpro Noto", sans-serif !important;
 }
 
 /* The landing experience owns the full first viewport. The shared
@@ -109,6 +156,7 @@
   position: relative;
   isolation: isolate;
   width: 100%;
+  text-align: center;
 }
 
 .heroText::before {
@@ -125,7 +173,8 @@
 .home.home .heroKicker {
   margin: 0 0 12px;
   color: #f0c976;
-  font-size: 12px !important;
+  font-family: "Via Baloo", "Finalpro Noto", sans-serif !important;
+  font-size: 14px !important;
   font-weight: 700;
   letter-spacing: .035em;
 }
@@ -133,9 +182,9 @@
 .home.home .heroTitle {
   max-width: none;
   margin: 0;
-  font-family: 'Finalpro Amiri', Georgia, serif;
-  font-size: clamp(2.4rem, 4.45vw, 4.05rem) !important;
-  line-height: 1.06 !important;
+  font-family: 'Finalpro Amiri', Georgia, serif !important;
+  font-size: clamp(2.3rem, 3.9vw, 3.65rem) !important;
+  line-height: 1.14 !important;
   font-weight: 700 !important;
   color: #fffaf2 !important;
   text-shadow: 0 3px 18px rgba(15, 6, 4, .7);
@@ -147,7 +196,7 @@
   display: block;
   width: min(100%, 18rem);
   height: 1px;
-  margin: 18px 0 0;
+  margin: 18px auto 0;
   background: linear-gradient(90deg, transparent, #dfb45d 22%, #f5d68a 50%, #dfb45d 78%, transparent);
   box-shadow: 0 0 8px rgba(228, 182, 87, .54);
 }
@@ -159,10 +208,11 @@
 
 .home.home .heroCopy {
   max-width: 31ch;
-  margin: 15px 0 0;
+  margin: 15px auto 0;
+  text-align: center;
   color: rgba(255, 250, 244, .94) !important;
-  font-size: clamp(.88rem, 1.05vw, 1rem) !important;
-  line-height: 1.8 !important;
+  font-size: clamp(1rem, 1.2vw, 1.12rem) !important;
+  line-height: 1.72 !important;
 }
 
 .heroActions {
@@ -213,78 +263,218 @@
 .heroPrimary:hover { filter: brightness(1.12); }
 .heroSecondary:hover { background: rgba(20, 12, 13, .62); }
 
+.promoFrame {
+  position: relative;
+  isolation: isolate;
+  display: flow-root;
+  overflow: visible;
+}
+
+.trendingPromoFrame {
+  filter:
+    drop-shadow(0 14px 20px rgba(103, 61, 27, .44))
+    drop-shadow(12px 0 16px rgba(103, 61, 27, .3))
+    drop-shadow(-12px 0 16px rgba(103, 61, 27, .3));
+}
+
+.salesPromoFrame {
+  filter:
+    drop-shadow(0 14px 20px rgba(0, 0, 0, .4))
+    drop-shadow(12px 0 16px rgba(0, 0, 0, .28))
+    drop-shadow(-12px 0 16px rgba(0, 0, 0, .28));
+}
+
 .womenPromo {
   position: relative;
   isolation: isolate;
   display: flex;
+  width: 70vw;
   align-items: center;
-  min-height: 355px;
-  margin: 96px 0 0;
-  padding: clamp(2rem, 4vw, 4rem) clamp(2rem, 6vw, 6.5rem);
+  min-height: 365px;
+  margin-block-start: 246px;
+  margin-block-end: 70px;
+  margin-left: calc(50% - 50vw);
+  margin-right: auto;
+  padding: clamp(1.75rem, 3vw, 3rem) clamp(2rem, 6vw, 6.5rem);
   overflow: visible;
-  border: 1px solid rgba(225, 202, 141, .48);
+  clip-path: inset(-320px 0 0 0 round 0 32px 32px 0);
+  border: 0;
   border-radius: 32px;
   color: #f8f0dc;
   text-decoration: none;
-  background: url("/images/Vintage Olive Paisley Damask Pattern.png") center / cover;
-  box-shadow: 0 18px 35px rgba(31, 37, 24, .2);
+  box-shadow: 0 0 1px rgba(22, 18, 12, .3), 0 0 22px rgba(31, 28, 20, .2);
 }
 
 .womenPromoCopy {
   position: relative;
   z-index: 2;
+  isolation: isolate;
   width: min(53%, 610px);
   margin-inline-start: auto;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
+  text-align: center;
+  transform: translateX(-40px);
+}
+
+.womenPromo::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  pointer-events: none;
+}
+
+.womenPromo::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  border: 1px solid rgba(225, 202, 141, .48);
+  border-radius: inherit;
+  clip-path: inset(0 round 32px);
+  background: url("/images/Warm Taupe Paisley Textile Draped in Folds.png") center / cover no-repeat;
+  pointer-events: none;
+}
+
+.womenPromoCopy::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -50px -64px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse, rgba(70, 43, 21, .78) 0%, rgba(68, 41, 20, .52) 46%, transparent 74%);
+  filter: blur(11px);
+  pointer-events: none;
 }
 
 .womenPromoEyebrow {
-  color: #e3c47e;
-  font-size: .9rem;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  color: #f3d58e;
+  font-size: 1.36rem;
   font-weight: 800;
-  letter-spacing: .04em;
+  letter-spacing: .055em;
+  text-shadow: 0 2px 10px rgba(60, 37, 18, .95), 0 0 20px rgba(116, 76, 28, .88);
+  transform: translateY(-18px);
 }
 
-.womenPromoCopy h2 {
-  margin: 12px 0 14px;
-  color: #fff5df;
-  font-family: "Finalpro Amiri", Georgia, serif;
-  font-size: clamp(2rem, 3.1vw, 3.15rem);
-  line-height: 1.18;
+.womenPromoEyebrow::before,
+.womenPromoEyebrow::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 31px;
+  height: 31px;
+  background: url("/images/floral_ornaments_transparent_svg/ornament_02.svg") center / contain no-repeat;
+  transform: translateY(-50%);
 }
+
+.womenPromoEyebrow::before { inset-inline-end: calc(100% + 17px); }
+.womenPromoEyebrow::after { inset-inline-start: calc(100% + 17px); transform: translateY(-50%) scaleX(-1); }
+
+.womenPromoCopy h2 {
+  position: relative;
+  margin: 18px 0 14px;
+  color: #ffedca;
+  font-family: "Via Arslan Wessam", "Finalpro Amiri", Georgia, serif;
+  font-weight: 400;
+  font-size: clamp(3.35rem, 5.15vw, 5.55rem);
+  line-height: 1.04;
+  text-shadow: 0 3px 2px rgba(59, 36, 17, .88), 0 0 17px rgba(71, 42, 17, .86), 0 0 32px rgba(55, 33, 15, .48);
+}
+
+.womenPromoCopy h2::before,
+.womenPromoCopy h2::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 68px;
+  height: 52px;
+  background: url("/images/floral_ornaments_transparent_svg/ornament_06.svg") center / contain no-repeat;
+  transform: translateY(-50%);
+}
+
+.womenPromoCopy h2::before { inset-inline-end: calc(100% + 20px); }
+.womenPromoCopy h2::after { inset-inline-start: calc(100% + 20px); transform: translateY(-50%) scaleX(-1); }
 
 .womenPromoCopy p {
   max-width: 42ch;
   margin: 0;
-  color: #f2e7cc;
-  font-size: 1rem;
-  line-height: 1.85;
+  color: #f2dfb8;
+  font-size: 1.27rem;
+  line-height: 1.78;
+  text-shadow: 0 2px 10px rgba(58, 35, 17, .9), 0 0 20px rgba(72, 43, 18, .56);
+}
+
+.womenPromoCopy p::after {
+  content: "";
+  display: block;
+  width: min(100%, 390px);
+  height: 1px;
+  margin: 19px auto 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(222, 177, 78, .72) 14%, #f0c95e 50%, rgba(222, 177, 78, .72) 86%, transparent 100%);
+  box-shadow: 0 0 9px rgba(110, 70, 24, .72), 0 4px 18px rgba(52, 31, 14, .68);
 }
 
 .womenPromoCta {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  min-height: 46px;
+  min-height: 48px;
+  gap: 10px;
   margin-top: 24px;
-  padding: 0 24px;
-  border: 1px solid #ebd197;
+  padding: 0 26px;
+  border: 1px solid transparent;
   border-radius: 999px;
-  background: rgba(39, 55, 37, .88);
-  color: #fff7e6;
-  font-size: .94rem;
+  background:
+    linear-gradient(rgba(39, 55, 37, .88), rgba(39, 55, 37, .88)) padding-box,
+    linear-gradient(90deg, transparent 0%, rgba(225, 191, 120, .48) 18%, #f0cf85 50%, rgba(225, 191, 120, .48) 82%, transparent 100%) border-box;
+  color: #f5e2bc;
+  font-size: clamp(1.32rem, 1.6vw, 1.5rem);
   font-weight: 800;
   box-shadow: inset 0 1px rgba(255, 241, 202, .25), 0 8px 16px rgba(12, 20, 12, .22);
+  text-shadow: 0 2px 9px rgba(57, 34, 15, .9);
+  transition: transform .2s ease, box-shadow .2s ease;
+}
+
+.womenPromoCta::before,
+.womenPromoCta::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 22px;
+  height: 22px;
+  background: url("/images/floral_ornaments_transparent_svg/ornament_09.svg") center / contain no-repeat;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.womenPromoCta::before { inset-inline-start: -18px; }
+.womenPromoCta::after { inset-inline-end: -18px; transform: translateY(-50%) scaleX(-1); }
+
+.womenPromo:not(.salesPromo) .womenPromoCta {
+  color: #76521b;
+  text-shadow: 0 1px 0 rgba(255, 245, 211, .42), 0 1px 5px rgba(65, 41, 13, .28);
+  background:
+    linear-gradient(rgba(51, 39, 25, .22), rgba(51, 39, 25, .22)) padding-box,
+    url("/images/Seamless Light Beige Linen Weave.png") center / cover no-repeat padding-box,
+    linear-gradient(90deg, transparent 0%, rgba(225, 191, 120, .48) 18%, #f0cf85 50%, rgba(225, 191, 120, .48) 82%, transparent 100%) border-box;
 }
 
 .womenPromoFigures {
   position: absolute;
   z-index: 1;
-  inset-inline-start: -70px;
+  inset-inline-start: -90px;
   bottom: 0;
-  width: min(56%, 520px);
-  height: calc(100% + 90px);
+  width: min(68%, 650px);
+  height: calc(100% + 245px);
   pointer-events: none;
 }
 
@@ -295,8 +485,121 @@
 }
 
 .womenPromo:hover .womenPromoCta {
-  background: #506144;
-  box-shadow: inset 0 1px rgba(255, 241, 202, .35), 0 10px 20px rgba(12, 20, 12, .3);
+  transform: translateY(-3px);
+  box-shadow: inset 0 1px rgba(255, 241, 202, .25), 0 12px 21px rgba(12, 20, 12, .32);
+}
+
+.salesPromo {
+  margin-block-start: 30px;
+  margin-left: auto;
+  margin-right: calc(50% - 50vw);
+  border-radius: 32px;
+  clip-path: inset(-320px 0 0 0 round 32px 0 0 32px);
+}
+
+.salesPromo::before {
+  background: url("/images/Layered Keffiyeh Textures and Tassels.png") center / cover no-repeat;
+}
+
+.womenPromo:not(.salesPromo) {
+  margin-block-end: 0;
+}
+
+.womenPromo:not(.salesPromo)::after {
+  box-shadow: inset 0 0 25px rgba(93, 54, 24, .78), inset 0 0 4px rgba(126, 77, 34, .78);
+}
+
+.salesPromo {
+  box-shadow: 0 0 1px rgba(0, 0, 0, .42), 0 0 22px rgba(0, 0, 0, .2);
+}
+
+.salesPromo::after {
+  box-shadow: inset 0 0 25px rgba(0, 0, 0, .72), inset 0 0 4px rgba(0, 0, 0, .62);
+}
+
+.salesPromo .womenPromoCopy::before {
+  background: radial-gradient(ellipse, rgba(0, 0, 0, .82) 0%, rgba(0, 0, 0, .55) 46%, transparent 74%);
+}
+
+.salesPromo .womenPromoEyebrow,
+.salesPromo .womenPromoCopy h2,
+.salesPromo .womenPromoCopy p,
+.salesPromo .womenPromoCta {
+  color: #fff;
+  text-shadow: 0 2px 1px rgba(0, 0, 0, 1), 0 0 10px rgba(0, 0, 0, .98), 0 0 20px rgba(0, 0, 0, .86);
+}
+
+.salesPromo .womenPromoCta {
+  border-color: transparent;
+  background:
+    linear-gradient(rgba(18, 15, 11, .32), rgba(18, 15, 11, .32)) padding-box,
+    url("/images/Olive Green Woven Linen Texture.png") center / cover no-repeat padding-box,
+    linear-gradient(90deg, transparent 0%, rgba(255, 247, 224, .3) 12%, #fff7df 50%, rgba(255, 247, 224, .3) 88%, transparent 100%) border-box;
+  box-shadow: inset 0 1px rgba(255, 255, 255, .42), 0 7px 15px rgba(0, 0, 0, .38);
+}
+
+.salesPromo:hover .womenPromoCta {
+  transform: translateY(-3px);
+  box-shadow: inset 0 1px rgba(255, 255, 255, .42), 0 11px 20px rgba(0, 0, 0, .5);
+}
+
+.salesPromo .womenPromoCopy p::after {
+  background: linear-gradient(90deg, transparent 0%, rgba(222, 177, 78, .72) 14%, #f0c95e 50%, rgba(222, 177, 78, .72) 86%, transparent 100%);
+  box-shadow: 0 0 9px rgba(110, 70, 24, .72), 0 4px 18px rgba(52, 31, 14, .68);
+}
+
+.salesPromo .womenPromoFigures :global(img) {
+  z-index: 1;
+  filter: drop-shadow(0 25px 18px rgba(0, 0, 0, .58)) drop-shadow(0 8px 8px rgba(0, 0, 0, .42));
+}
+
+.salesPromo .womenPromoFigures {
+  isolation: isolate;
+}
+
+.salesPromo .womenPromoFigures::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset-inline: -14% -7%;
+  bottom: -10px;
+  height: 122px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, .82) 0%, rgba(0, 0, 0, .58) 48%, rgba(0, 0, 0, .2) 72%, transparent 84%);
+  filter: blur(11px);
+  pointer-events: none;
+}
+
+@supports (animation-timeline: view()) {
+  .womenPromo {
+    animation: women-promo-slide linear both;
+    animation-timeline: view(block);
+    animation-range: entry 0% contain 0%;
+  }
+
+  .salesPromo { animation-name: sales-promo-slide; }
+}
+
+@keyframes women-promo-slide {
+  from {
+    transform: translate(-112%, 70px);
+    clip-path: inset(-320px 0 0 0 round 0 32px 32px 0);
+  }
+  to {
+    transform: translateY(70px);
+    clip-path: inset(-320px 0 0 0 round 0 32px 32px 0);
+  }
+}
+
+@keyframes sales-promo-slide {
+  from {
+    transform: translate(112%, 70px);
+    clip-path: inset(-320px 0 0 0 round 32px 0 0 32px);
+  }
+  to {
+    transform: translateY(70px);
+    clip-path: inset(-320px 0 0 0 round 32px 0 0 32px);
+  }
 }
 
 .categoryCarousel {
@@ -608,21 +911,27 @@
 
 @media (max-width: 760px) {
   .womenPromo {
-    min-height: 570px;
-    margin-top: 64px;
+    width: 100%;
+    min-height: 640px;
+    margin-top: 314px;
     padding: 32px 26px;
     align-items: flex-start;
     border-radius: 24px;
+    clip-path: inset(-230px 0 0 0 round 0 0 24px 24px);
     background-position: center;
   }
-  .womenPromoCopy { width: 100%; margin: 0; }
-  .womenPromoCopy h2 { max-width: 11ch; font-size: clamp(2rem, 10vw, 2.7rem); }
-  .womenPromoCopy p { max-width: 31ch; font-size: .94rem; }
+  .womenPromo::before { clip-path: inset(0 round 24px); }
+  @supports (animation-timeline: view()) {
+    .womenPromo { animation-name: women-promo-slide-mobile; }
+  }
+  .womenPromoCopy { width: 100%; margin: 0; transform: none; }
+  .womenPromoCopy h2 { max-width: 11ch; font-size: clamp(2.45rem, 11vw, 3.15rem); }
+  .womenPromoCopy p { max-width: 31ch; font-size: .98rem; }
   .womenPromoFigures {
-    inset-inline-start: -70px;
+    inset-inline-start: -90px;
     bottom: 0;
-    width: min(96%, 430px);
-    height: 64%;
+    width: min(104%, 495px);
+    height: 76%;
     transform: none;
   }
   .categoryIntro { margin-top: calc(-3rem - 180px) !important; }
@@ -647,13 +956,25 @@
   .heroImage { object-position: center; }
   .hero::before { background: linear-gradient(90deg, rgba(16, 10, 11, .58), rgba(16, 10, 11, .26)), linear-gradient(0deg, var(--via-cream) 0%, rgba(247, 242, 234, .86) 8%, rgba(247, 242, 234, 0) 31%); }
   .heroWordmark { inset: calc(45% - 20px) auto auto calc(2% - 10px); width: min(54vw, 18rem); }
-  .heroContent { justify-content: flex-end; padding: 56px 24px 116px; transform: translate(10px, -92px); }
-  .home.home .heroTitle { max-width: none; font-size: clamp(2rem, 8.5vw, 2.5rem) !important; line-height: 1.12 !important; white-space: nowrap; }
-  .home.home .heroCopy { max-width: 30ch; font-size: .92rem !important; }
+  .heroContent { width: min(52%, 355px); margin-left: auto; justify-content: flex-end; padding: 56px 16px 116px; transform: translate(0, -92px); }
+  .home.home .heroTitle { max-width: none; font-size: clamp(2.05rem, 6.1vw, 2.45rem) !important; line-height: 1.17 !important; white-space: normal; }
+  .heroTitleLine { display: block; white-space: normal; }
+  .home.home .heroCopy { max-width: 26ch; font-size: 1rem !important; }
   .heroTitle::after { width: min(100%, 17rem); margin-top: 12px; }
   .heroText::before { inset: -30px -26px -28px; filter: blur(11px); }
   .heroActions { width: 100%; }
   .heroPrimary, .heroSecondary { flex: 1 1 180px; text-align: center; }
+}
+
+@keyframes women-promo-slide-mobile {
+  from {
+    transform: translateX(-108%);
+    clip-path: inset(-230px 0 0 0 round 0 0 24px 24px);
+  }
+  to {
+    transform: translateX(0);
+    clip-path: inset(-230px 0 0 0 round 0 0 24px 24px);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -662,4 +983,5 @@
     scroll-behavior: auto !important;
     transition-duration: .01ms !important;
   }
+  .womenPromo { animation: none; }
 }
