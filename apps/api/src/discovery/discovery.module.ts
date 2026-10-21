@@ -12,6 +12,7 @@ import {
 } from './comparison.controller';
 import { ComparisonService } from './comparison.service';
 import { DiscoveryController } from './discovery.controller';
+import { DiscoveryBrowseService } from './discovery-browse.service';
 import { FollowingController } from './following.controller';
 
 @Module({
@@ -24,6 +25,6 @@ import { FollowingController } from './following.controller';
     ComparisonSetsController,
     ComparisonSetsSharedController,
   ],
-  providers: [ComparisonService, ComparisonSetsService],
+  providers: [ComparisonService, ComparisonSetsService, DiscoveryBrowseService],
 })
 export class DiscoveryModule {}

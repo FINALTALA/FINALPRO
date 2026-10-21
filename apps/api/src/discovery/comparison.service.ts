@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import {
   AvailabilityBucket,
@@ -7,7 +7,11 @@ import {
   totalAvailableStockLive,
 } from '../common/availability.util';
 import { PrismaService } from '../prisma/prisma.service';
-import { computeEffectivePrice } from '../offers/pricing/effective-price.util';
+import {
+  computeEffectivePrice,
+  isEffectivelyDiscounted,
+} from '../offers/pricing/effective-price.util';
+import { MIN_REVIEWS_TO_DISPLAY } from '../reviews/rating-aggregate.util';
 
 export interface EligibleOffer {
   offerVariantId: string;
@@ -20,6 +24,7 @@ export interface EligibleOffer {
   vendorLogoUrl: string | null;
   vendorCreatedAt: Date;
   price: number;
+  isDiscounted?: boolean;
   availability: AvailabilityBucket;
   imageUrl: string | null;
   /// Sprint 24 (FR-COMP-003).
@@ -44,6 +49,10 @@ export interface ComparisonCard {
   brandName: string | null;
   categoryName: string | null;
   storeCount: number;
+  discountedStoreCount: number;
+  hasDiscount: boolean;
+  rating: number | null;
+  ratingCount: number;
   colors: string[];
   sizes: string[];
   cheapestOffer: {
@@ -60,6 +69,7 @@ export interface ComparisonCard {
     offerId: string;
     offerVariantId: string;
     price: number;
+    isDiscounted: boolean;
   }[];
 }
 
@@ -146,6 +156,9 @@ export function eligibleProductWhere(
  */
 @Injectable()
 export class ComparisonService {
+  private readonly logger = new Logger(ComparisonService.name);
+  private ratingSchemaWarningLogged = false;
+
   constructor(private readonly prisma: PrismaService) {}
 
   /**
@@ -229,6 +242,7 @@ export class ComparisonService {
         vendorCreatedAt: v.vendor.createdAt,
         // Sprint 17 (blocker 1): shared, read-only computation.
         price: computeEffectivePrice(v),
+        isDiscounted: isEffectivelyDiscounted(v),
         availability: bucketForStock(totalStock),
         imageUrl: primaryMediaUrl(v.media),
         condition: v.condition,
@@ -239,14 +253,11 @@ export class ComparisonService {
 
   /**
    * Deterministic cheapest-first ordering. PDR-015 calls for ties to
-   * break by "higher rating, then permitted location proximity" - this
-   * codebase has no rating or geolocation-permission infrastructure at
-   * all (checked before writing this sprint's code; see the PR
-   * description for this note in full), so guessing at either would be
-   * dishonest. The documented, fully deterministic fallback used
-   * instead: the longer-established store wins (older vendor.createdAt
-   * first), then offerVariantId as a final total-order tiebreak so the
-   * result never depends on incidental DB row order.
+   * break by "higher rating, then permitted location proximity." Product
+   * review aggregates shown on cards are not per-offer tie-break data,
+   * and this query has no permitted location signal, so retain the
+   * deterministic fallback: the longer-established store wins, then
+   * offerVariantId as a final total-order tiebreak.
    */
   compareOffersByPrice = (a: EligibleOffer, b: EligibleOffer): number => {
     if (a.price !== b.price) return a.price - b.price;
@@ -301,6 +312,11 @@ export class ComparisonService {
     );
     const pool = availableOffers.length > 0 ? availableOffers : eligibleOffers;
     const cheapest = pool.slice().sort(this.compareOffersByPrice)[0];
+    const discountedStoreCount = new Set(
+      eligibleOffers
+        .filter((offer) => offer.availability !== 'sold_out' && offer.isDiscounted)
+        .map((offer) => offer.vendorId),
+    ).size;
 
     return {
       canonicalProductId: canonicalProduct.id,
@@ -315,6 +331,10 @@ export class ComparisonService {
       brandName: canonicalProduct.brand?.name ?? null,
       categoryName: canonicalProduct.category?.nameAr ?? null,
       storeCount: cheapestPerVendor.size,
+      discountedStoreCount,
+      hasDiscount: discountedStoreCount > 0,
+      rating: null,
+      ratingCount: 0,
       colors: distinctAttributeValues(eligibleOffers, ['color', 'colour']),
       sizes: distinctAttributeValues(eligibleOffers, ['size']),
       cheapestOffer: {
@@ -331,6 +351,7 @@ export class ComparisonService {
         offerId: o.offerId,
         offerVariantId: o.offerVariantId,
         price: o.price,
+        isDiscounted: o.isDiscounted === true,
       })),
     };
   }
@@ -359,7 +380,7 @@ export class ComparisonService {
         },
       }),
     ]);
-    const cards = await Promise.all(
+    const cards = (await Promise.all(
       products.map(async (product) => {
         const eligible = await this.findEligibleOffers(
           product.id,
@@ -367,10 +388,61 @@ export class ComparisonService {
         );
         return this.buildCard(product, eligible);
       }),
+    )).filter((c): c is ComparisonCard => c !== null);
+    const productIds = cards.map((card) => card.canonicalProductId);
+    const reviewTable = productIds.length
+      ? await this.prisma.$queryRaw<{ available: boolean }[]>(Prisma.sql`
+          SELECT to_regclass('reviews') IS NOT NULL AS available
+        `)
+      : [];
+    const ratingsAvailable = reviewTable[0]?.available === true;
+    if (
+      productIds.length > 0 &&
+      !ratingsAvailable &&
+      !this.ratingSchemaWarningLogged
+    ) {
+      this.logger.warn(
+        'Product ratings are unavailable because the reviews table is missing; apply pending Prisma migrations.',
+      );
+      this.ratingSchemaWarningLogged = true;
+    }
+    const ratings = ratingsAvailable
+      ? await this.prisma.$queryRaw<
+          { canonicalProductId: string; average: number | null; count: number }[]
+        >(Prisma.sql`
+          SELECT "canonicalProductId",
+                 AVG(rating)::float8 AS average,
+                 COUNT(*)::int4 AS count
+          FROM reviews
+          WHERE "canonicalProductId" IN (${Prisma.join(productIds)})
+            AND "targetType"::text = 'PRODUCT'
+            AND "moderationStatus"::text = 'VISIBLE'
+          GROUP BY "canonicalProductId"
+        `)
+      : [];
+    const ratingsByProductId = new Map(
+      ratings.map((summary) => [
+        summary.canonicalProductId,
+        {
+          rating:
+            summary.count >= MIN_REVIEWS_TO_DISPLAY &&
+            summary.average !== null
+              ? Math.round(summary.average * 100) / 100
+              : null,
+          count: summary.count,
+        },
+      ]),
     );
     return {
       total,
-      cards: cards.filter((c): c is ComparisonCard => c !== null),
+      cards: cards.map((card) => {
+        const summary = ratingsByProductId.get(card.canonicalProductId);
+        return {
+          ...card,
+          rating: summary?.rating ?? null,
+          ratingCount: summary?.count ?? 0,
+        };
+      }),
     };
   }
 }
