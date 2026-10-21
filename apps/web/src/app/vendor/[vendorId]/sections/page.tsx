@@ -47,7 +47,7 @@ export default function StoreSectionsPage() {
           router.replace("/login");
           return;
         }
-        setError(err instanceof ApiError ? err.message : "تعذّر تحميل الأقسام");
+        setError(err instanceof ApiError ? err.message : "تعذّر تحميل التصنيفات");
       });
     apiFetch<VendorOfferDto[]>(`/vendors/${params.vendorId}/offers`)
       .then(setOffers)
@@ -78,7 +78,7 @@ export default function StoreSectionsPage() {
       setNewName("");
       load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "تعذّر إنشاء القسم");
+      setError(err instanceof ApiError ? err.message : "تعذّر إنشاء التصنيف");
     } finally {
       setBusy(false);
     }
@@ -107,10 +107,10 @@ export default function StoreSectionsPage() {
       await apiFetch(`/vendors/${params.vendorId}/sections/${id}`, {
         method: "DELETE",
       });
-      setNotice("تم حذف القسم (المنتجات نفسها لم تُحذف)");
+      setNotice("تم حذف التصنيف (المنتجات نفسها لم تُحذف)");
       load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "تعذّر حذف القسم");
+      setError(err instanceof ApiError ? err.message : "تعذّر حذف التصنيف");
     } finally {
       setBusy(false);
     }
@@ -166,7 +166,7 @@ export default function StoreSectionsPage() {
       // for the sections list itself.
       load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "تعذّر تحديث القسم");
+      setError(err instanceof ApiError ? err.message : "تعذّر تحديث التصنيف");
     } finally {
       setBusy(false);
     }
@@ -192,7 +192,7 @@ export default function StoreSectionsPage() {
     <div className="page-shell">
       <div className="top-bar">
         <div className="brand" style={{ margin: 0 }}>
-          أقسام المتجر
+          تصنيفات المتجر
         </div>
         <Link href={`/vendor/${params.vendorId}`} className="button-link">
           لوحة المتجر
@@ -202,22 +202,24 @@ export default function StoreSectionsPage() {
       {error && <div className="error-banner" style={{ maxWidth: 560 }}>{error}</div>}
       {notice && <p className="muted" style={{ maxWidth: 560 }}>{notice}</p>}
       <p className="muted" style={{ maxWidth: 560 }}>
-        قسم &quot;الكل&quot; ثابت دائماً، و&quot;وصل حديثاً&quot; و&quot;تخفيضات&quot;
-        تلقائيان - لا يمكن تعديلهما هنا. يمكن إنشاء حتى 20 قسماً مخصصاً.
+        التصنيفات التي تنشئينها هنا (مثل: أحذية، إكسسوارات) تظهر للزبائن كأزرار في صفحة المتجر
+        بنفس الأسماء والترتيب، وعند الضغط على تصنيف تظهر منتجاته فقط - ويمكن وضع المنتج في أكثر من
+        تصنيف. &quot;الكل&quot; ثابت دائماً، و&quot;وصل حديثاً&quot; و&quot;تخفيضات&quot; تلقائيان
+        (يظهران فقط عند وجود منتجات جديدة أو مخفّضة). يمكن إنشاء حتى 20 تصنيفاً.
       </p>
 
       <div className="card" style={{ maxWidth: 560 }}>
         <div className="field">
-          <label>اسم قسم جديد</label>
-          <input value={newName} onChange={(e) => setNewName(e.target.value)} />
+          <label>اسم تصنيف جديد</label>
+          <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="مثال: أحذية" />
         </div>
         <button className="button" onClick={createSection} disabled={busy}>
-          إضافة قسم
+          إضافة تصنيف
         </button>
       </div>
 
       <div style={{ maxWidth: 560, width: "100%", display: "flex", flexDirection: "column", gap: 12, marginTop: 16 }}>
-        {sections.length === 0 && <p className="muted">لا توجد أقسام مخصصة بعد.</p>}
+        {sections.length === 0 && <p className="muted">لا توجد تصنيفات بعد. أضيفي أول تصنيف ليظهر للزبائن في صفحة المتجر.</p>}
         {sections.map((section, index) => (
           <div key={section.id} className="card">
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -255,7 +257,7 @@ export default function StoreSectionsPage() {
 
             {offers && offers.length > 0 && (
               <div style={{ marginTop: 10 }}>
-                <div className="muted">المنتجات في هذا القسم:</div>
+                <div className="muted">المنتجات في هذا التصنيف:</div>
                 {offers.map((offer) => (
                   <label
                     key={offer.id}

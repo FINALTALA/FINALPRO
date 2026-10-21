@@ -41,6 +41,7 @@ interface Filters {
   entity_id: string;
   actor_id: string;
   action: string;
+  correlation_id: string;
   from: string;
   to: string;
 }
@@ -50,6 +51,7 @@ const EMPTY_FILTERS: Filters = {
   entity_id: "",
   actor_id: "",
   action: "",
+  correlation_id: "",
   from: "",
   to: "",
 };
@@ -60,6 +62,7 @@ function buildQuery(filters: Filters, extra: Record<string, string>): string {
   if (filters.entity_id.trim()) qs.set("entity_id", filters.entity_id.trim());
   if (filters.actor_id.trim()) qs.set("actor_id", filters.actor_id.trim());
   if (filters.action.trim()) qs.set("action", filters.action.trim());
+  if (filters.correlation_id.trim()) qs.set("correlation_id", filters.correlation_id.trim());
   if (filters.from) qs.set("from", new Date(filters.from).toISOString());
   if (filters.to) qs.set("to", new Date(filters.to).toISOString());
   return qs.toString();
@@ -111,13 +114,25 @@ export default function AdminAuditLogsPage() {
     };
   }, [gate.status, fetchPage]);
 
-  function applyFilters(e: FormEvent) {
-    e.preventDefault();
+  function runFilters(next: Filters) {
     setLoading(true);
     setItems([]);
     setCursor(null);
     setError(null);
-    setFilters(draft);
+    setFilters(next);
+  }
+
+  function applyFilters(e: FormEvent) {
+    e.preventDefault();
+    runFilters(draft);
+  }
+
+  // Review round: one click shows every row written while serving the
+  // same request (Part 4, H.1's correlation id).
+  function showRequest(correlationId: string) {
+    const next = { ...EMPTY_FILTERS, correlation_id: correlationId };
+    setDraft(next);
+    runFilters(next);
   }
 
   async function loadMore() {
@@ -214,6 +229,14 @@ export default function AdminAuditLogsPage() {
             style={{ minWidth: 220 }}
           />
           <input
+            aria-label="معرّف الطلب (correlation id)"
+            placeholder="معرّف الطلب (correlation id)"
+            value={draft.correlation_id}
+            onChange={(e) => setDraft({ ...draft, correlation_id: e.target.value })}
+            dir="ltr"
+            style={{ minWidth: 220 }}
+          />
+          <input
             aria-label="من تاريخ"
             type="datetime-local"
             value={draft.from}
@@ -272,6 +295,7 @@ export default function AdminAuditLogsPage() {
                     <th>نوع الكيان</th>
                     <th>معرّف الكيان</th>
                     <th>الفاعل</th>
+                    <th>معرّف الطلب</th>
                     <th>الملخّص</th>
                   </tr>
                 </thead>
@@ -283,6 +307,17 @@ export default function AdminAuditLogsPage() {
                       <td>{row.entity_type}</td>
                       <td style={{ fontFamily: "monospace", fontSize: 12 }}>{row.entity_id}</td>
                       <td style={{ fontFamily: "monospace", fontSize: 12 }}>{row.actor_id ?? "-"}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="button-link"
+                          style={{ fontFamily: "monospace", fontSize: 12, padding: 0 }}
+                          title="عرض كل سجلات هذا الطلب"
+                          onClick={() => showRequest(row.correlation_id)}
+                        >
+                          {row.correlation_id}
+                        </button>
+                      </td>
                       <td>{row.summary ?? "-"}</td>
                     </tr>
                   ))}

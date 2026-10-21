@@ -70,6 +70,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const isHomePage = pathname === "/";
   const isViaExperience = pathname === "/" || pathname === "/women";
+  // Store pages carry their own identity bar (logo, name, icon), so the
+  // platform header is not rendered on top of them.
+  const isStorePage = pathname.startsWith("/store/");
   const isWomenPage = pathname === "/women";
   const router = useRouter();
   const token = useSessionToken();
@@ -282,7 +285,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
             </div>
           </div>
         </header>
-      ) : (
+      ) : isStorePage ? null : (
       <header className={`app-header${isWomenPage ? " women-header" : ""}`}>
         {isWomenPage ? (
           <div className="women-header-inner">

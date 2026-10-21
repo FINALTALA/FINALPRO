@@ -17,6 +17,51 @@ export interface VendorPerformance {
   responded_orders_count: number;
   rating_average: number | null;
   rating_count: number;
+  /** Sprint 25 review round: the counts behind cancellation_rate. */
+  terminal_orders_count: number;
+  cancelled_orders_count: number;
+  /** Sprint 25 review round: the same window split into consecutive
+   * 7-day buckets (oldest first; the oldest is the 2-day remainder of
+   * the 30 days), each with the same null-not-zero rules as the
+   * totals - for the owner dashboard's charts. */
+  weekly: VendorPerformanceWeek[];
+}
+
+export interface VendorPerformanceWeek {
+  week_from: string;
+  week_to: string;
+  terminal_orders_count: number;
+  cancelled_orders_count: number;
+  cancellation_rate: number | null;
+  responded_orders_count: number;
+  average_response_time_hours: number | null;
+}
+
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const TERMINAL = ['COMPLETED', 'CANCELLED', 'REFUNDED'];
+const CANCELLED = ['CANCELLED', 'REFUNDED'];
+
+function summarize(orders: OrderRow[]) {
+  const terminal = orders.filter((o) => TERMINAL.includes(o.status));
+  const cancelled = terminal.filter((o) => CANCELLED.includes(o.status));
+  const responded = orders.filter((o) => o.preparingAt !== null);
+  return {
+    terminal_orders_count: terminal.length,
+    cancelled_orders_count: cancelled.length,
+    cancellation_rate:
+      terminal.length === 0 ? null : cancelled.length / terminal.length,
+    responded_orders_count: responded.length,
+    average_response_time_hours:
+      responded.length === 0
+        ? null
+        : responded.reduce(
+            (sum, o) =>
+              sum +
+              (o.preparingAt!.getTime() - o.createdAt.getTime()) /
+                (60 * 60 * 1000),
+            0,
+          ) / responded.length,
+  };
 }
 
 interface OrderRow {
@@ -84,26 +129,24 @@ export class VendorPerformanceService {
         AND bo."createdAt" >= ${from}
     `;
 
-    const terminal = orders.filter((o) =>
-      ['COMPLETED', 'CANCELLED', 'REFUNDED'].includes(o.status),
-    );
-    const cancelled = terminal.filter((o) =>
-      ['CANCELLED', 'REFUNDED'].includes(o.status),
-    );
-    const cancellationRate =
-      terminal.length === 0 ? null : cancelled.length / terminal.length;
+    const totals = summarize(orders);
 
-    const responded = orders.filter((o) => o.preparingAt !== null);
-    const averageResponseHours =
-      responded.length === 0
-        ? null
-        : responded.reduce(
-            (sum, o) =>
-              sum +
-              (o.preparingAt!.getTime() - o.createdAt.getTime()) /
-                (60 * 60 * 1000),
-            0,
-          ) / responded.length;
+    // Buckets end at `to` and step back 7 days at a time; the last
+    // step is clipped to `from`, so the buckets tile the window exactly.
+    const weekly: VendorPerformanceWeek[] = [];
+    for (let end = to.getTime(); end > from.getTime(); end -= WEEK_MS) {
+      const start = Math.max(end - WEEK_MS, from.getTime());
+      const inBucket = orders.filter((o) => {
+        const t = o.createdAt.getTime();
+        // The newest bucket includes `to` itself.
+        return t >= start && (t < end || end === to.getTime());
+      });
+      weekly.unshift({
+        week_from: new Date(start).toISOString(),
+        week_to: new Date(end).toISOString(),
+        ...summarize(inBucket),
+      });
+    }
 
     const rating = await this.reviews.getVendorRatingSummary(vendorId);
 
@@ -112,11 +155,14 @@ export class VendorPerformanceService {
       window_days: WINDOW_DAYS,
       window_from: from.toISOString(),
       window_to: to.toISOString(),
-      cancellation_rate: cancellationRate,
-      average_response_time_hours: averageResponseHours,
-      responded_orders_count: responded.length,
+      cancellation_rate: totals.cancellation_rate,
+      average_response_time_hours: totals.average_response_time_hours,
+      responded_orders_count: totals.responded_orders_count,
       rating_average: rating.average,
       rating_count: rating.count,
+      terminal_orders_count: totals.terminal_orders_count,
+      cancelled_orders_count: totals.cancelled_orders_count,
+      weekly,
     };
   }
 }

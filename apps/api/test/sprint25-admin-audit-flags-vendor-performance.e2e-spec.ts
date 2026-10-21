@@ -58,12 +58,40 @@ describe('Sprint 25 - admin audit logs, feature flags, vendor performance (e2e)'
     );
     await app.init();
     prisma = app.get(PrismaService);
+
+    // Review-round fix (test isolation): a feature flag is one global
+    // row, so every test starts from the registry default - no row at
+    // all, i.e. disabled - instead of inheriting whatever the previous
+    // test (or the true/false race below) happened to leave behind.
+    // AuditLog stays append-only even here: the rows already present
+    // are only remembered, and each test asserts on its own new rows.
+    await prisma.featureFlag.deleteMany();
+    const existing = await prisma.auditLog.findMany({
+      where: { entityType: 'FeatureFlag' },
+      select: { id: true },
+    });
+    flagLogBaseline = existing.map((r) => r.id);
   });
 
   afterEach(async () => {
     jest.restoreAllMocks();
+    await prisma.featureFlag.deleteMany();
     await app.close();
   });
+
+  let flagLogBaseline: string[] = [];
+
+  /** FeatureFlag AuditLog rows written during the current test only. */
+  function flagLogsThisTest() {
+    return prisma.auditLog.findMany({
+      where: {
+        entityType: 'FeatureFlag',
+        entityId: FLAG_KEY,
+        id: { notIn: flagLogBaseline },
+      },
+      orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
+    });
+  }
 
   const http = () => app.getHttpServer();
 
@@ -297,6 +325,50 @@ describe('Sprint 25 - admin audit logs, feature flags, vendor performance (e2e)'
   }
 
   // ------------------------------------------------------------
+  // Review round: authorization across every Sprint 25 admin endpoint
+  // ------------------------------------------------------------
+  describe('Admin endpoint authorization', () => {
+    const ADMIN_ENDPOINTS: [method: 'get' | 'put', path: string][] = [
+      ['get', '/api/v1/admin/audit-logs'],
+      ['get', '/api/v1/admin/audit-logs/export'],
+      ['get', '/api/v1/admin/feature-flags'],
+      ['put', `/api/v1/admin/feature-flags/${FLAG_KEY}`],
+      ['get', '/api/v1/admin/vendors/performance'],
+    ];
+
+    it('every endpoint answers 401 without a session and 403 for a VERIFICATION_REVIEWER (PLATFORM_ADMIN only)', async () => {
+      const reviewerPhone = uniquePhone();
+      const reviewer = await signup(reviewerPhone, 'a-strong-password');
+      await prisma.user.update({
+        where: { phone: reviewerPhone },
+        data: { platformRole: 'VERIFICATION_REVIEWER' },
+      });
+
+      for (const [method, path] of ADMIN_ENDPOINTS) {
+        const anonymous = await request(http())
+          [method](path)
+          .send(method === 'put' ? { enabled: true } : undefined);
+        expect({ path, status: anonymous.status }).toEqual({
+          path,
+          status: 401,
+        });
+
+        const asReviewer = await request(http())
+          [method](path)
+          .set('Authorization', `Bearer ${reviewer}`)
+          .send(method === 'put' ? { enabled: true } : undefined);
+        expect({ path, status: asReviewer.status }).toEqual({
+          path,
+          status: 403,
+        });
+      }
+      // The refused PUTs changed nothing.
+      expect(await prisma.featureFlag.count()).toBe(0);
+      expect(await flagLogsThisTest()).toHaveLength(0);
+    });
+  });
+
+  // ------------------------------------------------------------
   // FR-ADMIN-004: Feature flags
   // ------------------------------------------------------------
   describe('Feature flags', () => {
@@ -349,11 +421,7 @@ describe('Sprint 25 - admin audit logs, feature flags, vendor performance (e2e)'
       expect(await prisma.featureFlag.count({ where: { key: FLAG_KEY } })).toBe(
         0,
       );
-      expect(
-        await prisma.auditLog.count({
-          where: { entityType: 'FeatureFlag', entityId: FLAG_KEY },
-        }),
-      ).toBe(0);
+      expect(await flagLogsThisTest()).toHaveLength(0);
     });
 
     it('the first real PUT (true on an absent key) creates one row and one clear AuditLog entry (false -> true)', async () => {
@@ -367,9 +435,7 @@ describe('Sprint 25 - admin audit logs, feature flags, vendor performance (e2e)'
       expect(await prisma.featureFlag.count({ where: { key: FLAG_KEY } })).toBe(
         1,
       );
-      const logs = await prisma.auditLog.findMany({
-        where: { entityType: 'FeatureFlag', entityId: FLAG_KEY },
-      });
+      const logs = await flagLogsThisTest();
       expect(logs).toHaveLength(1);
       expect(logs[0].beforeState).toEqual({ enabled: false });
       expect(logs[0].afterState).toEqual({ enabled: true });
@@ -383,11 +449,7 @@ describe('Sprint 25 - admin audit logs, feature flags, vendor performance (e2e)'
         .set('Authorization', `Bearer ${admin}`)
         .send({ enabled: true })
         .expect(200);
-      expect(
-        await prisma.auditLog.count({
-          where: { entityType: 'FeatureFlag', entityId: FLAG_KEY },
-        }),
-      ).toBe(1);
+      expect(await flagLogsThisTest()).toHaveLength(1);
     });
 
     it('flipping back to false after true updates the row and writes a correct second AuditLog entry', async () => {
@@ -398,10 +460,7 @@ describe('Sprint 25 - admin audit logs, feature flags, vendor performance (e2e)'
         .set('Authorization', `Bearer ${admin}`)
         .send({ enabled: false })
         .expect(200);
-      const logs = await prisma.auditLog.findMany({
-        where: { entityType: 'FeatureFlag', entityId: FLAG_KEY },
-        orderBy: { occurredAt: 'asc' },
-      });
+      const logs = await flagLogsThisTest();
       expect(logs).toHaveLength(2);
       expect(logs[1].beforeState).toEqual({ enabled: true });
       expect(logs[1].afterState).toEqual({ enabled: false });
@@ -409,6 +468,11 @@ describe('Sprint 25 - admin audit logs, feature flags, vendor performance (e2e)'
 
     it('CONCURRENCY: two simultaneous first-writes to the same never-configured key never collide, and the AuditLog chain is correct', async () => {
       const admin = await platformAdmin();
+      // The per-test reset guarantees the premise this test is about:
+      // no row exists yet, so both writes race on the very first create.
+      expect(await prisma.featureFlag.count({ where: { key: FLAG_KEY } })).toBe(
+        0,
+      );
       const [r1, r2] = await Promise.all([
         run(
           request(http())
@@ -428,10 +492,7 @@ describe('Sprint 25 - admin audit logs, feature flags, vendor performance (e2e)'
       expect(await prisma.featureFlag.count({ where: { key: FLAG_KEY } })).toBe(
         1,
       );
-      const logs = await prisma.auditLog.findMany({
-        where: { entityType: 'FeatureFlag', entityId: FLAG_KEY },
-        orderBy: { occurredAt: 'asc' },
-      });
+      const logs = await flagLogsThisTest();
       // Exactly one real transition happened first (false -> true,
       // since that's the only one that can ever create the row), and
       // IF the second write (false) actually changed anything, its
@@ -559,6 +620,55 @@ describe('Sprint 25 - admin audit logs, feature flags, vendor performance (e2e)'
         .set('Authorization', `Bearer ${admin}`)
         .expect(200);
       expect(futureOnly.body.items).toHaveLength(0);
+    });
+
+    it('correlation_id finds every row written while serving one request, in both the list and the CSV export', async () => {
+      const admin = await platformAdmin();
+      const marker = unique('corr-marker');
+      const shared = unique('corr-shared');
+      // Two rows from the "same request", one unrelated row.
+      for (const [correlationId, n] of [
+        [shared, 1],
+        [shared, 2],
+        [unique('corr-other'), 3],
+      ] as const) {
+        await prisma.auditLog.create({
+          data: {
+            correlationId,
+            action: `custom.${marker}`,
+            entityType: 'CustomEntity',
+            entityId: `${marker}-${n}`,
+            actorId: null,
+          },
+        });
+      }
+
+      const list = await request(http())
+        .get(`/api/v1/admin/audit-logs?correlation_id=${shared}`)
+        .set('Authorization', `Bearer ${admin}`)
+        .expect(200);
+      expect(list.body.items).toHaveLength(2);
+      expect(
+        list.body.items.every(
+          (i: { correlation_id: string }) => i.correlation_id === shared,
+        ),
+      ).toBe(true);
+
+      const exported = await request(http())
+        .get(`/api/v1/admin/audit-logs/export?correlation_id=${shared}`)
+        .set('Authorization', `Bearer ${admin}`)
+        .expect(200);
+      const dataRows = exported.text.split('\n').slice(1);
+      expect(dataRows).toHaveLength(2);
+      expect(dataRows.every((r) => r.includes(`"${shared}"`))).toBe(true);
+
+      const combined = await request(http())
+        .get(
+          `/api/v1/admin/audit-logs?correlation_id=${shared}&entity_id=${marker}-2`,
+        )
+        .set('Authorization', `Bearer ${admin}`)
+        .expect(200);
+      expect(combined.body.items).toHaveLength(1);
     });
 
     it("LEAK TEST: an un-reviewed action's sensitive beforeState/afterState (e.g. address.created's lat/lng) never appears in the list response or the CSV export - summary is null instead", async () => {
@@ -765,6 +875,76 @@ describe('Sprint 25 - admin audit logs, feature flags, vendor performance (e2e)'
         .expect(200);
       // denominator = 2 (COMPLETED + CANCELLED), the still-PLACED one excluded.
       expect(res.body.cancellation_rate).toBeCloseTo(0.5, 5);
+      expect(res.body.terminal_orders_count).toBe(2);
+      expect(res.body.cancelled_orders_count).toBe(1);
+    });
+
+    it('weekly buckets tile the 30-day window exactly, place each order in its own week, and add up to the totals', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const variantId = await createOfferWithStock(vendorId, branchId, 50, 10);
+      const admin = await platformAdmin();
+      await enableVendorPerformanceFlag(admin);
+
+      await placeAndPickUp(
+        owner,
+        await signup(uniquePhone(), 'a-strong-password'),
+        vendorId,
+        branchId,
+        variantId,
+      );
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const cartItem = await addToCart(customer, vendorId, variantId, 1);
+      const order = await placeOrder(customer, vendorId, branchId, cartItem);
+      await cancelWholeOrder(customer, order.branchOrderId).then((r) =>
+        expect(r.status).toBe(201),
+      );
+      // The cancelled order belongs to ten days ago.
+      const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+      await prisma.branchOrder.update({
+        where: { id: order.branchOrderId },
+        data: { createdAt: tenDaysAgo },
+      });
+
+      const res = await request(http())
+        .get(`/api/v1/vendors/${vendorId}/performance`)
+        .set('Authorization', `Bearer ${owner}`)
+        .expect(200);
+      const weekly: {
+        week_from: string;
+        week_to: string;
+        terminal_orders_count: number;
+        cancelled_orders_count: number;
+        cancellation_rate: number | null;
+      }[] = res.body.weekly;
+
+      // 30 days = 4 full weeks + a 2-day remainder, oldest first.
+      expect(weekly).toHaveLength(5);
+      expect(weekly[0].week_from).toBe(res.body.window_from);
+      expect(weekly[weekly.length - 1].week_to).toBe(res.body.window_to);
+      for (let i = 1; i < weekly.length; i += 1) {
+        expect(weekly[i].week_from).toBe(weekly[i - 1].week_to);
+      }
+
+      const holding = weekly.find(
+        (w) =>
+          new Date(w.week_from) <= tenDaysAgo &&
+          tenDaysAgo < new Date(w.week_to),
+      )!;
+      expect(holding.cancelled_orders_count).toBe(1);
+      expect(holding.cancellation_rate).toBe(1);
+      const newest = weekly[weekly.length - 1];
+      expect(newest.terminal_orders_count).toBe(1);
+      expect(newest.cancellation_rate).toBe(0);
+      // Weeks with no finished orders say "no data", never 0%.
+      expect(
+        weekly
+          .filter((w) => w.terminal_orders_count === 0)
+          .every((w) => w.cancellation_rate === null),
+      ).toBe(true);
+      expect(weekly.reduce((n, w) => n + w.terminal_orders_count, 0)).toBe(
+        res.body.terminal_orders_count,
+      );
     });
 
     it('response time: only orders that actually reached PREPARING enter the average; others are excluded, not counted as 0', async () => {

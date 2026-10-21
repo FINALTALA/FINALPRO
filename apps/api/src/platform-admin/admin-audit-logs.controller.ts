@@ -63,6 +63,7 @@ export class AdminAuditLogsController {
     @Query('entity_id') entityId?: string,
     @Query('actor_id') actorId?: string,
     @Query('action') action?: string,
+    @Query('correlation_id') correlationId?: string,
     @Query('from') fromRaw?: string,
     @Query('to') toRaw?: string,
     @Query('cursor') cursor?: string,
@@ -75,6 +76,7 @@ export class AdminAuditLogsController {
       entityId,
       actorId,
       action,
+      correlationId,
       from: parseOptionalDate(fromRaw, 'from'),
       to: parseOptionalDate(toRaw, 'to'),
     });
@@ -141,6 +143,7 @@ export class AdminAuditLogsController {
     @Query('entity_id') entityId?: string,
     @Query('actor_id') actorId?: string,
     @Query('action') action?: string,
+    @Query('correlation_id') correlationId?: string,
     @Query('from') fromRaw?: string,
     @Query('to') toRaw?: string,
   ) {
@@ -149,6 +152,7 @@ export class AdminAuditLogsController {
       entityId,
       actorId,
       action,
+      correlationId,
       from: parseOptionalDate(fromRaw, 'from'),
       to: parseOptionalDate(toRaw, 'to'),
     });
