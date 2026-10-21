@@ -236,4 +236,66 @@ describe('ComparisonService', () => {
       expect(fallback?.imageUrl).toBe('/b.png');
     });
   });
+
+  describe('listCards (product ratings)', () => {
+    const product = {
+      id: 'rated-product',
+      canonicalNameAr: 'منتج',
+      canonicalNameEn: 'Product',
+    };
+
+    async function listWithRating(average: number, count: number) {
+      const prisma = {
+        canonicalProduct: {
+          count: jest.fn().mockResolvedValue(1),
+          findMany: jest.fn().mockResolvedValue([product]),
+        },
+        $queryRaw: jest
+          .fn()
+          .mockResolvedValueOnce([{ available: true }])
+          .mockResolvedValueOnce([
+            { canonicalProductId: product.id, average, count },
+          ]),
+      };
+      const ratedService = new ComparisonService(prisma as never);
+      jest
+        .spyOn(ratedService, 'findEligibleOffers')
+        .mockResolvedValue([offer({})]);
+
+      return ratedService.listCards({}, 1, 50);
+    }
+
+    it('adds a rounded average when at least three visible product reviews exist', async () => {
+      const result = await listWithRating(4.3333, 3);
+      expect(result.cards[0]).toMatchObject({ rating: 4.33, ratingCount: 3 });
+    });
+
+    it('withholds the average below the existing three-review threshold', async () => {
+      const result = await listWithRating(4.5, 2);
+      expect(result.cards[0]).toMatchObject({ rating: null, ratingCount: 2 });
+    });
+
+    it('keeps product cards available when the reviews migration is not installed', async () => {
+      const prisma = {
+        canonicalProduct: {
+          count: jest.fn().mockResolvedValue(1),
+          findMany: jest.fn().mockResolvedValue([product]),
+        },
+        $queryRaw: jest.fn().mockResolvedValueOnce([{ available: false }]),
+      };
+      const unavailableRatingsService = new ComparisonService(prisma as never);
+      jest
+        .spyOn(unavailableRatingsService, 'findEligibleOffers')
+        .mockResolvedValue([offer({})]);
+
+      const result = await unavailableRatingsService.listCards({}, 1, 50);
+
+      expect(result.cards[0]).toMatchObject({
+        canonicalProductId: product.id,
+        rating: null,
+        ratingCount: 0,
+      });
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    });
+  });
 });

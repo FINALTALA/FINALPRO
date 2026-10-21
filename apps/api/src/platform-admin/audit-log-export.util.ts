@@ -5,6 +5,9 @@ export interface AuditLogFilters {
   entityId?: string;
   actorId?: string;
   action?: string;
+  /** Sprint 25 review round: Part 5's "correlation-ID search" (Part 4,
+   * H.1) - every row written while serving one request shares it. */
+  correlationId?: string;
   from?: Date;
   to?: Date;
 }
@@ -20,6 +23,7 @@ export function buildAuditLogWhere(
     ...(filters.entityId ? { entityId: filters.entityId } : {}),
     ...(filters.actorId ? { actorId: filters.actorId } : {}),
     ...(filters.action ? { action: filters.action } : {}),
+    ...(filters.correlationId ? { correlationId: filters.correlationId } : {}),
     ...(filters.from || filters.to
       ? {
           occurredAt: {

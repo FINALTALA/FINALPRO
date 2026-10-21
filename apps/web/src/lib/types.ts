@@ -14,6 +14,7 @@ export interface StoreLogoDto {
   offer_id: string;
   offer_variant_id: string;
   price: string;
+  is_discounted?: boolean;
 }
 
 /** The global comparison card (GET /discovery/all, /customers/me/following/feed). */
@@ -27,6 +28,10 @@ export interface ComparisonCardDto {
   brand_name: string | null;
   category_name: string | null;
   store_count: number;
+  has_discount?: boolean;
+  discounted_store_count?: number;
+  rating?: number | null;
+  rating_count?: number;
   colors: string[];
   sizes: string[];
   cheapest_offer: {
@@ -36,6 +41,17 @@ export interface ComparisonCardDto {
     offer_variant_id: string;
   };
   store_logos: StoreLogoDto[];
+}
+
+/** /discovery/all in browse mode (sort/filter/category/cursor): cursor
+ * pagination; category_counts only when requested with facets=categories. */
+export interface BrowsePageDto {
+  page_size: number;
+  total: number;
+  items: ComparisonCardDto[];
+  next_cursor: string | null;
+  category_counts?: Record<string, number>;
+  all_count?: number;
 }
 
 export interface CardsPageDto {

@@ -2,7 +2,7 @@
 // only, shown once at least 3 exist - fewer than that is withheld
 // entirely (average: null), never shown as a misleadingly precise
 // average of one or two reviews.
-const MIN_REVIEWS_TO_DISPLAY = 3;
+export const MIN_REVIEWS_TO_DISPLAY = 3;
 
 export interface AggregateRating {
   average: number | null;
