@@ -14,6 +14,10 @@ export function comparisonCardDto(card: ComparisonCard) {
     brand_name: card.brandName,
     category_name: card.categoryName,
     store_count: card.storeCount,
+    has_discount: card.hasDiscount,
+    discounted_store_count: card.discountedStoreCount,
+    rating: card.rating,
+    rating_count: card.ratingCount,
     colors: card.colors,
     sizes: card.sizes,
     cheapest_offer: {
@@ -30,6 +34,7 @@ export function comparisonCardDto(card: ComparisonCard) {
       offer_id: logo.offerId,
       offer_variant_id: logo.offerVariantId,
       price: logo.price.toFixed(2),
+      is_discounted: logo.isDiscounted,
     })),
   };
 }

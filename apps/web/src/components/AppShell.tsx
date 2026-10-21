@@ -73,6 +73,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   // Store pages carry their own identity bar (logo, name, icon), so the
   // platform header is not rendered on top of them.
   const isStorePage = pathname.startsWith("/store/");
+  const isWomenPage = pathname === "/women";
   const router = useRouter();
   const token = useSessionToken();
   const workspaces = useWorkspaces(token);
@@ -204,7 +205,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   const links = desktopLinks();
   const tabs = mobileTabs(Boolean(token));
-
   // These are standalone, pre-session pages with their own full-bleed
   // design (background photo, glass card) - no header/search/account
   // menu or bottom tab bar belongs on top of them. LangEffect still
@@ -286,7 +286,67 @@ export default function AppShell({ children }: { children: ReactNode }) {
           </div>
         </header>
       ) : isStorePage ? null : (
-      <header className={`app-header${isViaExperience ? " home-header" : ""}`}>
+      <header className={`app-header${isWomenPage ? " women-header" : ""}`}>
+        {isWomenPage ? (
+          <div className="women-header-inner">
+            <div className="women-header-actions" aria-label="روابط سريعة">
+              <Link href="/cart" className="women-header-icon" aria-label="سلتي">
+                <CartIcon />
+                {cartCount > 0 && <span className="badge-count">{cartCount}</span>}
+              </Link>
+              <Link href="/following" className="women-header-icon" aria-label="أتابعه">
+                <HeartIcon />
+              </Link>
+              <Link href="/account" className="women-header-icon" aria-label="حسابي">
+                <UserIcon />
+              </Link>
+              <Link href="/discovery" className="women-header-icon" aria-label="البحث">
+                <SearchIcon />
+              </Link>
+            </div>
+           <div className="women-header-nav">
+  <form
+    className="women-search-bar"
+    role="search"
+    onSubmit={(e) => {
+      e.preventDefault();
+
+      const formData = new FormData(e.currentTarget);
+      const query = String(formData.get("q") ?? "").trim();
+
+      if (query) {
+        router.push(`/discovery?q=${encodeURIComponent(query)}`);
+      }
+    }}
+  >
+    <input
+      type="search"
+      name="q"
+      placeholder="ابحثي عن منتجات، ماركات أو متاجر..."
+      aria-label="البحث في Via"
+    />
+
+    <button type="submit" aria-label="بحث">
+      <svg
+        width="21"
+        height="21"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      >
+        <circle cx="11" cy="11" r="7" />
+        <path d="m20 20-4-4" />
+      </svg>
+    </button>
+  </form>
+</div>
+
+            <Link href="/" className="women-header-brand" aria-label="Via - الصفحة الرئيسية">
+  <Image src="/images/via-brand-mark.png" alt="" width={512} height={346} priority unoptimized />
+            </Link>
+          </div>
+        ) : (
         <div className="app-header-inner">
           <Link href="/" className="app-logo" aria-label={`${isViaExperience ? "Via" : "FINALPRO"} - ${t("nav.home")}`}>
             <span className="app-logo-mark" aria-hidden="true">
@@ -401,10 +461,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
             )}
           </div>
         </div>
+        )}
       </header>
       )}
 
-      <main className={`app-main${isViaExperience ? " home-main" : ""}`}>{children}</main>
+      <main className={`app-main${isViaExperience ? " home-main" : ""}${isWomenPage ? " women-main" : ""}`}>{children}</main>
 
       <nav className={`bottom-nav${isViaExperience ? " home-bottom-nav" : ""}`} aria-label={t("appshell.nav.bottom_aria")}>
         {tabs.map((tab) => {

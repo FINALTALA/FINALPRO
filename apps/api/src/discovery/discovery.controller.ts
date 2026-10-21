@@ -3,6 +3,14 @@ import { Prisma, StoreApplicableCategory } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ComparisonService, eligibleProductWhere } from './comparison.service';
 import { comparisonCardDto } from './dto/comparison-card.dto';
+import {
+  BROWSE_FILTERS,
+  BROWSE_SORTS,
+  BrowseFilter,
+  BrowseSort,
+  DiscoveryBrowseService,
+} from './discovery-browse.service';
+import { isWomenCategorySlug } from './women-categories';
 
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 50;
@@ -38,6 +46,19 @@ function parseSegment(raw: string | undefined): StoreApplicableCategory | null {
   return segment;
 }
 
+function parseEnum<T extends string>(
+  raw: string | undefined,
+  allowed: readonly T[],
+  name: string,
+): T | null {
+  if (raw === undefined || raw === '') return null;
+  if ((allowed as readonly string[]).includes(raw)) return raw as T;
+  throw new BadRequestException({
+    code: `INVALID_${name.toUpperCase()}`,
+    message: `${name} must be one of ${allowed.join(', ')}`,
+  });
+}
+
 function parseQuery(raw: string | undefined): string | null {
   const trimmed = raw?.trim().slice(0, MAX_QUERY_LENGTH);
   return trimmed ? trimmed : null;
@@ -57,6 +78,7 @@ export class DiscoveryController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly comparison: ComparisonService,
+    private readonly browse: DiscoveryBrowseService,
   ) {}
 
   @Get('all')
@@ -65,6 +87,11 @@ export class DiscoveryController {
     @Query('page_size') pageSizeRaw?: string,
     @Query('segment') segmentRaw?: string,
     @Query('q') qRaw?: string,
+    @Query('sort') sortRaw?: string,
+    @Query('filter') filterRaw?: string,
+    @Query('category') categoryRaw?: string,
+    @Query('cursor') cursorRaw?: string,
+    @Query('facets') facetsRaw?: string,
   ) {
     const page = clampInt(pageRaw, 1, 1, 1_000_000);
     const pageSize = clampInt(pageSizeRaw, DEFAULT_PAGE_SIZE, 1, MAX_PAGE_SIZE);
@@ -91,6 +118,36 @@ export class DiscoveryController {
           ],
         }
       : base;
+
+    // Infinite-scroll browsing (women's listing): opt-in via any of
+    // sort/filter/category/cursor/facets. Server-side sort + filter +
+    // cursor pagination over the same `where`; without these params the
+    // classic page/page_size response below is unchanged.
+    const browsing = [
+      sortRaw,
+      filterRaw,
+      categoryRaw,
+      cursorRaw,
+      facetsRaw,
+    ].some((v) => v !== undefined && v !== '');
+    if (browsing) {
+      const category = categoryRaw?.trim() || null;
+      if (category && !isWomenCategorySlug(category)) {
+        throw new BadRequestException({
+          code: 'INVALID_CATEGORY',
+          message: 'category is not a known category slug',
+        });
+      }
+      return this.browse.browse({
+        where,
+        pageSize,
+        sort: parseEnum<BrowseSort>(sortRaw, BROWSE_SORTS, 'sort') ?? 'newest',
+        filter: parseEnum<BrowseFilter>(filterRaw, BROWSE_FILTERS, 'filter'),
+        category,
+        cursor: cursorRaw?.trim() || null,
+        withCategoryCounts: facetsRaw === 'categories',
+      });
+    }
 
     const { total, cards } = await this.comparison.listCards(
       where,

@@ -22,6 +22,8 @@ interface ApiFetchOptions {
   body?: unknown;
   auth?: boolean;
   idempotencyKey?: string;
+  /** Lets a caller cancel a superseded request (e.g. a filter change). */
+  signal?: AbortSignal;
 }
 
 /**
@@ -51,6 +53,7 @@ export async function apiFetch<T>(
     method: options.method ?? "GET",
     headers,
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    signal: options.signal,
   });
 
   const text = await res.text();
