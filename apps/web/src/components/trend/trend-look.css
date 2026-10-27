@@ -1,0 +1,233 @@
+/* =========================================================================
+   /trending - "shop the look": a grid of the look's pieces beside a sticky
+   vertical film with scene cues (REF/20261025-1449-36.6680092.mp4).
+   tl- prefixed classes, variables scoped to .tl. Mirrored for RTL.
+   ========================================================================= */
+
+.tl {
+  --tl-bg: #F7F7F5;
+  --tl-ink: #242424;
+  --tl-muted: #777777;
+  --tl-line: #D8D8D5;
+  --tl-accent: #5B2333;
+  --tl-ar: var(--ts-font-ar), "IBM Plex Sans Arabic", "Segoe UI", Tahoma, sans-serif;
+  --tl-display: var(--tp-font-display), "Inter Tight", "Arial Black", sans-serif;
+  --tl-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --tl-sticky-top: 24px;
+  /* The shared editorial header bleeds to the section edges by this much. */
+  --tp-pad: clamp(16px, 4vw, 80px);
+  padding: 0 var(--tp-pad) clamp(48px, 6vw, 112px);
+  background: var(--tl-bg);
+  color: var(--tl-ink);
+  font-family: var(--tl-ar);
+  direction: rtl;
+  -webkit-font-smoothing: antialiased;
+}
+:where(.tl) *, :where(.tl) *::before, :where(.tl) *::after { box-sizing: border-box; }
+.tl :focus-visible { outline: 2px solid var(--tl-ink); outline-offset: 3px; }
+.tl-latin { font-family: var(--tl-display); letter-spacing: 0.08em; direction: ltr; unicode-bidi: isolate; }
+
+/* --------------------------------------------------- the layout */
+/* RTL grid: the first column (the film) is on the right. Every track and
+   child can shrink (min-width: 0), so nothing is pushed past the edge. */
+/* Desktop: film column ~34 %, products ~66 %. */
+.tl-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 34fr) minmax(0, 66fr);
+  gap: 18px; /* same as between the cards */
+  align-items: start;
+}
+.tl-layout > * { min-width: 0; }
+
+/* ------------------------------------------------- film column */
+.tl-film-col { position: sticky; top: var(--tl-sticky-top); min-width: 0; }
+.tl-film {
+  position: relative;
+  /* 9:16, as tall as the screen allows; about 400 px wide at 1440. */
+  width: min(100%, calc((100vh - var(--tl-sticky-top) * 2) * 9 / 16));
+  aspect-ratio: 9 / 16;
+  margin: 0;
+  overflow: hidden;
+  background: #1C1A19;
+  color: #fff;
+}
+.tl-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+
+.tl-tag, .tl-clock {
+  position: absolute;
+  z-index: 1;
+  top: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  padding: 0 10px;
+  background: rgba(20, 19, 19, 0.62);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.tl-tag { right: 12px; }
+.tl-tag i { width: 6px; height: 6px; border-radius: 50%; background: #fff; }
+.tl-clock { left: 12px; letter-spacing: 0.04em; font-variant-numeric: tabular-nums; }
+
+.tl-film-foot {
+  position: absolute;
+  z-index: 1;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: grid;
+  gap: 8px;
+  padding: 40px 12px 6px;
+  background: linear-gradient(to top, rgba(12, 11, 11, 0.78), rgba(12, 11, 11, 0));
+}
+.tl-onscreen {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 7px;
+  background: rgba(20, 19, 19, 0.72);
+  animation: tl-onscreen 0.4s var(--tl-ease);
+}
+@keyframes tl-onscreen { from { opacity: 0; transform: translateY(6px); } }
+.tl-onscreen img { width: 40px; height: 48px; object-fit: cover; background: #EFE9E3; }
+.tl-onscreen-text { display: grid; gap: 2px; min-width: 0; }
+.tl-onscreen-label { color: rgba(255, 255, 255, 0.72); font-size: 10px; font-weight: 600; }
+/* Max two lines, then an ellipsis - never cut mid-word. */
+.tl-onscreen-name {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: normal;
+  word-break: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.tl-progress { position: relative; height: 14px; cursor: pointer; }
+.tl-progress::before { content: ""; position: absolute; inset: 6px 0; background: rgba(255, 255, 255, 0.3); }
+.tl-progress-fill { position: absolute; inset: 6px 0; background: #fff; transform: scaleX(0); transform-origin: right; }
+.tl-progress:focus-visible { outline-color: #fff; }
+
+.tl-controls { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.tl-ctl {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+}
+.tl-ctl svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.tl-ctl svg .is-fill { fill: currentColor; }
+.tl-ctl:focus-visible { outline-color: #fff; outline-offset: -2px; }
+.tl-scene { flex: 1; min-width: 0; overflow: hidden; color: rgba(255, 255, 255, 0.72); font-size: 10.5px; font-weight: 600; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+
+/* -------------------------------------------- the pieces grid */
+.tl-main { min-width: 0; }
+.tl-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 26px 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.tl-grid > li { min-width: 0; }
+
+/* The cards come from the women page (women.css); its page wrapper class is
+   only borrowed for that scope - not its page background or font. */
+.tl .tl-women { width: auto; background: transparent; }
+.tl .tl-women .women-product-card-media { outline: 1.5px solid transparent; outline-offset: 3px; transition: outline-color 0.3s ease; }
+/* The piece on screen: dark frame (outline - no layout shift). */
+.tl-grid > li[data-active] .women-product-card-media { outline-color: var(--tl-ink); }
+
+/* Badges: IN SCENE (only the active piece) and the match label. */
+.tl-badge {
+  position: absolute;
+  z-index: 2;
+  top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+.tl-badge-scene { right: 8px; z-index: 4; background: var(--tl-ink); color: #fff; animation: tl-onscreen 0.35s var(--tl-ease); }
+.tl-badge-scene i { width: 5px; height: 5px; border-radius: 50%; background: #fff; }
+.tl-badge-match { left: 8px; background: rgba(255, 255, 255, 0.92); color: var(--tl-muted); }
+.tl-badge-match.is-exact { color: var(--tl-ink); }
+
+.tl-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: clamp(24px, 3vw, 40px);
+  padding-top: 18px;
+  border-top: 1px solid var(--tl-line);
+}
+.tl-foot-count { color: var(--tl-muted); font-size: 14px; }
+.tl-foot-count bdi { color: var(--tl-ink); font-weight: 900; }
+.tl-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 0 24px;
+  border-radius: 999px;
+  background: var(--color-oxblood, #3B1A1C);
+  color: #FFFFFF;
+  font-size: 15px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: gap 0.3s var(--tl-ease), background-color 0.3s ease;
+}
+.tl-cta:hover { gap: 18px; background: var(--color-oxblood-hover, #2A1214); }
+.tl-cta svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ------------------------------------------------ entry (once) */
+.tl-film-col, .tl-main { opacity: 0; transform: translateY(24px); transition: opacity 0.8s ease, transform 0.9s var(--tl-ease); }
+.tl-film-col { transition-delay: 0.08s; }
+.tl-main { transition-delay: 0.14s; }
+.tl[data-in] :is(.tl-film-col, .tl-main) { opacity: 1; transform: none; }
+
+/* ------------------------------------------------------ smaller */
+@media (max-width: 1199px) {
+  .tl-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 899px) {
+  .tl { padding-bottom: calc(var(--bottom-nav-h, 64px) + 40px + env(safe-area-inset-bottom, 0px)); }
+  .tl-layout { grid-template-columns: minmax(0, 1fr); }
+  .tl-film-col { position: static; }
+  .tl-film { width: min(100%, 420px, 70vh * 9 / 16); margin-inline: auto; }
+}
+@media (max-width: 767px) {
+  .tl-grid { gap: 22px 12px; }
+  /* Narrow cards: the match label moves to the bottom so it never meets the
+     IN SCENE badge. */
+  .tl-badge-match { top: auto; bottom: 9px; left: 8px; }
+  .tl-foot { flex-direction: column; align-items: stretch; }
+  .tl-cta { justify-content: center; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tl-film-col, .tl-main, .tl-cta { transition: none; }
+  .tl-film-col, .tl-main { opacity: 1; transform: none; }
+  .tl-onscreen, .tl-badge-scene { animation: none; }
+}

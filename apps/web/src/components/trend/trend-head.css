@@ -1,0 +1,122 @@
+/* =========================================================================
+   /trending - editorial section header (TRENDING PIECES, STREET EDIT ...):
+   one oversized Latin headline across the full width with small labels set
+   round it. Shared by the sections of the page; see TrendEditorialHead.tsx.
+   The host section sets --tp-pad (its inline padding) so the band bleeds to
+   the section's edges.
+   ========================================================================= */
+
+/* ------------------------------------------------ editorial header */
+/* After the "MOVEMENTS" editorial: an oversized, tightly tracked Latin
+   headline across the full width, small labels set asymmetrically round it.
+   Neutral palette only. */
+.tp-head {
+  --tp-h-bg: #F7F7F5;
+  --tp-h-ink: #242424;
+  --tp-h-muted: #777777;
+  --tp-h-line: #D8D8D5;
+  --tp-display: var(--tp-font-display), "Inter Tight", "Arial Black", sans-serif;
+  margin: 0 calc(var(--tp-pad) * -1) clamp(26px, 3vw, 48px);
+  padding: clamp(26px, 3.2vw, 56px) var(--tp-pad) clamp(18px, 2vw, 32px);
+  border-bottom: 1px solid var(--tp-h-line);
+  background: var(--tp-h-bg);
+  color: var(--tp-h-ink);
+}
+.tp-mask { display: inline-block; overflow: hidden; vertical-align: top; }
+.tp-label {
+  display: inline-block;
+  color: var(--tp-h-muted);
+  font-family: var(--tp-display);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  direction: ltr;
+}
+.tp-head-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--tp-h-line);
+}
+/* "WINTER 2026" sits off-centre, not at the far edge. */
+.tp-head-top > :last-child { margin-inline-end: 22%; }
+.tp-headline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.2em;
+  margin: clamp(10px, 1.2vw, 22px) 0 0;
+  color: var(--tp-h-ink);
+  font-family: var(--tp-display);
+  font-size: clamp(58px, 11.6vw, 240px);
+  font-weight: 900;
+  line-height: 0.8;
+  letter-spacing: -0.045em;
+  text-transform: uppercase;
+  direction: ltr;
+  white-space: nowrap;
+}
+/* Room for the glyphs inside the masks (tight line-height). */
+.tp-headline .tp-mask { padding: 0.06em 0.04em 0.04em 0; }
+.tp-headline .tp-mask > span { display: inline-block; }
+.tp-head-foot {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: end;
+  gap: clamp(16px, 3vw, 64px);
+  margin-top: clamp(12px, 1.4vw, 24px);
+}
+/* Arabic title tucked under the start of PIECES: asymmetric, not centred. */
+.tp-ar-wrap { justify-self: start; padding-inline-start: 4%; }
+.tp-ar-title {
+  display: inline-block;
+  font-family: var(--tp-ar, var(--ts-font-ar), "IBM Plex Sans Arabic", "Segoe UI", Tahoma, sans-serif);
+  font-size: clamp(22px, 2vw, 36px);
+  font-weight: 700;
+  line-height: 1.3;
+}
+.tp-count { display: inline-flex; align-items: baseline; gap: 10px; color: var(--tp-h-muted); font-size: 13px; }
+.tp-count bdi { color: var(--tp-h-ink); font-family: var(--tp-display); font-size: clamp(18px, 1.4vw, 24px); font-weight: 900; letter-spacing: -0.02em; }
+.tp-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  border-bottom: 1px solid var(--tp-h-ink);
+  color: var(--tp-h-ink);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.tp-all span { font-size: 15px; transition: transform 0.3s var(--tp-ease, cubic-bezier(0.65, 0, 0.35, 1)); }
+.tp-all:hover span { transform: translate(-3px, -3px); }
+
+/* Reveal: each line slides up out of its mask, once. */
+.tp-head :is(.tp-r1, .tp-r2, .tp-r3, .tp-r4, .tp-r5) {
+  transform: translateY(105%);
+  transition: transform 0.9s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.tp-r2 { transition-delay: 0.08s !important; }
+.tp-r3 { transition-delay: 0.16s !important; }
+.tp-r4 { transition-delay: 0.3s !important; }
+.tp-r5 { transition-delay: 0.38s !important; }
+.tp-head[data-in] :is(.tp-r1, .tp-r2, .tp-r3, .tp-r4, .tp-r5) { transform: none; }
+
+/* Fitted headline (data-fit): one line, sized from JS to the full width. */
+.tp-headline[data-fit] { flex-wrap: nowrap; gap: 0 0.2em; letter-spacing: -0.005em; }
+/* Room for letters that overhang their box (K, W) so the masks never cut them. */
+.tp-headline[data-fit] { gap: 0 0.2em; }
+.tp-headline[data-fit] .tp-mask { padding-right: 0.1em; }
+
+@media (max-width: 767px) {
+  .tp-headline { flex-direction: column; font-size: 19.6vw; line-height: 0.82; }
+  .tp-headline .tp-mask:last-child { align-self: flex-end; }
+  .tp-head-top > :last-child { margin-inline-end: 0; }
+  .tp-head-foot { grid-template-columns: 1fr auto; row-gap: 10px; }
+  .tp-ar-wrap { grid-column: 1 / -1; padding-inline-start: 0; }
+  .tp-headline[data-fit] { flex-direction: row; line-height: 0.8; }
+  .tp-headline[data-fit] .tp-mask:last-child { align-self: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tp-head :is(.tp-r1, .tp-r2, .tp-r3, .tp-r4, .tp-r5) { transform: none; transition: none; }
+}

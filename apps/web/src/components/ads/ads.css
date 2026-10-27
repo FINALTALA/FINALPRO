@@ -1,0 +1,285 @@
+/* =========================================================================
+   /ads - Advertising page (AI Studio design, ported from its Tailwind
+   classes to plain CSS). All rules are under .ads; nothing global.
+   Breakpoints follow the design: sm 640, md 768, lg 1024.
+   ========================================================================= */
+
+.ads {
+  --ads-bg: #F8F7F5;
+  --stone-50: #FAFAF9;
+  --stone-100: #F5F5F4;
+  --stone-200: #E7E5E4;
+  --stone-300: #D6D3D1;
+  --stone-400: #A8A29E;
+  --stone-500: #78716C;
+  --stone-600: #57534E;
+  --stone-700: #44403C;
+  --stone-800: #292524;
+  --stone-900: #1C1917;
+  --stone-950: #0C0A09;
+  --ads-ar: var(--ads-font-ar), "Cairo", "Segoe UI", Tahoma, sans-serif;
+  --ads-serif: var(--ads-font-serif), "Playfair Display", Georgia, "Times New Roman", serif;
+  --ads-ar-serif: var(--ads-font-ar-serif), "Amiri", "Finalpro Amiri", "Traditional Arabic", serif;
+  --ads-ui: var(--ads-font-ui), "Plus Jakarta Sans", "Segoe UI", Roboto, sans-serif;
+  --ads-display: var(--tp-font-display), "Inter Tight", "Arial Black", sans-serif;
+  background: var(--ads-bg);
+  color: var(--stone-900);
+  font-family: var(--ads-ui);
+  -webkit-font-smoothing: antialiased;
+}
+.ads[lang="ar"] { font-family: var(--ads-ar); }
+:where(.ads) *, :where(.ads) *::before, :where(.ads) *::after { box-sizing: border-box; }
+:where(.ads) button { font: inherit; color: inherit; }
+:where(.ads) a { color: inherit; text-decoration: none; }
+:where(.ads) a:visited { color: inherit; }
+:where(.ads) img, :where(.ads) video { display: block; max-width: 100%; }
+.ads :focus-visible { outline: 2px solid var(--stone-900); outline-offset: 2px; }
+.ads-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+.f-ar { font-family: var(--ads-ar); }
+.f-serif { font-family: var(--ads-serif); }
+.f-ui { font-family: var(--ads-ui); }
+.f-display { font-family: var(--ads-display); }
+
+/* max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 */
+/* Full width with the Trending page's small side gutter (its --tp-pad). */
+.ads-wrap { width: 100%; padding: 0 clamp(16px, 2vw, 40px); }
+
+/* Section rhythm: tighter than the design's 64/80 so the page reads as one
+   continuous edit (no long empty bands between sections). */
+.ads-section { width: 100%; border-bottom: 1px solid rgba(231, 229, 228, 0.5); background: var(--ads-bg); padding: 40px 0 44px; }
+@media (min-width: 640px) { .ads-section { padding: 52px 0 56px; } }
+
+/* Demo marker: small, neutral, always readable. */
+.ads-demo {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  border: 1px dashed rgba(120, 113, 108, 0.7);
+  border-radius: 999px;
+  color: var(--stone-500);
+  font-family: var(--ads-ui);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  white-space: nowrap;
+}
+.ads[lang="ar"] .ads-demo { font-family: var(--ads-ar); letter-spacing: 0; }
+.ads-demo.is-light { border-color: rgba(255, 255, 255, 0.7); color: rgba(255, 255, 255, 0.92); }
+.ads-demo-note { display: inline-flex; align-items: center; gap: 8px; color: var(--stone-500); font-size: 11px; }
+
+/* Action that cannot work yet: keeps its place, clearly inert. */
+.is-unavailable { cursor: not-allowed !important; opacity: 0.55; }
+
+/* ------------------------------------------- filter row (stories/reels/stores) */
+.ads-filterbar {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(231, 229, 228, 0.6);
+}
+@media (min-width: 640px) { .ads-filterbar { margin-bottom: 24px; } }
+@media (min-width: 768px) { .ads-filterbar { flex-direction: row; align-items: center; gap: 32px; } }
+.ads-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+@media (min-width: 640px) { .ads-controls { gap: 16px; } }
+@media (min-width: 768px) { .ads-controls { flex-wrap: nowrap; gap: 20px; } }
+.ads-tabs { display: flex; flex: none; align-items: center; gap: 12px; font-size: 13px; }
+@media (min-width: 640px) { .ads-tabs { gap: 16px; font-size: 14px; } }
+.ads-tab {
+  padding: 0 0 2px;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: none;
+  color: var(--stone-400);
+  font-weight: 400;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+  user-select: none;
+}
+.ads-tab:hover { color: var(--stone-700); }
+.ads-tab[aria-pressed="true"] { border-bottom: 2px solid var(--stone-900); color: var(--stone-900); font-weight: 500; }
+.ads-vsep { display: none; width: 1px; height: 14px; flex: none; background: rgba(214, 211, 209, 0.8); }
+@media (min-width: 640px) { .ads-vsep { display: block; } }
+.ads-cats { display: flex; flex: none; align-items: center; gap: 12px; font-size: 12px; }
+@media (min-width: 640px) { .ads-cats { gap: 14px; font-size: 13px; } }
+@media (min-width: 768px) { .ads-cats { gap: 16px; } }
+.ads-cat {
+  padding: 0 0 2px;
+  border: 0;
+  border-bottom: 1px solid rgba(214, 211, 209, 0.6);
+  background: none;
+  color: var(--stone-600);
+  font-weight: 400;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+  user-select: none;
+}
+.ads-cat:hover { border-bottom-color: var(--stone-700); color: var(--stone-900); }
+.ads-cat[aria-pressed="true"] { border-bottom: 2px solid var(--stone-900); color: var(--stone-900); font-weight: 600; }
+.ads-more { position: relative; flex: none; }
+.ads-more-btn { position: relative; display: grid; padding: 6px; border: 0; background: none; color: var(--stone-400); cursor: pointer; transition: color 0.2s; }
+.ads-more-btn:hover, .ads-more-btn[aria-expanded="true"], .ads-more-btn.has-pick { color: var(--stone-900); }
+.ads-more-btn svg { width: 14px; height: 14px; }
+.ads-more-dot { position: absolute; top: 4px; right: 4px; width: 6px; height: 6px; border-radius: 50%; background: var(--stone-900); }
+.ads-pop {
+  position: absolute;
+  z-index: 40;
+  top: 100%;
+  inset-inline-end: 0;
+  display: flex;
+  min-width: 170px;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid var(--stone-200);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+  animation: ads-fade 0.15s ease;
+}
+@media (min-width: 640px) { .ads-pop { inset-inline-end: auto; inset-inline-start: 0; } }
+.ads-pop-title { color: var(--stone-400); font-size: 10px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; }
+.ads-pop-list { display: flex; flex-direction: column; gap: 8px; }
+.ads-pop .ads-cat { align-self: flex-start; font-size: 12px; text-align: start; }
+@keyframes ads-fade { from { opacity: 0; } }
+
+.ads-empty { width: 100%; padding: 48px 0; text-align: center; }
+.ads-empty p { margin: 0; color: var(--stone-500); font-size: 14px; }
+.ads-empty button { margin-top: 12px; padding: 0 0 2px; border: 0; border-bottom: 1px solid var(--stone-900); background: none; color: var(--stone-900); font-size: 12px; font-weight: 600; cursor: pointer; }
+
+/* ------------------------------------------------- horizontal strip */
+.ads-strip { position: relative; }
+.ads-strip-track {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin: 0 -16px;
+  padding: 4px 16px 12px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+}
+.ads-strip-track::-webkit-scrollbar { display: none; }
+@media (min-width: 640px) { .ads-strip-track { gap: 20px; margin: 0; padding: 4px 0 12px; } }
+.ads-strip-btn {
+  position: absolute;
+  z-index: 20;
+  top: 50%;
+  display: none;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid rgba(231, 229, 228, 0.8);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--stone-700);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  opacity: 0;
+  cursor: pointer;
+  transform: translateY(-50%);
+  transition: opacity 0.2s, transform 0.2s, background-color 0.2s;
+}
+.ads-strip-btn svg { width: 14px; height: 14px; }
+.ads-strip-btn:hover { background: #fff; transform: translateY(-50%) scale(1.05); }
+.ads-strip-btn:focus-visible { opacity: 1; }
+.ads-strip-btn.is-left { left: -12px; }
+.ads-strip-btn.is-right { right: -12px; }
+@media (min-width: 640px) { .ads-strip-btn { display: flex; } }
+.ads-strip:hover .ads-strip-btn { opacity: 1; }
+
+/* Small round monogram (store logo stand-in). */
+.ads-mono {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--stone-900);
+  color: var(--stone-100);
+  font-family: var(--ads-ui);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  transition: transform 0.3s;
+}
+.ads-mono img { width: 100%; height: 100%; object-fit: cover; background: #fff; }
+
+/* ---------------------- large editorial intro (Reels, Featured, Offers) */
+/* The display line uses the Trending page's bold display face. */
+.ads-intro { padding-bottom: 18px; border-bottom: 1px solid rgba(231, 229, 228, 0.6); }
+@media (min-width: 640px) { .ads-intro { padding-bottom: 24px; } }
+.ads-kicker { display: block; margin-bottom: 10px; color: var(--stone-500); font-family: var(--ads-ui); font-size: 11px; letter-spacing: 0.25em; text-transform: uppercase; direction: ltr; unicode-bidi: isolate; }
+@media (min-width: 640px) { .ads-kicker { font-size: 12px; } }
+.ads-display-title {
+  margin: 0;
+  color: var(--stone-900);
+  font-family: var(--ads-display);
+  font-size: 36px;
+  font-weight: 900;
+  line-height: 0.96;
+  letter-spacing: -0.03em;
+  text-transform: uppercase;
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+.ads[dir="rtl"] .ads-display-title { text-align: right; }
+@media (min-width: 640px) { .ads-display-title { font-size: 60px; } }
+@media (min-width: 768px) { .ads-display-title { font-size: 72px; } }
+@media (min-width: 1024px) { .ads-display-title { font-size: 96px; } }
+.ads-intro-sub { margin: 10px 0 0; color: var(--stone-600); font-family: var(--ads-ar); font-size: 14px; font-weight: 500; }
+@media (min-width: 640px) { .ads-intro-sub { font-size: 16px; } }
+
+/* Fitted display headline (FitTitle): one line across the column on
+   desktop, a balanced two-line break on phones; size set from JS. */
+.ads-display-title.is-fit { display: block; width: 100%; font-size: 56px; line-height: 0.86; white-space: nowrap; }
+.ads-fit-line { display: inline-block; }
+.ads-fit-line.is-mobile { display: none; }
+@media (max-width: 639px) {
+  .ads-fit-line.is-desktop { display: none; }
+  .ads-fit-line.is-mobile { display: block; width: max-content; }
+  .ads[dir="rtl"] .ads-fit-line.is-mobile { margin-inline-start: auto; }
+}
+
+/* ------------------------------------------- scroll reveal (as /trending) */
+/* Same motion as the Trending page: header lines rise out of masks
+   (0.9 s, staggered), cards rise 28 px and fade in 70 ms apart, the large
+   Featured blocks rise 24 px. Only while armed by useReveal ([data-rv]);
+   replays each time the block comes back on screen. */
+.ads { --rv-ease: cubic-bezier(0.22, 1, 0.36, 1); }
+.rv-mask { display: block; overflow: hidden; }
+.fa-kicker-row .rv-mask, .ao-sub-row .rv-mask { display: inline-block; vertical-align: top; }
+.rv-mask > .ads-kicker { margin-bottom: 0; }
+.ads-intro > .rv-mask:first-child { margin-bottom: 10px; }
+/* Room for the glyphs inside each word's mask (tight line-height, overhangs). */
+.ads-fit-word { display: inline-block; overflow: hidden; padding: 0.06em 0.1em 0.04em 0; vertical-align: top; }
+.ads-fit-word > .rv-up { display: inline-block; }
+
+[data-rv] .rv-up { transition: transform 0.9s var(--rv-ease) var(--d, 0s); }
+[data-rv]:not([data-in]) .rv-up { transform: translateY(105%); }
+[data-rv].rv-fade, [data-rv] .rv-fade { transition: opacity 0.7s ease var(--d, 0s), transform 0.8s var(--rv-ease) var(--d, 0s); }
+[data-rv].rv-fade:not([data-in]), [data-rv]:not([data-in]) .rv-fade { opacity: 0; transform: translateY(14px); }
+
+/* Cards (Stories, Reels, Discover Stores, Offers). */
+.rv-i > :nth-child(2) { --i: 1; } .rv-i > :nth-child(3) { --i: 2; } .rv-i > :nth-child(4) { --i: 3; }
+.rv-i > :nth-child(5) { --i: 4; } .rv-i > :nth-child(6) { --i: 5; } .rv-i > :nth-child(7) { --i: 6; }
+.rv-i > :nth-child(8) { --i: 7; } .rv-i > :nth-child(n + 9) { --i: 8; }
+[data-rv] .rv-i > *, [data-rv].rv-i > * { transition: opacity 0.7s ease, transform 0.8s var(--rv-ease); transition-delay: calc(var(--i, 0) * 70ms); }
+[data-rv]:not([data-in]) .rv-i > *, [data-rv].rv-i:not([data-in]) > * { opacity: 0; transform: translateY(28px); }
+
+/* Featured Edit blocks. */
+[data-rv].rv-blocks > * { transition: opacity 0.8s ease, transform 0.9s var(--rv-ease); }
+[data-rv].rv-blocks > :nth-child(2) { transition-delay: 0.07s; }
+[data-rv].rv-blocks:not([data-in]) > * { opacity: 0; transform: translateY(24px); }
+
+@media (prefers-reduced-motion: reduce) {
+  .ads [data-rv], .ads [data-rv] * { transition: none !important; }
+  .ads [data-rv] .rv-up, .ads [data-rv].rv-fade, .ads [data-rv] .rv-fade, .ads [data-rv] .rv-i > *, .ads [data-rv].rv-i > *, .ads [data-rv].rv-blocks > * { opacity: 1 !important; transform: none !important; }
+}

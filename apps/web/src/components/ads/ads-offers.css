@@ -1,0 +1,77 @@
+/* THE OFFER EDIT - compact editorial board (same intro, type and palette
+   as THE FEATURED EDIT; cells separated by hairlines, no card boxes). */
+
+.ads-intro.ao-intro { margin-bottom: 18px; padding-bottom: 0; border-bottom: 0; }
+@media (min-width: 640px) { .ao-intro { margin-bottom: 22px; } }
+.ao-sub-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 24px; margin-top: 10px; }
+.ao-sub-row .ads-intro-sub { margin: 0; }
+.ao-cats { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; font-size: 12px; }
+@media (min-width: 640px) { .ao-cats { gap: 16px; font-size: 13px; } }
+
+.ao-board {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 22px 12px;
+  min-height: 300px;
+  padding-top: 16px;
+  border-top: 1px solid var(--stone-900);
+}
+@media (min-width: 640px) { .ao-board { gap: 28px 16px; padding-top: 20px; } }
+@media (min-width: 1024px) { .ao-board { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; } }
+
+.ao-cell { display: flex; min-width: 0; flex-direction: column; gap: 12px; transition: opacity 0.25s; }
+.ao-cell.is-stale { opacity: 0.45; }
+.ao-cell.is-skeleton { aspect-ratio: 4 / 6; border-radius: 12px; background: linear-gradient(90deg, rgba(231, 229, 228, 0.5), rgba(231, 229, 228, 0.9), rgba(231, 229, 228, 0.5)) 0 0 / 200% 100%; animation: ao-shine 1.4s linear infinite; }
+@keyframes ao-shine { to { background-position: -200% 0; } }
+
+/* Product image, 4:5, with the real discount in the corner. */
+.ao-media { position: relative; display: block; overflow: hidden; aspect-ratio: 4 / 5; border-radius: 12px; background: var(--stone-100); }
+.ao-media img, .ao-media-empty { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform 0.6s ease-out; }
+.ao-cell:hover .ao-media img { transform: scale(1.03); }
+.ao-pct-tag { position: absolute; top: 10px; inset-inline-start: 10px; padding: 3px 9px; border-radius: 999px; background: var(--stone-900); color: #fff; font-family: var(--ads-ui); font-size: 12px; font-weight: 600; direction: ltr; }
+
+.ao-body { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 6px; }
+.ao-store { display: flex; min-width: 0; align-items: center; gap: 7px; }
+.ao-store .ads-mono { width: 20px !important; height: 20px !important; font-size: 8px !important; }
+.ao-store-name { min-width: 0; overflow: hidden; color: var(--stone-500); font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+.ads[lang="ar"] .ao-store-name { font-size: 12px; letter-spacing: 0; }
+.ao-label { flex: none; padding: 1px 7px; border-radius: 999px; background: var(--stone-900); color: #FCD34D; font-size: 10px; font-weight: 500; }
+.ao-label.is-quiet { background: rgba(231, 229, 228, 0.8); color: var(--stone-600); }
+
+.ao-name { display: -webkit-box; overflow: hidden; margin: 0; min-height: 2.8em; color: var(--stone-900); font-size: 14px; font-weight: 500; line-height: 1.4; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
+@media (min-width: 640px) { .ao-name { font-size: 15px; } }
+
+/* Now, was, then the percent off. */
+.ao-price { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin: 0; color: var(--stone-900); }
+.ao-now { font-size: 16px; font-weight: 700; }
+.ao-price s { color: var(--stone-400); font-size: 13px; }
+.ao-pct { color: #9F1239; font-size: 12px; font-weight: 600; }
+/* Two columns on phones: the percent sits on its own line. */
+@media (max-width: 1023px) { .ao-pct { flex-basis: 100%; } }
+.ao-price { margin-bottom: 6px; }
+/* The UI face has no ₪ glyph: the currency sign uses a system face. */
+.ao-cur { margin-inline-end: 2px; font-family: "Segoe UI", Arial, "Noto Sans", sans-serif; font-weight: inherit; }
+.ads-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+.ao-shop {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 0;
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--stone-900);
+  color: var(--stone-900) !important;
+  font-size: 12px;
+  font-weight: 600;
+}
+.ao-shop svg { width: 13px; height: 13px; transition: transform 0.2s; }
+.ao-shop:hover svg { transform: translate(2px, -2px); }
+.ads[dir="rtl"] .ao-shop:hover svg { transform: translate(-2px, -2px); }
+
+.ao-msg { grid-column: 1 / -1; display: grid; place-items: center; gap: 10px; padding: 56px 0; color: var(--stone-500); font-size: 14px; }
+.ao-msg p { margin: 0; }
+.ao-msg button { padding: 0 0 2px; border: 0; border-bottom: 1px solid var(--stone-900); background: none; color: var(--stone-900); font-size: 12px; font-weight: 600; cursor: pointer; }
+
+@media (prefers-reduced-motion: reduce) { .ao-cell.is-skeleton { animation: none; } }

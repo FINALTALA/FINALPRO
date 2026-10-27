@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 import SafeImage from "./SafeImage";
 import StoreCircle from "./StoreCircle";
 import { AVAILABILITY_LABEL, ComparisonCardDto } from "@/lib/types";
@@ -17,6 +18,11 @@ interface ProductCardProps {
   favorited?: boolean;
   favoritePending?: boolean;
   onToggleFavorite?: (card: ComparisonCardDto) => void;
+  /** Link for the image, name and cart button instead of the offer page
+   *  (a card for a piece that has no Via offer yet). */
+  href?: string;
+  /** Extra badges drawn over the image (women presentation). */
+  overlay?: ReactNode;
 }
 
 export default function ProductCard({
@@ -26,8 +32,10 @@ export default function ProductCard({
   favorited = false,
   favoritePending = false,
   onToggleFavorite,
+  href,
+  overlay,
 }: ProductCardProps) {
-  const offerHref = `/store/${card.cheapest_offer.vendor_slug}/products/${card.cheapest_offer.offer_id}`;
+  const offerHref = href ?? `/store/${card.cheapest_offer.vendor_slug}/products/${card.cheapest_offer.offer_id}`;
   const options = [...card.colors, ...card.sizes];
   const meta = [card.brand_name, card.category_name].filter(Boolean).join(" · ");
   const visibleStores = card.store_logos.slice(0, 3);
@@ -46,7 +54,7 @@ export default function ProductCard({
             )}
           </Link>
 
-          <Link
+          {card.store_count > 0 && <Link
             href={`/compare/${card.canonical_product_id}`}
             className="women-product-card-stores"
             aria-label={`قارني الأسعار بين ${card.store_count === 1 ? "متجر واحد" : `${card.store_count} متاجر`}`}
@@ -56,7 +64,7 @@ export default function ProductCard({
             {visibleStores.map((logo) => (
               <StoreCircle key={logo.vendor_id} name={logo.display_name} logoUrl={logo.logo_url} size={22} />
             ))}
-          </Link>
+          </Link>}
 
           <span className="women-product-card-ai" title="تنسيق الإطلالة" role="img" aria-label="تنسيق الإطلالة">
             <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -111,6 +119,7 @@ export default function ProductCard({
               )}
             </div>
           )}
+          {overlay}
         </div>
 
         <div className="product-card-body women-product-card-body">
@@ -118,7 +127,7 @@ export default function ProductCard({
             {card.canonical_name_ar}
           </Link>
           <div className="women-product-card-price-row">
-            <span className="product-card-price women-product-card-price">₪ {displayPrice}</span>
+            {card.lowest_price ? <span className="product-card-price women-product-card-price">₪ {displayPrice}</span> : <span />}
             <span className="women-product-card-rating" aria-label={typeof card.rating !== "number" ? "لا يوجد تقييم بعد" : `التقييم ${card.rating.toFixed(1)} من 5`}>
               <svg viewBox="0 0 16 16" aria-hidden="true">
                 <path d="m8 1.3 2.05 4.16 4.6.67-3.32 3.24.78 4.58L8 11.78l-4.11 2.17.78-4.58L1.35 6.13l4.6-.67L8 1.3Z" />
