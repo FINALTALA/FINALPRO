@@ -12,7 +12,7 @@ import {
   itemIdForOrder,
   prisma,
 } from "./helpers/db";
-import { loginAs } from "./helpers/session";
+import { enterWorkspace, loginAs } from "./helpers/session";
 import { loadSharedFixtures } from "./helpers/shared-fixtures";
 
 // Sprint 21 (PDR-031 escalation, review-round point 1): the admin's
@@ -27,11 +27,14 @@ test.describe("admin returns UI", () => {
   }) => {
     await loginAs(page, fixtures.ownerToken);
     await page.goto("/admin/returns");
-    await expect(page.getByText("هذه الصفحة لمدير المنصة فقط")).toBeVisible();
+    // TB-26: stopped at the platform workspace's entry confirmation.
+    await expect(page).toHaveURL(/\/workspaces\/enter\?type=platform/);
+    await expect(page.getByTestId("ws-enter-no-access")).toBeVisible();
   });
 
   test("empty state: no escalated returns", async ({ page }) => {
     await loginAs(page, fixtures.adminToken);
+    await enterWorkspace(page, fixtures.adminToken, { type: "platform" });
     await page.goto("/admin/returns");
     await expect(
       page.getByText("لا توجد إرجاعات معلَّقة لمراجعتك حالياً"),
@@ -53,6 +56,7 @@ test.describe("admin returns UI", () => {
     await escalateReturn(submitted.body.id);
 
     await loginAs(page, fixtures.adminToken);
+    await enterWorkspace(page, fixtures.adminToken, { type: "platform" });
     await page.goto("/admin/returns");
     await expect(page.getByText("معلَّق - قيد مراجعة إدارة المنصة")).toBeVisible();
     await page.getByRole("button", { name: "اعتماد الإرجاع" }).click();
@@ -76,6 +80,7 @@ test.describe("admin returns UI", () => {
     await escalateReturn(submitted.body.id);
 
     await loginAs(page, fixtures.adminToken);
+    await enterWorkspace(page, fixtures.adminToken, { type: "platform" });
     await page.goto("/admin/returns");
     await page.getByRole("button", { name: "رفض نهائي" }).click();
     await page
@@ -131,6 +136,7 @@ test.describe("admin returns UI", () => {
     await escalateReturn(submitted.body.id);
 
     await loginAs(page, fixtures.adminToken);
+    await enterWorkspace(page, fixtures.adminToken, { type: "platform" });
     await page.goto("/admin/returns");
     await expect(page.getByText("(طلب تبديل)")).toBeVisible();
     await page.getByRole("button", { name: "اعتماد التبديل" }).click();
