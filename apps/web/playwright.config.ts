@@ -15,7 +15,9 @@ export default defineConfig({
   retries: 0,
   reporter: [["list"]],
   use: {
-    baseURL: process.env.PW_WEB_BASE_URL ?? "http://localhost:3000",
+    // TB-12.1: no default - :3000 is the development server, backed by
+    // finalpro. e2e/global-setup.ts refuses to start without it.
+    baseURL: process.env.PW_WEB_BASE_URL,
     trace: "retain-on-failure",
   },
   projects: [
