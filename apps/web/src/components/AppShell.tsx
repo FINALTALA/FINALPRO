@@ -596,9 +596,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
           ref={homeHeaderRef}
           className={[
             homeStyles.homeHeader,
-            // Light pages get the header's dark-ink variant: /trending, and the
+            // Light pages get the header's dark-ink variant: /trending, the
+            // homepage (its editorial hero is a warm ivory photograph), and the
             // shopping profile and cart canvases.
-            usesTrendChrome ? `${homeStyles.headerInk} trend-page-header` : (isShoppingProfilePage || isCartPage) ? homeStyles.headerInk : "",
+            usesTrendChrome ? `${homeStyles.headerInk} trend-page-header` : (isHomePage || isShoppingProfilePage || isCartPage) ? homeStyles.headerInk : "",
             headerScrolled || homeNavOpen ? homeStyles.headerScrolled : "",
           ].filter(Boolean).join(" ")}
         >
