@@ -1,13 +1,17 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import {
   AvailabilityBucket,
   bucketForStock,
-  liveReservedQuantityByKey,
-  totalAvailableStockLive,
 } from '../common/availability.util';
+import { FulfilmentEligibilityService } from '../fulfilment/fulfilment-eligibility.service';
+import { nameOrArabic } from '../common/text/optional-name';
 import { PrismaService } from '../prisma/prisma.service';
-import { computeEffectivePrice } from '../offers/pricing/effective-price.util';
+import {
+  computeEffectivePrice,
+  isEffectivelyDiscounted,
+} from '../offers/pricing/effective-price.util';
+import { MIN_REVIEWS_TO_DISPLAY } from '../reviews/rating-aggregate.util';
 
 export interface EligibleOffer {
   offerVariantId: string;
@@ -20,10 +24,14 @@ export interface EligibleOffer {
   vendorLogoUrl: string | null;
   vendorCreatedAt: Date;
   price: number;
+  isDiscounted?: boolean;
   availability: AvailabilityBucket;
   imageUrl: string | null;
   /// Sprint 24 (FR-COMP-003).
   condition: string;
+  /// TB-25.2: the offer variant's taxonomy colour code (null for an
+  /// unclassified variant; optional so older callers need not set it).
+  colorCode?: string | null;
   /// Sprint 24 (FR-COMP-006, BR-004/NFR-STALE-002): the proxy for
   /// "when was this price last confirmed" - the latest PriceHistory
   /// row's own changedAt for this variant, or (if the price has never
@@ -43,8 +51,16 @@ export interface ComparisonCard {
   imageUrl: string | null;
   brandName: string | null;
   categoryName: string | null;
+  /** TB-25.2: the catalogue category's English name (additive). */
+  categoryNameEn: string | null;
   storeCount: number;
+  discountedStoreCount: number;
+  hasDiscount: boolean;
+  rating: number | null;
+  ratingCount: number;
   colors: string[];
+  /** TB-25.2: the eligible offers' distinct taxonomy colour codes (additive). */
+  colorCodes: string[];
   sizes: string[];
   cheapestOffer: {
     vendorId: string;
@@ -60,6 +76,7 @@ export interface ComparisonCard {
     offerId: string;
     offerVariantId: string;
     price: number;
+    isDiscounted: boolean;
   }[];
 }
 
@@ -102,23 +119,31 @@ function distinctAttributeValues(
  * Sprint 13: the one definition of "an eligible offer's vendor" used by
  * every public listing (discovery, search, following feed). A product is
  * listed only if at least one CONFIRMED, ACTIVE offer belongs to a
- * published, ACTIVE store that also satisfies `vendorFilter`.
+ * published, ACTIVE store that also satisfies `vendorFilter`. Sprint 27:
+ * `offerFilter` narrows the SAME confirmed offer variant further (the
+ * taxonomy filters of /discovery/all) - never a second, looser offer.
  */
 export function eligibleProductWhere(
   vendorFilter: Prisma.VendorWhereInput = {},
+  offerFilter: Prisma.OfferVariantWhereInput = {},
 ): Prisma.CanonicalProductWhereInput {
   return {
     variants: {
       some: {
         confirmedOfferVariants: {
           some: {
-            vendorOffer: { status: 'ACTIVE' },
-            vendor: {
-              AND: [
-                { storefrontPublished: true, status: 'ACTIVE' },
-                vendorFilter,
-              ],
-            },
+            AND: [
+              {
+                vendorOffer: { status: 'ACTIVE' },
+                vendor: {
+                  AND: [
+                    { storefrontPublished: true, status: 'ACTIVE' },
+                    vendorFilter,
+                  ],
+                },
+              },
+              offerFilter,
+            ],
           },
         },
       },
@@ -146,7 +171,13 @@ export function eligibleProductWhere(
  */
 @Injectable()
 export class ComparisonService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(ComparisonService.name);
+  private ratingSchemaWarningLogged = false;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly fulfilment: FulfilmentEligibilityService,
+  ) {}
 
   /**
    * `vendorFilter` narrows WHICH stores' offers count (default: every
@@ -179,7 +210,6 @@ export class ComparisonService {
           },
         },
         canonicalVariant: { select: { id: true, structuralAttributes: true } },
-        branchStocks: { select: { branchId: true, quantity: true } },
         media: {
           select: { url: true, kind: true },
           orderBy: { createdAt: 'asc' },
@@ -192,29 +222,15 @@ export class ComparisonService {
       },
     });
 
-    // Codex review round 4 on commit 95a8430 (fix #2): live-reserved,
-    // not the lazily-swept BranchStock.reservedQuantity counter - see
-    // liveReservedQuantityByKey's own doc comment. Batched once for
-    // every variant this call returns.
-    const liveReservedByKey = await liveReservedQuantityByKey(
-      this.prisma,
-      variants.flatMap((v) =>
-        v.branchStocks.map((bs) => ({
-          branchId: bs.branchId,
-          offerVariantId: v.id,
-        })),
-      ),
+    // PD-2: availability from the shared read side - sellable branches
+    // only (approved, not archived, not closed), live holds subtracted,
+    // 0 for a vendor that can't sell right now.
+    const available = await this.fulfilment.availableByVariant(
+      variants.map((v) => ({ id: v.id, vendorId: v.vendor.id })),
     );
 
     return variants.map((v) => {
-      const totalStock = totalAvailableStockLive(
-        v.branchStocks.map((bs) => ({
-          branchId: bs.branchId,
-          offerVariantId: v.id,
-          quantity: bs.quantity,
-        })),
-        liveReservedByKey,
-      );
+      const totalStock = available.get(v.id)?.total ?? 0;
       return {
         offerVariantId: v.id,
         offerId: v.vendorOfferId,
@@ -229,9 +245,11 @@ export class ComparisonService {
         vendorCreatedAt: v.vendor.createdAt,
         // Sprint 17 (blocker 1): shared, read-only computation.
         price: computeEffectivePrice(v),
+        isDiscounted: isEffectivelyDiscounted(v),
         availability: bucketForStock(totalStock),
         imageUrl: primaryMediaUrl(v.media),
         condition: v.condition,
+        colorCode: v.colorCode,
         priceLastConfirmedAt: v.priceHistory[0]?.changedAt ?? v.createdAt,
       };
     });
@@ -239,14 +257,11 @@ export class ComparisonService {
 
   /**
    * Deterministic cheapest-first ordering. PDR-015 calls for ties to
-   * break by "higher rating, then permitted location proximity" - this
-   * codebase has no rating or geolocation-permission infrastructure at
-   * all (checked before writing this sprint's code; see the PR
-   * description for this note in full), so guessing at either would be
-   * dishonest. The documented, fully deterministic fallback used
-   * instead: the longer-established store wins (older vendor.createdAt
-   * first), then offerVariantId as a final total-order tiebreak so the
-   * result never depends on incidental DB row order.
+   * break by "higher rating, then permitted location proximity." Product
+   * review aggregates shown on cards are not per-offer tie-break data,
+   * and this query has no permitted location signal, so retain the
+   * deterministic fallback: the longer-established store wins, then
+   * offerVariantId as a final total-order tiebreak.
    */
   compareOffersByPrice = (a: EligibleOffer, b: EligibleOffer): number => {
     if (a.price !== b.price) return a.price - b.price;
@@ -267,7 +282,7 @@ export class ComparisonService {
       canonicalNameAr: string | null;
       canonicalNameEn: string | null;
       brand?: { name: string } | null;
-      category?: { nameAr: string } | null;
+      category?: { nameAr: string; nameEn?: string | null } | null;
     },
     eligibleOffers: EligibleOffer[],
   ): ComparisonCard | null {
@@ -276,7 +291,8 @@ export class ComparisonService {
     // the FIRST confirmed match happens (Sprint 7), and eligibility
     // above requires a confirmed match to exist.
     const nameAr = canonicalProduct.canonicalNameAr!;
-    const nameEn = canonicalProduct.canonicalNameEn!;
+    // Phase A+: a product named only in Arabic shows its Arabic name.
+    const nameEn = nameOrArabic(canonicalProduct.canonicalNameEn, nameAr);
 
     const cheapestPerVendor = new Map<string, EligibleOffer>();
     for (const offer of eligibleOffers) {
@@ -301,6 +317,13 @@ export class ComparisonService {
     );
     const pool = availableOffers.length > 0 ? availableOffers : eligibleOffers;
     const cheapest = pool.slice().sort(this.compareOffersByPrice)[0];
+    const discountedStoreCount = new Set(
+      eligibleOffers
+        .filter(
+          (offer) => offer.availability !== 'sold_out' && offer.isDiscounted,
+        )
+        .map((offer) => offer.vendorId),
+    ).size;
 
     return {
       canonicalProductId: canonicalProduct.id,
@@ -314,8 +337,22 @@ export class ComparisonService {
         null,
       brandName: canonicalProduct.brand?.name ?? null,
       categoryName: canonicalProduct.category?.nameAr ?? null,
+      categoryNameEn: canonicalProduct.category?.nameEn ?? null,
       storeCount: cheapestPerVendor.size,
+      discountedStoreCount,
+      hasDiscount: discountedStoreCount > 0,
+      rating: null,
+      ratingCount: 0,
       colors: distinctAttributeValues(eligibleOffers, ['color', 'colour']),
+      colorCodes: [
+        ...new Set(
+          eligibleOffers
+            .map((o) => o.colorCode)
+            .filter(
+              (code): code is string => typeof code === 'string' && code !== '',
+            ),
+        ),
+      ],
       sizes: distinctAttributeValues(eligibleOffers, ['size']),
       cheapestOffer: {
         vendorId: cheapest.vendorId,
@@ -331,6 +368,7 @@ export class ComparisonService {
         offerId: o.offerId,
         offerVariantId: o.offerVariantId,
         price: o.price,
+        isDiscounted: o.isDiscounted === true,
       })),
     };
   }
@@ -355,22 +393,78 @@ export class ComparisonService {
         take: pageSize,
         include: {
           brand: { select: { name: true } },
-          category: { select: { nameAr: true } },
+          category: { select: { nameAr: true, nameEn: true } },
         },
       }),
     ]);
-    const cards = await Promise.all(
-      products.map(async (product) => {
-        const eligible = await this.findEligibleOffers(
-          product.id,
-          vendorFilter,
-        );
-        return this.buildCard(product, eligible);
-      }),
+    const cards = (
+      await Promise.all(
+        products.map(async (product) => {
+          const eligible = await this.findEligibleOffers(
+            product.id,
+            vendorFilter,
+          );
+          return this.buildCard(product, eligible);
+        }),
+      )
+    ).filter((c): c is ComparisonCard => c !== null);
+    const productIds = cards.map((card) => card.canonicalProductId);
+    const reviewTable = productIds.length
+      ? await this.prisma.$queryRaw<{ available: boolean }[]>(Prisma.sql`
+          SELECT to_regclass('reviews') IS NOT NULL AS available
+        `)
+      : [];
+    const ratingsAvailable = reviewTable[0]?.available === true;
+    if (
+      productIds.length > 0 &&
+      !ratingsAvailable &&
+      !this.ratingSchemaWarningLogged
+    ) {
+      this.logger.warn(
+        'Product ratings are unavailable because the reviews table is missing; apply pending Prisma migrations.',
+      );
+      this.ratingSchemaWarningLogged = true;
+    }
+    const ratings = ratingsAvailable
+      ? await this.prisma.$queryRaw<
+          {
+            canonicalProductId: string;
+            average: number | null;
+            count: number;
+          }[]
+        >(Prisma.sql`
+          SELECT "canonicalProductId",
+                 AVG(rating)::float8 AS average,
+                 COUNT(*)::int4 AS count
+          FROM reviews
+          WHERE "canonicalProductId" IN (${Prisma.join(productIds)})
+            AND "targetType"::text = 'PRODUCT'
+            AND "moderationStatus"::text = 'VISIBLE'
+          GROUP BY "canonicalProductId"
+        `)
+      : [];
+    const ratingsByProductId = new Map(
+      ratings.map((summary) => [
+        summary.canonicalProductId,
+        {
+          rating:
+            summary.count >= MIN_REVIEWS_TO_DISPLAY && summary.average !== null
+              ? Math.round(summary.average * 100) / 100
+              : null,
+          count: summary.count,
+        },
+      ]),
     );
     return {
       total,
-      cards: cards.filter((c): c is ComparisonCard => c !== null),
+      cards: cards.map((card) => {
+        const summary = ratingsByProductId.get(card.canonicalProductId);
+        return {
+          ...card,
+          rating: summary?.rating ?? null,
+          ratingCount: summary?.count ?? 0,
+        };
+      }),
     };
   }
 }

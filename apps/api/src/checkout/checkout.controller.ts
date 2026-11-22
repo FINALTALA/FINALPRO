@@ -19,6 +19,7 @@ import { CheckoutService } from './checkout.service';
 import { ConfirmCheckoutDto } from './dto/confirm-checkout.dto';
 import { QuoteCheckoutDto } from './dto/quote-checkout.dto';
 import { ReserveCheckoutDto } from './dto/reserve-checkout.dto';
+import { ReserveRateLimitGuard } from './reserve-rate-limit.guard';
 
 // Sprint 10 (RB-ORD-002): PDR-002 restricts checkout entirely to
 // signed-in customers - SessionAuthGuard is the whole boundary, no
@@ -54,7 +55,10 @@ export class CheckoutController {
   // idempotencyCompletion.complete() call) is the exact pattern this
   // codebase already established for every other mutating, resource-
   // creating endpoint (e.g. InventoryController.createMovement).
+  // TB-5 (D4): at most 10 new attempts a minute per user; an idempotent
+  // retry of one already sent is never counted (see the guard).
   @Post('reserve')
+  @UseGuards(ReserveRateLimitGuard)
   @UseInterceptors(IdempotencyInterceptor)
   async reserve(
     @CurrentUser() user: AuthenticatedUser,
@@ -67,6 +71,7 @@ export class CheckoutController {
       dto,
       req.correlationId,
       req.idempotencyClaimId,
+      user.id,
     );
   }
 

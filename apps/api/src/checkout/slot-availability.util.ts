@@ -1,5 +1,6 @@
 import { PrismaService } from '../prisma/prisma.service';
 import { TERMINAL_BRANCH_ORDER_STATUSES } from '../orders/branch-order-state-machine';
+import { calendarDates, isWindowOpen } from './delivery-calendar.util';
 
 export interface SlotOption {
   deliveryWindowId: string;
@@ -18,12 +19,6 @@ function minutesToTime(minutes: number): string {
   return `${h}:${m}`;
 }
 
-function utcDateOnly(d: Date): Date {
-  return new Date(
-    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()),
-  );
-}
-
 function toDateString(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
@@ -32,32 +27,33 @@ function toDateString(d: Date): string {
  * PDR-023: "the customer picks an available branch calendar slot in
  * the next three days." A live, read-only snapshot - NOT a hold (see
  * CheckoutReservationSlot's own comment for where the real atomic hold
- * happens, under a row lock, at actual reserve time). Simplification,
- * documented honestly: this does not filter out a same-day window
- * whose start time has already passed - "the next three calendar
- * days" is treated literally (today, tomorrow, the day after),
- * ignoring time-of-day cutoffs, a reasonable scope-appropriate
- * simplification for this sprint's checkout, not a claim that it's a
- * complete real-time scheduling engine.
+ * happens, under a row lock, at actual reserve time).
+ * PD-5.1: the three days are Palestine calendar days, and a window is
+ * listed only while it hasn't started and is at least the branch's
+ * deliveryLeadMinutes away (delivery-calendar.util.ts) - the same rule
+ * reserve() and reschedule enforce.
  */
 export async function computeAvailableSlots(
   prisma: PrismaService,
   vendorId: string,
   branchId: string,
-  fromDate: Date = new Date(),
+  now: Date = new Date(),
   days = 3,
 ): Promise<SlotOption[]> {
-  const windows = await prisma.deliveryWindow.findMany({
-    where: { vendorId, branchId },
-    include: { exceptions: true },
-  });
+  const [windows, branch] = await Promise.all([
+    prisma.deliveryWindow.findMany({
+      where: { vendorId, branchId },
+      include: { exceptions: true },
+    }),
+    prisma.storeBranch.findUnique({
+      where: { id: branchId },
+      select: { deliveryLeadMinutes: true },
+    }),
+  ]);
   if (windows.length === 0) return [];
+  const leadMinutes = branch?.deliveryLeadMinutes ?? 0;
 
-  const dates: Date[] = [];
-  const start = utcDateOnly(fromDate);
-  for (let i = 0; i < days; i++) {
-    dates.push(new Date(start.getTime() + i * 24 * 60 * 60 * 1000));
-  }
+  const dates = calendarDates(now, days);
 
   const windowIds = windows.map((w) => w.id);
   const [activeReservationSlots, activeOrders] = await Promise.all([
@@ -65,7 +61,7 @@ export async function computeAvailableSlots(
       where: {
         deliveryWindowId: { in: windowIds },
         scheduledDate: { in: dates },
-        reservation: { expiresAt: { gt: new Date() } },
+        reservation: { expiresAt: { gt: now } },
       },
       select: { deliveryWindowId: true, scheduledDate: true },
     }),
@@ -100,6 +96,7 @@ export async function computeAvailableSlots(
     const dayOfWeek = date.getUTCDay();
     for (const window of windows) {
       if (window.dayOfWeek !== dayOfWeek) continue;
+      if (!isWindowOpen(date, window.startMinute, now, leadMinutes)) continue;
       const exception = window.exceptions.find(
         (e) => toDateString(e.exceptionDate) === toDateString(date),
       );

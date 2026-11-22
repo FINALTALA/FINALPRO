@@ -5,17 +5,25 @@ describe('BranchOrderService.transition', () => {
   let tx: {
     $queryRaw: jest.Mock;
     branchOrder: { update: jest.Mock };
+    customerOrder: { findUnique: jest.Mock };
   };
   let auditLog: { record: jest.Mock };
+  let outbox: { enqueue: jest.Mock };
   let service: BranchOrderService;
 
   beforeEach(() => {
     tx = {
       $queryRaw: jest.fn(),
       branchOrder: { update: jest.fn() },
+      customerOrder: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ customer: { userId: 'customer-user' } }),
+      },
     };
     auditLog = { record: jest.fn().mockResolvedValue(undefined) };
-    service = new BranchOrderService(auditLog as never);
+    outbox = { enqueue: jest.fn().mockResolvedValue(undefined) };
+    service = new BranchOrderService(auditLog as never, outbox as never);
   });
 
   it('locks the row, applies a legal transition, and audits before/after status', async () => {
@@ -175,6 +183,57 @@ describe('BranchOrderService.transition', () => {
       expect.objectContaining({ actorId: null }),
       tx,
     );
+  });
+
+  it('PD-3: reaching COMPLETED invites the customer to review, in the same transaction', async () => {
+    tx.$queryRaw.mockResolvedValue([
+      {
+        id: 'bo-1',
+        status: 'DELIVERED',
+        fulfilmentMethod: 'DELIVERY',
+        paymentMethod: 'ONLINE',
+      },
+    ]);
+    tx.branchOrder.update.mockResolvedValue({
+      id: 'bo-1',
+      status: 'COMPLETED',
+      customerOrderId: 'co-1',
+      vendorId: 'v-1',
+      branchId: 'b-1',
+    });
+
+    await service.transition(tx as never, 'bo-1', 'COMPLETED', 'u', 'corr-1');
+
+    expect(outbox.enqueue).toHaveBeenCalledWith(
+      {
+        eventType: 'branch_order.review_invitation',
+        audience: 'CUSTOMER',
+        payload: {
+          branch_order_id: 'bo-1',
+          vendor_id: 'v-1',
+          branch_id: 'b-1',
+          recipient_user_id: 'customer-user',
+        },
+      },
+      tx,
+    );
+  });
+
+  it('PD-3: any other transition sends no review invitation', async () => {
+    tx.$queryRaw.mockResolvedValue([
+      {
+        id: 'bo-1',
+        status: 'PLACED',
+        fulfilmentMethod: 'DELIVERY',
+        paymentMethod: 'ONLINE',
+      },
+    ]);
+    tx.branchOrder.update.mockResolvedValue({
+      id: 'bo-1',
+      status: 'PREPARING',
+    });
+    await service.transition(tx as never, 'bo-1', 'PREPARING', 'u', 'corr-1');
+    expect(outbox.enqueue).not.toHaveBeenCalled();
   });
 
   it('allows REFUNDED for an ONLINE order from PLACED', async () => {

@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { CurrentUser } from '../auth/current-user.decorator';
@@ -60,5 +61,32 @@ export class FavoritesController {
     @Body() dto: SetNotificationPreferenceDto,
   ) {
     return this.favorites.setPreference(user.id, dto.alert_type, dto.enabled);
+  }
+
+  @Get('customers/me/availability-subscriptions')
+  async listAvailability(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('offer_variant_id') offerVariantId?: string,
+  ) {
+    return this.favorites.listAvailabilitySubscriptions(
+      user.id,
+      offerVariantId,
+    );
+  }
+
+  @Post('customers/me/availability-subscriptions/:offerVariantId')
+  async subscribeAvailability(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('offerVariantId') offerVariantId: string,
+  ) {
+    return this.favorites.subscribeAvailability(user.id, offerVariantId);
+  }
+
+  @Delete('customers/me/availability-subscriptions/:offerVariantId')
+  async unsubscribeAvailability(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('offerVariantId') offerVariantId: string,
+  ) {
+    return this.favorites.unsubscribeAvailability(user.id, offerVariantId);
   }
 }

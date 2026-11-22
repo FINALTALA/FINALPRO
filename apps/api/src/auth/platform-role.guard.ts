@@ -8,7 +8,9 @@ import { Reflector } from '@nestjs/core';
 import { Request } from 'express';
 import { PlatformRole } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { RedisService } from '../redis/redis.service';
 import { PLATFORM_ROLES_KEY } from './platform-role.decorator';
+import { requireWorkspace } from './workspace-session';
 
 /**
  * Enforces `@RequirePlatformRole(...)`. Must run after SessionAuthGuard
@@ -25,6 +27,7 @@ export class PlatformRoleGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -56,6 +59,11 @@ export class PlatformRoleGuard implements CanActivate {
       });
     }
 
+    // TB-26: the role above is read fresh on every request; the
+    // workspace token proves the platform workspace was entered.
+    await requireWorkspace(this.prisma, this.redis, request, {
+      kind: 'PLATFORM',
+    });
     return true;
   }
 }

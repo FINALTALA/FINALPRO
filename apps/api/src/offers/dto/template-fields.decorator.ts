@@ -53,7 +53,7 @@ export function IsValidTemplateAttributes(options?: ValidationOptions) {
                   ? `missing required key "${p.key}"`
                   : p.type === 'UNKNOWN_KEY'
                     ? `unexpected key "${p.key}"`
-                    : `"${p.key}" must be a non-blank string or "N/A"`,
+                    : `"${p.key}" must be a non-blank string (leave out a value you don't know)`,
             )
             .join('; ');
         },

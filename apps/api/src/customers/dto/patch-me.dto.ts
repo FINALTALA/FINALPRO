@@ -1,10 +1,5 @@
-import {
-  IsIn,
-  IsOptional,
-  IsPhoneNumber,
-  IsString,
-  ValidateIf,
-} from 'class-validator';
+import { IsIn, IsOptional, IsString, ValidateIf } from 'class-validator';
+import { PhoneField } from '../../common/phone/phone-input';
 
 // Sprint 22 (FR-AUTH-006/009): the one generic PATCH /customers/me
 // SRS Part 4 names literally - phone change, language preference, and
@@ -12,7 +7,7 @@ import {
 // per field.
 export class PatchMeDto {
   @IsOptional()
-  @IsPhoneNumber(undefined)
+  @PhoneField()
   phone?: string;
 
   // Required WHENEVER phone is present (an unverified phone change is

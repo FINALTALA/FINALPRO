@@ -2,7 +2,9 @@ import { Module } from '@nestjs/common';
 import { AuditModule } from '../audit/audit.module';
 import { AuthModule } from '../auth/auth.module';
 import { IdempotencyModule } from '../common/idempotency/idempotency.module';
+import { FeatureFlagsModule } from '../feature-flags/feature-flags.module';
 import { OutboxModule } from '../outbox/outbox.module';
+import { PlatformAlertsModule } from '../platform-alerts/platform-alerts.module';
 import { BranchReturnsController } from './branch-returns.controller';
 import { CustomerReturnsController } from './customer-returns.controller';
 import { ReturnSweepService } from './return-sweep.service';
@@ -15,7 +17,14 @@ import { VendorReturnsController } from './vendor-returns.controller';
 // per-module-DI pattern OrdersModule already established for
 // BranchOrderCancellationService.
 @Module({
-  imports: [AuditModule, AuthModule, OutboxModule, IdempotencyModule],
+  imports: [
+    AuditModule,
+    AuthModule,
+    OutboxModule,
+    IdempotencyModule,
+    PlatformAlertsModule,
+    FeatureFlagsModule,
+  ],
   controllers: [
     CustomerReturnsController,
     BranchReturnsController,

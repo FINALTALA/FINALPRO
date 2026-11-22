@@ -6,6 +6,13 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import { PeriodicTask } from '../common/periodic-task.util';
+import {
+  logSweepTick,
+  runSweepStep,
+  SweepBackoff,
+  sweepTransaction,
+  type SweepStepResult,
+} from '../common/sweep-runner.util';
 import { enqueueFavoriteNotification } from '../favorites/favorite-alerts.util';
 import { OutboxEventService } from '../outbox/outbox-event.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -36,6 +43,15 @@ function isUniqueViolation(err: unknown): boolean {
  * already handled this one" - it just attempts the INSERT and lets
  * Postgres answer. See DiscountActivationNotice's own schema.prisma
  * comment.
+ *
+ * TB-11: the candidate query used to return every active discount, the
+ * oldest 200 first, already-notified ones included - so with 200 or more
+ * active discounts a newly started one was never reached (and each tick
+ * opened 200 transactions only to be refused by that constraint). It now
+ * leaves out every (variant, discountStartAt) that already has its
+ * notice; the constraint stays the guarantee when two instances race.
+ * Each item runs through the shared sweep runner (own transaction with
+ * lock_timeout, own try/catch, deferral of a failing variant).
  */
 @Injectable()
 export class DiscountActivationSweepService
@@ -50,7 +66,11 @@ export class DiscountActivationSweepService
         'DiscountActivationSweepService tick failed',
         err as Error,
       ),
+    DiscountActivationSweepService.name,
   );
+  private readonly backoff = new SweepBackoff();
+  /** TB-11: the last tick's per-step results (tests read it). */
+  lastTick: SweepStepResult[] = [];
 
   constructor(
     private readonly prisma: PrismaService,
@@ -69,29 +89,51 @@ export class DiscountActivationSweepService
    * tick (0 on a tick where every currently-active discount was
    * already notified by an earlier tick - the common case). */
   async sweepOnce(): Promise<number> {
-    const candidates = await this.prisma.$queryRaw<
+    const startedAt = Date.now();
+    const candidates = new Map<
+      string,
       {
         id: string;
         vendorId: string;
         vendorOfferId: string;
         discountStartAt: Date;
-      }[]
-    >`
-      SELECT id, "vendorId", "vendorOfferId", "discountStartAt"
-      FROM offer_variants
-      WHERE "discountPercent" IS NOT NULL
-        AND "discountStartAt" <= now()
-        AND "discountEndAt" > now()
-      ORDER BY "discountStartAt" ASC, id ASC
-      LIMIT ${BATCH_LIMIT}
-    `;
-
-    let notified = 0;
-    for (const candidate of candidates) {
-      const didNotify = await this.tryNotifyOnce(candidate);
-      if (didNotify) notified += 1;
-    }
-    return notified;
+      }
+    >();
+    const step = await runSweepStep({
+      step: 'discountActivations',
+      logger: this.logger,
+      backoff: this.backoff,
+      findCandidates: async (excluded) => {
+        const rows = await this.prisma.$queryRaw<
+          {
+            id: string;
+            vendorId: string;
+            vendorOfferId: string;
+            discountStartAt: Date;
+          }[]
+        >`
+          SELECT ov.id, ov."vendorId", ov."vendorOfferId", ov."discountStartAt"
+          FROM offer_variants ov
+          WHERE ov."discountPercent" IS NOT NULL
+            AND ov."discountStartAt" <= now()
+            AND ov."discountEndAt" > now()
+            AND NOT EXISTS (
+              SELECT 1 FROM discount_activation_notices n
+              WHERE n."offerVariantId" = ov.id
+                AND n."discountStartAt" = ov."discountStartAt"
+            )
+            AND ov.id <> ALL(${excluded}::text[])
+          ORDER BY ov."discountStartAt" ASC, ov.id ASC
+          LIMIT ${BATCH_LIMIT}
+        `;
+        for (const r of rows) candidates.set(r.id, r);
+        return rows.map((r) => r.id);
+      },
+      processItem: (id) => this.tryNotifyOnce(candidates.get(id)!),
+    });
+    this.lastTick = [step];
+    logSweepTick(this.logger, this.lastTick, startedAt);
+    return step.done;
   }
 
   private async tryNotifyOnce(candidate: {
@@ -101,7 +143,7 @@ export class DiscountActivationSweepService
     discountStartAt: Date;
   }): Promise<boolean> {
     try {
-      await this.prisma.$transaction(async (tx) => {
+      await sweepTransaction(this.prisma, async (tx) => {
         // The claim-and-create-everything-atomically step the review
         // round required: OutboxEvent is created first (cheap,
         // conflict-free), THEN the DiscountActivationNotice INSERT -
@@ -111,6 +153,7 @@ export class DiscountActivationSweepService
         const outboxEvent = await this.outbox.enqueue(
           {
             eventType: 'offer.discount_activated_for_followers',
+            audience: 'CUSTOMER',
             payload: {
               vendor_id: candidate.vendorId,
               offer_variant_id: candidate.id,

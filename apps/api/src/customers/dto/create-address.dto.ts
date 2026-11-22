@@ -1,12 +1,6 @@
-import {
-  IsEnum,
-  IsLatitude,
-  IsLongitude,
-  IsOptional,
-  IsPhoneNumber,
-  IsString,
-} from 'class-validator';
+import { IsEnum, IsLatitude, IsLongitude, IsOptional, IsString } from 'class-validator';
 import { DeliveryZoneRegion } from '../../../generated/prisma/client';
+import { PhoneField } from '../../common/phone/phone-input';
 
 // FR-AUTH-008 / BL-AUTH-004 ("minimal slice"): map pin + landmark +
 // phone number(s), captured at the point of use. Field names are
@@ -27,11 +21,11 @@ export class CreateAddressDto {
   @IsString()
   landmark_note?: string;
 
-  @IsPhoneNumber(undefined)
+  @PhoneField()
   phone_number_1!: string;
 
   @IsOptional()
-  @IsPhoneNumber(undefined)
+  @PhoneField()
   phone_number_2?: string;
 
   // Sprint 10 (PDR-022): the customer's own declared delivery region -

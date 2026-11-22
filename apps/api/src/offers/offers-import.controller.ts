@@ -1,3 +1,7 @@
+import {
+  NOT_IMPORTED_YET_COLUMNS,
+  notImportedValues,
+} from './import/not-imported';
 import { BlockWhenSuspended } from '../auth/vendor-suspended.guard';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
@@ -114,7 +118,12 @@ export class OffersImportController {
   @Get('template')
   @RequireVendorRole('OWNER')
   async downloadTemplate() {
-    return { csv: IMPORT_TEMPLATE_HEADERS.join(',') + '\n' };
+    return {
+      csv: IMPORT_TEMPLATE_HEADERS.join(',') + '\n',
+      // Phase A++ (condition 7): product fields this import does not take
+      // yet - a value in one of these columns is reported, not imported.
+      not_imported_yet: Object.keys(NOT_IMPORTED_YET_COLUMNS),
+    };
   }
 
   // Sprint 17 (D6, FR-IMPORT-004 partial): batch history - counts and
@@ -374,6 +383,8 @@ export class OffersImportController {
       failedRows.sort((a, b) => a.rowNumber - b.rowNumber);
       return {
         ...report,
+        // Phase A++ (condition 7): what was sent but not imported, by column.
+        not_imported: notImportedValues(parsedRows),
         batch_id: batch.id,
         failed_rows_csv:
           failedRows.length > 0 ? buildFailedRowsCsv(failedRows) : null,
@@ -567,6 +578,30 @@ export class OffersImportController {
           }
         }
 
+        // Sprint 27: a classified offer accepts only colour/size
+        // combinations created from the product screen (the database
+        // refuses any other new variant on it) - reported per row like
+        // every other import conflict, never a whole-import failure.
+        if (offerId) {
+          const target = await tx.vendorOffer.findUnique({
+            where: { id: offerId },
+            select: { taxonomyVersion: true },
+          });
+          if (target?.taxonomyVersion != null) {
+            for (const row of rowsToCreate) {
+              const reason =
+                'This product is classified - add its colour/size combinations from the product screen, not by import';
+              report.conflicts.push({ row_number: row.rowNumber, reason });
+              failedRows.push({
+                rowNumber: row.rowNumber,
+                raw: rowToRaw(row),
+                reason,
+              });
+            }
+            return;
+          }
+        }
+
         if (!offerId) {
           // Sprint 17 (D1): the resolved brandId (or the sentinel) -
           // never a free-text name reaching the database here.
@@ -581,6 +616,13 @@ export class OffersImportController {
               templateAttributes:
                 (firstRow.templateAttributes as
                   Prisma.InputJsonValue | undefined) ?? undefined,
+              // Sprint 27: the CSV carries no taxonomy (deliberately - no
+              // new columns until the screens are stable), so a new
+              // imported product is created as an unclassified DRAFT.
+              // The import itself never fails for it; the product simply
+              // cannot be published (DB trigger, OFFER_NOT_CLASSIFIED)
+              // until its owner classifies it on the product screen.
+              requiresTaxonomy: true,
             },
           });
           offerId = offer.id;

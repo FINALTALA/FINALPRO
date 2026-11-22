@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { TaxonomyModule } from '../taxonomy/taxonomy.module';
 import { AuditModule } from '../audit/audit.module';
 import { AuthModule } from '../auth/auth.module';
 import { IdempotencyModule } from '../common/idempotency/idempotency.module';
@@ -8,20 +9,26 @@ import { BranchOperatingHoursController } from './branch-operating-hours.control
 import { DeliveryZoneMinimumOrderController } from './delivery-zone-minimum-order.controller';
 import { ReturnPolicyController } from './return-policy.controller';
 import { StaffController } from './staff.controller';
+import { StoreInfoPublicController } from './store-info-public.controller';
 import { StoreOffersPublicController } from './store-offers-public.controller';
-import { StoreSectionsController } from './store-sections.controller';
+import {
+  OfferCollectionsController,
+  StoreSectionsController,
+} from './store-sections.controller';
 import { StorefrontPublicController } from './storefront-public.controller';
 import { StorefrontController } from './storefront.controller';
 import { VendorsController } from './vendors.controller';
 
 @Module({
-  imports: [AuditModule, AuthModule, IdempotencyModule],
+  imports: [AuditModule, AuthModule, IdempotencyModule, TaxonomyModule],
   controllers: [
     VendorsController,
     StorefrontController,
     StorefrontPublicController,
     StoreSectionsController,
+    OfferCollectionsController,
     StoreOffersPublicController,
+    StoreInfoPublicController,
     BranchOperatingHoursController,
     BranchClosuresController,
     BranchMinimumOrderController,

@@ -8,7 +8,9 @@ import { Reflector } from '@nestjs/core';
 import { Request } from 'express';
 import { VendorUserRole } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { RedisService } from '../redis/redis.service';
 import { VENDOR_ROLES_KEY } from './vendor-role.decorator';
+import { requireWorkspace } from './workspace-session';
 
 export interface VendorMembership {
   vendorId: string;
@@ -54,6 +56,7 @@ export class VendorMembershipGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -106,9 +109,15 @@ export class VendorMembershipGuard implements CanActivate {
       });
     }
 
-    const requiredRoles = this.reflector.get<VendorUserRole[]>(
+    // Security fix: read the role from the handler AND its controller
+    // class. reflector.get(..., getHandler()) alone silently ignored a
+    // class-level @RequireVendorRole('OWNER') - which let a
+    // BRANCH_EMPLOYEE list/suspend staff (StaffController) and read the
+    // owner-only performance report (VendorPerformanceController). A
+    // handler-level decorator still wins over a class-level one.
+    const requiredRoles = this.reflector.getAllAndOverride<VendorUserRole[]>(
       VENDOR_ROLES_KEY,
-      context.getHandler(),
+      [context.getHandler(), context.getClass()],
     );
     if (requiredRoles?.length && !requiredRoles.includes(membership.role)) {
       throw new ForbiddenException({
@@ -128,6 +137,15 @@ export class VendorMembershipGuard implements CanActivate {
         message: 'You are not assigned to this branch',
       });
     }
+
+    // TB-26: the membership above is the permission (read fresh on every
+    // request); the workspace token is the proof the person entered this
+    // store's workspace in this tab - checked last, so a non-member still
+    // gets the membership error, never a hint that a workspace exists.
+    await requireWorkspace(this.prisma, this.redis, request, {
+      kind: 'VENDOR',
+      vendorId,
+    });
 
     request.vendorMembership = {
       vendorId,

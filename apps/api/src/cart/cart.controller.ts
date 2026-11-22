@@ -19,16 +19,18 @@ import {
 } from '../auth/session-auth.guard';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
-import {
-  bucketForStock,
-  liveReservedQuantityByKey,
-  maxSingleBranchAvailable,
-} from '../common/availability.util';
+import { bucketForStock } from '../common/availability.util';
+import { FulfilmentEligibilityService } from '../fulfilment/fulfilment-eligibility.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { assertItemsPurchasable } from '../checkout/purchase-eligibility.util';
 import { SubscriptionGateService } from '../subscriptions/subscription-gate.service';
 import { AddCartItemDto } from './dto/add-cart-item.dto';
 import { UpdateCartItemDto } from './dto/update-cart-item.dto';
+import {
+  CART_LINE_LIMIT,
+  assertWithinCartLineLimit,
+  lockCartVariant,
+} from './cart-line-limit';
 import {
   PriceConfig,
   computeEffectivePrice,
@@ -41,6 +43,15 @@ function cartItemDto(item: {
   quantity: number;
   offerVariant: PriceConfig & {
     sellerSku: string;
+    colorCode?: string | null;
+    sizeCode?: string | null;
+    size?: string | null;
+    offerColor?: {
+      nameAr: string;
+      nameEn: string | null;
+      hex: string | null;
+      swatchUrl: string | null;
+    } | null;
     vendorOffer: { titleAr: string; titleEn: string };
   };
 }) {
@@ -51,6 +62,14 @@ function cartItemDto(item: {
     quantity: item.quantity,
     title_ar: item.offerVariant.vendorOffer.titleAr,
     title_en: item.offerVariant.vendorOffer.titleEn,
+    // Product colours: the line's colour (name + swatch) and size.
+    color_code: item.offerVariant.colorCode ?? null,
+    color_name_ar: item.offerVariant.offerColor?.nameAr ?? null,
+    color_name_en: item.offerVariant.offerColor?.nameEn ?? null,
+    color_hex: item.offerVariant.offerColor?.hex ?? null,
+    color_swatch_url: item.offerVariant.offerColor?.swatchUrl ?? null,
+    size_code: item.offerVariant.sizeCode ?? null,
+    size_label: item.offerVariant.size ?? null,
     // Sprint 17 (blocker 1): the one shared, read-only price
     // computation - see offers/pricing/effective-price.util.ts.
     unit_price: computeEffectivePrice(item.offerVariant),
@@ -69,6 +88,7 @@ export class CartController {
     private readonly prisma: PrismaService,
     private readonly subscriptionGate: SubscriptionGateService,
     private readonly idempotencyCompletion: IdempotencyCompletionService,
+    private readonly fulfilment: FulfilmentEligibilityService,
   ) {}
 
   private async requireCustomerId(user: AuthenticatedUser): Promise<string> {
@@ -88,6 +108,12 @@ export class CartController {
           discountStartAt: true,
           discountEndAt: true,
           sellerSku: true,
+          colorCode: true,
+          sizeCode: true,
+          size: true,
+          offerColor: {
+            select: { nameAr: true, nameEn: true, hex: true, swatchUrl: true },
+          },
           vendorOffer: { select: { titleAr: true, titleEn: true } },
         },
       },
@@ -96,12 +122,13 @@ export class CartController {
 
   // Sprint 14 (PDR-017, approved baseline 3.4): the cart is the one
   // surface that may show a quantity limit - each line reports its
-  // availability bucket, the maximum currently available to buy
-  // (`max_quantity` - the most ONE branch can fulfil, live-reservation
-  // aware, since checkout never splits a line across branches; 0 when
-  // the line can't be bought at all) and whether the offer/store is still purchasable.
-  // Purely additive fields; add/update responses are unchanged, and the
-  // real stock/eligibility enforcement stays in quote/reserve/confirm.
+  // availability bucket, whether the offer/store is still purchasable,
+  // the public per-line `purchase_limit`, and - TB-1 - `max_quantity`
+  // ONLY when the line asks for more than it can get: the most ONE
+  // branch can fulfil right now (checkout never splits a line), capped
+  // at the purchase limit, so the cart never reveals stock above it.
+  // Otherwise null. The real stock/eligibility enforcement stays in
+  // quote/reserve/confirm.
   @Get()
   async list(@CurrentUser() user: AuthenticatedUser) {
     const customerId = await this.requireCustomerId(user);
@@ -117,6 +144,17 @@ export class CartController {
             discountStartAt: true,
             discountEndAt: true,
             sellerSku: true,
+            colorCode: true,
+            sizeCode: true,
+            size: true,
+            offerColor: {
+              select: {
+                nameAr: true,
+                nameEn: true,
+                hex: true,
+                swatchUrl: true,
+              },
+            },
             vendorOffer: {
               select: { titleAr: true, titleEn: true, status: true },
             },
@@ -126,32 +164,26 @@ export class CartController {
         },
       },
     });
-    const liveReserved = await liveReservedQuantityByKey(
-      this.prisma,
-      items.flatMap((i) =>
-        i.offerVariant.branchStocks.map((bs) => ({
-          branchId: bs.branchId,
-          offerVariantId: i.offerVariantId,
-        })),
-      ),
+    // PD-2: the shared read side - sellable branches only, the most ONE
+    // branch can supply (checkout never splits a line), and a vendor
+    // that can't sell right now (incl. its subscription) gives 0.
+    const available = await this.fulfilment.availableByVariant(
+      items.map((i) => ({ id: i.offerVariantId, vendorId: i.vendorId })),
     );
     return items.map((item) => {
-      const available = maxSingleBranchAvailable(
-        item.offerVariant.branchStocks.map((bs) => ({
-          branchId: bs.branchId,
-          offerVariantId: item.offerVariantId,
-          quantity: bs.quantity,
-        })),
-        liveReserved,
-      );
       const purchasable =
         item.offerVariant.vendorOffer.status === 'ACTIVE' &&
-        item.offerVariant.vendor.storefrontPublished &&
-        item.offerVariant.vendor.status === 'ACTIVE';
+        (available.get(item.offerVariantId)?.purchasable ?? false);
+      const stock = purchasable
+        ? (available.get(item.offerVariantId)?.maxSingleBranch ?? 0)
+        : 0;
+      const canGet = Math.min(stock, CART_LINE_LIMIT);
       return {
         ...cartItemDto(item),
-        availability: bucketForStock(purchasable ? available : 0),
-        max_quantity: purchasable ? available : 0,
+        availability: bucketForStock(stock),
+        purchase_limit: CART_LINE_LIMIT,
+        max_quantity:
+          purchasable && stock > 0 && item.quantity > canGet ? canGet : null,
         purchasable,
       };
     });
@@ -192,6 +224,26 @@ export class CartController {
         this.subscriptionGate,
         req.correlationId,
         [{ vendorId: dto.vendor_id, offerVariantId: dto.offer_variant_id }],
+      );
+      // TB-1: the variant's whole cart total stays within the limit, even
+      // under concurrent adds/updates (serialised per customer+variant).
+      await lockCartVariant(tx, customerId, dto.offer_variant_id);
+      const existing = await tx.cartItem.findUnique({
+        where: {
+          customerId_vendorId_offerVariantId: {
+            customerId,
+            vendorId: dto.vendor_id,
+            offerVariantId: dto.offer_variant_id,
+          },
+        },
+        select: { id: true, quantity: true },
+      });
+      await assertWithinCartLineLimit(
+        tx,
+        customerId,
+        dto.offer_variant_id,
+        (existing?.quantity ?? 0) + dto.quantity,
+        existing?.id ?? null,
       );
       const item = await tx.cartItem.upsert({
         where: {
@@ -236,10 +288,21 @@ export class CartController {
         message: 'Cart item not found',
       });
     }
-    const item = await this.prisma.cartItem.update({
-      where: { id },
-      data: { quantity: dto.quantity },
-      include: this.itemInclude(),
+    const item = await this.prisma.$transaction(async (tx) => {
+      // TB-1: same per-variant limit as add, under the same lock.
+      await lockCartVariant(tx, customerId, existing.offerVariantId);
+      await assertWithinCartLineLimit(
+        tx,
+        customerId,
+        existing.offerVariantId,
+        dto.quantity,
+        id,
+      );
+      return tx.cartItem.update({
+        where: { id },
+        data: { quantity: dto.quantity },
+        include: this.itemInclude(),
+      });
     });
     return cartItemDto(item);
   }

@@ -1,6 +1,6 @@
-import { IsPhoneNumber } from 'class-validator';
+import { PhoneField } from '../../common/phone/phone-input';
 
 export class PasswordResetRequestDto {
-  @IsPhoneNumber(undefined)
+  @PhoneField()
   phone!: string;
 }

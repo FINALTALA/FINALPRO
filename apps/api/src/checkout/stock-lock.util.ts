@@ -1,4 +1,5 @@
 import { Prisma } from '../../generated/prisma/client';
+import { stockLockKey } from '../common/availability.util';
 
 export interface LockedStock {
   id: string;
@@ -109,6 +110,31 @@ export async function findExpiredReservationIdsForWindowKeys(
 }
 
 /**
+ * TB-5: every stock writer takes its vendor row(s) FOR KEY SHARE right
+ * after the reservation rows and before any stock row - the place the
+ * global order (reservation rows -> vendor rows -> stock rows) gives
+ * vendor rows. Without it the vendor row was still taken, but only
+ * implicitly and LAST: a stock_movements (or any other) row inserted
+ * after the stock row lock references vendors, and its foreign-key check
+ * takes FOR KEY SHARE on the vendor row then. checkout's reserve() and
+ * confirm() hold that vendor row FOR UPDATE (purchase eligibility) and
+ * then wait for the stock row, so a POS sale holding the stock row and
+ * waiting for the vendor row deadlocked against them (reproduced 3/3,
+ * 2026-11-06). FOR KEY SHARE conflicts with nothing but FOR UPDATE and
+ * key changes, so it only ever waits for a transaction that already
+ * holds the vendor row the way checkout does - before, not after, this
+ * transaction's stock rows. Sorted, as every vendor lock is.
+ */
+export async function lockVendorRowsForKeySharing(
+  tx: Prisma.TransactionClient,
+  vendorIds: string[],
+): Promise<void> {
+  for (const id of [...new Set(vendorIds)].sort()) {
+    await tx.$queryRaw`SELECT id FROM vendors WHERE id = ${id} FOR KEY SHARE`;
+  }
+}
+
+/**
  * Codex review round 2 on commit d0ea80d: the ONE place that locks a
  * BranchStock row AND sweeps its expired reservation holds - every
  * writer of `quantity`/`reservedQuantity` (checkout reserve, checkout
@@ -143,6 +169,7 @@ export async function lockAndSweepStockRow(
     ])
   ).sort();
   await lockReservationRowsSorted(tx, reservationIds);
+  await lockVendorRowsForKeySharing(tx, [vendorId]);
   return lockAndSweepStockRowAssumingReservationsLocked(
     tx,
     vendorId,
@@ -219,13 +246,16 @@ export async function lockAndSweepStockRowAssumingReservationsLocked(
  * orders could each hold one key's reservation lock while waiting on
  * the other's - a real deadlock risk, not merely a style preference.
  *
- * Lock order here matches reserve()'s own established plan: every
- * key's advisory creation lock first (sorted), THEN the full
- * reservation-lock set for ALL keys combined (one batched discovery,
- * one sorted lock pass), THEN each stock row in sorted order via
- * lockAndSweepStockRowAssumingReservationsLocked - never the
- * standalone single-key primitive, which would re-discover and
- * re-lock reservations per key and reintroduce the same hazard.
+ * Lock order: every key's advisory creation lock first (sorted), THEN
+ * the full reservation-lock set for ALL keys combined (one batched
+ * discovery, one sorted lock pass), THEN each stock row in sorted order
+ * via lockAndSweepStockRowAssumingReservationsLocked - never the
+ * standalone single-key primitive, which would re-discover and re-lock
+ * reservations per key and reintroduce the same hazard. (reserve()
+ * takes no stock advisory lock at all - it locks reservation rows, then
+ * vendor rows, then stock rows - so it never waits for one of these
+ * advisory locks; both orders put reservation rows before stock rows,
+ * which is what keeps the two from forming a cycle.)
  */
 export async function lockSweepOrCreateStockRowsSorted(
   tx: Prisma.TransactionClient,
@@ -244,6 +274,10 @@ export async function lockSweepOrCreateStockRowsSorted(
     await findExpiredReservationIdsForStockKeys(tx, uniqueKeys)
   ).sort();
   await lockReservationRowsSorted(tx, reservationIds);
+  await lockVendorRowsForKeySharing(
+    tx,
+    uniqueKeys.map((k) => k.vendorId),
+  );
 
   const result = new Map<string, LockedStock>();
   for (const k of uniqueKeys) {
@@ -524,6 +558,12 @@ export async function lockOffersWideForRestock(
     await findExpiredReservationIdsForStockKeys(tx, targetKeys)
   ).sort();
   await lockReservationRowsSorted(tx, reservationIds);
+  // TB-5: the vendor rows, between the reservation rows and the stock
+  // rows - see lockVendorRowsForKeySharing().
+  await lockVendorRowsForKeySharing(
+    tx,
+    normalizedMutations.map((m) => m.vendorId),
+  );
 
   // Step 5: FOR UPDATE on every EXISTING row across the full union -
   // one query, never a per-key loop (which would re-open the exact
@@ -650,4 +690,55 @@ export async function lockOfferWideForRestock(
 ): Promise<RestockMutationResult> {
   const results = await lockOffersWideForRestock(tx, [mutation]);
   return results.get(offerKey(mutation.branchId, mutation.offerVariantId))!;
+}
+
+/**
+ * TB-8: the one release primitive for CheckoutReservationItem holds -
+ * moved here unchanged from CheckoutService.releaseReservationHolds()
+ * (cancel, confirm's expiry path) so the periodic expired-reservation
+ * sweep releases holds exactly the same way. Each item: lock its stock
+ * row (canonical order), delete the item row by id, and decrement
+ * reservedQuantity only if THIS call deleted it - an item an earlier
+ * lazy sweep, cancel or concurrent call already released deletes zero
+ * rows and gives nothing back twice. Only checkout items are ever
+ * passed here, so a return-exchange hold on the same stock row (also
+ * counted in reservedQuantity) is never touched. Returns what this
+ * call actually released.
+ */
+export async function releaseReservationItemHolds(
+  tx: Prisma.TransactionClient,
+  items: {
+    id: string;
+    vendorId: string;
+    branchId: string;
+    offerVariantId: string;
+    quantity: number;
+  }[],
+): Promise<{ items: number; units: number }> {
+  const sorted = [...items].sort((a, b) => {
+    const ka = stockLockKey(a.vendorId, a.branchId, a.offerVariantId);
+    const kb = stockLockKey(b.vendorId, b.branchId, b.offerVariantId);
+    return ka < kb ? -1 : ka > kb ? 1 : 0;
+  });
+  const released = { items: 0, units: 0 };
+  for (const item of sorted) {
+    await tx.$executeRaw`SELECT id FROM branch_stock WHERE "vendorId" = ${item.vendorId} AND "branchId" = ${item.branchId} AND "offerVariantId" = ${item.offerVariantId} FOR UPDATE`;
+    const deleted = await tx.checkoutReservationItem.deleteMany({
+      where: { id: item.id },
+    });
+    if (deleted.count === 0) {
+      continue;
+    }
+    await tx.branchStock.updateMany({
+      where: {
+        vendorId: item.vendorId,
+        branchId: item.branchId,
+        offerVariantId: item.offerVariantId,
+      },
+      data: { reservedQuantity: { decrement: item.quantity } },
+    });
+    released.items += 1;
+    released.units += item.quantity;
+  }
+  return released;
 }

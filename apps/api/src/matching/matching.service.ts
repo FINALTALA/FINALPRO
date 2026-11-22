@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { OfferIdentifierType, Prisma } from '../../generated/prisma/client';
+import { optionalName } from '../common/text/optional-name';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface MatchCandidateResult {
@@ -35,6 +36,20 @@ export interface MatchCandidateResult {
  * candidate: only an identifier that unambiguously identifies one
  * variant is ever proposed at all.
  */
+/**
+ * The offer's text for the similarity signal. Phase A+: an empty (or
+ * whitespace-only) part - typically a product without an English name -
+ * is left out explicitly, never a blank token.
+ */
+export function offerMatchingText(
+  parts: (string | null | undefined)[],
+): string {
+  return parts
+    .map(optionalName)
+    .filter((t): t is string => t !== null)
+    .join(' ');
+}
+
 @Injectable()
 export class MatchingService {
   constructor(private readonly prisma: PrismaService) {}
@@ -209,16 +224,16 @@ export class MatchingService {
             variant.vendorOffer.templateAttributes as Record<string, string>,
           ).filter((v) => v !== 'N/A')
         : [];
-    const offerText = [
+    const offerText = offerMatchingText([
       variant.vendorOffer.titleAr,
       variant.vendorOffer.titleEn,
-      variant.specsTextAr ?? '',
-      variant.specsTextEn ?? '',
+      variant.specsTextAr,
+      variant.specsTextEn,
       brandText,
-      variant.colour ?? '',
-      variant.size ?? '',
+      variant.colour,
+      variant.size,
       ...templateValues,
-    ].join(' ');
+    ]);
 
     // Sprint 17b, Guard B (N.2: "a bundle... never matched against a
     // component, no matter how high the title-similarity score"):

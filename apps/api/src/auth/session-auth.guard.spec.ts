@@ -1,5 +1,6 @@
 import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { RedisService } from '../redis/redis.service';
 import { SessionAuthGuard } from './session-auth.guard';
 import { SessionService } from './session.service';
 
@@ -32,6 +33,7 @@ describe('SessionAuthGuard', () => {
     const guard = new SessionAuthGuard(
       sessions as unknown as SessionService,
       prisma as unknown as PrismaService,
+      {} as unknown as RedisService,
     );
     const { context } = makeContext({});
 
@@ -47,6 +49,7 @@ describe('SessionAuthGuard', () => {
     const guard = new SessionAuthGuard(
       sessions as unknown as SessionService,
       prisma as unknown as PrismaService,
+      {} as unknown as RedisService,
     );
     const { context } = makeContext({ Authorization: 'Basic abc123' });
 
@@ -61,6 +64,7 @@ describe('SessionAuthGuard', () => {
     const guard = new SessionAuthGuard(
       sessions as unknown as SessionService,
       prisma as unknown as PrismaService,
+      {} as unknown as RedisService,
     );
     const { context } = makeContext({ Authorization: 'Bearer bad-token' });
 
@@ -82,6 +86,7 @@ describe('SessionAuthGuard', () => {
     const guard = new SessionAuthGuard(
       sessions as unknown as SessionService,
       prisma as unknown as PrismaService,
+      {} as unknown as RedisService,
     );
     const { context, req } = makeContext({
       Authorization: 'Bearer good-token',
@@ -111,6 +116,7 @@ describe('SessionAuthGuard', () => {
     const guard = new SessionAuthGuard(
       sessions as unknown as SessionService,
       prisma as unknown as PrismaService,
+      {} as unknown as RedisService,
     );
     const { context } = makeContext({
       Authorization: 'Bearer stale-session-token',
@@ -134,6 +140,7 @@ describe('SessionAuthGuard', () => {
     const guard = new SessionAuthGuard(
       sessions as unknown as SessionService,
       prisma as unknown as PrismaService,
+      {} as unknown as RedisService,
     );
     const { context } = makeContext({
       Authorization: 'Bearer orphaned-token',

@@ -1,8 +1,4 @@
-import { IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { CreateStoreSectionDto } from './create-store-section.dto';
 
-export class RenameStoreSectionDto {
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(80)
-  name: string;
-}
+/** PUT/PATCH a collection: any of its fields (the Arabic name stays required - never emptied). */
+export class RenameStoreSectionDto extends CreateStoreSectionDto {}

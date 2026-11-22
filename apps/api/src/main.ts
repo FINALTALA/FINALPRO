@@ -1,8 +1,10 @@
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import * as Sentry from '@sentry/node';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { configureUploadServing } from './uploads/uploads.util';
 
 async function bootstrap() {
   // Part 6, §P: Sentry error tracking. A no-op if SENTRY_DSN isn't set
@@ -11,10 +13,14 @@ async function bootstrap() {
     Sentry.init({ dsn: process.env.SENTRY_DSN });
   }
 
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   // Part 4, H.1: versioned API surface.
   app.setGlobalPrefix('api/v1');
+
+  // Sprint 26: owner-uploaded images, read-only at /uploads/* (outside
+  // the api/v1 prefix - static files, not API routes).
+  configureUploadServing(app);
 
   app.useGlobalFilters(new HttpExceptionFilter());
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import { AuditLogService } from '../audit/audit-log.service';
+import { optionalName } from '../common/text/optional-name';
 
 /**
  * Sprint 7 (RB-MATCH-003, approved-product-decisions-2026-09.md
@@ -47,17 +48,24 @@ export class CanonicalNamingService {
       where: { id: vendorOfferId },
     });
 
-    if (
-      canonicalProduct.canonicalNameAr === null ||
-      canonicalProduct.canonicalNameEn === null
-    ) {
+    // Phase A+: an empty (or whitespace-only) English name is never a
+    // name - a canonical product is never given '' as a name, and an
+    // offer without an English name keeps it empty rather than adopting
+    // a blank one.
+    const offerAr = optionalName(offer.titleAr);
+    const offerEn = optionalName(offer.titleEn);
+    const canonicalAr = optionalName(canonicalProduct.canonicalNameAr);
+    let canonicalEn = optionalName(canonicalProduct.canonicalNameEn);
+
+    if (canonicalAr === null) {
       // First confirmer for this product - their own offer title
-      // becomes the provisional canonical name.
+      // becomes the provisional canonical name (English only if it has one).
+      if (offerAr === null) return;
       await tx.canonicalProduct.update({
         where: { id: canonicalProductId },
         data: {
-          canonicalNameAr: offer.titleAr,
-          canonicalNameEn: offer.titleEn,
+          canonicalNameAr: offerAr,
+          canonicalNameEn: canonicalEn ?? offerEn,
         },
       });
       await this.auditLog.record(
@@ -68,8 +76,8 @@ export class CanonicalNamingService {
           entityType: 'CanonicalProduct',
           entityId: canonicalProductId,
           afterState: {
-            canonical_name_ar: offer.titleAr,
-            canonical_name_en: offer.titleEn,
+            canonical_name_ar: offerAr,
+            canonical_name_en: canonicalEn ?? offerEn,
             source_vendor_offer_id: vendorOfferId,
           },
         },
@@ -77,21 +85,39 @@ export class CanonicalNamingService {
       );
       return;
     }
+    if (canonicalEn === null && offerEn !== null) {
+      // The product had no English name yet - the first confirmer who
+      // has one provides it (provisionally, like the first name).
+      await tx.canonicalProduct.update({
+        where: { id: canonicalProductId },
+        data: { canonicalNameEn: offerEn },
+      });
+      await this.auditLog.record(
+        {
+          actorId,
+          correlationId,
+          action: 'canonical_product.name_set_provisional',
+          entityType: 'CanonicalProduct',
+          entityId: canonicalProductId,
+          afterState: {
+            canonical_name_en: offerEn,
+            source_vendor_offer_id: vendorOfferId,
+          },
+        },
+        tx,
+      );
+      canonicalEn = offerEn;
+    }
 
     // A canonical name already exists - this vendor's own offer must
     // adopt it, so no two different names remain for the same matched
     // product. A no-op (no write, no audit row) if this offer's title
     // already happens to match already.
-    if (
-      offer.titleAr !== canonicalProduct.canonicalNameAr ||
-      offer.titleEn !== canonicalProduct.canonicalNameEn
-    ) {
+    const wantEn = canonicalEn ?? offer.titleEn;
+    if (offer.titleAr !== canonicalAr || offer.titleEn !== wantEn) {
       await tx.vendorOffer.update({
         where: { id: vendorOfferId },
-        data: {
-          titleAr: canonicalProduct.canonicalNameAr,
-          titleEn: canonicalProduct.canonicalNameEn,
-        },
+        data: { titleAr: canonicalAr, titleEn: wantEn },
       });
       await this.auditLog.record(
         {
@@ -101,10 +127,7 @@ export class CanonicalNamingService {
           entityType: 'VendorOffer',
           entityId: vendorOfferId,
           beforeState: { title_ar: offer.titleAr, title_en: offer.titleEn },
-          afterState: {
-            title_ar: canonicalProduct.canonicalNameAr,
-            title_en: canonicalProduct.canonicalNameEn,
-          },
+          afterState: { title_ar: canonicalAr, title_en: wantEn },
         },
         tx,
       );
@@ -131,9 +154,14 @@ export class CanonicalNamingService {
     const before = await tx.canonicalProduct.findUniqueOrThrow({
       where: { id: canonicalProductId },
     });
+    // Phase A+: never '' as a name - a blank English name keeps the
+    // product's current one (or none).
+    nameAr = nameAr.trim();
+    const canonicalEn =
+      optionalName(nameEn) ?? optionalName(before.canonicalNameEn);
     await tx.canonicalProduct.update({
       where: { id: canonicalProductId },
-      data: { canonicalNameAr: nameAr, canonicalNameEn: nameEn },
+      data: { canonicalNameAr: nameAr, canonicalNameEn: canonicalEn },
     });
     await this.auditLog.record(
       {
@@ -146,7 +174,10 @@ export class CanonicalNamingService {
           canonical_name_ar: before.canonicalNameAr,
           canonical_name_en: before.canonicalNameEn,
         },
-        afterState: { canonical_name_ar: nameAr, canonical_name_en: nameEn },
+        afterState: {
+          canonical_name_ar: nameAr,
+          canonical_name_en: canonicalEn,
+        },
       },
       tx,
     );
@@ -158,12 +189,13 @@ export class CanonicalNamingService {
       where: { canonicalProductId },
     });
     for (const offer of matchedOffers) {
-      if (offer.titleAr === nameAr && offer.titleEn === nameEn) {
+      const wantEn = canonicalEn ?? offer.titleEn;
+      if (offer.titleAr === nameAr && offer.titleEn === wantEn) {
         continue;
       }
       await tx.vendorOffer.update({
         where: { id: offer.id },
-        data: { titleAr: nameAr, titleEn: nameEn },
+        data: { titleAr: nameAr, titleEn: wantEn },
       });
       await this.auditLog.record(
         {
@@ -173,7 +205,7 @@ export class CanonicalNamingService {
           entityType: 'VendorOffer',
           entityId: offer.id,
           beforeState: { title_ar: offer.titleAr, title_en: offer.titleEn },
-          afterState: { title_ar: nameAr, title_en: nameEn },
+          afterState: { title_ar: nameAr, title_en: wantEn },
         },
         tx,
       );

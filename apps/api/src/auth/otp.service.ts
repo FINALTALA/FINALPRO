@@ -39,7 +39,7 @@ export interface OtpConsumedRecord {
 // sidesteps that instead of fighting it.
 export interface OtpCheckResult {
   ok: boolean;
-  reason?: 'invalid' | 'expired' | 'too_many_attempts';
+  reason?: 'invalid' | 'expired' | 'too_many_attempts' | 'superseded';
   claim?: OtpClaim;
 }
 
@@ -94,34 +94,64 @@ export class OtpService {
    * happens exactly once, on first *successful* verification" (Part
    * 4, H.3).
    *
-   * Review fix: ordered by createdAt DESC, then issuedSequence DESC -
-   * createdAt is TIMESTAMP(3) (millisecond resolution), which real,
-   * fast, concurrent traffic can and does tie on for the same
-   * (phone, purpose); issuedSequence (a DB sequence, independent of
-   * wall-clock time) is what makes "the latest OTP" unambiguous even
-   * then, so an older, already-superseded code can never win a tie
-   * against a newer one requested moments later.
+   * TB-17: only the LATEST ISSUED code for this phone+purpose can ever
+   * succeed - by issuedSequence (a DB sequence, independent of
+   * wall-clock time, so never tied the way createdAt's millisecond
+   * resolution can be), whether or not it was consumed. A newer code
+   * supersedes every older one for good: once the latest is consumed
+   * (or expired, or locked out), the answer is a failure - never a
+   * fall-back to an older code that is still within its own TTL. (The
+   * previous lookup took the latest UNCONSUMED code, so consuming code
+   * B made the superseded code A valid again.)
    */
   async checkCode(
     phone: string,
     purpose: OtpPurpose,
     code: string,
   ): Promise<OtpCheckResult> {
+    const codeHash = hashCode(code);
     const latest = await this.prisma.otpCode.findFirst({
-      where: { phone, purpose, consumedAt: null },
-      orderBy: [{ createdAt: 'desc' }, { issuedSequence: 'desc' }],
+      where: { phone, purpose },
+      orderBy: { issuedSequence: 'desc' },
     });
 
-    if (!latest) {
-      return { ok: false, reason: 'invalid' };
+    // Every failure below first runs the same "is this an older code?"
+    // lookup, used or not, so a rejection takes the same work whatever
+    // its reason - the response time never tells a guess that happened
+    // to match an older code apart from any other wrong code.
+    const fail = async (
+      reason: OtpCheckResult['reason'],
+    ): Promise<OtpCheckResult> => {
+      await this.isOlderLiveCode(phone, purpose, codeHash, latest);
+      return { ok: false, reason };
+    };
+
+    // Already used: "invalid", the same answer as a wrong code (so a
+    // same-key retry of the request that consumed it can still be
+    // recovered via findConsumedRecord()). No attempt is counted - a
+    // consumed code has no attempts left to protect. An older code typed
+    // now is just as invalid: after the latest is used, nothing older
+    // ever counts again.
+    if (!latest || latest.consumedAt !== null) {
+      return fail('invalid');
     }
     if (latest.attemptCount >= MAX_ATTEMPTS) {
-      return { ok: false, reason: 'too_many_attempts' };
+      return fail('too_many_attempts');
     }
     if (latest.expiresAt.getTime() < Date.now()) {
-      return { ok: false, reason: 'expired' };
+      return fail('expired');
     }
-    if (latest.codeHash !== hashCode(code)) {
+    if (latest.codeHash !== codeHash) {
+      // TB-17: an older code for this phone+purpose, still within its
+      // own TTL - the person has a real code, just not the newest one
+      // (typically the first SMS after asking for a resend). Refused as
+      // "superseded" WITHOUT spending one of the latest code's attempts.
+      // Only a guess that misses every code still costs an attempt; the
+      // odds of a guess hitting one of the few older codes are no better
+      // than hitting the latest, and it can never be accepted.
+      if (await this.isOlderLiveCode(phone, purpose, codeHash, latest)) {
+        return { ok: false, reason: 'superseded' };
+      }
       await this.prisma.otpCode.update({
         where: { id: latest.id },
         data: { attemptCount: { increment: 1 } },
@@ -137,6 +167,27 @@ export class OtpService {
         attemptCount: latest.attemptCount,
       },
     };
+  }
+
+  /** TB-17: whether `codeHash` is an OLDER code than `latest` for this
+   * phone+purpose that has not expired yet (consumed or not). */
+  private async isOlderLiveCode(
+    phone: string,
+    purpose: OtpPurpose,
+    codeHash: string,
+    latest: { issuedSequence: number } | null,
+  ): Promise<boolean> {
+    const older = await this.prisma.otpCode.findFirst({
+      where: {
+        phone,
+        purpose,
+        codeHash,
+        expiresAt: { gt: new Date() },
+        ...(latest ? { issuedSequence: { lt: latest.issuedSequence } } : {}),
+      },
+      select: { id: true },
+    });
+    return older !== null;
   }
 
   /**
@@ -190,9 +241,9 @@ export class OtpService {
    * failed completion write elsewhere (IdempotencyInterceptor's own
    * bookkeeping for otp/verify; see AuthController.verifyOtp, which
    * pairs this with PhoneVerificationService's Redis-side recovery
-   * index to get back the actual token). checkCode() only ever looks
-   * at unconsumed rows, so an already-consumed one is indistinguishable
-   * from "never existed" without this.
+   * index to get back the actual token). checkCode() answers "invalid"
+   * for an already-consumed latest code, so an already-consumed one is
+   * indistinguishable from a wrong code without this.
    *
    * The exact-match on `idempotencyKey` (not just the code hash) is
    * load-bearing, not optional: two genuinely different, concurrent

@@ -1,5 +1,6 @@
 import { BlockWhenSuspended } from '../auth/vendor-suspended.guard';
 import {
+  BadRequestException,
   Body,
   Controller,
   ForbiddenException,
@@ -21,9 +22,24 @@ import {
 } from '../auth/session-auth.guard';
 import { VendorMembershipGuard } from '../auth/vendor-membership.guard';
 import { RequireVendorRole } from '../auth/vendor-role.decorator';
+import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateApplicableCategoriesDto } from './dto/update-applicable-categories.dto';
 import { UpdateStorefrontDto } from './dto/update-storefront.dto';
+import { ownUploadProblem } from '../uploads/uploads.util';
+import { CoverLookColumns, coverLookData, coverLookDto } from './cover-look';
+import {
+  HeroTextColumns,
+  assertHeroFontWeights,
+  heroTextData,
+  heroTextDto,
+} from './hero-text';
+import {
+  AppearanceTree,
+  mergeAppearanceOverrides,
+  resolveAppearance,
+  validateAppearancePatch,
+} from './storefront-appearance';
 
 // Sprint 7 (RB-STOREF-001, PDR-011/PDR-007). Owner-only throughout,
 // per-method (not class-level) @RequireVendorRole('OWNER') - the same
@@ -36,32 +52,47 @@ import { UpdateStorefrontDto } from './dto/update-storefront.dto';
 // storefront (name/logo/bio/contacts only, never these full settings)
 // is StorefrontPublicController below, a completely separate,
 // unauthenticated route.
-function ownerStorefrontDto(vendor: {
-  id: string;
-  slug: string;
-  displayName: string | null;
-  legalName: string;
-  logoUrl: string | null;
-  bio: string | null;
-  coverImageUrl: string | null;
-  coverColor: string | null;
-  instagramUrl: string | null;
-  facebookUrl: string | null;
-  whatsappUrl: string | null;
-  storefrontPublished: boolean;
-}) {
+function clearable(value: string | undefined): string | null | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+function ownerStorefrontDto(
+  vendor: {
+    id: string;
+    slug: string;
+    displayName: string | null;
+    heroTitle: string | null;
+    legalName: string;
+    logoUrl: string | null;
+    bio: string | null;
+    coverImageUrl: string | null;
+    coverColor: string | null;
+    instagramUrl: string | null;
+    facebookUrl: string | null;
+    whatsappUrl: string | null;
+    storefrontPublished: boolean;
+    storefrontAppearance: unknown;
+  } & CoverLookColumns &
+    HeroTextColumns,
+) {
   return {
     vendor_id: vendor.id,
     slug: vendor.slug,
     display_name: vendor.displayName ?? vendor.legalName,
+    hero_title: vendor.heroTitle,
+    ...heroTextDto(vendor),
     logo_url: vendor.logoUrl,
     bio: vendor.bio,
     cover_image_url: vendor.coverImageUrl,
     cover_color: vendor.coverColor,
+    ...coverLookDto(vendor),
     instagram_url: vendor.instagramUrl,
     facebook_url: vendor.facebookUrl,
     whatsapp_url: vendor.whatsappUrl,
     is_published: vendor.storefrontPublished,
+    storefront_appearance: resolveAppearance(vendor.storefrontAppearance),
   };
 }
 
@@ -103,18 +134,58 @@ export class StorefrontController {
     @Req() req: Request,
   ) {
     const vendor = await this.requireVendor(vendorId);
-    const updated = await this.prisma.vendor.update({
-      where: { id: vendorId },
-      data: {
-        displayName: dto.display_name,
-        logoUrl: dto.logo_url,
-        bio: dto.bio,
-        coverImageUrl: dto.cover_image_url,
-        coverColor: dto.cover_color,
-        instagramUrl: dto.instagram_url,
-        facebookUrl: dto.facebook_url,
-        whatsappUrl: dto.whatsapp_url,
-      },
+    for (const [field, url] of [
+      ['logo_url', dto.logo_url],
+      ['cover_image_url', dto.cover_image_url],
+    ] as const) {
+      const problem = ownUploadProblem(url, vendorId);
+      if (problem) {
+        throw new BadRequestException({
+          code: 'UPLOAD_NOT_USABLE',
+          message: `${field}: ${problem}`,
+        });
+      }
+    }
+    if (dto.storefront_appearance !== undefined) {
+      validateAppearancePatch(dto.storefront_appearance);
+    }
+    const heroText = heroTextData(dto);
+    assertHeroFontWeights(vendor, heroText);
+    const updated = await this.prisma.$transaction(async (tx) => {
+      // The appearance is merged into the stored overrides, so the row
+      // is locked first - two saves at once can never lose each other's
+      // changes.
+      let storefrontAppearance: Prisma.InputJsonValue | undefined;
+      if (dto.storefront_appearance !== undefined) {
+        await tx.$queryRaw`SELECT id FROM vendors WHERE id = ${vendorId} FOR UPDATE`;
+        const current = await tx.vendor.findUniqueOrThrow({
+          where: { id: vendorId },
+          select: { storefrontAppearance: true },
+        });
+        storefrontAppearance = mergeAppearanceOverrides(
+          (current.storefrontAppearance ?? {}) as AppearanceTree,
+          dto.storefront_appearance as AppearanceTree,
+        ) as Prisma.InputJsonValue;
+      }
+      return tx.vendor.update({
+        where: { id: vendorId },
+        // Sprint 26: "" clears a field (stored as null); undefined leaves
+        // it untouched, as before.
+        data: {
+          displayName: clearable(dto.display_name),
+          heroTitle: clearable(dto.hero_title),
+          logoUrl: clearable(dto.logo_url),
+          bio: clearable(dto.bio),
+          coverImageUrl: clearable(dto.cover_image_url),
+          coverColor: clearable(dto.cover_color),
+          ...coverLookData(dto),
+          ...heroText,
+          instagramUrl: clearable(dto.instagram_url),
+          facebookUrl: clearable(dto.facebook_url),
+          whatsappUrl: clearable(dto.whatsapp_url),
+          storefrontAppearance,
+        },
+      });
     });
     await this.auditLog.record({
       actorId: user.id,

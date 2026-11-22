@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { BranchOrderStatus, Prisma } from '../../generated/prisma/client';
 import { AuditLogService } from '../audit/audit-log.service';
+import { OutboxEventService } from '../outbox/outbox-event.service';
 import { canTransition } from './branch-order-state-machine';
 
 /**
@@ -18,7 +19,10 @@ import { canTransition } from './branch-order-state-machine';
  */
 @Injectable()
 export class BranchOrderService {
-  constructor(private readonly auditLog: AuditLogService) {}
+  constructor(
+    private readonly auditLog: AuditLogService,
+    private readonly outbox: OutboxEventService,
+  ) {}
 
   /**
    * Locks the BranchOrder row first (`SELECT ... FOR UPDATE`), matching
@@ -93,6 +97,31 @@ export class BranchOrderService {
       },
       tx,
     );
+    // PD-3 (decision 12): every path to COMPLETED (staff hand-over,
+    // the customer's own confirmation, the 72h auto-confirm) passes
+    // here, so the review invitation is written once, atomically with
+    // the status change.
+    if (to === 'COMPLETED') {
+      const order = await tx.customerOrder.findUnique({
+        where: { id: updated.customerOrderId },
+        select: { customer: { select: { userId: true } } },
+      });
+      if (order) {
+        await this.outbox.enqueue(
+          {
+            eventType: 'branch_order.review_invitation',
+            audience: 'CUSTOMER',
+            payload: {
+              branch_order_id: branchOrderId,
+              vendor_id: updated.vendorId,
+              branch_id: updated.branchId,
+              recipient_user_id: order.customer.userId,
+            },
+          },
+          tx,
+        );
+      }
+    }
     return updated;
   }
 }

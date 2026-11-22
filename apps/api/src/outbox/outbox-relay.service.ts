@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import {
+  NotificationAudience,
   NotificationTargetType,
   NotificationType,
   Prisma,
@@ -13,12 +14,29 @@ import {
 import { PeriodicTask } from '../common/periodic-task.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationChannelService } from './notification-channel.service';
+import {
+  isReturnStoreEventType,
+  RETURN_STORE_EVENT_TYPES,
+  ReturnStoreEventType,
+  storeReturnRecipients,
+  storeReturnSafeData,
+} from './return-store-events';
 
 const MAX_ATTEMPTS = 5;
 const BASE_DELAY_SECONDS = 30;
 const MAX_DELAY_SECONDS = 3600;
 const LEASE_SECONDS = 120;
 const DISPATCH_INTERVAL_MS = 3000;
+/**
+ * TB-11: one timer tick dispatches up to this many rows, within
+ * RELAY_TICK_BUDGET_MS - one row per 3 s capped the relay at ~20 a
+ * minute per instance, so a burst from one sweep (e.g. many discount
+ * notices) held every other notification back behind it. dispatchOnce()
+ * itself is unchanged (still at most one row) for the tests that drive
+ * it directly.
+ */
+export const RELAY_TICK_MAX_EVENTS = 20;
+export const RELAY_TICK_BUDGET_MS = 2000;
 const FOLLOWER_BATCH_SIZE = 200;
 // Review-round fix: a follower-fanout row used to drain every batch in
 // one process() call, which could monopolize the relay for as long as
@@ -43,6 +61,35 @@ function backoffSeconds(attemptCount: number): number {
   return Math.min(MAX_DELAY_SECONDS, BASE_DELAY_SECONDS * 2 ** attemptCount);
 }
 
+const AUDIENCES: readonly string[] = Object.values(NotificationAudience);
+/** TB-26: store notifications about the whole store, not one branch - the
+ * only STORE rows allowed without a branch_id (same list as the
+ * notifications_store_branch_check constraint). */
+const STORE_WIDE_TYPES: readonly NotificationType[] = [
+  'VENDOR_SUSPENDED',
+  'VENDOR_REACTIVATED',
+];
+
+/**
+ * TB-26: the audience the SENDER wrote into the event (OutboxEventService
+ * requires it at every call site). Never derived from the event or
+ * notification type: an event without a valid one is an error (retried,
+ * then dead-lettered), not a guess.
+ */
+function payloadAudience(
+  payload: Record<string, unknown>,
+  eventType: string,
+  outboxEventId: string,
+): NotificationAudience {
+  const a = payload.audience;
+  if (typeof a !== 'string' || !AUDIENCES.includes(a)) {
+    throw new Error(
+      `OutboxRelayService: missing or invalid audience for eventType "${eventType}" (outbox event ${outboxEventId})`,
+    );
+  }
+  return a as NotificationAudience;
+}
+
 function isUniqueViolation(err: unknown): boolean {
   return (
     err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002'
@@ -64,6 +111,11 @@ interface EventMapping {
 // NOT in this map - they fan out via OutboxDeliveryTarget instead (see
 // dispatchFollowerBatch below).
 const EVENT_TYPE_MAP: Record<string, EventMapping> = {
+  'availability_subscription.back_in_stock': {
+    type: 'VARIANT_BACK_IN_STOCK',
+    targetType: 'OFFER',
+    targetIdField: 'offer_variant_id',
+  },
   'stock_movement.owner_notification': {
     type: 'STOCK_ADJUSTMENT',
     targetType: 'STOCK',
@@ -167,6 +219,86 @@ const EVENT_TYPE_MAP: Record<string, EventMapping> = {
     targetType: 'BRANCH_ORDER',
     targetIdField: 'branch_order_id',
   },
+  // PD-3 (decision 12): the order reached COMPLETED - its customer is
+  // invited to review what they bought.
+  'branch_order.review_invitation': {
+    type: 'REVIEW_INVITATION',
+    targetType: 'BRANCH_ORDER',
+    targetIdField: 'branch_order_id',
+  },
+  // PD-3 (decision 12): an administrator upheld a report - the author
+  // is told, with the administrator's reason.
+  'review.hidden_product': {
+    type: 'REVIEW_HIDDEN',
+    targetType: 'CANONICAL_PRODUCT',
+    targetIdField: 'canonical_product_id',
+  },
+  'review.hidden_store': {
+    type: 'REVIEW_HIDDEN',
+    targetType: 'VENDOR',
+    targetIdField: 'vendor_id',
+  },
+  // TB-9: a branch order in a state the order state machine never
+  // produces - platform administrators only, once per order.
+  'branch_order.integrity_flagged': {
+    type: 'ORDER_INTEGRITY_ALERT',
+    targetType: 'BRANCH_ORDER',
+    targetIdField: 'branch_order_id',
+  },
+  // TB-14: the returns lifecycle, all targeting the Return. To the
+  // branch (owner + that branch's employees):
+  'return.requested': {
+    type: 'RETURN_REQUESTED',
+    targetType: 'RETURN',
+    targetIdField: 'return_id',
+  },
+  'return.vendor_reminder': {
+    type: 'RETURN_VENDOR_REMINDER',
+    targetType: 'RETURN',
+    targetIdField: 'return_id',
+  },
+  // ...to the customer, about their own return:
+  'return.approved': {
+    type: 'RETURN_APPROVED',
+    targetType: 'RETURN',
+    targetIdField: 'return_id',
+  },
+  'return.rejected': {
+    type: 'RETURN_REJECTED',
+    targetType: 'RETURN',
+    targetIdField: 'return_id',
+  },
+  'return.admin_rejected': {
+    type: 'RETURN_ADMIN_REJECTED',
+    targetType: 'RETURN',
+    targetIdField: 'return_id',
+  },
+  'return.escalated': {
+    type: 'RETURN_ESCALATED',
+    targetType: 'RETURN',
+    targetIdField: 'return_id',
+  },
+  'return.refunded': {
+    type: 'RETURN_REFUNDED',
+    targetType: 'RETURN',
+    targetIdField: 'return_id',
+  },
+  'return.exchanged': {
+    type: 'RETURN_EXCHANGED',
+    targetType: 'RETURN',
+    targetIdField: 'return_id',
+  },
+  'return.code_expired': {
+    type: 'RETURN_CODE_EXPIRED',
+    targetType: 'RETURN',
+    targetIdField: 'return_id',
+  },
+  // ...and to the RETURN_ESCALATION platform-alert recipients.
+  'return.escalation_alert': {
+    type: 'RETURN_ESCALATION_ALERT',
+    targetType: 'RETURN',
+    targetIdField: 'return_id',
+  },
 };
 
 const FOLLOWER_EVENT_TYPE_MAP: Record<
@@ -186,6 +318,13 @@ const FOLLOWER_EVENT_TYPE_MAP: Record<
     type: 'FOLLOWED_STORE_DISCOUNT',
     targetIdField: 'offer_variant_id',
     targetType: 'OFFER',
+  },
+  // Bulk publishing (2026-11-18): ONE summary per run, to the store's
+  // followers - the store, and how many products it added.
+  'offer.bulk_published_for_followers': {
+    type: 'FOLLOWED_STORE_NEW_PRODUCTS',
+    targetIdField: 'vendor_id',
+    targetType: 'VENDOR',
   },
   // Sprint 24 (FR-FAV-003): fires for both PRODUCT and OFFER favorites
   // of the SAME offer - a price belongs to one specific listing either
@@ -212,6 +351,9 @@ const FOLLOWER_EVENT_TYPE_MAP: Record<
   },
 };
 
+/** TB-14: the only values RETURN_ESCALATION_ALERT's `reason` may take. */
+export const RETURN_ESCALATION_REASONS = ['SLA_TIMEOUT', 'CUSTOMER_DISPUTE'];
+
 // Whitelist-only, per eventType - the single place that decides what,
 // if anything, is safe to copy into Notification.data. Deliberately
 // never passes the raw payload through: stock_movement.reason_note and
@@ -223,12 +365,52 @@ function buildSafeData(
   payload: Record<string, unknown>,
 ): Record<string, unknown> {
   switch (eventType) {
+    case 'availability_subscription.back_in_stock':
+      return {
+        offer_id:
+          typeof payload.offer_id === 'string' ? payload.offer_id : null,
+        vendor_slug:
+          typeof payload.vendor_slug === 'string' ? payload.vendor_slug : null,
+        color_id:
+          typeof payload.color_id === 'string' ? payload.color_id : null,
+        color_name_ar:
+          typeof payload.color_name_ar === 'string'
+            ? payload.color_name_ar
+            : '',
+        color_name_en:
+          typeof payload.color_name_en === 'string'
+            ? payload.color_name_en
+            : null,
+        size_code:
+          typeof payload.size_code === 'string' ? payload.size_code : null,
+        size_label:
+          typeof payload.size_label === 'string' ? payload.size_label : '',
+      };
     case 'stock_movement.owner_notification':
       return { reason: payload.reason };
     case 'vendor.suspended':
       return { reason_code: payload.reason_code };
     case 'checkout.low_stock_after_reserve':
       return { remaining_quantity: payload.remaining_quantity };
+    // PD-3: the administrator's own decision reason (written for the
+    // author) - never a reporter's free text.
+    case 'review.hidden_product':
+    case 'review.hidden_store':
+      return { review_id: payload.review_id, reason: payload.reason };
+    // TB-9: the issue code only (a fixed enum, never free text).
+    case 'branch_order.integrity_flagged':
+      return { issue: payload.issue };
+    // Bulk publishing: how many products the store added (a number only).
+    case 'offer.bulk_published_for_followers':
+      return Number.isInteger(payload.count) ? { count: payload.count } : {};
+    // TB-14: why the return was escalated - one of two fixed codes,
+    // anything else is dropped. Every other return.* event carries
+    // nothing beyond its target (the return id): never the customer's
+    // note, a rejection reason, photos or an amount.
+    case 'return.escalation_alert':
+      return RETURN_ESCALATION_REASONS.includes(payload.reason as string)
+        ? { reason: payload.reason }
+        : {};
     default:
       return {};
   }
@@ -250,8 +432,9 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(OutboxRelayService.name);
   private readonly task = new PeriodicTask(
     DISPATCH_INTERVAL_MS,
-    () => this.dispatchOnce().then(() => undefined),
+    () => this.dispatchTick().then(() => undefined),
     (err) => this.logger.error('OutboxRelayService tick failed', err as Error),
+    OutboxRelayService.name,
   );
 
   constructor(
@@ -277,6 +460,22 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
    * timer; a large follower fan-out now takes several dispatchOnce()
    * calls to fully drain rather than one, by design (see
    * FOLLOWER_YIELD_SECONDS). */
+  /** TB-11: what the timer runs - dispatchOnce() repeatedly, up to
+   * RELAY_TICK_MAX_EVENTS rows or RELAY_TICK_BUDGET_MS, stopping as soon
+   * as nothing is due. Returns how many rows it handled. */
+  async dispatchTick(
+    maxEvents = RELAY_TICK_MAX_EVENTS,
+    budgetMs = RELAY_TICK_BUDGET_MS,
+  ): Promise<number> {
+    const started = Date.now();
+    let handled = 0;
+    while (handled < maxEvents && Date.now() - started < budgetMs) {
+      if (!(await this.dispatchOnce())) break;
+      handled += 1;
+    }
+    return handled;
+  }
+
   async dispatchOnce(): Promise<boolean> {
     const claimed = await this.claim();
     if (!claimed) return false;
@@ -445,6 +644,7 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
     payload: Record<string, unknown>,
     notifyItems: NotifyItem[],
   ): Promise<boolean> {
+    const audience = payloadAudience(payload, eventType, outboxEventId);
     const followerMapping = FOLLOWER_EVENT_TYPE_MAP[eventType];
     if (followerMapping) {
       return this.drainFollowerBatch(
@@ -454,6 +654,18 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
         followerMapping,
         payload,
         notifyItems,
+        audience,
+      );
+    }
+
+    if (isReturnStoreEventType(eventType)) {
+      return this.dispatchReturnStoreEvent(
+        tx,
+        outboxEventId,
+        eventType,
+        payload,
+        notifyItems,
+        audience,
       );
     }
 
@@ -484,6 +696,7 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
       data,
       typeof payload.vendor_id === 'string' ? payload.vendor_id : null,
       typeof payload.branch_id === 'string' ? payload.branch_id : null,
+      audience,
     );
     if (created) {
       notifyItems.push({
@@ -508,6 +721,7 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
     },
     payload: Record<string, unknown>,
     notifyItems: NotifyItem[],
+    audience: NotificationAudience,
   ): Promise<boolean> {
     const targets = await tx.$queryRaw<
       { id: string; recipientUserId: string }[]
@@ -533,6 +747,7 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
         safeData,
         vendorId,
         null,
+        audience,
       );
       if (created) {
         notifyItems.push({
@@ -556,6 +771,110 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
    * (false for an idempotent retry that hit the unique constraint) -
    * the caller only queues a best-effort channel notify for a genuine
    * new delivery, never for a replay of one that already happened. */
+  /**
+   * TB-15: one event per return transition, sent to the store. The
+   * recipients are decided HERE, at send time, from the live memberships
+   * and the live store status (see storeReturnRecipients): an owner or an
+   * employee of the order's branch who is still ACTIVE, on an account that
+   * is not deactivated - owners only while the store is SUSPENDED - minus
+   * the person who made the change (the customer who cancelled, or
+   * the administrator who decided). A retry re-runs this; the
+   * (outboxEventId, recipientUserId) unique constraint keeps every
+   * recipient at one notification. No recipient left is not an error.
+   */
+  private async dispatchReturnStoreEvent(
+    tx: Prisma.TransactionClient,
+    outboxEventId: string,
+    eventType: ReturnStoreEventType,
+    payload: Record<string, unknown>,
+    notifyItems: NotifyItem[],
+    audience: NotificationAudience,
+  ): Promise<boolean> {
+    const returnId = payload.return_id;
+    if (typeof returnId !== 'string' || !returnId) {
+      throw new Error(
+        `OutboxRelayService: missing return_id for eventType "${eventType}" (outbox event ${outboxEventId})`,
+      );
+    }
+    const r = await tx.return.findUniqueOrThrow({
+      where: { id: returnId },
+      select: {
+        vendorId: true,
+        desiredOutcome: true,
+        escalationResolvedByUserId: true,
+        branchOrderItem: {
+          select: {
+            branchOrder: {
+              select: {
+                branchId: true,
+                customerOrder: {
+                  select: { customer: { select: { userId: true } } },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    const branchOrder = r.branchOrderItem.branchOrder;
+    const actorUserId =
+      eventType === 'return.cancelled_for_store'
+        ? branchOrder.customerOrder.customer.userId
+        : r.escalationResolvedByUserId;
+    const vendor = await tx.vendor.findUniqueOrThrow({
+      where: { id: r.vendorId },
+      select: { status: true },
+    });
+    const members = await tx.vendorUser.findMany({
+      where: { vendorId: r.vendorId },
+      select: {
+        userId: true,
+        role: true,
+        status: true,
+        branchId: true,
+        user: { select: { deactivatedAt: true } },
+      },
+    });
+    const recipients = storeReturnRecipients(
+      members.map((m) => ({
+        userId: m.userId,
+        role: m.role,
+        status: m.status,
+        branchId: m.branchId,
+        userDeactivated: m.user.deactivatedAt !== null,
+      })),
+      branchOrder.branchId,
+      actorUserId,
+      vendor.status === 'SUSPENDED',
+    );
+    const type = RETURN_STORE_EVENT_TYPES[eventType];
+    const data = storeReturnSafeData(eventType, r.desiredOutcome);
+    for (const recipientUserId of recipients) {
+      const created = await this.createNotification(
+        tx,
+        outboxEventId,
+        recipientUserId,
+        type,
+        'RETURN',
+        returnId,
+        data,
+        r.vendorId,
+        branchOrder.branchId,
+        audience,
+      );
+      if (created) {
+        notifyItems.push({
+          recipientUserId,
+          type,
+          targetType: 'RETURN',
+          targetId: returnId,
+          data,
+        });
+      }
+    }
+    return true;
+  }
+
   private async createNotification(
     tx: Prisma.TransactionClient,
     outboxEventId: string,
@@ -566,7 +885,19 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
     data: Record<string, unknown>,
     vendorId: string | null,
     branchId: string | null,
+    audience: NotificationAudience,
   ): Promise<boolean> {
+    // TB-26: a store notification must name its store, and - unless it
+    // is a store-wide type - its branch (the database enforces the same
+    // with a CHECK constraint; this fails earlier with a clearer error).
+    if (
+      audience === 'STORE' &&
+      (!vendorId || (!branchId && !STORE_WIDE_TYPES.includes(type)))
+    ) {
+      throw new Error(
+        `OutboxRelayService: STORE notification ${type} without ${vendorId ? 'branch_id' : 'vendor_id'} (outbox event ${outboxEventId})`,
+      );
+    }
     // A unique-constraint hit here is EXPECTED (an idempotent retry
     // re-creating a Notification that already exists) - but Postgres
     // marks the WHOLE transaction aborted the instant any statement
@@ -589,6 +920,7 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
           data: data as Prisma.InputJsonValue,
           vendorId,
           branchId,
+          audience,
         },
       });
       await tx.$executeRaw`RELEASE SAVEPOINT create_notification`;

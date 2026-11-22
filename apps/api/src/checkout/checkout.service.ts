@@ -5,15 +5,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { AuditLogService } from '../audit/audit-log.service';
-import {
-  liveReservedQuantityByKey,
-  stockLockKey,
-} from '../common/availability.util';
+import { stockLockKey } from '../common/availability.util';
 import {
   hasActiveBranchClosure,
   lockBranchOperationalStatus,
 } from '../common/branch-operational-lock.util';
-import { lockCustomerAccountState } from '../common/customer-account-lock.util';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import {
   BranchOrderPaymentMethod,
@@ -36,8 +32,10 @@ import {
   lockAndSweepStockRowAssumingReservationsLocked,
   lockReservationRowIfExists,
   lockReservationRowsSorted,
+  releaseReservationItemHolds,
 } from './stock-lock.util';
 import { computeAvailableSlots } from './slot-availability.util';
+import { daysFromToday, isWindowOpen } from './delivery-calendar.util';
 import {
   SandboxCardToken,
   SandboxPaymentService,
@@ -83,34 +81,28 @@ function effectivePrice(variant: PriceConfig): number {
   return computeEffectivePrice(variant);
 }
 
-function utcDateOnly(d: Date): Date {
-  return new Date(
-    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()),
-  );
-}
-
 function parseDateOnly(s: string): Date {
   return new Date(`${s}T00:00:00.000Z`);
 }
 
-/**
- * Sprint 10 (RB-ORD-003): a region is actually usable for delivery
- * only when BOTH `enabled` is true (Sprint 5's own lazy-default-true
- * convention - no row at all still counts as enabled) AND `fee` has
- * been explicitly set by the owner (never defaulted or inferred - see
- * VendorDeliveryZone's own schema.prisma comment).
- */
-// Sprint 22: exported too - BranchOrderAddressChangeService's own
-// zone-support check re-uses this exact same resolution rule, never a
-// re-derived copy of it.
-export function resolveDeliveryFee(
-  row: { enabled: boolean; fee: unknown } | null,
-): number | null {
-  if (!row) return null;
-  if (!row.enabled) return null;
-  if (row.fee === null || row.fee === undefined) return null;
-  return Number(row.fee);
-}
+// Sprint 10 / Sprint 22: the delivery-fee rule now lives in
+// delivery-fee.util.ts (shared with FulfilmentEligibilityService, PD-2);
+// re-exported here for its existing importers.
+export { resolveDeliveryFee } from './delivery-fee.util';
+import { resolveDeliveryFee } from './delivery-fee.util';
+import { purchaseSnapshots } from './purchase-snapshot.util';
+import {
+  FulfilmentEligibilityService,
+  isBranchSellable,
+} from '../fulfilment/fulfilment-eligibility.service';
+import { SizeGuidesService } from '../size-guides/size-guides.service';
+import { assertCartLinesWithinLimit } from '../cart/cart-line-limit';
+import { crossesIntoLowStock } from '../common/low-stock-alert.util';
+import {
+  RESERVATION_UNITS_LIMIT,
+  lockCustomerCheckout,
+  reservationUnitsLimitExceeded,
+} from './reservation-customer-lock.util';
 
 // Sprint 22: exported too, same reasoning as PICKUP_CODE_MAX_ATTEMPTS above.
 export function generatePickupCode(): string {
@@ -185,6 +177,8 @@ export class CheckoutService {
     private readonly subscriptionGate: SubscriptionGateService,
     private readonly idempotencyCompletion: IdempotencyCompletionService,
     private readonly outbox: OutboxEventService,
+    private readonly fulfilment: FulfilmentEligibilityService,
+    private readonly sizeGuides: SizeGuidesService,
   ) {}
 
   // ============================================================
@@ -213,6 +207,8 @@ export class CheckoutService {
         message: 'One or more cart items were not found in your cart',
       });
     }
+    // TB-1: a line over the public per-item limit never gets quoted.
+    assertCartLinesWithinLimit(cartItems);
 
     // Codex review round 2: eligibility (offer/vendor/subscription
     // state) must be checked at quote too, not just reserve/confirm -
@@ -409,6 +405,9 @@ export class CheckoutService {
         cart_item_id: u.cartItemId,
         reason: u.reason,
       })),
+      // TB-5: the public per-order units limit, so the page can warn
+      // before reserving (reserve() still decides).
+      units_limit: RESERVATION_UNITS_LIMIT,
     };
   }
 
@@ -436,67 +435,25 @@ export class CheckoutService {
       { branchId: string; availableQuantity: number; createdAt: Date }[]
     >
   > {
-    const variantIds = [...new Set(items.map((i) => i.offerVariantId))];
-    const stocks = await this.prisma.branchStock.findMany({
-      where: { offerVariantId: { in: variantIds } },
-    });
-    const branchIds = [...new Set(stocks.map((s) => s.branchId))];
-    // Sprint 18b: a PENDING/archived/temporarily-closed branch is
-    // filtered out here too - UX only (don't suggest a branch reserve()
-    // would refuse a moment later), not the real enforcement, which is
-    // reserve()'s own fresh, lock-guaranteed check.
-    const now = new Date();
-    const [branches, activeClosures] = await Promise.all([
-      this.prisma.storeBranch.findMany({
-        where: {
-          id: { in: branchIds },
-          verificationStatus: 'APPROVED',
-          archivedAt: null,
-        },
-      }),
-      this.prisma.branchClosure.findMany({
-        where: {
-          branchId: { in: branchIds },
-          startsAt: { lte: now },
-          endsAt: { gt: now },
-        },
-        select: { branchId: true },
-      }),
-    ]);
-    const closedBranchIds = new Set(activeClosures.map((c) => c.branchId));
-    const branchCreatedAtById = new Map(
-      branches
-        .filter((b) => !closedBranchIds.has(b.id))
-        .map((b) => [b.id, b.createdAt]),
+    // PD-2: the shared read side - only sellable branches (APPROVED, not
+    // archived, not temporarily closed), live holds subtracted. UX only;
+    // reserve() re-checks under its own locks.
+    const stock = await this.fulfilment.stockByVariant(
+      items.map((i) => i.offerVariantId),
     );
-
-    const liveReservedByKey = await liveReservedQuantityByKey(
-      this.prisma,
-      stocks.map((s) => ({
-        branchId: s.branchId,
-        offerVariantId: s.offerVariantId,
-      })),
-    );
-
     const map = new Map<
       string,
       { branchId: string; availableQuantity: number; createdAt: Date }[]
     >();
-    for (const stock of stocks) {
-      // Sprint 18b: a branch filtered out above (not APPROVED,
-      // archived, or temporarily closed right now) is excluded
-      // entirely here, not just given a fallback createdAt - it must
-      // never appear as an eligible branch at all.
-      if (!branchCreatedAtById.has(stock.branchId)) continue;
-      const key = `${stock.branchId}:${stock.offerVariantId}`;
-      const liveReserved = liveReservedByKey.get(key) ?? 0;
-      const list = map.get(stock.offerVariantId) ?? [];
-      list.push({
-        branchId: stock.branchId,
-        availableQuantity: stock.quantity - liveReserved,
-        createdAt: branchCreatedAtById.get(stock.branchId) ?? new Date(0),
-      });
-      map.set(stock.offerVariantId, list);
+    for (const [variantId, rows] of stock) {
+      map.set(
+        variantId,
+        rows.map((r) => ({
+          branchId: r.branchId,
+          availableQuantity: r.available,
+          createdAt: r.branchCreatedAt,
+        })),
+      );
     }
     return map;
   }
@@ -510,6 +467,7 @@ export class CheckoutService {
     dto: ReserveCheckoutDto,
     correlationId: string,
     idempotencyClaimId: string | undefined,
+    actorId?: string,
   ) {
     // Sprint 20b (FR-CART-012, platform terms only): checked first,
     // before any DB read - a pure request-shape validation, same as
@@ -548,6 +506,12 @@ export class CheckoutService {
     const expiresAt = new Date(Date.now() + RESERVATION_TTL_MS);
 
     return this.prisma.$transaction(async (tx) => {
+      // TB-5: first of all, the account lock and this customer's
+      // reservation lock (lockCustomerCheckout(), the same pair
+      // confirm()/cancelReservation() take, in the same order) - so a new
+      // reservation and the customer's previous one are never in flight
+      // at once.
+      await lockCustomerCheckout(tx, customerId);
       const cartItems = await tx.cartItem.findMany({
         where: { id: { in: allCartItemIds }, customerId },
         include: {
@@ -568,7 +532,27 @@ export class CheckoutService {
           message: 'One or more cart items were not found in your cart',
         });
       }
+      // TB-1: nor reserved (defence in depth - the cart already refuses it).
+      assertCartLinesWithinLimit(cartItems);
+      // TB-5: every line of this reservation together - all stores,
+      // branches and variants - stays within the units limit.
+      const units = cartItems.reduce((sum, ci) => sum + ci.quantity, 0);
+      if (units > RESERVATION_UNITS_LIMIT) {
+        throw reservationUnitsLimitExceeded();
+      }
       const cartItemById = new Map(cartItems.map((ci) => [ci.id, ci]));
+
+      // TB-5: everything this customer still holds - a live reservation
+      // (replaced by this one) and expired leftovers the lazy sweep never
+      // reached (cleaned up here). Stable under the customer lock above:
+      // only the expiry sweep could still touch them, and it is
+      // serialised by the reservation-row lock taken in Position 1.
+      const previous = await tx.checkoutReservation.findMany({
+        where: { customerId },
+        include: { items: true, slots: true },
+      });
+      const now = Date.now();
+      const replacedLive = previous.filter((r) => r.expiresAt.getTime() > now);
 
       // Phase 0 (Sprint 18b): lock every distinct branch's own
       // operational-status advisory lock FIRST, sorted ascending by
@@ -622,10 +606,9 @@ export class CheckoutService {
         // confirm() deliberately does NOT repeat this check - a
         // reservation already created before a closure/archive stays
         // confirmable (product decision).
+        // PD-2: the same predicate every public availability read uses.
         if (
-          branch.verificationStatus !== 'APPROVED' ||
-          branch.archivedAt !== null ||
-          (await hasActiveBranchClosure(tx, branch.id))
+          !isBranchSellable(branch, await hasActiveBranchClosure(tx, branch.id))
         ) {
           throw new ConflictException({
             code: 'BRANCH_NOT_AVAILABLE_FOR_ORDERS',
@@ -753,6 +736,21 @@ export class CheckoutService {
           );
         }
       }
+      // TB-5: the previous reservations' rows join the same sorted lock
+      // sets, so releasing them never breaks the global lock order.
+      const newStockKeys = new Set(stockKeys.keys());
+      for (const r of previous) {
+        for (const item of r.items) {
+          stockKeys.set(
+            stockLockKey(item.vendorId, item.branchId, item.offerVariantId),
+            {
+              vendorId: item.vendorId,
+              branchId: item.branchId,
+              offerVariantId: item.offerVariantId,
+            },
+          );
+        }
+      }
       const sortedStockKeys = [...stockKeys.keys()].sort();
 
       const windowIdByKey = new Map<string, string>();
@@ -777,7 +775,12 @@ export class CheckoutService {
           });
         }
       }
-      const sortedWindowIds = [...new Set([...windowIdByKey.values()])].sort();
+      const sortedWindowIds = [
+        ...new Set([
+          ...windowIdByKey.values(),
+          ...previous.flatMap((r) => r.slots.map((sl) => sl.deliveryWindowId)),
+        ]),
+      ].sort();
 
       // Position 1: the full reservation-lock set, batched across every
       // target stock AND window key at once - not discovered/locked
@@ -787,7 +790,11 @@ export class CheckoutService {
         findExpiredReservationIdsForWindowKeys(tx, windowDateKeys),
       ]);
       const reservationIdsToLock = [
-        ...new Set([...expiredFromStock, ...expiredFromWindows]),
+        ...new Set([
+          ...expiredFromStock,
+          ...expiredFromWindows,
+          ...previous.map((r) => r.id),
+        ]),
       ];
       await lockReservationRowsSorted(tx, reservationIdsToLock);
 
@@ -821,6 +828,8 @@ export class CheckoutService {
           reservationIdsToLock,
         );
         if (!locked) {
+          // Only a row this reservation needs must exist.
+          if (!newStockKeys.has(key)) continue;
           throw new ConflictException({
             code: 'INSUFFICIENT_STOCK',
             message: 'No stock recorded for this item at the selected branch',
@@ -830,6 +839,20 @@ export class CheckoutService {
       }
       for (const windowId of sortedWindowIds) {
         await lockDeliveryWindowRow(tx, windowId);
+      }
+
+      // TB-5: release what the customer still holds, under the locks
+      // above, before this reservation checks availability - the
+      // replaced hold counts as available again for its replacement.
+      if (previous.length > 0) {
+        await this.releaseLockedHolds(
+          tx,
+          previous.flatMap((r) => r.items),
+          lockedStock,
+        );
+        await tx.checkoutReservation.deleteMany({
+          where: { id: { in: previous.map((r) => r.id) } },
+        });
       }
 
       // Phase 3: locks held - check availability and write.
@@ -850,7 +873,8 @@ export class CheckoutService {
           if (available < item.quantity) {
             throw new ConflictException({
               code: 'INSUFFICIENT_STOCK',
-              message: `Only ${available} unit(s) available for this item at this branch`,
+              // TB-1: never the branch's real quantity.
+              message: 'The requested quantity is not available at this branch',
             });
           }
           await tx.branchStock.update({
@@ -867,7 +891,17 @@ export class CheckoutService {
           // since "before" is re-evaluated fresh every single reserve()
           // call against the row's current state under its own lock.
           const afterReserve = available - item.quantity;
-          if (available > 3 && afterReserve >= 1 && afterReserve <= 3) {
+          // 2026-11-22: the owner's safety threshold is the source of truth
+          // (the 1-3 band only while none is set) - read from the row this
+          // transaction already holds locked.
+          const { safetyStockThreshold } =
+            await tx.branchStock.findUniqueOrThrow({
+              where: { id: stock.id },
+              select: { safetyStockThreshold: true },
+            });
+          if (
+            crossesIntoLowStock(available, afterReserve, safetyStockThreshold)
+          ) {
             await this.enqueueLowStockNotification(
               tx,
               g.vendorId,
@@ -908,7 +942,26 @@ export class CheckoutService {
         }
       }
 
-      const responseBody = await this.reservationSummary(tx, reservation.id);
+      for (const old of replacedLive) {
+        await this.auditLog.record(
+          {
+            actorId,
+            correlationId,
+            action: 'checkout.reservation_replaced',
+            entityType: 'CheckoutReservation',
+            entityId: old.id,
+            afterState: { replaced_by: reservation.id },
+          },
+          tx,
+        );
+      }
+
+      const responseBody = {
+        ...(await this.reservationSummary(tx, reservation.id)),
+        // TB-5: true only when a LIVE earlier reservation was released;
+        // sweeping expired leftovers alone is not a replacement.
+        replaced_previous: replacedLive.length > 0,
+      };
       await this.idempotencyCompletion.complete(
         tx,
         idempotencyClaimId,
@@ -917,6 +970,44 @@ export class CheckoutService {
       );
       return responseBody;
     });
+  }
+
+  /**
+   * TB-5: releases a set of reservation items whose stock rows this
+   * transaction already locked (reserve()'s Position 3), keeping the
+   * in-memory locked rows in step. Same claim-then-decrement rule as
+   * releaseReservationHolds(): only an item this call actually deletes
+   * gives its quantity back (the expiry sweep may already have).
+   */
+  private async releaseLockedHolds(
+    tx: Prisma.TransactionClient,
+    items: {
+      id: string;
+      vendorId: string;
+      branchId: string;
+      offerVariantId: string;
+      quantity: number;
+    }[],
+    lockedStock: Map<string, { id: string; reservedQuantity: number }>,
+  ): Promise<void> {
+    for (const item of items) {
+      const deleted = await tx.checkoutReservationItem.deleteMany({
+        where: { id: item.id },
+      });
+      if (deleted.count === 0) continue;
+      const key = stockLockKey(
+        item.vendorId,
+        item.branchId,
+        item.offerVariantId,
+      );
+      const stock = lockedStock.get(key);
+      if (!stock) continue;
+      await tx.branchStock.update({
+        where: { id: stock.id },
+        data: { reservedQuantity: { decrement: item.quantity } },
+      });
+      stock.reservedQuantity -= item.quantity;
+    }
   }
 
   /**
@@ -1005,10 +1096,9 @@ export class CheckoutService {
     }
 
     const scheduledDate = parseDateOnly(scheduledDateStr);
-    const today = utcDateOnly(new Date());
-    const diffDays = Math.round(
-      (scheduledDate.getTime() - today.getTime()) / 86_400_000,
-    );
+    // PD-5.1: "today" in Palestine time (delivery-calendar.util.ts).
+    const now = new Date();
+    const diffDays = daysFromToday(scheduledDate, now);
     if (diffDays < 0 || diffDays > 2) {
       throw new ConflictException({
         code: 'INVALID_SLOT_DATE',
@@ -1019,6 +1109,26 @@ export class CheckoutService {
       throw new ConflictException({
         code: 'INVALID_SLOT_DATE',
         message: "This date does not match the window's day of week",
+      });
+    }
+    // PD-5.1: the same rule as the slot list - a window that already
+    // started, or is closer than the branch's preparation time, is gone.
+    const branchLead = await tx.storeBranch.findUnique({
+      where: { id: branchId },
+      select: { deliveryLeadMinutes: true },
+    });
+    if (
+      !isWindowOpen(
+        scheduledDate,
+        window.startMinute,
+        now,
+        branchLead?.deliveryLeadMinutes ?? 0,
+      )
+    ) {
+      throw new ConflictException({
+        code: 'SLOT_NO_LONGER_AVAILABLE',
+        message:
+          'This delivery window has started or is too close to prepare for - choose a later one',
       });
     }
 
@@ -1123,6 +1233,9 @@ export class CheckoutService {
     reservationId: string,
   ): Promise<{ released: boolean }> {
     return this.prisma.$transaction(async (tx) => {
+      // TB-5: the account lock and the customer's reservation lock come
+      // first (see lockCustomerCheckout()), then the reservation row.
+      await lockCustomerCheckout(tx, customerId);
       // Codex review round 3 on commit 3d81c9b (fix #3): lock the
       // CheckoutReservation row itself FIRST, before reading its items -
       // the same lock, taken the same way, lockAndSweepStockRow() now
@@ -1172,29 +1285,36 @@ export class CheckoutService {
       quantity: number;
     }[],
   ): Promise<void> {
-    // Canonical order - see stockLockKey's own comment.
-    const sorted = [...items].sort((a, b) => {
-      const ka = stockLockKey(a.vendorId, a.branchId, a.offerVariantId);
-      const kb = stockLockKey(b.vendorId, b.branchId, b.offerVariantId);
-      return ka < kb ? -1 : ka > kb ? 1 : 0;
+    // TB-8: the shared primitive (see releaseReservationItemHolds()).
+    await releaseReservationItemHolds(tx, items);
+  }
+
+  /**
+   * TB-8: RESERVATION_NOT_FOUND says WHY only when it is certain - a
+   * `checkout.reservation_replaced` audit row for this reservation,
+   * written by this same account's own later reserve() (TB-5) - so the
+   * page says "you started another checkout" only then, never for a
+   * hold the expiry sweep or a cancel removed. Keyed on the caller's
+   * own user id: nothing is revealed about another account's holds.
+   */
+  private async reservationNotFound(
+    reservationId: string,
+    actorId: string,
+  ): Promise<NotFoundException> {
+    const replaced = await this.prisma.auditLog.findFirst({
+      where: {
+        entityType: 'CheckoutReservation',
+        entityId: reservationId,
+        action: 'checkout.reservation_replaced',
+        actorId,
+      },
+      select: { id: true },
     });
-    for (const item of sorted) {
-      await tx.$executeRaw`SELECT id FROM branch_stock WHERE "vendorId" = ${item.vendorId} AND "branchId" = ${item.branchId} AND "offerVariantId" = ${item.offerVariantId} FOR UPDATE`;
-      const deleted = await tx.checkoutReservationItem.deleteMany({
-        where: { id: item.id },
-      });
-      if (deleted.count === 0) {
-        continue;
-      }
-      await tx.branchStock.updateMany({
-        where: {
-          vendorId: item.vendorId,
-          branchId: item.branchId,
-          offerVariantId: item.offerVariantId,
-        },
-        data: { reservedQuantity: { decrement: item.quantity } },
-      });
-    }
+    return new NotFoundException({
+      code: 'RESERVATION_NOT_FOUND',
+      message: 'Reservation not found',
+      ...(replaced ? { details: [{ reason: 'REPLACED' }] } : {}),
+    });
   }
 
   // ============================================================
@@ -1215,6 +1335,9 @@ export class CheckoutService {
     // d0ea80d): a rolled-back transaction can never "release, but
     // still fail" atomically.
     const expiryOutcome = await this.prisma.$transaction(async (tx) => {
+      // TB-5: never alongside a reserve() that could be replacing it
+      // (account lock first - see lockCustomerCheckout()).
+      await lockCustomerCheckout(tx, customerId);
       // Codex review round 3 on commit 3d81c9b (fix #3): lock the
       // reservation row before reading it or its items - same order as
       // cancelReservation() and lockAndSweepStockRow() now both use.
@@ -1237,10 +1360,7 @@ export class CheckoutService {
       return 'ok' as const;
     });
     if (expiryOutcome === 'not_found') {
-      throw new NotFoundException({
-        code: 'RESERVATION_NOT_FOUND',
-        message: 'Reservation not found',
-      });
+      throw await this.reservationNotFound(reservationId, actorId);
     }
     if (expiryOutcome === 'expired') {
       throw new ConflictException({
@@ -1250,28 +1370,20 @@ export class CheckoutService {
       });
     }
 
-    // Sprint 22 (FR-AUTH-014, PDR-034): resolved OUTSIDE the
-    // transaction below - CustomerProfile.userId is an immutable 1:1
-    // mapping (nothing ever changes it), so reading it before any lock
-    // is safe; only User.deactivatedAt itself (read fresh, under the
-    // lock, inside the transaction) needs the staleness protection.
-    const owningProfile = await this.prisma.customerProfile.findUniqueOrThrow({
-      where: { id: customerId },
-      select: { userId: true },
-    });
-
     return this.prisma.$transaction(async (tx) => {
-      // Review-round requirement: this account-state lock is taken
-      // FIRST, before even the reservation lock below - the global
-      // fixed order customer-account-lock.util.ts documents. Closes
-      // the race where DELETE /customers/me and confirm() interleave
-      // such that confirm() reads "not yet deactivated" a moment
-      // before deactivate() commits, then still creates a BranchOrder
-      // for an account that is, by the time anyone reads it again,
-      // already deactivated.
-      await lockCustomerAccountState(tx, owningProfile.userId);
+      // Review-round requirement: the account-state lock is taken
+      // FIRST, before even the reservation lock - the global fixed order
+      // customer-account-lock.util.ts documents, now taken together by
+      // lockCustomerCheckout() in every checkout path (TB-5). Closes the
+      // race where DELETE /customers/me and confirm() interleave such
+      // that confirm() reads "not yet deactivated" a moment before
+      // deactivate() commits, then still creates a BranchOrder for an
+      // account that is, by the time anyone reads it again, already
+      // deactivated; and a reserve() replacing this reservation waits
+      // for this payment to finish or roll back, and vice versa.
+      const ownerUserId = await lockCustomerCheckout(tx, customerId);
       const ownerFresh = await tx.user.findUniqueOrThrow({
-        where: { id: owningProfile.userId },
+        where: { id: ownerUserId },
         select: { deactivatedAt: true },
       });
       if (ownerFresh.deactivatedAt !== null) {
@@ -1294,10 +1406,7 @@ export class CheckoutService {
           })
         : null;
       if (!reservation || reservation.customerId !== customerId) {
-        throw new NotFoundException({
-          code: 'RESERVATION_NOT_FOUND',
-          message: 'Reservation not found',
-        });
+        throw await this.reservationNotFound(reservationId, actorId);
       }
       // Defensive re-check: the expiry-check transaction above already
       // verified this reservation was not expired and committed, but a
@@ -1432,13 +1541,17 @@ export class CheckoutService {
         const kb = stockLockKey(b.vendorId, b.branchId, b.offerVariantId);
         return ka < kb ? -1 : ka > kb ? 1 : 0;
       });
+      // 2026-11-22: each line's quantity after the decrement, for its
+      // ORDER_SALE stock log line written once its BranchOrder exists below
+      // (same transaction; the decrement itself is unchanged).
+      const resultingByItem = new Map<(typeof sortedItems)[number], number>();
       for (const item of sortedItems) {
-        const updated = await tx.$queryRaw<{ id: string }[]>`
+        const updated = await tx.$queryRaw<{ id: string; quantity: number }[]>`
           UPDATE branch_stock
           SET quantity = quantity - ${item.quantity}, "reservedQuantity" = "reservedQuantity" - ${item.quantity}, "updatedAt" = now()
           WHERE "vendorId" = ${item.vendorId} AND "branchId" = ${item.branchId} AND "offerVariantId" = ${item.offerVariantId}
             AND quantity - ${item.quantity} >= 0 AND "reservedQuantity" - ${item.quantity} >= 0
-          RETURNING id
+          RETURNING id, quantity
         `;
         if (updated.length === 0) {
           throw new ConflictException({
@@ -1446,7 +1559,20 @@ export class CheckoutService {
             message: 'Stock changed unexpectedly - please try again',
           });
         }
+        resultingByItem.set(item, updated[0].quantity);
       }
+
+      // PD-3: what each line is right now, frozen onto its order item.
+      const snapshots = await purchaseSnapshots(
+        tx,
+        sortedItems.map((i) => i.offerVariantId),
+      );
+      // PD-4 (decision 6): the size-guide version describing each line's
+      // size when bought - kept for any later return dispute.
+      const guideVersions = await this.sizeGuides.versionSnapshots(
+        tx,
+        sortedItems.map((i) => i.offerVariantId),
+      );
 
       let onlineTotal = 0;
       for (const [key, items] of itemsByBranch) {
@@ -1598,6 +1724,25 @@ export class CheckoutService {
               offerVariantId: item.offerVariantId,
               quantity: item.quantity,
               unitPrice: item.unitPriceAtReserve,
+              ...snapshots.get(item.offerVariantId),
+              sizeGuideVersionIdSnapshot:
+                guideVersions.get(item.offerVariantId) ?? null,
+            },
+          });
+          // «إدارة مخزون الفرع v1» (2026-11-22): the stock log line of this
+          // order's units (the decrement above already happened, unchanged)
+          await tx.stockMovement.create({
+            data: {
+              vendorId: item.vendorId,
+              branchId: item.branchId,
+              offerVariantId: item.offerVariantId,
+              quantityDelta: -item.quantity,
+              resultingQuantity: resultingByItem.get(item)!,
+              reason: 'ORDER_SALE',
+              reasonNote: 'طلب أونلاين',
+              actorId,
+              actorRole: 'CUSTOMER',
+              branchOrderId: branchOrder.id,
             },
           });
         }
@@ -1724,6 +1869,7 @@ export class CheckoutService {
       await this.outbox.enqueue(
         {
           eventType: 'checkout.low_stock_after_reserve',
+          audience: 'STORE',
           payload: {
             vendor_id: vendorId,
             branch_id: branchId,
@@ -1756,6 +1902,7 @@ export class CheckoutService {
       await this.outbox.enqueue(
         {
           eventType: 'branch_order.new_order_for_employee',
+          audience: 'STORE',
           payload: {
             vendor_id: vendorId,
             branch_id: branchId,

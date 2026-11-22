@@ -291,6 +291,7 @@ export class AdminVendorsController {
         await this.outbox.enqueue(
           {
             eventType: 'vendor.suspended',
+            audience: 'STORE',
             payload: {
               vendor_id: vendorId,
               suspension_id: suspension.id,
@@ -383,6 +384,7 @@ export class AdminVendorsController {
         await this.outbox.enqueue(
           {
             eventType: 'vendor.reactivated',
+            audience: 'STORE',
             payload: {
               vendor_id: vendorId,
               suspension_id: closed.id,

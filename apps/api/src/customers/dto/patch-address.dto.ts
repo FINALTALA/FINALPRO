@@ -1,13 +1,6 @@
-import {
-  IsBoolean,
-  IsEnum,
-  IsLatitude,
-  IsLongitude,
-  IsOptional,
-  IsPhoneNumber,
-  IsString,
-} from 'class-validator';
+import { IsBoolean, IsEnum, IsLatitude, IsLongitude, IsOptional, IsString } from 'class-validator';
 import { DeliveryZoneRegion } from '../../../generated/prisma/client';
+import { PhoneField } from '../../common/phone/phone-input';
 
 // Sprint 22 (FR-AUTH-008, PDR-029): every field optional - a partial
 // update. is_default folds "set as default" into this same generic
@@ -30,11 +23,11 @@ export class PatchAddressDto {
   landmark_note?: string;
 
   @IsOptional()
-  @IsPhoneNumber(undefined)
+  @PhoneField()
   phone_number_1?: string;
 
   @IsOptional()
-  @IsPhoneNumber(undefined)
+  @PhoneField()
   phone_number_2?: string;
 
   @IsOptional()

@@ -1,3 +1,5 @@
+import { compositionView } from './composition';
+import { ContentViaEditDraft } from './content-via-edit-draft.guard';
 import { BlockWhenSuspended } from '../auth/vendor-suspended.guard';
 import {
   BadRequestException,
@@ -34,16 +36,17 @@ import { RequireVendorRole } from '../auth/vendor-role.decorator';
 import { generateStoreInventoryBarcode } from '../common/barcode.util';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
-import {
-  liveReservedQuantityByKey,
-  totalAvailableStockLive,
-} from '../common/availability.util';
 import { enqueueFavoriteNotification } from '../favorites/favorite-alerts.util';
 import { CanonicalNamingService } from '../matching/canonical-naming.service';
 import { MatchingService } from '../matching/matching.service';
 import { OutboxEventService } from '../outbox/outbox-event.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SubscriptionGateService } from '../subscriptions/subscription-gate.service';
+import {
+  TAXONOMY_VERSION,
+  TaxonomyService,
+} from '../taxonomy/taxonomy.service';
+import { OfferPublishService } from './offer-publish.service';
 import {
   describeTemplateProblems,
   validateTemplateAttributes,
@@ -57,6 +60,7 @@ import { UpdateOfferVariantDto } from './dto/update-offer-variant.dto';
 import { UpdateOfferVariantMediaDto } from './dto/update-offer-variant-media.dto';
 import { UpdateVendorOfferDto } from './dto/update-vendor-offer.dto';
 import { UpdateVendorOfferStatusDto } from './dto/update-vendor-offer-status.dto';
+import { ownUploadProblem } from '../uploads/uploads.util';
 import {
   computeDiscountedPrice,
   computeEffectivePrice,
@@ -111,40 +115,22 @@ export class VendorOffersController {
     private readonly idempotencyCompletion: IdempotencyCompletionService,
     private readonly subscriptionGate: SubscriptionGateService,
     private readonly outbox: OutboxEventService,
+    private readonly taxonomy: TaxonomyService,
+    private readonly offerPublish: OfferPublishService,
   ) {}
 
-  // Sprint 19 (FR-FAV-005 E.0, review-round): one OutboxEvent + its
-  // StoreFollow snapshot, atomically, in the SAME transaction as the
-  // real change it announces - never a per-follower enqueue loop (a
-  // store with many followers would mean many outbox rows for one
-  // real event; see OutboxDeliveryTarget's own schema.prisma comment).
-  // `payload` shape must match OutboxRelayService's/
-  // DiscountActivationSweepService's own expectations for the given
-  // eventType exactly (see FOLLOWER_EVENT_TYPE_MAP there) - this is
-  // the SAME 'offer.discount_activated_for_followers' eventType the
-  // sweep service also enqueues for the scheduled-discount case, so
-  // both call sites must agree on payload shape.
-  private async enqueueFollowerNotification(
-    tx: Prisma.TransactionClient,
-    eventType:
-      | 'offer.published_for_followers'
-      | 'offer.discount_activated_for_followers',
-    vendorId: string,
-    payload: Record<string, unknown>,
+  // Sprint 19 follower notifications: one implementation, in the shared
+  // OfferPublishService (also used when the wizard publishes).
+  private enqueueFollowerNotification(
+    ...args: Parameters<OfferPublishService['enqueueFollowerNotification']>
   ): Promise<void> {
-    const outboxEvent = await this.outbox.enqueue(
-      { eventType, payload: { vendor_id: vendorId, ...payload } },
-      tx,
-    );
-    await tx.$executeRaw`
-      INSERT INTO outbox_delivery_targets (id, "outboxEventId", "recipientUserId")
-      SELECT gen_random_uuid()::text, ${outboxEvent.id}, "userId"
-      FROM store_follows WHERE "vendorId" = ${vendorId}
-    `;
+    return this.offerPublish.enqueueFollowerNotification(...args);
   }
 
   private offerToDto(offer: {
     id: string;
+    taxonomyVersion?: number | null;
+    firstPublishedAt?: Date | null;
     vendorId: string;
     canonicalProductId: string | null;
     titleAr: string;
@@ -154,6 +140,8 @@ export class VendorOffersController {
     categoryTemplate: string | null;
     templateAttributes: Prisma.JsonValue | null;
     archivedAt: Date | null;
+    composition?: Prisma.JsonValue | null;
+    countryOfOrigin?: string | null;
   }) {
     return {
       id: offer.id,
@@ -161,10 +149,22 @@ export class VendorOffersController {
       canonical_product_id: offer.canonicalProductId,
       title_ar: offer.titleAr,
       title_en: offer.titleEn,
+      // Phase A++ (item 7): a classified product has ONE price and discount
+      // for all its versions (PUT .../price) - the screens say so.
+      price_is_offer_level:
+        offer.taxonomyVersion !== null && offer.taxonomyVersion !== undefined,
+      // Edit drafts: a published, classified product's content changes only
+      // through «تعديل المنتج» (the server refuses the direct routes)
+      edit_via_draft:
+        offer.taxonomyVersion !== null &&
+        offer.taxonomyVersion !== undefined &&
+        !!offer.firstPublishedAt,
       status: offer.status,
       brand_id: offer.brandId,
       category_template: offer.categoryTemplate,
       template_attributes: offer.templateAttributes,
+      // fabric composition and country of origin (the owner's details page)
+      ...compositionView(offer.composition ?? null, offer.countryOfOrigin),
       archived_at: offer.archivedAt?.toISOString() ?? null,
     };
   }
@@ -346,6 +346,20 @@ export class VendorOffersController {
     return offers.map((o) => this.offerToDto(o));
   }
 
+  /**
+   * Phase A+: what still prevents publishing this product - read-only (no
+   * locks, no writes, no audit, no notification), the same judgement the
+   * status change applies.
+   */
+  @Get(':offerId/publish-check')
+  @RequireVendorRole('OWNER')
+  publishCheck(
+    @Param('vendorId') vendorId: string,
+    @Param('offerId') offerId: string,
+  ) {
+    return this.offerPublish.check(vendorId, offerId);
+  }
+
   @Get(':offerId')
   @RequireVendorRole('OWNER')
   async get(
@@ -414,13 +428,22 @@ export class VendorOffersController {
       dto.category_template,
       dto.template_attributes,
     );
+    // Sprint 27: a new product is born classified (audience >= 1,
+    // category >= 1, season optional) - same rules and error codes as
+    // PUT .../classification. requiresTaxonomy keeps it unpublishable
+    // should its classification ever be removed (DB publish trigger).
+    const { audiences, categories } =
+      await this.taxonomy.validateClassification({
+        audiences: dto.audiences ?? [],
+        categories: dto.categories ?? [],
+      });
 
     return this.prisma.$transaction(async (tx) => {
       const offer = await tx.vendorOffer.create({
         data: {
           vendorId,
           titleAr: dto.title_ar,
-          titleEn: dto.title_en,
+          titleEn: dto.title_en ?? '',
           brandId: dto.brand_id ?? null,
           categoryTemplate: dto.category_template ?? null,
           // Prisma.DbNull (real SQL NULL), not Prisma.JsonNull (the
@@ -429,8 +452,30 @@ export class VendorOffersController {
           templateAttributes: dto.category_template
             ? (dto.template_attributes as Prisma.InputJsonValue)
             : Prisma.DbNull,
+          season: dto.season ?? null,
+          taxonomyVersion: TAXONOMY_VERSION,
+          requiresTaxonomy: true,
         },
       });
+      await tx.vendorOfferAudience.createMany({
+        data: audiences.map((audience) => ({
+          vendorOfferId: offer.id,
+          vendorId,
+          audience,
+        })),
+      });
+      await tx.vendorOfferCategory.createMany({
+        data: categories.map((categoryCode) => ({
+          vendorOfferId: offer.id,
+          vendorId,
+          categoryCode,
+        })),
+      });
+      const classification = {
+        audiences,
+        categories,
+        season: offer.season,
+      };
 
       await this.auditLog.record(
         {
@@ -439,12 +484,12 @@ export class VendorOffersController {
           action: 'vendor_offer.created',
           entityType: 'VendorOffer',
           entityId: offer.id,
-          afterState: this.offerToDto(offer),
+          afterState: { ...this.offerToDto(offer), ...classification },
         },
         tx,
       );
 
-      const body = this.offerToDto(offer);
+      const body = { ...this.offerToDto(offer), ...classification };
       await this.idempotencyCompletion.complete(
         tx,
         req.idempotencyClaimId,
@@ -469,6 +514,7 @@ export class VendorOffersController {
   // a no-op. Never touches media (no signal there to re-score against -
   // see matching.service.ts).
   @BlockWhenSuspended()
+  @ContentViaEditDraft()
   @Put(':offerId')
   @RequireVendorRole('OWNER')
   async updateOffer(
@@ -735,21 +781,25 @@ export class VendorOffersController {
         });
       }
 
-      // Sprint 19 (FR-FAV-005 E.0): true only the very first time this
-      // offer ever reaches ACTIVE - never on a later ACTIVE<->INACTIVE
-      // toggle (firstPublishedAt is set once below and never cleared).
-      let isFirstPublish = false;
+      // Phase A+: publishing is ONE shared path (OfferPublishService) -
+      // the same gate, firstPublishedAt (Sprint 19: set once, on the very
+      // first publish only), audit and followers' notification as the
+      // product-entry wizard's publish.
       if (dto.status === 'ACTIVE') {
-        await this.assertPublishGate(tx, vendorId, offer);
-        isFirstPublish = offer.firstPublishedAt === null;
+        return this.offerToDto(
+          await this.offerPublish.activate(
+            tx,
+            user.id,
+            req.correlationId,
+            vendorId,
+            offer,
+          ),
+        );
       }
 
       const updated = await tx.vendorOffer.update({
         where: { id: offerId },
-        data: {
-          status: dto.status,
-          ...(isFirstPublish ? { firstPublishedAt: new Date() } : {}),
-        },
+        data: { status: dto.status },
       });
       await this.auditLog.record(
         {
@@ -763,98 +813,8 @@ export class VendorOffersController {
         },
         tx,
       );
-      if (isFirstPublish) {
-        await this.enqueueFollowerNotification(
-          tx,
-          'offer.published_for_followers',
-          vendorId,
-          { offer_id: offerId },
-        );
-      }
       return this.offerToDto(updated);
     });
-  }
-
-  private async assertPublishGate(
-    tx: Prisma.TransactionClient,
-    vendorId: string,
-    offer: {
-      id: string;
-      titleAr: string;
-      titleEn: string;
-      brandId: string | null;
-      categoryTemplate: string | null;
-      templateAttributes: Prisma.JsonValue | null;
-    },
-  ): Promise<void> {
-    const missing: string[] = [];
-
-    if (!offer.titleAr || !offer.titleEn) missing.push('title');
-    if (!offer.brandId) missing.push('brand');
-    if (offer.categoryTemplate) {
-      const problems = validateTemplateAttributes(
-        offer.categoryTemplate as ClothingCategoryTemplate,
-        offer.templateAttributes,
-      );
-      if (problems.length > 0) missing.push('template_attributes');
-    }
-
-    const variants = await tx.offerVariant.findMany({
-      where: { vendorOfferId: offer.id },
-      select: { id: true, basePrice: true },
-    });
-    if (variants.length === 0) {
-      missing.push('primary_image', 'available_stock');
-    } else {
-      const variantIds = variants.map((v) => v.id);
-
-      const primaryImage = await tx.offerVariantMedia.findFirst({
-        where: {
-          offerVariantId: { in: variantIds },
-          kind: 'PRIMARY',
-          mediaType: 'IMAGE',
-        },
-      });
-      if (!primaryImage) missing.push('primary_image');
-
-      // Sprint 17 (item 4 of the final review round): lock every
-      // relevant branch_stock row FOR SHARE, sorted by the canonical
-      // stockLockKey, BEFORE reading live availability - this is what
-      // makes the read race-free against a concurrent reserve()/POS
-      // movement (which takes FOR UPDATE on the same row): whichever
-      // side gets there first is fully committed before the other
-      // proceeds. A plain read (no lock) would let a concurrent
-      // reserve() consume the last unit between this read and the
-      // status UPDATE below.
-      const stocks = await tx.branchStock.findMany({
-        where: { vendorId, offerVariantId: { in: variantIds } },
-        select: { branchId: true, offerVariantId: true, quantity: true },
-      });
-      const sortedStocks = [...stocks].sort((a, b) => {
-        const ka = `${vendorId}:${a.branchId}:${a.offerVariantId}`;
-        const kb = `${vendorId}:${b.branchId}:${b.offerVariantId}`;
-        return ka < kb ? -1 : ka > kb ? 1 : 0;
-      });
-      for (const s of sortedStocks) {
-        await tx.$queryRaw`SELECT id FROM branch_stock WHERE "vendorId" = ${vendorId} AND "branchId" = ${s.branchId} AND "offerVariantId" = ${s.offerVariantId} FOR SHARE`;
-      }
-      const liveReserved = await liveReservedQuantityByKey(tx, sortedStocks);
-      const available = totalAvailableStockLive(sortedStocks, liveReserved);
-      if (available <= 0) missing.push('available_stock');
-    }
-
-    if (missing.length > 0) {
-      // HttpExceptionFilter only ever forwards code/message/details to
-      // the client (never an arbitrary custom property) - the same
-      // `details` convention CHECKOUT_PRICE_CHANGED already uses is
-      // what carries this structured list, not a one-off `missing` key
-      // that the filter would silently drop.
-      throw new BadRequestException({
-        code: 'OFFER_NOT_PUBLISHABLE',
-        message: `This offer cannot be published yet: ${missing.join(', ')}`,
-        details: missing,
-      });
-    }
   }
 
   // Sprint 3 remediation (FR-MATCH-012, Sec 3.2, S3-B03 - not PDR-012,
@@ -867,6 +827,7 @@ export class VendorOffersController {
   // variant's link" invariant - that write only ever happens in
   // confirmMatch() below, which is where the lock now lives.
   @BlockWhenSuspended()
+  @ContentViaEditDraft()
   @Post(':offerId/variants')
   @HttpCode(201)
   @UseInterceptors(IdempotencyInterceptor)
@@ -1142,6 +1103,7 @@ export class VendorOffersController {
   // searchNonExactCandidates() when specs/colour/size changed on an
   // unmatched variant.
   @BlockWhenSuspended()
+  @ContentViaEditDraft()
   @Put(':offerId/variants/:variantId')
   @RequireVendorRole('OWNER')
   async updateVariant(
@@ -1183,6 +1145,33 @@ export class VendorOffersController {
           code: 'OFFER_VARIANT_NOT_FOUND',
           message: 'Offer variant not found for this offer',
         });
+      }
+      // Sprint 27: a combination's price is the product's one price
+      // (PUT .../price) and its colour/size are its taxonomy codes, fixed
+      // at creation. The DB price trigger only catches a divergence
+      // between 2+ combinations, so a single-combination product must be
+      // refused here too. Legacy (non-combination) variants are untouched.
+      if (variant.isCombination) {
+        if (
+          dto.base_price !== undefined ||
+          dto.sale_price !== undefined ||
+          dto.discount_percent !== undefined ||
+          dto.discount_start_at !== undefined ||
+          dto.discount_end_at !== undefined
+        ) {
+          throw new ConflictException({
+            code: 'PRICE_IS_OFFER_LEVEL',
+            message:
+              'A classified product has one price - change it with PUT .../price',
+          });
+        }
+        if (dto.colour !== undefined || dto.size !== undefined) {
+          throw new ConflictException({
+            code: 'USE_COMBINATION_ENDPOINT',
+            message:
+              "A combination's colour/size cannot be edited - add the new combination through POST .../combinations",
+          });
+        }
       }
       const touchesIdentifier =
         dto.identifier_type !== undefined || dto.identifier_value !== undefined;
@@ -1735,6 +1724,7 @@ export class VendorOffersController {
   // below is itself a check-then-act race without it. sortOrder is
   // assigned deterministically under the same lock.
   @BlockWhenSuspended()
+  @ContentViaEditDraft()
   @Post(':offerId/variants/:variantId/media')
   @HttpCode(201)
   @UseInterceptors(IdempotencyInterceptor)
@@ -1748,6 +1738,13 @@ export class VendorOffersController {
     @Req() req: Request,
   ) {
     await this.requireVariant(vendorId, offerId, variantId);
+    const uploadProblem = ownUploadProblem(dto.url, vendorId);
+    if (uploadProblem) {
+      throw new BadRequestException({
+        code: 'UPLOAD_NOT_USABLE',
+        message: uploadProblem,
+      });
+    }
     const kind = dto.kind ?? 'ADDITIONAL';
     if (kind === 'PRIMARY' && dto.media_type === 'VIDEO') {
       throw new BadRequestException({
@@ -1855,6 +1852,7 @@ export class VendorOffersController {
 
   // Sprint 17 (FR-CAT-005): alt text only.
   @BlockWhenSuspended()
+  @ContentViaEditDraft()
   @Patch(':offerId/variants/:variantId/media/:mediaId')
   @RequireVendorRole('OWNER')
   async updateVariantMedia(
@@ -1907,6 +1905,7 @@ export class VendorOffersController {
   // StoreSectionsController.reorder() (BOLA-safe: the provided id set
   // must be EXACTLY this variant's own media ids, no more, no fewer).
   @BlockWhenSuspended()
+  @ContentViaEditDraft()
   @Put(':offerId/variants/:variantId/media/reorder')
   @RequireVendorRole('OWNER')
   async reorderVariantMedia(
@@ -1963,6 +1962,7 @@ export class VendorOffersController {
   }
 
   @BlockWhenSuspended()
+  @ContentViaEditDraft()
   @Delete(':offerId/variants/:variantId/media/:mediaId')
   @HttpCode(204)
   @RequireVendorRole('OWNER')

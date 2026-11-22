@@ -5,7 +5,11 @@ import {
   NotFoundException,
   Param,
   Query,
+  Req,
 } from '@nestjs/common';
+import { Request } from 'express';
+import { optionalSessionUserId } from '../auth/optional-session';
+import { SessionService } from '../auth/session.service';
 import { resolveDeliveryFee } from '../checkout/checkout.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ReviewsService } from '../reviews/reviews.service';
@@ -16,6 +20,7 @@ import {
 import { ComparisonService, EligibleOffer } from './comparison.service';
 import { comparisonCardDto } from './dto/comparison-card.dto';
 import { isPriceStale } from './price-staleness.util';
+import { StoreComparisonService } from './store-comparison.service';
 
 const ZONES = ['WEST_BANK', 'JERUSALEM', 'INSIDE'] as const;
 type Zone = (typeof ZONES)[number];
@@ -114,6 +119,8 @@ export class ComparisonController {
     private readonly prisma: PrismaService,
     private readonly comparison: ComparisonService,
     private readonly reviews: ReviewsService,
+    private readonly storeComparison: StoreComparisonService,
+    private readonly sessions: SessionService,
   ) {}
 
   private async requireCanonicalProduct(id: string) {
@@ -121,7 +128,7 @@ export class ComparisonController {
       where: { id },
       include: {
         brand: { select: { name: true } },
-        category: { select: { nameAr: true } },
+        category: { select: { nameAr: true, nameEn: true } },
       },
     });
     if (!product) {
@@ -157,6 +164,32 @@ export class ComparisonController {
   // below) are always the FULL unfiltered set of variants that have at
   // least one eligible offer, so filtering down to one never removes
   // the other choices from the picker itself.
+  /**
+   * The product compared between STORES: one row per store with its best
+   * offer for the filters (see StoreComparisonService). The delivery zone
+   * defaults to the signed-in customer's default address zone.
+   */
+  @Get('store-comparison')
+  async getStoreComparison(
+    @Param('id') id: string,
+    @Query() query: Record<string, string | undefined>,
+    @Req() req: Request,
+  ) {
+    const product = await this.requireCanonicalProduct(id);
+    const result = await this.storeComparison.compare(
+      product,
+      query,
+      await optionalSessionUserId(this.sessions, this.prisma, req),
+    );
+    if (!result) {
+      throw new NotFoundException({
+        code: 'NO_ELIGIBLE_OFFERS',
+        message: 'No eligible offers exist for this product yet',
+      });
+    }
+    return result;
+  }
+
   @Get('comparison')
   async getComparison(
     @Param('id') id: string,
@@ -295,7 +328,7 @@ export class CrossComparisonController {
       where: { id: { in: ids } },
       include: {
         brand: { select: { name: true } },
-        category: { select: { nameAr: true } },
+        category: { select: { nameAr: true, nameEn: true } },
       },
     });
     const byId = new Map(products.map((p) => [p.id, p]));
