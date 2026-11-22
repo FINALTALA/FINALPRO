@@ -5,6 +5,11 @@ import { useParams } from "next/navigation";
 import SafeImage from "@/components/SafeImage";
 import { EmptyState, ErrorBanner, SkeletonGrid } from "@/components/States";
 import { useFetch } from "@/lib/useFetch";
+import { translate } from "@/lib/i18n";
+import { useLang } from "@/lib/useLang";
+import { apiErrorMessage } from "@/lib/apiErrors";
+import { pickText } from "@/lib/localized";
+import "@/lib/compareSetsText";
 
 interface SetItemDto {
   canonical_product_id: string;
@@ -27,6 +32,8 @@ interface SharedSetDto {
 // session-guarded, never accepts/exposes the internal set id, only
 // the opaque share_slug from the URL itself.
 export default function SharedComparisonSetPage() {
+  const lang = useLang();
+  const t = (key: string) => translate(lang, key);
   const params = useParams<{ slug: string }>();
   const shared = useFetch<SharedSetDto>(`/comparison-sets/shared/${params.slug}`, false);
 
@@ -35,9 +42,9 @@ export default function SharedComparisonSetPage() {
       <div className="page-shell">
         <div className="wide-shell">
           {shared.status === 404 ? (
-            <EmptyState title="رابط المشاركة غير صالح أو تم حذف المجموعة" actionHref="/" actionLabel="الصفحة الرئيسية" />
+            <EmptyState title={t("cset.shared_invalid")} actionHref="/" actionLabel={t("cset.home")} />
           ) : (
-            <ErrorBanner message={shared.error} />
+            <ErrorBanner message={apiErrorMessage(shared.apiError, lang)} />
           )}
         </div>
       </div>
@@ -47,12 +54,12 @@ export default function SharedComparisonSetPage() {
   return (
     <div className="page-shell">
       <div className="wide-shell">
-        <h1 className="page-title">مجموعة مقارنة مشتركة</h1>
+        <h1 className="page-title">{t("cset.shared_title")}</h1>
 
         {shared.loading && <SkeletonGrid count={4} />}
 
         {shared.data && shared.data.items.length === 0 && (
-          <EmptyState title="هذه المجموعة فارغة حالياً" />
+          <EmptyState title={t("cset.shared_empty")} />
         )}
 
         {shared.data && shared.data.items.length > 0 && (
@@ -60,19 +67,19 @@ export default function SharedComparisonSetPage() {
             {shared.data.items.map((item) => (
               <div key={item.canonical_product_id} className="compare-card">
                 {item.image_url && (
-                  <SafeImage src={item.image_url} alt={item.name_ar ?? "منتج"} className="compare-thumb" />
+                  <SafeImage src={item.image_url} alt={pickText(lang, item.name_en, item.name_ar) || t("cset.product")} className="compare-thumb" />
                 )}
                 {item.available ? (
                   <>
                     <Link href={`/compare/${item.canonical_product_id}`}>
-                      <strong>{item.name_ar ?? item.name_en}</strong>
+                      <strong>{pickText(lang, item.name_en, item.name_ar)}</strong>
                     </Link>
                     {item.lowest_price && (
                       <div className="product-card-price">{item.lowest_price} ₪</div>
                     )}
                   </>
                 ) : (
-                  <span className="muted">غير متوفر حالياً</span>
+                  <span className="muted">{t("cset.unavailable_now")}</span>
                 )}
               </div>
             ))}

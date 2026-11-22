@@ -16,5 +16,5 @@ export async function logout(): Promise<void> {
       // what matters to this browser.
     }
   }
-  clearSession();
+  clearSession({ lost: false });
 }

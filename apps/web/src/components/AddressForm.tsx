@@ -9,6 +9,7 @@ import {
   formatCoordinate,
   validateAddress,
 } from "@/lib/address";
+import { apiErrorMessage } from "@/lib/apiErrors";
 import { useLang, useT } from "@/lib/useLang";
 import { registerTranslations } from "@/lib/i18n";
 
@@ -186,7 +187,8 @@ export default function AddressForm({
         setValues(EMPTY);
       }
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : t("address.save_failed"));
+      // Phase A++ (item 8): the central words (PHONE_INVALID included), never the API's sentence.
+      setError(err instanceof ApiError ? apiErrorMessage(err, lang) : t("address.save_failed"));
     } finally {
       setSaving(false);
     }

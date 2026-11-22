@@ -30,14 +30,11 @@
   font-display: swap;
 }
 
-:global(:root) {
+.home,
+.homeHeader {
   /* Reusable identity token: use this variable wherever the VIA wordmark is
      needed, without changing the Arabic UI font. */
   --via-logo-font: "Via Birds of Paradise", Georgia, "Times New Roman", serif;
-}
-
-.home,
-.homeHeader {
   --via-brand-font: var(--via-logo-font);
   --via-ink: #241b20;
   --via-cream: #f7f2ea;
@@ -710,6 +707,43 @@
   backdrop-filter: none;
 }
 
+/* The private shopping profile keeps the Via navigation available without
+   permanently covering its calm profile canvas. Desktop users reveal it by
+   moving into the slim top edge; leaving it lets it glide back upward. */
+.profileHoverHeader {
+  top: 0;
+  height: clamp(76px, 11vh, 126px);
+  overflow: visible;
+  pointer-events: auto !important;
+}
+
+.profileHoverHeader::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 100%;
+}
+
+.profileHoverHeader.profileHoverArmed .headerInner {
+  transform: translateY(-126px);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform .34s cubic-bezier(.2, .8, .2, 1), opacity .26s ease;
+}
+
+.profileHoverHeader:not(.profileHoverArmed) .headerInner,
+.profileHoverHeader.profileHoverArmed:hover .headerInner,
+.profileHoverHeader:focus-within .headerInner {
+  transform: translateY(clamp(14px, 2vw, 30px));
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: none) {
+  .profileHoverHeader { top: clamp(8px, 2vw, 18px); height: auto; }
+  .profileHoverHeader .headerInner { transform: none; opacity: 1; pointer-events: auto; }
+}
+
 .headerInner {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
@@ -756,8 +790,8 @@
   display: flex;
   justify-content: center;
   align-items: center;
-  gap: clamp(18px, 2.5vw, 38px);
-  width: clamp(470px, 44vw, 660px);
+  gap: clamp(13px, 1.65vw, 27px);
+  width: clamp(720px, 58vw, 930px);
   min-height: 52px;
   padding-inline: clamp(24px, 3vw, 44px);
   min-width: 0;
@@ -804,10 +838,12 @@
   border: 0;
   color: rgba(255, 250, 244, .76);
   background: transparent;
-  font: inherit;
-  font-size: clamp(16px, 1.15vw, 18px);
-  font-weight: 700;
+  font-family: "Via Far Vosta", "Via Arslan Wessam", 'Finalpro Amiri', Georgia, serif;
+  font-size: clamp(18px, 1.3vw, 21px);
+  line-height: 1;
+  font-weight: 400;
   text-decoration: none;
+  white-space: nowrap;
   transition: color .18s ease, transform .18s ease;
 }
 
@@ -816,10 +852,11 @@
   content: "";
   position: absolute;
   right: 0;
-  bottom: 2px;
+  bottom: 6px;
   left: 0;
-  height: 1px;
-  background: var(--via-gold);
+  height: .75px;
+  background: linear-gradient(to right, transparent 0%, #E2A72F 19%, #FFE77B 48%, #FFF5B7 50%, #FFE77B 52%, #E2A72F 81%, transparent 100%);
+  box-shadow: 0 0 6px rgba(255, 214, 72, .72);
   transform: scaleX(0);
   transform-origin: center;
   transition: transform .18s ease;
@@ -908,6 +945,25 @@
 
 .homeSearchInput::placeholder { color: rgba(255, 250, 244, .62); }
 .homeSearchOpen .homeSearchInput { width: 100%; padding-inline: 12px 2px; opacity: 1; }
+
+/* Keep the Via header's existing presentation on the light profile canvas.
+   Only the tools that sit outside the black navigation slab become darker,
+   so their icons remain readable without introducing new button surfaces. */
+.profileLightHeader .brand { color: #302631; }
+.profileLightHeader .toolLink, .profileLightHeader .searchToggle { color: #302631; }
+.profileLightHeader .toolLink:hover, .profileLightHeader .toolLink:focus-visible, .profileLightHeader .searchToggle:hover, .profileLightHeader .searchToggle:focus-visible { background: rgba(45, 0, 0, .09); color: #2d0000; }
+
+/* The cart sits on the quiet profile canvas, so its Via navigation uses the
+   same wine-glass language as the cart cards instead of the campaign's
+   heavy black halo. */
+.cartGlassHeader .homeNav::before {
+  inset: -2px -20px;
+  border: 1px solid rgba(255, 216, 198, .22);
+  background: linear-gradient(135deg, rgba(78, 12, 16, .94), rgba(45, 0, 0, .96) 58%, rgba(27, 0, 3, .94));
+  box-shadow: 0 14px 30px rgba(45, 0, 0, .32), 0 5px 12px rgba(109, 55, 43, .16), inset 0 1px 0 rgba(255, 231, 216, .16);
+  filter: none;
+}
+.cartGlassHeader .homeNav::after { inset: -12px -32px; background: radial-gradient(ellipse 88% 88% at center, rgba(86, 24, 27, .28) 0%, rgba(45, 0, 0, .12) 62%, rgba(45, 0, 0, 0) 100%); filter: blur(10px); }
 
 @media (max-width: 760px) {
   .womenPromo {

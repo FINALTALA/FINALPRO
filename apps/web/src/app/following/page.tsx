@@ -9,9 +9,9 @@ import { EmptyState, ErrorBanner, SkeletonGrid } from "@/components/States";
 import { clearSession } from "@/lib/session";
 import { CardsPageDto, StoreSummaryDto } from "@/lib/types";
 import { useFetch } from "@/lib/useFetch";
-import { useHydrated, useSessionToken } from "@/lib/useSession";
+import { useHydrated, useSessionToken } from "@/lib/useSession";
+import { loginRedirectHref } from "@/lib/loginRedirect";
 
-const LOGIN_REDIRECT = "/login?next=/following";
 
 // Sprint 13 (RB-STOREF-003): "أتابعه" - the stores the signed-in
 // customer follows. A horizontal strip of followed-store logos, then
@@ -34,7 +34,7 @@ export default function FollowingPage() {
   useEffect(() => {
     if (stores.status === 401 || feed.status === 401) {
       clearSession();
-      router.replace(LOGIN_REDIRECT);
+      router.replace(loginRedirectHref());
     }
   }, [stores.status, feed.status, router]);
 
@@ -43,7 +43,7 @@ export default function FollowingPage() {
   // card first, same as /orders' own unauthenticated redirect.
   useEffect(() => {
     if (hydrated && !token) {
-      router.replace(LOGIN_REDIRECT);
+      router.replace(loginRedirectHref());
     }
   }, [hydrated, token, router]);
 

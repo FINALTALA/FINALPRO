@@ -5,8 +5,20 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { ErrorBanner } from "@/components/States";
 import { apiFetch, newIdempotencyKey } from "@/lib/api";
+import { isUnauthorized } from "@/lib/apiErrors";
+import { type Lang } from "@/lib/i18n";
+import { useLang, useT } from "@/lib/useLang";
+import { useSessionExpiredRedirect } from "@/lib/useSessionExpiredRedirect";
 import { useHydrated, useSessionToken } from "@/lib/useSession";
-import { RETURN_REASON_LABEL, returnErrorMessage } from "@/lib/returns";
+import { loginRedirectHref } from "@/lib/loginRedirect";
+import {
+  RETURN_REASONS,
+  type ReturnReason,
+  type UiError,
+  formatMoney,
+  returnReasonLabel,
+  uiErrorText,
+} from "@/lib/returns";
 
 interface ReturnDto {
   id: string;
@@ -14,7 +26,6 @@ interface ReturnDto {
 
 interface ExchangeOptionBranch {
   branch_id: string;
-  available_quantity: number;
 }
 
 interface ExchangeOptionVariant {
@@ -30,13 +41,10 @@ interface ExchangeOptionsDto {
   branches: { id: string; name: string }[];
 }
 
-const REASONS = Object.keys(RETURN_REASON_LABEL) as Array<
-  keyof typeof RETURN_REASON_LABEL
->;
-
-function variantLabel(v: ExchangeOptionVariant): string {
+/** The variant's own colour/size values (store data, as written) and its price. */
+function variantLabel(v: ExchangeOptionVariant, lang: Lang, fallback: string): string {
   const parts = [v.colour, v.size].filter(Boolean);
-  return `${parts.length ? parts.join(" / ") : "بديل"} — ${v.price} ₪`;
+  return `${parts.length ? parts.join(" / ") : fallback} — ${formatMoney(v.price, lang)}`;
 }
 
 // Sprint 21/21b (FR-RET-001/002, EPIC-RET): the customer's "طلب إرجاع/تبديل"
@@ -45,23 +53,26 @@ function variantLabel(v: ExchangeOptionVariant): string {
 // comes back rather than duplicating that logic client-side. The
 // exchange-options list (GET .../exchange-options) is purely
 // indicative for the picker; submit()/approveReturn() under a real
-// lock are the only real validation.
+// lock are the only real validation. TB-16.2: Arabic and English.
 export default function RequestReturnPage() {
   const params = useParams<{ orderId: string; itemId: string }>();
   const router = useRouter();
+  const lang = useLang();
+  const t = useT();
+  const onExpired = useSessionExpiredRedirect();
   const hydrated = useHydrated();
   const token = useSessionToken();
 
-  const [reason, setReason] = useState<keyof typeof RETURN_REASON_LABEL>("DAMAGED");
+  const [reason, setReason] = useState<ReturnReason>("DAMAGED");
   const [note, setNote] = useState("");
   const [photoUrlsRaw, setPhotoUrlsRaw] = useState("");
   const [outcome, setOutcome] = useState<"RETURN" | "EXCHANGE">("RETURN");
   const [options, setOptions] = useState<ExchangeOptionsDto | null>(null);
-  const [optionsError, setOptionsError] = useState<string | null>(null);
+  const [optionsError, setOptionsError] = useState<UiError | null>(null);
   const [replacementVariantId, setReplacementVariantId] = useState("");
   const [replacementBranchId, setReplacementBranchId] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<UiError | null>(null);
   const [created, setCreated] = useState<ReturnDto | null>(null);
 
   useEffect(() => {
@@ -79,7 +90,7 @@ export default function RequestReturnPage() {
           if (firstBranch) setReplacementBranchId(firstBranch.branch_id);
         }
       })
-      .catch((err) => setOptionsError(returnErrorMessage(err)));
+      .catch((err) => (isUnauthorized(err) ? onExpired() : setOptionsError({ api: err })));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated, token, outcome]);
 
@@ -92,7 +103,7 @@ export default function RequestReturnPage() {
   }
   if (!token) {
     router.replace(
-      `/login?next=/orders/${params.orderId}/items/${params.itemId}/return`,
+      loginRedirectHref(),
     );
     return null;
   }
@@ -101,7 +112,7 @@ export default function RequestReturnPage() {
 
   async function submit() {
     if (outcome === "EXCHANGE" && (!replacementVariantId || !replacementBranchId)) {
-      setError("يرجى اختيار البديل والفرع");
+      setError({ key: "ret.request.choose_replacement" });
       return;
     }
     setBusy(true);
@@ -132,7 +143,11 @@ export default function RequestReturnPage() {
       );
       setCreated(result);
     } catch (err) {
-      setError(returnErrorMessage(err));
+      if (isUnauthorized(err)) {
+        onExpired();
+        return;
+      }
+      setError({ api: err });
     } finally {
       setBusy(false);
     }
@@ -143,12 +158,10 @@ export default function RequestReturnPage() {
       <div className="page-shell">
         <div className="card" style={{ maxWidth: 560 }}>
           <div className="notice-banner" role="status">
-            {outcome === "EXCHANGE"
-              ? "تم إرسال طلب التبديل. سيراجعه المتجر خلال 48 ساعة."
-              : "تم إرسال طلب الإرجاع. سيراجعه المتجر خلال 48 ساعة."}
+            {t(`ret.request.sent.${outcome}`)}
           </div>
           <Link href={`/returns/${created.id}`} className="button" style={{ marginTop: 8 }}>
-            {outcome === "EXCHANGE" ? "تتبّع طلب التبديل" : "تتبّع طلب الإرجاع"}
+            {t(`ret.request.track.${outcome}`)}
           </Link>
         </div>
       </div>
@@ -158,32 +171,32 @@ export default function RequestReturnPage() {
   return (
     <div className="page-shell">
       <div className="top-bar">
-        <h1 className="page-title" style={{ margin: 0 }}>طلب إرجاع أو تبديل</h1>
-        <Link href="/orders" className="button-link">طلباتي</Link>
+        <h1 className="page-title" style={{ margin: 0 }}>{t("ret.request.title")}</h1>
+        <Link href="/orders" className="button-link">{t("ret.my_orders")}</Link>
       </div>
-      {error && <ErrorBanner message={error} />}
+      {error && <ErrorBanner message={uiErrorText(error, lang)} />}
       <div className="card" style={{ maxWidth: 560 }}>
         <div className="field">
-          <label>المطلوب</label>
+          <label>{t("ret.request.what")}</label>
           <select
             value={outcome}
             disabled={busy}
             onChange={(e) => setOutcome(e.target.value as "RETURN" | "EXCHANGE")}
           >
-            <option value="RETURN">استرداد المبلغ</option>
-            <option value="EXCHANGE">تبديل بمقاس/لون آخر</option>
+            <option value="RETURN">{t("ret.request.outcome.RETURN")}</option>
+            <option value="EXCHANGE">{t("ret.request.outcome.EXCHANGE")}</option>
           </select>
         </div>
         <div className="field">
-          <label>السبب</label>
+          <label>{t("ret.request.reason")}</label>
           <select
             value={reason}
             disabled={busy}
-            onChange={(e) => setReason(e.target.value as keyof typeof RETURN_REASON_LABEL)}
+            onChange={(e) => setReason(e.target.value as ReturnReason)}
           >
-            {REASONS.map((r) => (
+            {RETURN_REASONS.map((r) => (
               <option key={r} value={r}>
-                {RETURN_REASON_LABEL[r]}
+                {returnReasonLabel(r, lang)}
               </option>
             ))}
           </select>
@@ -191,11 +204,11 @@ export default function RequestReturnPage() {
 
         {outcome === "EXCHANGE" && (
           <div className="field">
-            <label>البديل</label>
-            {optionsError && <ErrorBanner message={optionsError} />}
-            {!options && !optionsError && <p className="muted">جارٍ تحميل الخيارات...</p>}
+            <label>{t("ret.request.replacement")}</label>
+            {optionsError && <ErrorBanner message={uiErrorText(optionsError, lang)} />}
+            {!options && !optionsError && <p className="muted">{t("ret.request.loading_options")}</p>}
             {options && options.variants.length === 0 && (
-              <p className="muted">لا تتوفر بدائل أخرى لهذا المنتج حالياً.</p>
+              <p className="muted">{t("ret.request.no_options")}</p>
             )}
             {options && options.variants.length > 0 && (
               <>
@@ -211,7 +224,7 @@ export default function RequestReturnPage() {
                 >
                   {options.variants.map((v) => (
                     <option key={v.id} value={v.id}>
-                      {variantLabel(v)}
+                      {variantLabel(v, lang, t("ret.request.option_fallback"))}
                     </option>
                   ))}
                 </select>
@@ -238,7 +251,7 @@ export default function RequestReturnPage() {
         )}
 
         <div className="field">
-          <label>ملاحظة (اختياري)</label>
+          <label>{t("ret.request.note")}</label>
           <textarea
             rows={3}
             value={note}
@@ -247,7 +260,7 @@ export default function RequestReturnPage() {
           />
         </div>
         <div className="field">
-          <label>روابط صور (اختياري، مفصولة بفاصلة)</label>
+          <label>{t("ret.request.photos")}</label>
           <input
             value={photoUrlsRaw}
             disabled={busy}
@@ -256,7 +269,7 @@ export default function RequestReturnPage() {
           />
         </div>
         <button className="button" disabled={busy} onClick={submit}>
-          {busy ? "جارٍ الإرسال..." : outcome === "EXCHANGE" ? "إرسال طلب التبديل" : "إرسال طلب الإرجاع"}
+          {busy ? t("ret.request.sending") : t(`ret.request.send.${outcome}`)}
         </button>
       </div>
     </div>

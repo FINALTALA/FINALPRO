@@ -10,6 +10,7 @@ import { useFetch } from "@/lib/useFetch";
 import { CardsPageDto, StoreSummaryDto } from "@/lib/types";
 import { BagIcon, CompassIcon, UserIcon } from "@/components/Icons";
 import styles from "./home-via.module.css";
+import CollectionShowcase from "@/components/CollectionShowcase";
 
 const INFO_BLOCKS = [
   {
@@ -142,6 +143,9 @@ export default function Home() {
             </div>
           </Link>
         </div>
+
+        {/* PD-5b.4: the platform's live editorial collections (none -> nothing). */}
+        <CollectionShowcase placement="HOME" />
 
         <div className="section-heading">
           <div><h2>وصل حديثاً</h2><p>مختارات من المتاجر، مع أقل سعر متاح لكل منتج.</p></div>

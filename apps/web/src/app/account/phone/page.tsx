@@ -5,11 +5,13 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 import { ErrorBanner, EmptyState } from "@/components/States";
 import { ApiError, apiFetch, newIdempotencyKey } from "@/lib/api";
+import { otpErrorText } from "@/lib/otpErrors";
 import { normalisePhone } from "@/lib/address";
 import { registerTranslations } from "@/lib/i18n";
-import { useT } from "@/lib/useLang";
+import { useLang, useT } from "@/lib/useLang";
 import { setSessionToken } from "@/lib/session";
 import { useHydrated, useSessionToken } from "@/lib/useSession";
+import { useLoginRedirectHref, useLoginWhenSessionLost } from "@/lib/loginRedirect";
 
 registerTranslations({
   ar: {
@@ -59,10 +61,14 @@ interface PatchMeResponse {
 // customer simply logs in again with the new number - never an error
 // about the change itself, which already succeeded.
 export default function ChangePhonePage() {
+  const loginLink = useLoginRedirectHref();
   const router = useRouter();
   const hydrated = useHydrated();
   const token = useSessionToken();
+  // TB-34: a session lost to a 401 goes to sign-in (with `next` = this page) rather than showing the sign-in button.
+  useLoginWhenSessionLost(hydrated, token);
   const t = useT();
+  const lang = useLang();
   const [step, setStep] = useState<Step>("phone");
   const [phone, setPhone] = useState("");
   const [code, setCode] = useState("");
@@ -75,7 +81,7 @@ export default function ChangePhonePage() {
     try {
       await action();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : t("phone.generic_error"));
+      setError(err instanceof ApiError ? otpErrorText(err, lang) : t("phone.generic_error"));
     } finally {
       setLoading(false);
     }
@@ -127,7 +133,7 @@ export default function ChangePhonePage() {
   if (!token) {
     return (
       <div className="page-shell">
-        <EmptyState title={t("phone.login_required")} actionHref="/login?next=/account/phone" actionLabel={t("phone.login_action")} />
+        <EmptyState title={t("phone.login_required")} actionHref={loginLink} actionLabel={t("phone.login_action")} />
       </div>
     );
   }

@@ -9,6 +9,7 @@
 // through rather than hardcoding Arabic.
 
 import type { Lang } from "./i18n";
+import { normalizePhoneInput } from "./phone";
 
 export type ZoneValue = "WEST_BANK" | "JERUSALEM" | "INSIDE";
 
@@ -48,9 +49,14 @@ export type AddressValidation =
   | { ok: true; body: AddressRequestBody }
   | { ok: false; errors: Partial<Record<keyof AddressFormValues, string>> };
 
-/** "059xxxxxxx" / "056xxxxxxx" -> "+97059xxxxxxx"; anything else is returned trimmed. */
+/**
+ * Cleaned with the one phone rule (lib/phone.ts: spaces, invisible marks,
+ * Arabic/Persian digits), then the address form's existing convenience:
+ * "059xxxxxxx" / "056xxxxxxx" -> "+97059xxxxxxx". Anything else is returned
+ * cleaned - the server still validates strictly.
+ */
 export function normalisePhone(raw: string): string {
-  const compact = raw.replace(/[\s-]/g, "");
+  const compact = normalizePhoneInput(raw);
   if (/^0\d{9}$/.test(compact)) return `+970${compact.slice(1)}`;
   if (/^00970\d{9}$/.test(compact)) return `+${compact.slice(2)}`;
   return compact;

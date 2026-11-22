@@ -5,13 +5,21 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { ErrorBanner } from "@/components/States";
 import { apiFetch, newIdempotencyKey } from "@/lib/api";
+import { isUnauthorized } from "@/lib/apiErrors";
+import { useLang, useT } from "@/lib/useLang";
+import { useSessionExpiredRedirect } from "@/lib/useSessionExpiredRedirect";
 import {
-  RETURN_ITEM_CONDITION_LABEL,
-  RETURN_STATUS_LABEL,
+  ITEM_CONDITIONS,
+  type UiError,
+  fmt,
   formatDateTime,
-  returnErrorMessage,
+  formatMoney,
+  itemConditionLabel,
+  returnStatusLabel,
+  uiErrorText,
 } from "@/lib/returns";
 import { useHydrated, useSessionToken } from "@/lib/useSession";
+import { loginRedirectHref } from "@/lib/loginRedirect";
 
 interface BranchDto {
   id: string;
@@ -41,10 +49,13 @@ interface RedeemResult {
 // response is the privacy-safe redeemResultDto() only - never
 // reason_note/photo_urls/rejection_reason/code, since the redeeming
 // employee may belong to a DIFFERENT branch than the one that
-// originally decided this return.
+// originally decided this return. TB-16.2: Arabic and English.
 export default function RedeemReturnPage() {
   const params = useParams<{ vendorId: string }>();
   const router = useRouter();
+  const lang = useLang();
+  const t = useT();
+  const onExpired = useSessionExpiredRedirect();
   const hydrated = useHydrated();
   const token = useSessionToken();
 
@@ -53,13 +64,13 @@ export default function RedeemReturnPage() {
   const [branchId, setBranchId] = useState("");
   const [condition, setCondition] = useState<"RESELLABLE" | "DAMAGED">("RESELLABLE");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<UiError | null>(null);
   const [result, setResult] = useState<RedeemResult | null>(null);
 
   useEffect(() => {
     if (!hydrated) return;
     if (!token) {
-      router.replace(`/login?next=/vendor/${params.vendorId}/returns/redeem`);
+      router.replace(loginRedirectHref());
       return;
     }
     apiFetch<BranchDto[]>(`/vendors/${params.vendorId}/branches`)
@@ -68,7 +79,7 @@ export default function RedeemReturnPage() {
         setBranches(active);
         if (active.length > 0) setBranchId(active[0].id);
       })
-      .catch((err) => setError(returnErrorMessage(err)));
+      .catch((err) => (isUnauthorized(err) ? onExpired() : setError({ api: err })));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated, token, params.vendorId]);
 
@@ -82,11 +93,11 @@ export default function RedeemReturnPage() {
 
   async function redeem() {
     if (code.trim().length !== 6) {
-      setError("الكود مكوَّن من 6 أرقام");
+      setError({ key: "ret.redeem.code_invalid" });
       return;
     }
     if (!branchId) {
-      setError("اختاري الفرع المستلِم");
+      setError({ key: "ret.redeem.branch_required" });
       return;
     }
     setBusy(true);
@@ -101,7 +112,11 @@ export default function RedeemReturnPage() {
       setResult(res);
       setCode("");
     } catch (err) {
-      setError(returnErrorMessage(err));
+      if (isUnauthorized(err)) {
+        onExpired();
+        return;
+      }
+      setError({ api: err });
     } finally {
       setBusy(false);
     }
@@ -110,10 +125,10 @@ export default function RedeemReturnPage() {
   return (
     <div className="page-shell">
       <div className="top-bar">
-        <h1 className="page-title" style={{ margin: 0 }}>استبدال كود إرجاع</h1>
-        <Link href={`/vendor/${params.vendorId}`} className="button-link">لوحة المتجر</Link>
+        <h1 className="page-title" style={{ margin: 0 }}>{t("ret.redeem.title")}</h1>
+        <Link href={`/vendor/${params.vendorId}`} className="button-link">{t("ret.store_dashboard")}</Link>
       </div>
-      {error && <ErrorBanner message={error} />}
+      {error && <ErrorBanner message={uiErrorText(error, lang)} />}
 
       {!branches && !error && (
         <div className="skeleton" style={{ height: 160, width: "100%", maxWidth: 560 }} />
@@ -122,11 +137,10 @@ export default function RedeemReturnPage() {
       {branches && (
         <div className="card" style={{ maxWidth: 560 }}>
           <p className="muted" style={{ marginTop: 0 }}>
-            يمكن استلام إرجاع في أي فرع من فروع متجركم، بغض النظر عن الفرع الذي اعتمد الطلب
-            أصلاً.
+            {t("ret.redeem.hint")}
           </p>
           <div className="field">
-            <label>كود الإرجاع (6 أرقام)</label>
+            <label>{t("ret.redeem.code_label")}</label>
             <input
               value={code}
               disabled={busy}
@@ -135,7 +149,7 @@ export default function RedeemReturnPage() {
             />
           </div>
           <div className="field">
-            <label>الفرع المستلِم</label>
+            <label>{t("ret.redeem.branch_label")}</label>
             <select value={branchId} disabled={busy} onChange={(e) => setBranchId(e.target.value)}>
               {branches.map((b) => (
                 <option key={b.id} value={b.id}>{b.name}</option>
@@ -143,37 +157,37 @@ export default function RedeemReturnPage() {
             </select>
           </div>
           <div className="field">
-            <label>حالة المنتج</label>
+            <label>{t("ret.redeem.condition_label")}</label>
             <select
               value={condition}
               disabled={busy}
               onChange={(e) => setCondition(e.target.value as "RESELLABLE" | "DAMAGED")}
             >
-              {Object.entries(RETURN_ITEM_CONDITION_LABEL).map(([v, label]) => (
-                <option key={v} value={v}>{label}</option>
+              {ITEM_CONDITIONS.map((v) => (
+                <option key={v} value={v}>{itemConditionLabel(v, lang)}</option>
               ))}
             </select>
           </div>
           <button className="button" disabled={busy} onClick={redeem}>
-            {busy ? "جارٍ الاستبدال..." : "استبدال"}
+            {busy ? t("ret.redeem.submitting") : t("ret.redeem.submit")}
           </button>
         </div>
       )}
 
       {result && (
         <div className="notice-banner" style={{ marginTop: 14, maxWidth: 560 }} role="status">
-          {result.desired_outcome === "EXCHANGE" ? "تم تسليم البديل بنجاح." : "تم استلام المنتج بنجاح."}{" "}
-          الحالة: {RETURN_STATUS_LABEL[result.status] ?? result.status}، وقت الاستلام:{" "}
-          {formatDateTime(result.received_at)}.
+          {t(`ret.redeem.done.${result.desired_outcome}`)}{" "}
+          {fmt(t("ret.redeem.summary"), {
+            status: returnStatusLabel(result.status, lang),
+            date: formatDateTime(result.received_at, lang),
+          })}
           {result.settlement && result.settlement.direction === "COLLECT_CASH" && (
-            <> يُحصَّل من العميل {result.settlement.net_amount} ₪ نقداً.</>
+            <> {fmt(t("ret.redeem.collect"), { amount: formatMoney(result.settlement.net_amount, lang) })}</>
           )}
           {result.settlement && result.settlement.direction === "REFUND_CASH" && (
-            <> يُردّ للعميل {result.settlement.net_amount} ₪ نقداً.</>
+            <> {fmt(t("ret.redeem.refund"), { amount: formatMoney(result.settlement.net_amount, lang) })}</>
           )}
-          {result.settlement && result.settlement.direction === "NONE" && (
-            <> لا فرق مستحق.</>
-          )}
+          {result.settlement && result.settlement.direction === "NONE" && <> {t("ret.no_difference")}</>}
         </div>
       )}
     </div>

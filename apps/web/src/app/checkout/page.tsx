@@ -9,6 +9,132 @@ import { formatDelta, hasChanges, parsePriceChange, PriceChangeSummary } from "@
 import { CardResult, declineMessage, SandboxCardToken } from "@/lib/sandbox-card";
 import { allGroupsFulfillable, availableMethods, coerceMethod, defaultMethod, FulfilmentMethod } from "@/lib/fulfilment";
 import { clearSession, getSessionToken } from "@/lib/session";
+import { cartQuantityErrorMessage, expiredReservationMessage, replacedReservationNotice, reservationMessage, unitsLimitMessage } from "@/lib/cart";
+import { useLang } from "@/lib/useLang";
+import { registerTranslations, translate } from "@/lib/i18n";
+import { apiErrorMessage } from "@/lib/apiErrors";
+import { pickText } from "@/lib/localized";
+import { fmt } from "@/lib/shopText";
+import { type UiMsg, uiMsgText } from "@/lib/storeText";
+import { loginRedirectHref } from "@/lib/loginRedirect";
+
+// TB-25: the checkout's own words (Arabic unchanged). Branch names are
+// data; the server's own blocker sentences stay as they are in Arabic and
+// are worded by their code and figures in English.
+registerTranslations({
+  ar: {
+    "co.day.0": "الأحد", "co.day.1": "الاثنين", "co.day.2": "الثلاثاء", "co.day.3": "الأربعاء",
+    "co.day.4": "الخميس", "co.day.5": "الجمعة", "co.day.6": "السبت",
+    "co.err.quote": "تعذّر تحميل ملخص الطلب",
+    "co.err.no_method": "لا توجد طريقة استلام أو توصيل متاحة لأحد الفروع - اختاري فرعاً آخر.",
+    "co.err.address_slot": "اختاري عنوان التوصيل والموعد قبل المتابعة.",
+    "co.err.terms": "يجب الموافقة على شروط الاستخدام قبل المتابعة.",
+    "co.slot.SLOT_NO_LONGER_AVAILABLE": "موعد التوصيل الذي اخترتِه بدأ أو أصبح قريباً جداً على التجهيز - اختاري موعداً لاحقاً.",
+    "co.slot.SLOT_CAPACITY_EXCEEDED": "اكتمل حجز موعد التوصيل الذي اخترتِه - اختاري موعداً آخر.",
+    "co.slot.SLOT_CLOSED": "الفرع مغلق في هذا اليوم - اختاري موعداً آخر.",
+    "co.slot.INVALID_SLOT_DATE": "هذا الموعد لم يعد ضمن الأيام الثلاثة المتاحة - اختاري موعداً آخر.",
+    "co.err.reserve": "تعذّر حجز الطلب",
+    "co.err.confirm": "تعذّر تأكيد الطلب",
+    "co.created": "تم إنشاء الطلب",
+    "co.order_n": "طلب #{id}",
+    "co.pickup": "استلام من المحل",
+    "co.delivery": "توصيل",
+    "co.pickup_code": "رمز الاستلام: {code}",
+    "co.keep_shopping": "متابعة التسوق",
+    "co.loading": "جارٍ التحميل...",
+    "co.confirm_title": "تأكيد الطلب",
+    "co.prices_changed": "تغيّرت الأسعار منذ حجزك",
+    "co.prices_changed_hint": "لم يتم خصم أي مبلغ ولم يُنشأ أي طلب. راجعي الأسعار الجديدة ثم أكملي.",
+    "co.product": "منتج",
+    "co.delivery_fee": "رسوم التوصيل",
+    "co.not_available": "غير متاح",
+    "co.review_new_prices": "مراجعة بالأسعار الجديدة",
+    "co.cancel_back": "إلغاء والعودة",
+    "co.hold_valid": "الحجز صالح لمدة {n} دقيقة تقريباً - أكملي الدفع قبل انتهاء الوقت.",
+    "co.total": "الإجمالي: {total} ₪",
+    "co.confirm": "تأكيد الطلب",
+    "co.title": "إتمام الطلب",
+    "co.unavailable_items": "بعض العناصر لم تعد متوفرة بالكمية المطلوبة ولن تُشترى الآن.",
+    "co.subtotal": "المجموع الفرعي: {n} ₪",
+    "co.fragmented": "تعذّر تغطية كل العناصر من فرع واحد - قُسّمت تلقائياً على أقرب فرع مؤهل.",
+    "co.branch": "الفرع",
+    "co.method": "طريقة الاستلام",
+    "co.no_method_branch": "لا توجد طريقة استلام أو توصيل متاحة لهذا الفرع حالياً - اختاري فرعاً آخر.",
+    "co.address": "العنوان",
+    "co.pick_address": "اختاري عنواناً",
+    "co.no_addresses": "لا توجد عناوين محفوظة بعد.",
+    "co.new_address": "+ عنوان جديد",
+    "co.slot": "الموعد (خلال الأيام الثلاثة القادمة)",
+    "co.pick_slot": "اختاري موعداً",
+    "co.payment": "طريقة الدفع",
+    "co.cod": "الدفع عند الاستلام",
+    "co.online": "دفع إلكتروني (تجريبي)",
+    "co.note": "ملاحظة للمتجر (اختياري)",
+    "co.note_placeholder": "مثال: الرجاء الاتصال قبل التوصيل",
+    "co.agree": "أوافق على ",
+    "co.terms": "شروط الاستخدام",
+    "co.continue": "متابعة",
+    "co.nothing": "لا توجد عناصر متاحة للمتابعة حالياً.",
+    "co.list_sep": "، ",
+  },
+  en: {
+    "co.day.0": "Sunday", "co.day.1": "Monday", "co.day.2": "Tuesday", "co.day.3": "Wednesday",
+    "co.day.4": "Thursday", "co.day.5": "Friday", "co.day.6": "Saturday",
+    "co.err.quote": "Couldn't load the order summary",
+    "co.err.no_method": "One of the branches has no pickup or delivery available - choose another branch.",
+    "co.err.address_slot": "Choose the delivery address and time before you continue.",
+    "co.err.terms": "You need to accept the terms of use before you continue.",
+    "co.slot.SLOT_NO_LONGER_AVAILABLE": "The delivery time you chose has started or is now too close to prepare - choose a later time.",
+    "co.slot.SLOT_CAPACITY_EXCEEDED": "The delivery time you chose is fully booked - choose another time.",
+    "co.slot.SLOT_CLOSED": "The branch is closed on that day - choose another time.",
+    "co.slot.INVALID_SLOT_DATE": "This time is no longer within the three available days - choose another time.",
+    "co.err.reserve": "Couldn't hold the order",
+    "co.err.confirm": "Couldn't confirm the order",
+    "co.created": "Order placed",
+    "co.order_n": "Order #{id}",
+    "co.pickup": "Pickup from the shop",
+    "co.delivery": "Delivery",
+    "co.pickup_code": "Pickup code: {code}",
+    "co.keep_shopping": "Continue shopping",
+    "co.loading": "Loading...",
+    "co.confirm_title": "Confirm the order",
+    "co.prices_changed": "Prices have changed since your hold",
+    "co.prices_changed_hint": "Nothing was charged and no order was created. Review the new prices, then continue.",
+    "co.product": "Product",
+    "co.delivery_fee": "Delivery fee",
+    "co.not_available": "Not available",
+    "co.review_new_prices": "Review the new prices",
+    "co.cancel_back": "Cancel and go back",
+    "co.hold_valid": "The hold is valid for about {n} minutes - complete payment before it runs out.",
+    "co.total": "Total: ₪{total}",
+    "co.confirm": "Confirm the order",
+    "co.title": "Checkout",
+    "co.unavailable_items": "Some items are no longer available in the quantity asked for and won't be bought now.",
+    "co.subtotal": "Subtotal: ₪{n}",
+    "co.fragmented": "Not every item could come from one branch - they were split automatically to the nearest eligible branch.",
+    "co.branch": "Branch",
+    "co.method": "How you receive it",
+    "co.no_method_branch": "This branch has no pickup or delivery available right now - choose another branch.",
+    "co.address": "Address",
+    "co.pick_address": "Choose an address",
+    "co.no_addresses": "No saved addresses yet.",
+    "co.new_address": "+ New address",
+    "co.slot": "Time (within the next three days)",
+    "co.pick_slot": "Choose a time",
+    "co.payment": "Payment method",
+    "co.cod": "Pay on delivery",
+    "co.online": "Online payment (test)",
+    "co.note": "Note for the store (optional)",
+    "co.note_placeholder": "For example: please call before delivery",
+    "co.agree": "I accept the ",
+    "co.terms": "terms of use",
+    "co.continue": "Continue",
+    "co.nothing": "No items available to continue right now.",
+    "co.list_sep": ", ",
+    "co.blocker.min": "The minimum order for {method} at this branch is ₪{required} (this order: ₪{current}).",
+    "co.blocker.zone": "This branch doesn't deliver to your address's area.",
+  },
+});
 
 interface QuoteItem {
   cart_item_id: string;
@@ -66,6 +192,8 @@ interface QuoteGroup {
 interface QuoteResponse {
   groups: QuoteGroup[];
   unavailable_items: { cart_item_id: string; reason: string }[];
+  /** TB-5: the most items one order may hold (reserve() decides). */
+  units_limit?: number;
 }
 
 interface AddressDto {
@@ -100,6 +228,8 @@ interface ReserveResponse {
     payment_method: "ONLINE" | "COD";
   }[];
   slots: { delivery_fee: number; scheduled_date: string }[];
+  /** TB-5: an earlier live hold of this account was released for this one. */
+  replaced_previous?: boolean;
 }
 
 interface ConfirmedBranchOrder {
@@ -109,19 +239,38 @@ interface ConfirmedBranchOrder {
   total: number;
 }
 
-const DAY_LABELS = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
+// TB-25: day names are co.day.<0-6>.
 
 // Sprint 10 (RB-ORD-002): quote (read-only preview) -> the customer
 // configures branch/fulfilment/slot/payment per group -> reserve (the
 // real 10-minute hold) -> confirm (creates the actual order(s)).
 // Deliberately NOT a full Orders UI afterward - just the immediate
 // confirmation with pickup codes, per this sprint's own scope note.
-export default function CheckoutPage() {
+export default function CheckoutPage({ embedded = false }: { embedded?: boolean }) {
   const router = useRouter();
+  // TB-5: the new hold messages follow the shopper's language.
+  const lang = useLang();
+  const t = (key: string) => translate(lang, key);
   const [quote, setQuote] = useState<QuoteResponse | null>(null);
   const [addresses, setAddresses] = useState<AddressDto[] | null>(null);
   const [choices, setChoices] = useState<Record<string, GroupChoice>>({});
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<UiMsg | null>(null);
+  /** TB-25: a failure worded at render (slot, hold, stock refusals by code; never the server's text in English). */
+  const errorText = (m: UiMsg) => {
+    if (!("api" in m) || !(m.api instanceof ApiError)) return uiMsgText(m, lang);
+    const err = m.api;
+    const slotKey = `co.slot.${err.code}`;
+    if (t(slotKey) !== slotKey) return t(slotKey);
+    return reservationMessage(err.code, err.details, lang) ?? cartQuantityErrorMessage(err.code, err.details, lang) ?? (lang === "ar" ? err.message : apiErrorMessage(err, lang));
+  };
+  /** A branch blocker: the server's Arabic sentence as before; English worded by its code and figures. */
+  const blockerText = (b: QuoteBlocker) => {
+    if (lang === "ar") return b.message;
+    if (b.code === "BELOW_MINIMUM_ORDER_VALUE") {
+      return fmt(t("co.blocker.min"), { method: b.fulfilment_method === "PICKUP" ? "pickup" : "delivery", required: b.required, current: b.current });
+    }
+    return t("co.blocker.zone");
+  };
   const [busy, setBusy] = useState(false);
   const [reservation, setReservation] = useState<ReserveResponse | null>(null);
   const [expiresInMinutes, setExpiresInMinutes] = useState(0);
@@ -138,6 +287,7 @@ export default function CheckoutPage() {
   const [paymentError, setPaymentError] = useState<string | null>(null);
   const [priceChange, setPriceChange] = useState<PriceChangeSummary | null>(null);
   const [termsAccepted, setTermsAccepted] = useState(false);
+  const pageClass = embedded ? "checkout-embedded" : "page-shell";
 
   function groupKey(g: QuoteGroup): string {
     return `${g.vendor_id}:${g.cart_item_ids.join(",")}`;
@@ -145,7 +295,7 @@ export default function CheckoutPage() {
 
   useEffect(() => {
     if (!getSessionToken()) {
-      router.replace("/login");
+      router.replace(loginRedirectHref());
       return;
     }
     const raw = sessionStorage.getItem("checkout_cart_item_ids");
@@ -187,10 +337,10 @@ export default function CheckoutPage() {
       .catch((err) => {
         if (err instanceof ApiError && err.status === 401) {
           clearSession();
-          router.replace("/login");
+          router.replace(loginRedirectHref());
           return;
         }
-        setError(err instanceof ApiError ? err.message : "تعذّر تحميل ملخص الطلب");
+        setError({ api: err, key: "co.err.quote" });
       });
   }, [router]);
 
@@ -205,7 +355,7 @@ export default function CheckoutPage() {
   async function reserve() {
     if (!quote) return;
     if (!allGroupsFulfillable(quote.groups.map((g) => choices[groupKey(g)]?.fulfilmentMethod ?? null))) {
-      setError("لا توجد طريقة استلام أو توصيل متاحة لأحد الفروع - اختاري فرعاً آخر.");
+      setError({ key: "co.err.no_method" });
       return;
     }
     for (const g of quote.groups) {
@@ -214,12 +364,12 @@ export default function CheckoutPage() {
         choice?.fulfilmentMethod === "DELIVERY" &&
         (!choice.addressId || !choice.deliveryWindowId || !choice.scheduledDate)
       ) {
-        setError("اختاري عنوان التوصيل والموعد قبل المتابعة.");
+        setError({ key: "co.err.address_slot" });
         return;
       }
     }
     if (!termsAccepted) {
-      setError("يجب الموافقة على شروط الاستخدام قبل المتابعة.");
+      setError({ key: "co.err.terms" });
       return;
     }
     setBusy(true);
@@ -257,7 +407,9 @@ export default function CheckoutPage() {
       );
       setConfirmIdempotencyKey(newIdempotencyKey("checkout-confirm"));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "تعذّر حجز الطلب");
+      // PD-5.1: the slot rule is the server's - say why a window was refused
+      // (co.slot.<code>; worded at render by errorText).
+      setError({ api: err, key: "co.err.reserve" });
     } finally {
       setBusy(false);
     }
@@ -294,17 +446,24 @@ export default function CheckoutPage() {
         // why, and use a FRESH idempotency key so the next card is a new
         // attempt rather than a replay of this decline.
         const detail = err.details[0] as { decline_code?: string } | undefined;
-        setPaymentError(declineMessage(detail?.decline_code));
+        setPaymentError(declineMessage(detail?.decline_code, lang));
         setConfirmIdempotencyKey(newIdempotencyKey("checkout-confirm"));
       } else if (err instanceof ApiError && err.code === "CHECKOUT_PRICE_CHANGED") {
         const summary = parsePriceChange(err.details);
         if (hasChanges(summary)) setPriceChange(summary);
-        else setError(err.message);
+        else setError({ api: err, key: "co.err.confirm" });
       } else if (err instanceof ApiError && err.code === "RESERVATION_EXPIRED") {
-        setError("انتهت مدة الحجز. ابدئي الطلب من جديد.");
+        setError({ text: expiredReservationMessage(lang) });
+        setReservation(null);
+      } else if (err instanceof ApiError && err.code === "RESERVATION_NOT_FOUND") {
+        // TB-8: a hold whose known expiry has passed was removed by the
+        // expiry sweep - say it expired. Otherwise the server's reason
+        // (TB-5: replaced by a newer checkout of this account) decides.
+        const expired = new Date(reservation.expires_at).getTime() <= Date.now();
+        setError({ text: expired ? expiredReservationMessage(lang) : (reservationMessage(err.code, err.details, lang) ?? t("co.err.confirm")) });
         setReservation(null);
       } else {
-        setError(err instanceof ApiError ? err.message : "تعذّر تأكيد الطلب");
+        setError({ api: err, key: "co.err.confirm" });
       }
     } finally {
       setBusy(false);
@@ -331,33 +490,33 @@ export default function CheckoutPage() {
 
   if (error && !quote) {
     return (
-      <div className="page-shell">
-        <div className="error-banner" style={{ maxWidth: 560 }}>{error}</div>
+      <div className={pageClass}>
+        <div className="error-banner" style={{ maxWidth: 560 }}>{errorText(error)}</div>
       </div>
     );
   }
 
   if (confirmed) {
     return (
-      <div className="page-shell">
+      <div className={pageClass}>
         <div className="top-bar">
-          <div className="brand" style={{ margin: 0 }}>تم إنشاء الطلب</div>
+          <div className="brand" style={{ margin: 0 }}>{t("co.created")}</div>
         </div>
         <div style={{ maxWidth: 560, width: "100%", display: "flex", flexDirection: "column", gap: 12 }}>
           {confirmed.map((o) => (
             <div key={o.id} className="card">
-              <div>طلب #{o.id.slice(0, 8)}</div>
-              <div className="muted">{o.fulfilment_method === "PICKUP" ? "استلام من المحل" : "توصيل"}</div>
+              <div>{fmt(t("co.order_n"), { id: o.id.slice(0, 8) })}</div>
+              <div className="muted">{o.fulfilment_method === "PICKUP" ? t("co.pickup") : t("co.delivery")}</div>
               <div className="product-card-price">{o.total} ₪</div>
               {o.pickup_code && (
                 <div style={{ marginTop: 8, fontWeight: 600 }}>
-                  رمز الاستلام: {o.pickup_code}
+                  {fmt(t("co.pickup_code"), { code: o.pickup_code })}
                 </div>
               )}
             </div>
           ))}
           <a href="/discovery" className="button-link">
-            متابعة التسوق
+            {t("co.keep_shopping")}
           </a>
         </div>
       </div>
@@ -366,8 +525,8 @@ export default function CheckoutPage() {
 
   if (!quote || !addresses) {
     return (
-      <div className="page-shell">
-        <p className="muted">جارٍ التحميل...</p>
+      <div className={pageClass}>
+        <p className="muted">{t("co.loading")}</p>
       </div>
     );
   }
@@ -380,25 +539,30 @@ export default function CheckoutPage() {
     const hasOnline = reservation.items.some((i) => i.payment_method === "ONLINE");
     const titleByVariant = new Map<string, string>();
     for (const g of quote.groups) {
-      for (const it of g.items) titleByVariant.set(it.offer_variant_id, it.title_ar);
+      for (const it of g.items) titleByVariant.set(it.offer_variant_id, pickText(lang, it.title_en, it.title_ar));
     }
     return (
-      <div className="page-shell">
+      <div className={pageClass}>
         <div className="top-bar">
-          <div className="brand" style={{ margin: 0 }}>تأكيد الطلب</div>
+          <div className="brand" style={{ margin: 0 }}>{t("co.confirm_title")}</div>
         </div>
-        {error && <div className="error-banner" style={{ maxWidth: 560 }}>{error}</div>}
+        {error && <div className="error-banner" style={{ maxWidth: 560 }}>{errorText(error)}</div>}
+        {reservation.replaced_previous && (
+          <p className="muted checkout-hold-note" role="status" style={{ maxWidth: 560, margin: "0 0 8px" }}>
+            {replacedReservationNotice(lang)}
+          </p>
+        )}
 
         {priceChange && (
           <div className="card price-diff" style={{ maxWidth: 560 }} role="alert">
-            <strong>تغيّرت الأسعار منذ حجزك</strong>
+            <strong>{t("co.prices_changed")}</strong>
             <p className="muted" style={{ margin: "6px 0 10px" }}>
-              لم يتم خصم أي مبلغ ولم يُنشأ أي طلب. راجعي الأسعار الجديدة ثم أكملي.
+              {t("co.prices_changed_hint")}
             </p>
             <ul>
               {priceChange.prices.map((c) => (
                 <li key={c.offerVariantId}>
-                  <span>{titleByVariant.get(c.offerVariantId) ?? "منتج"}</span>
+                  <span>{titleByVariant.get(c.offerVariantId) ?? t("co.product")}</span>
                   <span>
                     <s>{c.oldPrice} ₪</s> ← <strong>{c.newPrice} ₪</strong> (<bdi dir="ltr">{formatDelta(c.oldPrice, c.newPrice)}</bdi>)
                   </span>
@@ -406,20 +570,20 @@ export default function CheckoutPage() {
               ))}
               {priceChange.fees.map((c) => (
                 <li key={c.deliveryWindowId}>
-                  <span>رسوم التوصيل</span>
+                  <span>{t("co.delivery_fee")}</span>
                   <span>
                     <s>{c.oldFee} ₪</s> ←{" "}
-                    <strong>{c.newFee === null ? "غير متاح" : `${c.newFee} ₪`}</strong>
+                    <strong>{c.newFee === null ? t("co.not_available") : `${c.newFee} ₪`}</strong>
                   </span>
                 </li>
               ))}
             </ul>
             <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
               <button className="button" onClick={reviewNewPrices} disabled={busy}>
-                مراجعة بالأسعار الجديدة
+                {t("co.review_new_prices")}
               </button>
               <button className="button-link" onClick={cancelReservationAndRestart} disabled={busy}>
-                إلغاء والعودة
+                {t("co.cancel_back")}
               </button>
             </div>
           </div>
@@ -428,10 +592,10 @@ export default function CheckoutPage() {
         {!priceChange && (
           <div className="card" style={{ maxWidth: 560 }}>
             <p className="muted">
-              الحجز صالح لمدة {expiresIn} دقيقة تقريباً - أكملي الدفع قبل انتهاء الوقت.
+              {fmt(t("co.hold_valid"), { n: expiresIn })}
             </p>
             <div className="product-card-price" style={{ marginTop: 8 }}>
-              الإجمالي: {total} ₪
+              {fmt(t("co.total"), { total })}
             </div>
 
             {hasOnline ? (
@@ -446,17 +610,17 @@ export default function CheckoutPage() {
                 </div>
                 <div style={{ marginTop: 10 }}>
                   <button className="button-link" onClick={cancelReservationAndRestart} disabled={busy}>
-                    إلغاء والعودة
+                    {t("co.cancel_back")}
                   </button>
                 </div>
               </>
             ) : (
               <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
                 <button className="button" onClick={() => void confirm()} disabled={busy}>
-                  تأكيد الطلب
+                  {t("co.confirm")}
                 </button>
                 <button className="button-link" onClick={cancelReservationAndRestart} disabled={busy}>
-                  إلغاء والعودة
+                  {t("co.cancel_back")}
                 </button>
               </div>
             )}
@@ -467,17 +631,23 @@ export default function CheckoutPage() {
   }
 
   return (
-    <div className="page-shell">
+    <div className={pageClass}>
       <div className="top-bar">
-        <div className="brand" style={{ margin: 0 }}>إتمام الطلب</div>
+        <div className="brand" style={{ margin: 0 }}>{t("co.title")}</div>
       </div>
 
-      {error && <div className="error-banner" style={{ maxWidth: 640 }}>{error}</div>}
+      {error && <div className="error-banner" style={{ maxWidth: 640 }}>{errorText(error)}</div>}
       {quote.unavailable_items.length > 0 && (
         <div className="error-banner" style={{ maxWidth: 640 }}>
-          بعض العناصر لم تعد متوفرة بالكمية المطلوبة ولن تُشترى الآن.
+          {t("co.unavailable_items")}
         </div>
       )}
+      {quote.units_limit !== undefined &&
+        quote.groups.reduce((n, g) => n + g.items.reduce((m, i) => m + i.quantity, 0), 0) > quote.units_limit && (
+          <div className="error-banner checkout-units-limit" role="alert" style={{ maxWidth: 640 }}>
+            {unitsLimitMessage(quote.units_limit, lang)}
+          </div>
+        )}
 
       <div style={{ maxWidth: 640, width: "100%", display: "flex", flexDirection: "column", gap: 16 }}>
         {quote.groups.map((g) => {
@@ -488,17 +658,17 @@ export default function CheckoutPage() {
           return (
             <div key={key} className="card">
               <div style={{ fontWeight: 600, marginBottom: 6 }}>
-                {g.items.map((i) => i.title_ar).join("، ")}
+                {g.items.map((i) => pickText(lang, i.title_en, i.title_ar)).join(t("co.list_sep"))}
               </div>
-              <div className="muted">المجموع الفرعي: {g.subtotal} ₪</div>
+              <div className="muted">{fmt(t("co.subtotal"), { n: g.subtotal })}</div>
               {g.fragmented && (
                 <p className="muted">
-                  تعذّر تغطية كل العناصر من فرع واحد - قُسّمت تلقائياً على أقرب فرع مؤهل.
+                  {t("co.fragmented")}
                 </p>
               )}
 
               <div className="field">
-                <label>الفرع</label>
+                <label>{t("co.branch")}</label>
                 <select
                   value={choice.branchId}
                   onChange={(e) =>
@@ -524,7 +694,7 @@ export default function CheckoutPage() {
               </div>
 
               <div className="field">
-                <label>طريقة الاستلام</label>
+                <label>{t("co.method")}</label>
                 <select
                   value={choice.fulfilmentMethod ?? ""}
                   disabled={choice.fulfilmentMethod === null}
@@ -535,16 +705,16 @@ export default function CheckoutPage() {
                   }
                 >
                   {availableMethods(branch).includes("PICKUP") && (
-                    <option value="PICKUP">استلام من المحل</option>
+                    <option value="PICKUP">{t("co.pickup")}</option>
                   )}
                   {availableMethods(branch).includes("DELIVERY") && (
-                    <option value="DELIVERY">توصيل</option>
+                    <option value="DELIVERY">{t("co.delivery")}</option>
                   )}
-                  {choice.fulfilmentMethod === null && <option value="">غير متاح</option>}
+                  {choice.fulfilmentMethod === null && <option value="">{t("co.not_available")}</option>}
                 </select>
                 {choice.fulfilmentMethod === null && (
                   <p className="cart-line-note" role="alert" style={{ margin: "6px 0 0" }}>
-                    لا توجد طريقة استلام أو توصيل متاحة لهذا الفرع حالياً - اختاري فرعاً آخر.
+                    {t("co.no_method_branch")}
                   </p>
                 )}
               </div>
@@ -565,19 +735,19 @@ export default function CheckoutPage() {
                     role="alert"
                     style={{ margin: "6px 0 0" }}
                   >
-                    {b.message}
+                    {blockerText(b)}
                   </div>
                 ))}
 
               {choice.fulfilmentMethod === "DELIVERY" && branch && (
                 <>
                   <div className="field">
-                    <label>العنوان</label>
+                    <label>{t("co.address")}</label>
                     <select
                       value={choice.addressId}
                       onChange={(e) => updateChoice(key, { addressId: e.target.value })}
                     >
-                      <option value="">اختاري عنواناً</option>
+                      <option value="">{t("co.pick_address")}</option>
                       {addresses.map((a) => (
                         <option key={a.id} value={a.id}>
                           {a.label ?? a.landmark_note ?? a.id.slice(0, 8)}
@@ -585,7 +755,7 @@ export default function CheckoutPage() {
                       ))}
                     </select>
                     {addresses.length === 0 && addingAddressFor !== key && (
-                      <p className="muted">لا توجد عناوين محفوظة بعد.</p>
+                      <p className="muted">{t("co.no_addresses")}</p>
                     )}
                     {addingAddressFor !== key && (
                       <button
@@ -594,7 +764,7 @@ export default function CheckoutPage() {
                         style={{ alignSelf: "flex-start" }}
                         onClick={() => setAddingAddressFor(key)}
                       >
-                        + عنوان جديد
+                        {t("co.new_address")}
                       </button>
                     )}
                   </div>
@@ -611,7 +781,7 @@ export default function CheckoutPage() {
                     </div>
                   )}
                   <div className="field">
-                    <label>الموعد (خلال الأيام الثلاثة القادمة)</label>
+                    <label>{t("co.slot")}</label>
                     <select
                       value={`${choice.deliveryWindowId}|${choice.scheduledDate}`}
                       onChange={(e) => {
@@ -619,13 +789,13 @@ export default function CheckoutPage() {
                         updateChoice(key, { deliveryWindowId: windowId, scheduledDate: date });
                       }}
                     >
-                      <option value="|">اختاري موعداً</option>
+                      <option value="|">{t("co.pick_slot")}</option>
                       {branch.available_slots.map((s) => (
                         <option
                           key={`${s.delivery_window_id}-${s.date}`}
                           value={`${s.delivery_window_id}|${s.date}`}
                         >
-                          {DAY_LABELS[s.day_of_week]} {s.date} ({s.start_time}-{s.end_time})
+                          {t(`co.day.${s.day_of_week}`)} {s.date} ({s.start_time}-{s.end_time})
                         </option>
                       ))}
                     </select>
@@ -634,7 +804,7 @@ export default function CheckoutPage() {
               )}
 
               <div className="field">
-                <label>طريقة الدفع</label>
+                <label>{t("co.payment")}</label>
                 <select
                   value={choice.paymentMethod}
                   onChange={(e) =>
@@ -642,18 +812,18 @@ export default function CheckoutPage() {
                   }
                 >
                   <option value="COD">
-                    {choice.fulfilmentMethod === "DELIVERY" ? "الدفع عند الاستلام" : "الدفع عند الاستلام"}
+                    {t("co.cod")}
                   </option>
-                  <option value="ONLINE">دفع إلكتروني (تجريبي)</option>
+                  <option value="ONLINE">{t("co.online")}</option>
                 </select>
               </div>
 
               <div className="field">
-                <label>ملاحظة للمتجر (اختياري)</label>
+                <label>{t("co.note")}</label>
                 <textarea
                   rows={2}
                   maxLength={500}
-                  placeholder="مثال: الرجاء الاتصال قبل التوصيل"
+                  placeholder={t("co.note_placeholder")}
                   value={choice.customerNote}
                   onChange={(e) => updateChoice(key, { customerNote: e.target.value })}
                 />
@@ -671,7 +841,7 @@ export default function CheckoutPage() {
               onChange={(e) => setTermsAccepted(e.target.checked)}
             />
             <label htmlFor="terms-accepted" style={{ margin: 0 }}>
-              أوافق على <a href="/terms" target="_blank" rel="noreferrer">شروط الاستخدام</a>
+              {t("co.agree")}<a href="/terms" target="_blank" rel="noreferrer">{t("co.terms")}</a>
             </label>
           </div>
         )}
@@ -686,11 +856,11 @@ export default function CheckoutPage() {
               !allGroupsFulfillable(quote.groups.map((g) => choices[groupKey(g)]?.fulfilmentMethod ?? null))
             }
           >
-            متابعة
+            {t("co.continue")}
           </button>
         )}
         {quote.groups.length === 0 && (
-          <p className="muted">لا توجد عناصر متاحة للمتابعة حالياً.</p>
+          <p className="muted">{t("co.nothing")}</p>
         )}
       </div>
     </div>

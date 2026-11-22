@@ -3,8 +3,10 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import DeliveryLeadTimeCard from "@/components/DeliveryLeadTimeCard";
 import { apiFetch, ApiError } from "@/lib/api";
-import { clearSession, getSessionToken } from "@/lib/session";
+import { clearSession, getSessionToken } from "@/lib/session";
+import { loginRedirectHref } from "@/lib/loginRedirect";
 
 const DAY_LABELS = [
   "الأحد",
@@ -73,6 +75,9 @@ export default function DeliveryWindowsCalendarPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // PD-5.1: an employee can't read the calendar (owner-only) but may see
+  // the branch's preparation time read-only.
+  const [readOnly, setReadOnly] = useState(false);
   const [form, setForm] = useState<NewWindowForm>(EMPTY_FORM);
   const [exceptionForms, setExceptionForms] = useState<
     Record<string, NewExceptionForm>
@@ -88,7 +93,11 @@ export default function DeliveryWindowsCalendarPage() {
       .catch((err) => {
         if (err instanceof ApiError && err.status === 401) {
           clearSession();
-          router.replace("/login");
+          router.replace(loginRedirectHref());
+          return;
+        }
+        if (err instanceof ApiError && err.status === 403 && err.code !== "VENDOR_SUSPENDED") {
+          setReadOnly(true);
           return;
         }
         setError(err instanceof ApiError ? err.message : "تعذّر تحميل التقويم");
@@ -97,7 +106,7 @@ export default function DeliveryWindowsCalendarPage() {
 
   useEffect(() => {
     if (!getSessionToken()) {
-      router.replace("/login");
+      router.replace(loginRedirectHref());
       return;
     }
     load();
@@ -225,6 +234,19 @@ export default function DeliveryWindowsCalendarPage() {
     }
   }
 
+  if (readOnly) {
+    return (
+      <div className="page-shell">
+        <div className="top-bar">
+          <div className="brand" style={{ margin: 0 }}>
+            التوصيل في هذا الفرع
+          </div>
+        </div>
+        <DeliveryLeadTimeCard vendorId={params.vendorId} branchId={params.branchId} canEdit={false} />
+      </div>
+    );
+  }
+
   if (error && !windows) {
     return (
       <div className="page-shell">
@@ -265,6 +287,8 @@ export default function DeliveryWindowsCalendarPage() {
 
       {error && <div className="error-banner" style={{ maxWidth: 640 }}>{error}</div>}
       {notice && <p className="muted" style={{ maxWidth: 640 }}>{notice}</p>}
+
+      <DeliveryLeadTimeCard vendorId={params.vendorId} branchId={params.branchId} canEdit />
 
       <div className="card" style={{ maxWidth: 640 }}>
         <div style={{ fontWeight: 600, marginBottom: 8 }}>إضافة نافذة جديدة</div>

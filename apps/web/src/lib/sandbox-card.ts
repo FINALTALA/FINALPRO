@@ -44,27 +44,62 @@ export function formatExpiry(raw: string): string {
   return digits.length > 2 ? `${digits.slice(0, 2)}/${digits.slice(2)}` : digits;
 }
 
-export function cardTokenFor(input: CardInput, now: Date = new Date()): CardResult {
+// TB-25: the same words in English (the Arabic is unchanged).
+const CARD_TEXT = {
+  ar: {
+    number: "أدخلي رقم البطاقة التجريبية المكوّن من 16 رقماً",
+    expiryFormat: "أدخلي تاريخ الانتهاء بصيغة MM/YY",
+    month: "شهر الانتهاء غير صحيح",
+    expired: "انتهت صلاحية البطاقة",
+    cvc: "رمز التحقق CVC يتكوّن من 3 أرقام",
+    notTest: "هذا نموذج تجريبي: استخدمي إحدى البطاقات التجريبية المعروضة فقط. لا تُدخلي بطاقة حقيقية.",
+    insufficient: "رُفضت العملية: الرصيد غير كافٍ. جرّبي بطاقة أخرى - الحجز ما زال قائماً.",
+    declined: "رُفضت البطاقة. جرّبي بطاقة أخرى - الحجز ما زال قائماً.",
+  },
+  en: {
+    number: "Enter the 16-digit test card number",
+    expiryFormat: "Enter the expiry date as MM/YY",
+    month: "The expiry month isn't valid",
+    expired: "The card has expired",
+    cvc: "The CVC is 3 digits",
+    notTest: "This is a test form: use one of the test cards shown only. Don't enter a real card.",
+    insufficient: "Declined: insufficient funds. Try another card - your hold is still in place.",
+    declined: "The card was declined. Try another card - your hold is still in place.",
+  },
+} as const;
+const OUTCOME_EN: Record<SandboxCardToken, string> = {
+  tok_sandbox_visa: "Payment succeeds",
+  tok_sandbox_declined: "Card declined",
+  tok_sandbox_insufficient_funds: "Insufficient funds",
+};
+
+/** A test card's outcome in the interface language. */
+export function cardOutcome(card: { token: SandboxCardToken; outcome: string }, lang: "ar" | "en" = "ar"): string {
+  return lang === "en" ? OUTCOME_EN[card.token] : card.outcome;
+}
+
+export function cardTokenFor(input: CardInput, now: Date = new Date(), lang: "ar" | "en" = "ar"): CardResult {
+  const text = CARD_TEXT[lang];
   const digits = input.number.replace(/\s/g, "");
   if (!/^\d{16}$/.test(digits)) {
-    return { ok: false, error: "أدخلي رقم البطاقة التجريبية المكوّن من 16 رقماً" };
+    return { ok: false, error: text.number };
   }
 
   const match = /^(\d{2})\/(\d{2})$/.exec(input.expiry.trim());
-  if (!match) return { ok: false, error: "أدخلي تاريخ الانتهاء بصيغة MM/YY" };
+  if (!match) return { ok: false, error: text.expiryFormat };
   const month = Number(match[1]);
   const year = 2000 + Number(match[2]);
   if (month < 1 || month > 12) {
-    return { ok: false, error: "شهر الانتهاء غير صحيح" };
+    return { ok: false, error: text.month };
   }
   // A card is valid through the END of its expiry month.
   const endOfMonth = new Date(year, month, 1);
   if (endOfMonth.getTime() <= now.getTime()) {
-    return { ok: false, error: "انتهت صلاحية البطاقة" };
+    return { ok: false, error: text.expired };
   }
 
   if (!/^\d{3}$/.test(input.cvc.trim())) {
-    return { ok: false, error: "رمز التحقق CVC يتكوّن من 3 أرقام" };
+    return { ok: false, error: text.cvc };
   }
 
   const card = SANDBOX_TEST_CARDS.find((c) => c.number.replace(/\s/g, "") === digits);
@@ -73,15 +108,12 @@ export function cardTokenFor(input: CardInput, now: Date = new Date()): CardResu
     // server-side - so it is refused right here and nothing is sent.
     return {
       ok: false,
-      error: "هذا نموذج تجريبي: استخدمي إحدى البطاقات التجريبية المعروضة فقط. لا تُدخلي بطاقة حقيقية.",
+      error: text.notTest,
     };
   }
   return { ok: true, token: card.token };
 }
 
-export function declineMessage(declineCode: string | undefined): string {
-  if (declineCode === "insufficient_funds") {
-    return "رُفضت العملية: الرصيد غير كافٍ. جرّبي بطاقة أخرى - الحجز ما زال قائماً.";
-  }
-  return "رُفضت البطاقة. جرّبي بطاقة أخرى - الحجز ما زال قائماً.";
+export function declineMessage(declineCode: string | undefined, lang: "ar" | "en" = "ar"): string {
+  return declineCode === "insufficient_funds" ? CARD_TEXT[lang].insufficient : CARD_TEXT[lang].declined;
 }

@@ -2,7 +2,7 @@
 
 import { useEffect, useSyncExternalStore } from "react";
 import { apiFetch } from "./api";
-import { LANG_EVENT, Lang, getLang, setLang, translate } from "./i18n";
+import { LANG_EVENT, Lang, getLang, langChangeCount, setLang, translate } from "./i18n";
 
 function subscribe(onChange: () => void): () => void {
   window.addEventListener(LANG_EVENT, onChange);
@@ -30,15 +30,20 @@ export function useT(): (key: string) => string {
  * differs from this browser's current choice - so a preference set on
  * one device follows the customer to the next. Only runs when a
  * session token is present; a signed-out visitor keeps whatever this
- * browser last chose (or the "ar" default).
+ * browser last chose (or the "ar" default). If the language changes
+ * locally while the request is in flight (the customer toggles before it
+ * answers), the answer is older than that choice and is not applied -
+ * the toggle has already saved the new choice to the server itself.
  */
 export function useSyncServerLanguagePref(token: string | null): void {
   useEffect(() => {
     if (!token) return;
     let cancelled = false;
+    const changesAtStart = langChangeCount();
     apiFetch<{ language_pref: Lang | null }>("/customers/me")
       .then((res) => {
-        if (!cancelled && (res.language_pref === "ar" || res.language_pref === "en")) {
+        if (cancelled || langChangeCount() !== changesAtStart) return;
+        if (res.language_pref === "ar" || res.language_pref === "en") {
           if (res.language_pref !== getLang()) setLang(res.language_pref);
         }
       })

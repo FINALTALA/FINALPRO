@@ -1,0 +1,251 @@
+import { ApiError, apiFetch, newIdempotencyKey } from "./api";
+import type { Lang } from "./i18n";
+import "./branchOrdersText";
+
+/**
+ * «إدارة طلبات الفرع v1» (2026-11-22): the branch's order queue, one order
+ * and its timeline (GET .../order-queue), and the EXISTING order actions
+ * (POST/PATCH .../orders/:id/...) - the same requests, bodies and
+ * Idempotency-Key the old page sent. Nothing here decides an order's next
+ * state: the server returns which steps are allowed now, and checks again.
+ */
+
+export const QUEUE_TABS = ["active", "new", "preparing", "with_courier", "awaiting_confirmation", "attention", "done"] as const;
+export type QueueTab = (typeof QUEUE_TABS)[number];
+export type QueueSort = "priority" | "newest";
+export type Method = "PICKUP" | "DELIVERY";
+
+export interface QueueRow {
+  id: string;
+  number: string;
+  status: string;
+  bucket: QueueTab;
+  fulfilment_method: Method;
+  payment_method: "COD" | "ONLINE";
+  created_at: string;
+  scheduled_date: string | null;
+  window: { start_minute: number; end_minute: number } | null;
+  due_at: string | null;
+  is_late: boolean;
+  customer_short: string | null;
+  phone_last4: string;
+  item_count: number;
+  total?: number;
+  amount_due: number | null;
+  has_open_not_received_report: boolean;
+}
+export type QueueCounts = Record<QueueTab | "late", number>;
+export interface QueuePage {
+  items: QueueRow[];
+  next_cursor: string | null;
+  counts: QueueCounts;
+  tab: QueueTab;
+  sort: QueueSort;
+}
+
+export type ActionKey =
+  | "start_preparation"
+  | "mark_sent"
+  | "pickup_handover"
+  | "mark_delivered"
+  | "mark_delivery_failed"
+  | "rerequest_confirmation"
+  | "approve_refund"
+  | "cancel"
+  | "internal_note";
+export interface QueueAction {
+  key: ActionKey;
+  primary?: boolean;
+  reason?: "optional" | "required";
+  closes_order?: boolean;
+}
+export interface OrderItem {
+  id: string;
+  title_ar: string;
+  title_en: string;
+  color_name_ar: string | null;
+  color_name_en: string | null;
+  color_hex: string | null;
+  size_label: string | null;
+  quantity: number;
+  cancelled: boolean;
+  image_url: string | null;
+  unit_price?: number;
+  line_total?: number;
+}
+export interface OrderDetail {
+  id: string;
+  number: string;
+  status: string;
+  bucket: QueueTab;
+  fulfilment_method: Method;
+  payment_method: "COD" | "ONLINE";
+  created_at: string;
+  scheduled_date: string | null;
+  window: { day_of_week: number; start_minute: number; end_minute: number } | null;
+  due_at: string | null;
+  is_late: boolean;
+  customer: { name: string | null; phone: string };
+  items: OrderItem[];
+  item_count: number;
+  payment: {
+    method: "COD" | "ONLINE";
+    subtotal?: number;
+    delivery_fee?: number | null;
+    total?: number;
+    refunded?: number;
+    amount_due: number | null;
+    cod_collected_amount: number | null;
+  };
+  customer_note: string | null;
+  internal_store_note: string | null;
+  not_received: { open: boolean; reported_at?: string | null; reason?: string | null };
+  cancellation_reason?: string | null;
+  delivery_attempt_count: number;
+  is_own_order: boolean;
+  actions: QueueAction[];
+}
+export type TimelineActor =
+  | { kind: "system" }
+  | { kind: "customer" }
+  | { kind: "owner"; name: string | null }
+  | { kind: "employee"; name: string | null; branch_name?: string | null; other_branch?: boolean }
+  | { kind: "employee_other_branch" }
+  | { kind: "platform" }
+  | { kind: "unrecorded"; name?: string | null };
+export interface TimelineEvent {
+  id: string;
+  at: string;
+  kind: string;
+  from_status: string | null;
+  to_status: string | null;
+  actor: TimelineActor;
+  reason?: string;
+}
+
+export interface QueueFilters {
+  tab: QueueTab;
+  method: Method | null;
+  late: boolean;
+  q: string;
+  sort: QueueSort | null;
+}
+
+const base = (vendorId: string, branchId: string) => `/vendors/${vendorId}/branches/${branchId}`;
+
+export function fetchQueue(vendorId: string, branchId: string, f: QueueFilters, cursor?: string | null) {
+  const p = new URLSearchParams();
+  if (f.tab !== "active") p.set("tab", f.tab);
+  if (f.method) p.set("method", f.method);
+  if (f.late) p.set("late", "true");
+  if (f.q.trim()) p.set("q", f.q.trim());
+  if (f.sort) p.set("sort", f.sort);
+  if (cursor) p.set("cursor", cursor);
+  const qs = p.toString();
+  return apiFetch<QueuePage>(`${base(vendorId, branchId)}/order-queue${qs ? `?${qs}` : ""}`);
+}
+export const fetchOrder = (vendorId: string, branchId: string, id: string) =>
+  apiFetch<OrderDetail>(`${base(vendorId, branchId)}/order-queue/${encodeURIComponent(id)}`);
+export const fetchTimeline = (vendorId: string, branchId: string, id: string) =>
+  apiFetch<{ items: TimelineEvent[]; truncated: boolean }>(`${base(vendorId, branchId)}/order-queue/${encodeURIComponent(id)}/timeline`);
+
+/** The existing endpoint of each step (unchanged). */
+const ACTION_PATH: Partial<Record<ActionKey, string>> = {
+  start_preparation: "start-preparation",
+  mark_sent: "mark-sent",
+  pickup_handover: "pickup-handover",
+  mark_delivered: "mark-delivered",
+  mark_delivery_failed: "mark-delivery-failed",
+  rerequest_confirmation: "rerequest-confirmation",
+  approve_refund: "approve-refund",
+  cancel: "cancel",
+};
+export function runOrderAction(vendorId: string, branchId: string, id: string, action: ActionKey, body: Record<string, unknown> = {}) {
+  const path = ACTION_PATH[action];
+  if (!path) throw new Error(`unknown action ${action}`);
+  return apiFetch(`${base(vendorId, branchId)}/orders/${encodeURIComponent(id)}/${path}`, {
+    method: "POST",
+    body,
+    idempotencyKey: newIdempotencyKey(`staff-${path}`),
+  });
+}
+export function saveInternalNote(vendorId: string, branchId: string, id: string, note: string) {
+  return apiFetch(`${base(vendorId, branchId)}/orders/${encodeURIComponent(id)}/internal-note`, {
+    method: "PATCH",
+    body: { note },
+    idempotencyKey: newIdempotencyKey("staff-internal-note"),
+  });
+}
+
+/** An action's error, in the reader's words - never the server's own text, never the code typed. */
+export function actionErrorKey(err: unknown): string {
+  if (err instanceof ApiError) {
+    switch (err.code) {
+      case "WRONG_PICKUP_CODE":
+        return "bo.err.wrong_code";
+      case "CANCELLATION_REASON_REQUIRED":
+        return "bo.err.reason_required";
+      case "SELF_DECISION_FORBIDDEN":
+        return "bo.err.own_order";
+      case "INVALID_BRANCH_ORDER_TRANSITION":
+      case "NO_PENDING_NOT_RECEIVED_REPORT":
+      case "PICKUP_HANDOVER_NOT_APPLICABLE":
+      case "DELIVERY_FAILURE_NOT_APPLICABLE":
+      case "BRANCH_ORDER_NOT_FOUND":
+        return "bo.err.changed";
+      case "BAD_REQUEST":
+        return "bo.err.invalid";
+      default:
+        if (err.status === 403) return "bo.err.forbidden";
+        if (err.status === 409) return "bo.err.changed";
+    }
+  }
+  return "bo.err.action";
+}
+
+// ---------------------------------------------------------------- formatting
+
+const locale = (lang: Lang) => (lang === "en" ? "en-GB" : "ar");
+
+export function money(n: number | null | undefined, lang: Lang): string {
+  if (n === null || n === undefined) return "—";
+  return `${new Intl.NumberFormat(locale(lang), { maximumFractionDigits: 2 }).format(n)} ₪`;
+}
+export function clock(minute: number, lang: Lang): string {
+  const d = new Date(Date.UTC(2000, 0, 1, Math.floor(minute / 60), minute % 60));
+  return new Intl.DateTimeFormat(locale(lang), { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "UTC" }).format(d);
+}
+export function exactTime(iso: string, lang: Lang): string {
+  return new Intl.DateTimeFormat(locale(lang), { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso));
+}
+export function dayLabel(isoDate: string, lang: Lang): string {
+  const [y, m, d] = isoDate.split("-").map(Number);
+  return new Intl.DateTimeFormat(locale(lang), { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }).format(new Date(Date.UTC(y, m - 1, d)));
+}
+/** «منذ 5 دقائق» / «in 2 hours». */
+export function relativeTime(iso: string, lang: Lang, now = Date.now()): string {
+  const diff = (new Date(iso).getTime() - now) / 1000;
+  const abs = Math.abs(diff);
+  const rtf = new Intl.RelativeTimeFormat(locale(lang), { numeric: "auto" });
+  if (abs < 60) return rtf.format(Math.round(diff), "second");
+  if (abs < 3600) return rtf.format(Math.round(diff / 60), "minute");
+  if (abs < 86400) return rtf.format(Math.round(diff / 3600), "hour");
+  return rtf.format(Math.round(diff / 86400), "day");
+}
+/** «متأخر 25 د» - minutes or hours since the slot started. */
+export function lateBy(iso: string, lang: Lang, now = Date.now()): string {
+  const mins = Math.max(1, Math.round((now - new Date(iso).getTime()) / 60000));
+  const nf = new Intl.NumberFormat(locale(lang));
+  if (mins < 60) return `${nf.format(mins)} ${lang === "en" ? "min" : "د"}`;
+  const h = Math.round(mins / 60);
+  if (h < 48) return `${nf.format(h)} ${lang === "en" ? "h" : "س"}`;
+  return `${nf.format(Math.round(h / 24))} ${lang === "en" ? "d" : "ي"}`;
+}
+export function windowLabel(date: string | null, w: { start_minute: number; end_minute: number } | null, lang: Lang): string | null {
+  if (!date || !w) return null;
+  return `${dayLabel(date, lang)} · ${clock(w.start_minute, lang)}–${clock(w.end_minute, lang)}`;
+}
+
+export function statusKey(status: string): string {
+  return `bo.status.${status}`;
+}

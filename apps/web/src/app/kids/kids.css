@@ -1,0 +1,195 @@
+@import "../women/women.css";
+
+.kids-page {
+  --women-wine: #2D343C;
+  --women-wine-hover: #15191E;
+  --women-blush: #E5CDAA;
+  --women-cream: #FBF3E5;
+  --women-ink: #22252A;
+  --women-muted: #686158;
+  --women-line: rgba(39, 42, 46, .16);
+  /* Sampled from the darker plain backdrop at the hero's right side. */
+  --women-deep-surface: #E1C8A9;
+  min-height: 100vh;
+  background: #E1C8A9;
+}
+
+.kids-hero {
+  position: relative;
+  overflow: hidden;
+  /* Base tone sampled from the image; the image itself fades in below. */
+  background: #D2BAA0;
+}
+.kids-hero::after {
+  position: absolute;
+  z-index: 1;
+  inset: 78% 0 0;
+  background: linear-gradient(to bottom, transparent, rgba(228, 203, 170, .72));
+  content: "";
+  pointer-events: none;
+}
+.kids-hero-image { display: block; width: 100%; height: auto; }
+@media (min-width: 900px) {
+  /* The source begins below the floating navigation so no child's head can sit behind it. */
+  .kids-hero { padding-top: 54px; }
+  /* Feather the actual photo into its sampled backdrop rather than leaving
+     a hard horizontal join, especially noticeable on the window at left. */
+  .kids-hero-image {
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, rgba(0, 0, 0, .28) 48px, #000 142px);
+    mask-image: linear-gradient(to bottom, transparent 0, rgba(0, 0, 0, .28) 48px, #000 142px);
+  }
+}
+.kids-hero-copy {
+  position: absolute;
+  z-index: 2;
+  top: 29%;
+  right: 13%;
+  display: grid;
+  gap: 6px;
+  color: #FFF8EB;
+  text-align: center;
+  text-shadow: 0 2px 18px rgba(63, 45, 24, .22);
+  pointer-events: none;
+}
+.kids-hero-copy strong { font: 400 clamp(42px, 5.2vw, 90px)/1.05 "Via Far Vosta", "Finalpro Amiri", serif; }
+.kids-hero-copy span { font: 400 clamp(26px, 3vw, 54px)/1.1 "Via Far Vosta", "Finalpro Amiri", serif; }
+.kids-hero-copy::after {
+  width: 76px;
+  height: 28px;
+  margin: 7px auto 0;
+  background: center / contain no-repeat url("/images/floral_ornaments_transparent_svg/ornament_03.svg");
+  content: "";
+  filter: brightness(2.2) saturate(.6);
+  opacity: .72;
+}
+.kids-hero-cta {
+  position: absolute;
+  z-index: 3;
+  top: 83%;
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-width: clamp(150px, 12.7vw, 258px);
+  min-height: clamp(46px, 3.25vw, 66px);
+  padding: 12px 28px;
+  border: 1px solid rgba(41, 46, 53, .5);
+  border-radius: 999px;
+  background: radial-gradient(ellipse at 50% 38%, #FFFDF7 0%, #F9EBD7 52%, #D3B689 100%);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.9), inset 0 0 14px rgba(92,70,35,.12), 0 9px 25px rgba(56,38,16,.2);
+  color: #252B31;
+  font: 700 18px/1 "Finalpro Amiri", Georgia, serif;
+  text-decoration: none;
+  transform: translateX(-50%);
+  transition: transform .2s ease, box-shadow .2s ease;
+}
+.kids-hero-cta::before { position:absolute; inset:5px; border:1px solid rgba(53,58,64,.2); border-radius:inherit; content:""; }
+.kids-hero-cta > * { position: relative; z-index: 1; }
+.kids-hero-cta svg { width: 18px; height: 18px; }
+.kids-hero-cta:hover { transform: translateX(-50%) translateY(-3px); box-shadow: inset 0 1px #fff, 0 14px 30px rgba(56,38,16,.26); }
+
+.kids-ticker {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  color: #FFF7ED;
+  border-block: 1px solid rgba(255, 239, 215, .28);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.12), transparent 38%, rgba(50,32,23,.18)),
+    linear-gradient(90deg, #9B7B67 0%, #7A5E4E 17%, #7A5E4E 83%, #9B7B67 100%);
+  box-shadow: inset 0 1px rgba(255,255,255,.19), inset 0 -1px rgba(56,37,27,.34);
+}
+.kids-ticker::after { position:absolute; z-index:1; inset:0; background:linear-gradient(90deg,rgba(122,94,78,.96),transparent 15%,transparent 85%,rgba(122,94,78,.96)); content:""; pointer-events:none; }
+.kids-ticker-track { display:flex; width:max-content; animation:kids-ticker-scroll 34s linear infinite; }
+.kids-ticker-group { position:relative; z-index:2; display:flex; align-items:center; gap:38px; min-height:40px; padding-inline:19px; direction:rtl; font-size:12px; letter-spacing:.2px; white-space:nowrap; }
+.kids-ticker-group::before,
+.kids-ticker-group::after { display:inline-block; width:20px; height:20px; flex:0 0 20px; background:center / contain no-repeat url("/images/floral_ornaments_transparent_svg/ornament_02.svg"); content:""; filter:brightness(1.8) saturate(.65); opacity:.64; }
+.kids-ticker-group::after { background-image:url("/images/floral_ornaments_transparent_svg/ornament_09.svg"); transform:rotate(180deg); }
+.kids-ticker-group > span::after { display:inline-block; width:13px; height:13px; margin-inline-start:10px; vertical-align:-3px; background:center / contain no-repeat url("/images/floral_ornaments_transparent_svg/ornament_06.svg"); content:""; filter:brightness(1.85) saturate(.6); opacity:.58; }
+.kids-ticker-group i {
+  color: #FFF0BE;
+  font-size: 13px;
+  font-style: normal;
+  text-shadow: 0 0 5px rgba(255, 232, 166, .95), 0 0 12px rgba(255, 215, 118, .6);
+}
+@keyframes kids-ticker-scroll { to { transform: translateX(50%); } }
+.kids-offer-strip {
+  position:relative;
+  isolation:isolate;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  flex-wrap:wrap;
+  gap:8px 14px;
+  min-height:44px;
+  padding:8px 16px;
+  border:0;
+  background:
+    radial-gradient(ellipse at 50% 0%,rgba(255,255,255,.14),transparent 54%),
+    linear-gradient(90deg,#E1C8A9 0%,#E1C8A9 10%,#D7BFA1 18%,#B99981 29%,#7A5E4E 40%,#7A5E4E 60%,#B99981 71%,#D7BFA1 82%,#E1C8A9 90%,#E1C8A9 100%);
+  box-shadow:none;
+  color:#FFF4E8;
+  font-size:13px;
+  text-align:center;
+}
+.kids-offer-strip::before,
+.kids-offer-strip::after { display:inline-block; width:21px; height:21px; flex:0 0 21px; background:center / contain no-repeat url("/images/floral_ornaments_transparent_svg/ornament_04.svg"); content:""; filter:brightness(.7) saturate(.8); opacity:.52; }
+.kids-offer-strip::after { background-image:url("/images/floral_ornaments_transparent_svg/ornament_11.svg"); transform:rotate(180deg); }
+.kids-offer-strip > span:nth-of-type(2)::before,
+.kids-offer-strip > span:nth-of-type(2)::after { display:inline-block; width:14px; height:14px; margin-inline:8px; vertical-align:-3px; background:center / contain no-repeat url("/images/floral_ornaments_transparent_svg/ornament_08.svg"); content:""; filter:brightness(1.85) saturate(.6); opacity:.56; }
+.kids-offer-strip > span:nth-of-type(2)::after { background-image:url("/images/floral_ornaments_transparent_svg/ornament_12.svg"); transform:rotate(180deg); }
+.kids-offer-icon { display:inline-grid; width:28px; height:28px; place-items:center; border-radius:50%; background:#E1C8A9; color:#5B4639; }
+.kids-offer-link { display:inline-flex; align-items:center; gap:6px; padding:4px 12px; border:1px solid rgba(255,244,232,.7); border-radius:999px; color:#FFF8EF; font-size:12px; font-weight:600; text-decoration:none; }
+
+.kids-floor-extension { margin:0; border:0; box-shadow:none; background:#E1C8A9; color:#23272C; }
+.kids-content { width:min(100%, 1320px); margin-inline:auto; }
+.kids-page .women-category-list { display:grid; width:min(100%,1280px); grid-auto-columns:auto; grid-auto-flow:row; grid-template-columns:repeat(4,minmax(0,1fr)); gap:18px 8px; margin-inline:auto; padding:0; overflow:visible; scroll-snap-type:none; }
+.kids-page .women-categories { position:relative; isolation:isolate; box-sizing:border-box; width:100vw; margin-inline:calc(50% - 50vw); padding-inline:max(16px,calc((100vw - 1280px)/2)); border-top:0; border-bottom:0; background:transparent; }
+.kids-page .women-categories::before { content:none; }
+.kids-page .women-category-card { position:static; display:flex; width:100%; min-width:0; height:auto; aspect-ratio:auto; align-items:center; flex-direction:column; gap:7px; overflow:visible; padding:3px 2px 4px; border:0; border-radius:10px; background:transparent; color:#262B30; isolation:auto; scroll-snap-align:none; }
+.kids-page .women-category-card::after { content:none; }
+.kids-page .women-category-image { overflow:visible; isolation:isolate; box-shadow:0 0 0 1px rgba(255,255,255,.65),0 7px 18px rgba(72,55,32,.2); }
+/* Restore the photo above the shared category card background; the soft halo remains outside the circle only. */
+.kids-page .women-category-image > img { position:absolute; z-index:auto; inset:0; width:100%; height:100%; object-fit:cover; border-radius:inherit; }
+.kids-page .women-category-image::before { position:absolute; z-index:-1; inset:-16px; border-radius:46% 54% 51% 49% / 55% 45% 55% 45%; background:radial-gradient(ellipse at 31% 42%,rgba(103,75,58,.29) 0 26%,transparent 66%),radial-gradient(ellipse at 71% 59%,rgba(126,94,72,.2) 0 24%,transparent 68%); content:""; filter:blur(9px); opacity:.76; pointer-events:none; animation:kids-category-shadow-wave 4.8s ease-in-out infinite alternate; }
+@keyframes kids-category-shadow-wave { from { transform:scale(.91) rotate(-5deg); border-radius:46% 54% 51% 49% / 55% 45% 55% 45%; } to { transform:scale(1.08) rotate(5deg); border-radius:54% 46% 45% 55% / 48% 56% 44% 52%; } }
+.kids-page .women-category-card > .women-category-name { max-width:100%; padding:0; color:#2B2C2C; font:500 11px/1.45 "Finalpro Noto", "Segoe UI", sans-serif; text-wrap:balance; }
+.kids-page .women-category-card.selected { outline:0; }
+.kids-page .women-category-image::after { position:absolute; z-index:1; inset:-2px; padding:1px; border-radius:inherit; background:conic-gradient(from 215deg,#4C352A,#7A5E4E 14%,#B99981 29%,#E0C4A7 46%,#FFF0D6 55%,#D4B9A2 67%,#9B7B67 81%,#4C352A); content:""; opacity:1; pointer-events:none; filter:drop-shadow(0 0 3px rgba(255,239,214,.64)); -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0); -webkit-mask-composite:xor; mask-composite:exclude; transition:padding .18s ease,filter .18s ease; }
+.kids-page .women-category-card:hover .women-category-image { transform:translateY(-2px) scale(1.04); box-shadow:0 8px 20px rgba(92,64,46,.38),0 0 16px rgba(212,185,162,.42); }
+.kids-page .women-category-card:hover .women-category-image::after,
+.kids-page .women-category-card.selected .women-category-image::after { padding:2px; animation:kids-category-ring-spin 1.45s linear infinite; filter:drop-shadow(0 0 4px rgba(255,239,214,.92)); }
+@keyframes kids-category-ring-spin { to { transform:rotate(1turn); } }
+.kids-page .women-category-card.selected .women-category-image { box-shadow:0 8px 22px rgba(92,64,46,.46),0 0 17px rgba(212,185,162,.46); }
+.kids-page .women-category-check { z-index:2; inset:auto -2px -2px auto; border-color:#FFF8ED; background:#7A5E4E; color:#FFF8ED; box-shadow:0 2px 7px rgba(62,40,29,.4); }
+.kids-page .women-category-card.selected > .women-category-name { color:#6B4938; font-weight:700; }
+.kids-page .women-category-card:focus-visible { outline:2px solid #7A5E4E; outline-offset:5px; border-radius:8px; }
+@media (prefers-reduced-motion: reduce) { .kids-page .women-category-image::before, .kids-page .women-category-card:hover .women-category-image::after, .kids-page .women-category-card.selected .women-category-image::after { animation:none; } }
+.kids-category-placeholder { position:absolute; inset:0; display:grid; place-items:center; border-radius:inherit; background:linear-gradient(145deg,#FFF8E9,#D2B58B); color:rgba(41,48,56,.62); font:400 28px/1 "Via Far Vosta",serif; }
+
+.kids-page .women-discovery { position:relative; isolation:isolate; box-sizing:border-box; width:100vw; margin:26px calc(50% - 50vw) 0; padding:32px; border-radius:28px 28px 0 0; background:radial-gradient(ellipse at 18% 0%,#9B7B67 0%,transparent 34%),radial-gradient(ellipse at 90% 100%,#6E5546 0%,transparent 47%),linear-gradient(135deg,#9B7B67 0%,#7A5E4E 49%,#806452 100%); box-shadow:inset 0 1px rgba(255,255,255,.18),0 -20px 38px rgba(82,60,25,.22),0 18px 42px rgba(72,51,37,.26); color:#FFF4E8; }
+.kids-page .women-discovery::before { position:absolute; z-index:-1; inset:1px; border-radius:27px 27px 0 0; background:linear-gradient(100deg,rgba(255,255,255,.035),transparent 36%,rgba(255,255,255,.04)); content:""; }
+.kids-page .women-listing-toolbar::after { height:2px; background:linear-gradient(90deg,transparent 0%,#E4CDB4 30%,#FFF4E2 48%,#FFFDF6 50%,#FFF4E2 52%,#E4CDB4 70%,transparent 100%); background-size:220% 100%; clip-path:polygon(0 50%,12% 28%,88% 28%,100% 50%,88% 72%,12% 72%); animation:kids-toolbar-line-shimmer 3.6s ease-in-out infinite; box-shadow:0 0 8px rgba(255,240,216,.34); }
+@keyframes kids-toolbar-line-shimmer { 0%,100% { background-position:100% 0; } 50% { background-position:0 0; } }
+.kids-page .women-tool { border-color:rgba(234,216,185,.38); background:rgba(255,250,241,.96); color:#252B31; }
+.kids-page .women-tool:hover { background:#FFF9EB; border-color:#D3B37B; color:#12171C; }
+.kids-page .women-list-error { color:#F5D7CE; }
+.kids-page .women-filter-drawer { --filter-accent:#765849; --filter-ink:#30261F; --filter-muted:#79665A; --filter-surface:#FFFBF5; --filter-surface-rgb:255,251,245; --filter-fade-rgb:92,70,53; --filter-ornament-filter:sepia(.85) saturate(.9) hue-rotate(335deg) brightness(.76); border-color:rgba(104,76,57,.18); box-shadow:-24px 0 48px rgba(69,46,31,.3),-4px 0 12px rgba(69,46,31,.15),inset 1px 0 rgba(255,255,255,.78); }
+.kids-page .women-filter-scrim { background:rgba(55,37,25,.35); }
+
+/* Repeat the page-level flourishes of the men's page in the kids palette.
+   Existing ticker and offer-strip ornaments are intentionally retained. */
+.kids-hero::before { position:absolute; z-index:2; inset:0; background:url("/images/floral_ornaments_transparent_svg/ornament_06.svg") no-repeat 8% 69% / 120px auto,url("/images/floral_ornaments_transparent_svg/ornament_09.svg") no-repeat 38% 18% / 94px auto; content:""; filter:sepia(.8) saturate(.85) hue-rotate(335deg) brightness(1.65); opacity:.3; pointer-events:none; }
+.kids-hero-copy::before { position:absolute; top:-22px; right:-72px; width:74px; height:42px; background:url("/images/floral_ornaments_transparent_svg/ornament_11.svg") center / contain no-repeat; content:""; filter:sepia(.8) saturate(.8) hue-rotate(335deg) brightness(1.85); opacity:.64; pointer-events:none; transform:rotate(12deg); }
+.kids-page .women-discovery::after { position:absolute; z-index:0; inset:0; background:url("/images/floral_ornaments_transparent_svg/ornament_07.svg") no-repeat -54px 10% / 190px auto,url("/images/floral_ornaments_transparent_svg/ornament_02.svg") no-repeat calc(100% + 64px) 79% / 210px auto; content:""; filter:sepia(.82) saturate(.85) hue-rotate(335deg) brightness(1.65); opacity:.13; pointer-events:none; }
+.kids-page .women-discovery > .women-listing-toolbar,.kids-page .women-discovery > .women-results-layout { position:relative; z-index:1; }
+.kids-page .women-discovery .women-tool::after { width:18px; height:14px; flex:0 0 auto; background:url("/images/floral_ornaments_transparent_svg/ornament_11.svg") center / contain no-repeat; content:""; filter:sepia(.82) saturate(.85) hue-rotate(335deg) brightness(.58); opacity:.5; }
+.kids-page .women-discovery .women-tool[aria-pressed="true"]::after,.kids-page .women-discovery .women-tool[aria-expanded="true"]::after { filter:sepia(.75) saturate(.7) hue-rotate(335deg) brightness(2); opacity:.74; }
+.kids-page .kids-ticker::before { position:absolute; z-index:2; inset:0; background:url("/images/floral_ornaments_transparent_svg/ornament_04.svg") no-repeat 4% center / 44px auto,url("/images/floral_ornaments_transparent_svg/ornament_04.svg") no-repeat 96% center / 44px auto; content:""; filter:sepia(.8) saturate(.85) hue-rotate(335deg) brightness(1.9); opacity:.48; pointer-events:none; }
+
+@media (min-width:640px) { .kids-page .women-category-list { grid-template-columns:repeat(8,minmax(0,1fr)); } .kids-page .women-category-card > .women-category-name { font-size:12px; } }
+@media (min-width:768px) { .kids-page .women-category-list { grid-template-columns:repeat(10,minmax(0,1fr)); } }
+@media (min-width:1024px) { .kids-page .women-category-list { grid-template-columns:repeat(13,minmax(0,1fr)); } .kids-page .women-category-item:nth-child(n + 27) { transform:translateX(-50%); } }
+@media (max-width:899px) { .kids-hero-copy { top:20%; right:8%; } .kids-hero-cta { top:auto; bottom:18px; } .kids-offer-strip { font-size:12px; gap:7px; } .kids-offer-link { display:none; } }
+@media (prefers-reduced-motion:reduce) { .kids-ticker-track { animation:none; } }

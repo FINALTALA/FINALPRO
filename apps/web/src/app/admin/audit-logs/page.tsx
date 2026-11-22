@@ -3,9 +3,8 @@
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { EmptyState, ErrorBanner } from "@/components/States";
-import { ApiError, apiFetch } from "@/lib/api";
+import { ApiError, apiFetch, authHeadersFor } from "@/lib/api";
 import { adminErrorMessage, formatDateTime, isForbidden } from "@/lib/admin";
-import { getSessionToken } from "@/lib/session";
 import { useAdminGate } from "@/lib/useAdminGate";
 
 interface AuditLogRow {
@@ -154,9 +153,8 @@ export default function AdminAuditLogsPage() {
     setError(null);
     try {
       const qs = buildQuery(filters, {});
-      const token = getSessionToken();
       const res = await fetch(`${API_BASE_URL}/admin/audit-logs/export?${qs}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: authHeadersFor(`/admin/audit-logs/export?${qs}`),
       });
       if (!res.ok) {
         const text = await res.text();

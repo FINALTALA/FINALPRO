@@ -1,10 +1,22 @@
+"use client";
+
 import Link from "next/link";
 import { SEGMENTS } from "@/lib/types";
+import { registerTranslations, translate } from "@/lib/i18n";
+import { useLang } from "@/lib/useLang";
+import { segmentLabel } from "@/lib/shopText";
+
+registerTranslations({
+  ar: { "foot.about": "منصّة فلسطينية لاكتشاف الأزياء ومقارنة أسعارها بين متاجر محلية متعددة.", "foot.browse": "تصفّح", "foot.all_products": "كل المنتجات", "foot.following": "أتابعه", "foot.account": "حسابي", "foot.categories": "الفئات", "foot.rights": "جميع الحقوق محفوظة © FINALPRO" },
+  en: { "foot.about": "A Palestinian platform for discovering fashion and comparing its prices across many local stores.", "foot.browse": "Browse", "foot.all_products": "All products", "foot.following": "Following", "foot.account": "My account", "foot.categories": "Categories", "foot.rights": "All rights reserved © FINALPRO" },
+});
 
 // Home-page footer: every link is a real route that already exists
 // elsewhere in the app (discovery segments, following, account). No
 // external/social links are invented - the platform has none today.
 export default function Footer() {
+  const lang = useLang();
+  const t = (key: string) => translate(lang, key);
   const segments = SEGMENTS.filter((s) => s.key !== "all");
   return (
     <footer className="site-footer">
@@ -13,27 +25,27 @@ export default function Footer() {
           <span className="app-logo-mark">
             FINALPRO
           </span>
-          <p>منصّة فلسطينية لاكتشاف الأزياء ومقارنة أسعارها بين متاجر محلية متعددة.</p>
+          <p>{t("foot.about")}</p>
         </div>
 
         <div className="footer-col">
-          <h3>تصفّح</h3>
-          <Link href="/discovery">كل المنتجات</Link>
-          <Link href="/following">أتابعه</Link>
-          <Link href="/account">حسابي</Link>
+          <h3>{t("foot.browse")}</h3>
+          <Link href="/discovery">{t("foot.all_products")}</Link>
+          <Link href="/following">{t("foot.following")}</Link>
+          <Link href="/account">{t("foot.account")}</Link>
         </div>
 
         <div className="footer-col">
-          <h3>الفئات</h3>
+          <h3>{t("foot.categories")}</h3>
           {segments.map((s) => (
             <Link key={s.key} href={s.key === "women" ? "/women" : `/discovery?segment=${s.key}`}>
-              {s.label}
+              {segmentLabel(lang, s.key, s.label)}
             </Link>
           ))}
         </div>
       </div>
       <div className="footer-bottom">
-        <span>جميع الحقوق محفوظة © FINALPRO</span>
+        <span>{t("foot.rights")}</span>
       </div>
     </footer>
   );

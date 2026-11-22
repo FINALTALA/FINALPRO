@@ -10,7 +10,10 @@ import PasswordInput from "@/components/PasswordInput";
 import { ErrorBanner } from "@/components/States";
 import { ApiError, apiFetch, newIdempotencyKey } from "@/lib/api";
 import { setSessionToken } from "@/lib/session";
+import { otpErrorText } from "@/lib/otpErrors";
+import { useLang } from "@/lib/useLang";
 import styles from "../auth-pages.module.css";
+import { normalizePhoneInput } from "@/lib/phone";
 
 type Step = "phone" | "code" | "password";
 
@@ -26,6 +29,7 @@ export default function RegisterPage() {
   const [password, setPassword] = useState("");
   const [verificationToken, setVerificationToken] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const lang = useLang();
   const [loading, setLoading] = useState(false);
 
   async function run(action: () => Promise<void>) {
@@ -34,7 +38,7 @@ export default function RegisterPage() {
     try {
       await action();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "تعذّر الاتصال بالخادم، حاولي مرة أخرى");
+      setError(err instanceof ApiError ? otpErrorText(err, lang) : "تعذّر الاتصال بالخادم، حاولي مرة أخرى");
     } finally {
       setLoading(false);
     }
@@ -46,7 +50,7 @@ export default function RegisterPage() {
       await apiFetch("/auth/otp/request", {
         method: "POST",
         auth: false,
-        body: { phone, purpose: "signup" },
+        body: { phone: normalizePhoneInput(phone), purpose: "signup" },
       });
       setStep("code");
     });
@@ -59,7 +63,7 @@ export default function RegisterPage() {
         method: "POST",
         auth: false,
         idempotencyKey: newIdempotencyKey("verify"),
-        body: { phone, otp_code: code, purpose: "signup" },
+        body: { phone: normalizePhoneInput(phone), otp_code: code, purpose: "signup" },
       });
       setVerificationToken(res.session_token);
       setStep("password");
@@ -72,7 +76,7 @@ export default function RegisterPage() {
       const res = await apiFetch<{ session_token: string }>("/auth/register", {
         method: "POST",
         auth: false,
-        body: { phone, password, verification_token: verificationToken },
+        body: { phone: normalizePhoneInput(phone), password, verification_token: verificationToken },
       });
       setSessionToken(res.session_token);
       router.push("/");

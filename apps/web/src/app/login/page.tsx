@@ -9,13 +9,17 @@ import { PhoneIcon } from "@/components/AuthIcons";
 import PasswordInput from "@/components/PasswordInput";
 import { ErrorBanner } from "@/components/States";
 import { ApiError, apiFetch } from "@/lib/api";
+import { safeNextPath } from "@/lib/loginRedirect";
 import { setSessionToken } from "@/lib/session";
 import styles from "../auth-pages.module.css";
+import { apiErrorMessage } from "@/lib/apiErrors";
+import { normalizePhoneInput } from "@/lib/phone";
 
-// Only same-site relative paths are honoured for ?next= - never an
-// absolute URL (no open redirect).
+// Only a same-site path is honoured for ?next= (TB-34: lib/loginRedirect.ts
+// is the one rule - no absolute URL, "//", "/\\", backslash or control
+// character, so no open redirect); anything else goes home.
 function safeNext(raw: string | null): string {
-  return raw && raw.startsWith("/") && !raw.startsWith("//") ? raw : "/";
+  return safeNextPath(raw) ?? "/";
 }
 
 function LoginForm() {
@@ -37,12 +41,13 @@ function LoginForm() {
       const res = await apiFetch<{ session_token: string }>("/auth/login", {
         method: "POST",
         auth: false,
-        body: { phone, password },
+        body: { phone: normalizePhoneInput(phone), password },
       });
       setSessionToken(res.session_token);
       router.push(next);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "تعذّر الاتصال بالخادم، حاولي مرة أخرى");
+      // Phase A++ (item 8): the central words, never the API's English sentence.
+      setError(apiErrorMessage(err, "ar"));
       // Sprint 22 (FR-AUTH-014): a deactivated account's own login
       // attempt must still lead somewhere - without this, the
       // reactivation flow (/reactivate) would be undiscoverable.

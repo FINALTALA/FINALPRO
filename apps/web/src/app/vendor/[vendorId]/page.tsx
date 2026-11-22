@@ -1,13 +1,12 @@
 "use client";
 
-import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { EmptyState } from "@/components/States";
-import { ownerHubTiles, workspaceEntry } from "@/lib/nav";
+import { workspaceEntry } from "@/lib/nav";
 import { useFetch } from "@/lib/useFetch";
-import { useHydrated, useSessionToken, useWorkspaces } from "@/lib/useSession";
-import PerformanceSection from "./PerformanceSection";
+import { useHydrated, useSessionToken, useWorkspaces } from "@/lib/useSession";
+import { loginRedirectHref } from "@/lib/loginRedirect";
 
 interface OwnerStorefrontDto {
   slug: string;
@@ -15,12 +14,9 @@ interface OwnerStorefrontDto {
   is_published: boolean;
 }
 
-// Sprint 13: the owner dashboard - direct links to everything an owner
-// manages. Owner-only in the UI: a branch employee who lands here (by
-// URL or a stale bookmark) is sent to their own branch's orders, and a
-// non-member sees a plain message. Hiding is UX only - every linked
-// page and API call is still authorized by the backend
-// (VendorMembershipGuard + @RequireVendorRole).
+// The owner's public storefront is now the management entry point. The
+// management cards appear only after the owner opens its in-page control;
+// this route remains as a safe redirect for old links and bookmarks.
 export default function OwnerHubPage() {
   const params = useParams<{ vendorId: string }>();
   const router = useRouter();
@@ -38,13 +34,19 @@ export default function OwnerHubPage() {
   useEffect(() => {
     if (!hydrated) return;
     if (!token) {
-      router.replace(`/login?next=/vendor/${params.vendorId}`);
+      router.replace(loginRedirectHref());
       return;
     }
     if (membership?.type === "vendor" && membership.role === "BRANCH_EMPLOYEE") {
       router.replace(workspaceEntry(membership).href);
     }
   }, [hydrated, token, membership, params.vendorId, router]);
+
+  useEffect(() => {
+    if (isOwner && storefront.data) {
+      router.replace(`/store/${storefront.data.slug}`);
+    }
+  }, [isOwner, router, storefront.data]);
 
   if (!hydrated || !token || workspaces === null) {
     return (
@@ -72,35 +74,7 @@ export default function OwnerHubPage() {
   return (
     <div className="page-shell">
       <div className="wide-shell" style={{ maxWidth: 1000 }}>
-        <div className="top-bar">
-          <div>
-            <h1 className="page-title" style={{ margin: 0 }}>
-              لوحة المتجر - {membership.vendor_legal_name}
-            </h1>
-            {storefront.data && (
-              <span className={`badge${storefront.data.is_published ? " badge-active" : ""}`}>
-                {storefront.data.is_published ? "المتجر منشور" : "المتجر غير منشور"}
-              </span>
-            )}
-          </div>
-          {storefront.data && (
-            <Link href={`/store/${storefront.data.slug}`} className="button-link">
-              عرض صفحة المتجر العامة
-            </Link>
-          )}
-        </div>
-        <div className="hub-grid">
-          {ownerHubTiles(params.vendorId).map((t) => (
-            <Link key={t.href} href={t.href} className="hub-tile">
-              <strong>{t.title}</strong>
-              <span>{t.description}</span>
-            </Link>
-          ))}
-        </div>
-
-        {/* Sprint 25: loading / error+retry / not-enough-data / charts -
-            and nothing at all while the dashboard flag is off. */}
-        {isOwner && <PerformanceSection vendorId={params.vendorId} />}
+        <div className="skeleton" style={{ height: 120, width: "100%" }} />
       </div>
     </div>
   );

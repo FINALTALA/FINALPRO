@@ -1,50 +1,229 @@
+"use client";
+
 import Link from "next/link";
 import SafeImage from "./SafeImage";
 import StoreCircle from "./StoreCircle";
-import { AVAILABILITY_LABEL, ComparisonCardDto } from "@/lib/types";
+import { ComparisonCardDto } from "@/lib/types";
+import { swatchFor } from "@/lib/colors";
+import BestsellerBadge from "@/components/BestsellerBadge";
+import { useLang } from "@/lib/useLang";
+import { translate, type Lang } from "@/lib/i18n";
+import { useTaxonomy, type TaxonomyDto } from "@/lib/taxonomy";
+import { colorName, pickText } from "@/lib/localized";
+import { availabilityLabel, fmt, storeCountLabel } from "@/lib/shopText";
 
 const MAX_OPTION_PILLS = 4;
-const COLOR_SWATCHES: Record<string, string> = {
-  "أبيض": "#ffffff", "ابيض": "#ffffff", white: "#ffffff",
-  "أسود": "#1c1416", "اسود": "#1c1416", black: "#1c1416",
-  "أزرق": "#47698b", "ازرق": "#47698b", blue: "#47698b",
-  "كحلي": "#1f2c3e", navy: "#1f2c3e",
-  "وردي": "#e8c8c4", pink: "#e8c8c4",
-  "خمري": "#4a1626", "نبيذي": "#4a1626", burgundy: "#4a1626",
-  "بيج": "#d7c6ad", beige: "#d7c6ad",
-  "بني": "#78533b", brown: "#78533b",
-  "رمادي": "#88827f", gray: "#88827f", grey: "#88827f",
-  "أخضر": "#50755e", "اخضر": "#50755e", green: "#50755e",
-  "أحمر": "#a33437", "احمر": "#a33437", red: "#a33437",
-};
+
+/** TB-25: a card's colours - by taxonomy code (named in the interface
+ * language, with the taxonomy swatch) when the API sends codes, otherwise
+ * the catalogue's own colour text as before. */
+export function cardColors(
+  card: ComparisonCardDto,
+  taxonomy: TaxonomyDto | null,
+  lang: Lang,
+): { key: string; label: string; hex: string | null }[] {
+  if (card.color_codes && card.color_codes.length > 0) {
+    return card.color_codes.map((code) => ({
+      key: code,
+      label: colorName(taxonomy, code, lang) ?? code,
+      hex: taxonomy?.colors.find((c) => c.code === code)?.hex ?? null,
+    }));
+  }
+  return card.colors.map((c) => ({ key: c, label: c, hex: swatchFor(c) }));
+}
 
 // Sprint 13: the global product card used by Home, Discovery, search
 // and Following. Every field shown comes from real API data - a card
 // with no image shows a neutral "no image" tile, and colours/sizes/
-// brand appear only when the product actually has them.
-export default function ProductCard({ card, editorial = false }: { card: ComparisonCardDto; editorial?: boolean }) {
-  const offerHref = `/store/${card.cheapest_offer.vendor_slug}/products/${card.cheapest_offer.offer_id}`;
-  const options = [...card.colors, ...card.sizes];
-  const meta = [card.brand_name, card.category_name].filter(Boolean).join(" · ");
+// brand appear only when the product actually has them. TB-25: names,
+// category, colours and the card's own words follow the interface language.
+interface ProductCardProps {
+  card: ComparisonCardDto;
+  editorial?: boolean;
+  presentation?: "default" | "women";
+  favorited?: boolean;
+  favoritePending?: boolean;
+  onToggleFavorite?: (card: ComparisonCardDto) => void;
+  /**
+   * Where opening the card leads. "compare" (default, every public list):
+   * the product's comparison, where the shopper picks a store's offer.
+   * "offer": straight to the cheapest offer's page - only for a card shown
+   * inside one store's own page.
+   */
+  navigationMode?: "compare" | "offer";
+}
+
+export default function ProductCard({
+  card,
+  editorial = false,
+  presentation = "default",
+  favorited = false,
+  favoritePending = false,
+  onToggleFavorite,
+  navigationMode = "compare",
+}: ProductCardProps) {
+  const lang = useLang();
+  const t = (key: string) => translate(lang, key);
+  const taxonomy = useTaxonomy().data;
+  const name = pickText(lang, card.canonical_name_en, card.canonical_name_ar);
+  const colors = cardColors(card, taxonomy, lang);
+  const compareHref = `/compare/${card.canonical_product_id}`;
+  // The image, the name and the cart icon all open the same place; the
+  // heart and the small store logos keep their own behaviour.
+  const openHref =
+    navigationMode === "offer"
+      ? `/store/${card.cheapest_offer.vendor_slug}/products/${card.cheapest_offer.offer_id}`
+      : compareHref;
+  const options = [...colors.map((c) => c.label), ...card.sizes];
+  const category = card.category_name ? pickText(lang, card.category_name_en, card.category_name) : null;
+  const meta = [card.brand_name, category].filter(Boolean).join(" · ");
+  const visibleStores = card.store_logos.slice(0, 3);
+  // "420.00" -> "420"; keeps real decimals ("99.50").
+  const displayPrice = String(Number.parseFloat(card.lowest_price) || card.lowest_price);
+  const discountStores = card.discounted_store_count ?? 1;
+  const discountTitle = fmt(t("shop.discount_at"), {
+    n: discountStores,
+    stores: t(card.discounted_store_count === 1 ? "shop.store_word_one" : "shop.store_word_many"),
+  });
+
+  if (presentation === "women") {
+    return (
+      <article className="product-card women-product-card" data-testid="product-card" data-product-id={card.canonical_product_id}>
+        <div className="product-card-media women-product-card-media">
+          <Link href={openHref} className="women-product-card-image" aria-label={name}>
+            {card.image_url ? (
+              <SafeImage src={card.image_url} alt={name} loading="lazy" />
+            ) : (
+              <span className="product-card-noimage">{t("shop.no_image")}</span>
+            )}
+          </Link>
+          {card.bestseller && <BestsellerBadge mark={card.bestseller} />}
+
+          <Link
+            href={compareHref}
+            className="women-product-card-stores"
+            aria-label={fmt(t("shop.compare_between"), { stores: storeCountLabel(lang, card.store_count) })}
+            title={t("shop.compare_title")}
+          >
+            <span className="women-product-card-store-count" aria-hidden="true">{card.store_count}+</span>
+            {visibleStores.map((logo) => (
+              <StoreCircle key={logo.vendor_id} name={logo.display_name} logoUrl={logo.logo_url} size={22} />
+            ))}
+          </Link>
+
+          <span className="women-product-card-ai" title={t("shop.style_look")} role="img" aria-label={t("shop.style_look")}>
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="m10 1.8 1.65 5.05L16.7 8.5l-5.05 1.65L10 15.2l-1.65-5.05L3.3 8.5l5.05-1.65L10 1.8Z" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinejoin="round" />
+              <path d="m16 12.5.8 2.2 2.2.8-2.2.8L16 18.5l-.8-2.2-2.2-.8 2.2-.8.8-2.2Z" fill="currentColor" />
+            </svg>
+          </span>
+
+          <button
+            className={`women-product-card-favorite${favorited ? " is-favorited" : ""}`}
+            type="button"
+            aria-label={favorited ? t("shop.fav_remove") : t("shop.fav_add")}
+            aria-pressed={favorited}
+            disabled={favoritePending}
+            onClick={() => onToggleFavorite?.(card)}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20.8 4.7a5.5 5.5 0 0 0-7.8 0L12 5.8l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8l1.1 1.1L12 21l7.8-7.4 1.1-1.1a5.5 5.5 0 0 0-.1-7.8Z" />
+            </svg>
+          </button>
+
+          {card.has_discount && (
+            <span className="women-product-card-discount" title={discountTitle}>
+              {t("shop.discount")}
+            </span>
+          )}
+
+          {colors.length > 0 && (
+            <div className="women-product-card-swatches" aria-label={t("shop.colors_available")}>
+              {colors.slice(0, 3).map((color) =>
+                color.hex ? (
+                  <span
+                    key={color.key}
+                    className="women-product-card-swatch"
+                    style={{ backgroundColor: color.hex }}
+                    role="img"
+                    aria-label={color.label}
+                    title={color.label}
+                  />
+                ) : (
+                  <span key={color.key} className="women-product-card-swatch-label" title={color.label}>
+                    {color.label}
+                  </span>
+                ),
+              )}
+              {colors.length > 3 && (
+                <span className="women-product-card-swatch-more">+{colors.length - 3}</span>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="product-card-body women-product-card-body">
+          <Link href={openHref} className="product-card-name women-product-card-name">
+            {name}
+          </Link>
+          <div className="women-product-card-price-row">
+            <span className="product-card-price women-product-card-price">₪ {displayPrice}</span>
+            <span
+              className="women-product-card-rating"
+              aria-label={typeof card.rating !== "number" ? t("shop.no_rating") : fmt(t("shop.rating_of"), { r: card.rating.toFixed(1) })}
+            >
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="m8 1.3 2.05 4.16 4.6.67-3.32 3.24.78 4.58L8 11.78l-4.11 2.17.78-4.58L1.35 6.13l4.6-.67L8 1.3Z" />
+              </svg>
+              {typeof card.rating !== "number" ? "—" : card.rating.toFixed(1)}
+              {typeof card.rating === "number" && card.rating_count ? (
+                <span className="women-product-card-rating-count">({card.rating_count})</span>
+              ) : null}
+            </span>
+          </div>
+          <div className="women-product-card-actions">
+            <span className="women-product-card-sizes" aria-label={t("shop.sizes_available")}>
+              {card.sizes.slice(0, 5).join(" · ")}
+              {card.sizes.length > 5 ? ` +${card.sizes.length - 5}` : ""}
+            </span>
+            <Link
+              href={openHref}
+              className="women-product-card-cart"
+              aria-label={t("shop.pick_size_add")}
+              title={t("shop.pick_size_add")}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 4h2.5l2 11h10l2-8H6.5" />
+                <circle cx="9.5" cy="19" r="1.4" />
+                <circle cx="16.5" cy="19" r="1.4" />
+              </svg>
+            </Link>
+          </div>
+        </div>
+      </article>
+    );
+  }
 
   return (
-    <article className="product-card" data-testid="product-card">
-      <Link href={offerHref} className="product-card-media" aria-label={card.canonical_name_ar}>
+    <article className="product-card" data-testid="product-card" data-product-id={card.canonical_product_id}>
+      <Link href={openHref} className="product-card-media" aria-label={name}>
         {card.image_url ? (
-          <SafeImage src={card.image_url} alt={card.canonical_name_ar} loading="lazy" />
+          <SafeImage src={card.image_url} alt={name} loading="lazy" />
         ) : (
-          <span className="product-card-noimage">لا توجد صورة</span>
+          <span className="product-card-noimage">{t("shop.no_image")}</span>
         )}
+        {card.bestseller && <BestsellerBadge mark={card.bestseller} />}
       </Link>
 
       <div className="product-card-body">
         {meta && <div className="product-card-meta">{meta}</div>}
-        <Link href={offerHref} className="product-card-name" style={{ textDecoration: "none", color: "inherit" }}>
-          {card.canonical_name_ar}
+        {card.has_discount && <span className="product-card-discount-badge">{discountTitle}</span>}
+        <Link href={openHref} className="product-card-name" style={{ textDecoration: "none", color: "inherit" }}>
+          {name}
         </Link>
 
         {!editorial && options.length > 0 && (
-          <div className="product-card-options" aria-label="الألوان والمقاسات">
+          <div className="product-card-options" aria-label={t("shop.colors_and_sizes")}>
             {options.slice(0, MAX_OPTION_PILLS).map((o) => (
               <span key={o} className="option-pill">
                 {o}
@@ -57,21 +236,24 @@ export default function ProductCard({ card, editorial = false }: { card: Compari
         )}
 
         <div className="product-card-price">
-          <small>يبدأ من </small>
+          <small>{t("shop.starts_from")}</small>
           {card.lowest_price} ₪
         </div>
         <span className={`availability-badge availability-${card.lowest_price_availability}`}>
-          {AVAILABILITY_LABEL[card.lowest_price_availability]}
+          {availabilityLabel(lang, card.lowest_price_availability)}
         </span>
 
-        {editorial && options.length > 0 && <div className="home-product-options" aria-label="الألوان والمقاسات المتاحة">
-          {card.colors.slice(0, 4).map((color) => {
-            const swatch = COLOR_SWATCHES[color.trim().toLowerCase()];
-            return swatch ? <span key={color} className="home-color-swatch" style={{ backgroundColor: swatch }} role="img" aria-label={`لون ${color}`} title={color} /> : <span key={color} className="option-pill">{color}</span>;
-          })}
-          {card.colors.length > 4 && <span className="option-pill">+{card.colors.length - 4} ألوان</span>}
+        {editorial && options.length > 0 && <div className="home-product-options" aria-label={t("shop.colors_and_sizes_available")}>
+          {colors.slice(0, 4).map((color) =>
+            color.hex ? (
+              <span key={color.key} className="home-color-swatch" style={{ backgroundColor: color.hex }} role="img" aria-label={fmt(t("shop.color_of"), { color: color.label })} title={color.label} />
+            ) : (
+              <span key={color.key} className="option-pill">{color.label}</span>
+            ),
+          )}
+          {colors.length > 4 && <span className="option-pill">{fmt(t("shop.more_colors"), { n: colors.length - 4 })}</span>}
           {card.sizes.slice(0, 4).map((size) => <span className="option-pill" key={`size-${size}`}>{size}</span>)}
-          {card.sizes.length > 4 && <span className="option-pill">+{card.sizes.length - 4} مقاسات</span>}
+          {card.sizes.length > 4 && <span className="option-pill">{fmt(t("shop.more_sizes"), { n: card.sizes.length - 4 })}</span>}
         </div>}
 
         <div className="product-card-stores">
@@ -86,18 +268,16 @@ export default function ProductCard({ card, editorial = false }: { card: Compari
               />
             ))}
           </div>
-          <span>
-            {card.store_count === 1 ? "متجر واحد" : `${card.store_count} متاجر`}
-          </span>
+          <span>{storeCountLabel(lang, card.store_count)}</span>
         </div>
       </div>
 
       <div className="product-card-actions">
         <Link
-          href={`/compare/${card.canonical_product_id}`}
+          href={compareHref}
           className="button button-block button-secondary"
         >
-          قارني الأسعار
+          {t("shop.compare_prices")}
         </Link>
       </div>
     </article>
