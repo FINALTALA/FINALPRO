@@ -83,18 +83,47 @@ model User {
   storeFollows                 StoreFollow[]
   priceChangesMade             PriceHistory[]
   importBatchesCreated         ImportBatch[]
+  bulkPublishRuns              BulkPublishRun[]
   notifications                Notification[]
   matchReports                 MatchReport[]
   /// Sprint 23 (PDR-032): PLATFORM_ADMIN's own decisions on
   /// ReviewReport - dismiss or uphold.
   reviewDecisions              ReviewReport[]
+  /// PD-3: review images this administrator hid.
+  hiddenReviewMedia            ReviewMedia[]
+  /// PD-4: size guides this administrator created / versions published,
+  /// and the guide requests an owner sent / an administrator decided.
+  sizeGuidesCreated            SizeGuide[]                     @relation("SizeGuideCreatedBy")
+  sizeGuideVersionsPublished   SizeGuideVersion[]              @relation("SizeGuideVersionPublishedBy")
+  sizeGuideRequestsSent        SizeGuideRequest[]              @relation("SizeGuideRequestRequestedBy")
+  sizeGuideRequestsDecided     SizeGuideRequest[]              @relation("SizeGuideRequestDecidedBy")
+  /// PD-5.2: sales-rank rebuilds an administrator triggered.
+  salesRankRunsTriggered       SalesRankRun[]
+  /// PD-5b: platform editorial collections an administrator created / items added.
+  platformCollectionsCreated   PlatformCollection[]
+  platformCollectionItemsAdded PlatformCollectionItem[]
   /// Sprint 24 (FR-FAV-001): PRODUCT/OFFER favorites - STORE
   /// favoriting stays StoreFollow (final decision #6).
   favorites                    Favorite[]
+  availabilitySubscriptions    VariantAvailabilitySubscription[]
   comparisonSets               ComparisonSet[]
   notificationPreferences      NotificationPreference[]
+  /// TB-12.2: the platform-alert categories this administrator receives,
+  /// and the subscriptions this administrator added for others.
+  platformAlertSubscriptions   PlatformAlertRecipient[]        @relation("PlatformAlertRecipientUser")
+  platformAlertRecipientsAdded PlatformAlertRecipient[]        @relation("PlatformAlertRecipientAddedBy")
+
+  offerDrafts    OfferDraft[]   @relation("OfferDraftCreator")
+  brandRequests  BrandRequest[] @relation("BrandRequestRequester")
+  brandDecisions BrandRequest[] @relation("BrandRequestDecider")
+
+  /// Barcodes and in-store sales (2026-11-20).
+  offerBarcodesCreated OfferBarcode[] @relation("OfferBarcodeCreator")
+  storeSalesSold       StoreSale[]    @relation("StoreSaleSeller")
+  storeSalesVoided     StoreSale[]    @relation("StoreSaleVoider")
 
   @@map("users")
+  offerDraftsLastEdited OfferDraft[] @relation("OfferDraftLastEditor")
 }
 
 /// Part 3, G.3: one-to-one with User. Split out (rather than folding
@@ -117,6 +146,10 @@ model CustomerProfile {
   /// someone else's review - two distinct relations, never confused.
   reviews              Review[]
   reviewReports        ReviewReport[]
+  /// PD-3: images this customer attached to their reviews, and the
+  /// "helpful" votes they cast on other people's reviews.
+  reviewMedia          ReviewMedia[]
+  reviewHelpfulVotes   ReviewHelpfulVote[]
 
   @@map("customer_profiles")
 }
@@ -358,30 +391,76 @@ enum StoreType {
 }
 
 model Vendor {
-  id                  String             @id @default(uuid())
-  legalName           String
-  status              VendorStatus       @default(APPLIED)
-  subscriptionStatus  SubscriptionStatus @default(NONE)
+  id                           String             @id @default(uuid())
+  legalName                    String
+  status                       VendorStatus       @default(APPLIED)
+  subscriptionStatus           SubscriptionStatus @default(NONE)
   /// Sprint 5 (RB-STORE-001, PDR-010). See StoreType's own doc comment.
-  storeType           StoreType          @default(PHYSICAL)
+  storeType                    StoreType          @default(PHYSICAL)
   /// Sprint 7 (RB-STOREF-001, PDR-011): the public storefront's stable
   /// URL segment - generated once at vendor creation (VendorsController.apply()),
   /// never editable afterward, deliberately separate from displayName
   /// below (which the owner can change freely without ever breaking a
   /// shared/bookmarked link). Globally unique across every vendor.
-  slug                String             @unique
+  slug                         String             @unique
   /// Owner-editable public-facing name, distinct from legalName (the
   /// registration/legal identity captured at application time,
   /// unrelated to this sprint). Defaults to legalName at creation and
   /// diverges only once the owner explicitly changes it.
-  displayName         String?
-  logoUrl             String?
-  bio                 String?
-  coverImageUrl       String?
-  coverColor          String?
-  instagramUrl        String?
-  facebookUrl         String?
-  whatsappUrl         String?
+  displayName                  String?
+  heroTitle                    String?
+  logoUrl                      String?
+  bio                          String?
+  coverImageUrl                String?
+  coverColor                   String?
+  /// Storefront cover look, per store (0-1, CHECK-constrained in the
+  /// migration). The defaults are the fixed values the hero used before
+  /// they became settings, so existing stores look exactly the same:
+  /// the cover image at 20% opacity under a 30% wash of coverColor.
+  coverImageOpacity            Float              @default(0.2)
+  coverTintOpacity             Float              @default(0.3)
+  /// Independent cover layers, bottom to top: the cover image, the upper
+  /// (radial) wash of coverColor, a global colour layer over the whole
+  /// hero, and the fade/shadow rising from the product panel. Turning a
+  /// layer off only flips its flag - its colour and strength stay saved.
+  /// Defaults keep every existing store's look (image + upper wash on,
+  /// global layer off, the panel's #4A1626 shadow at 6%). Colours are
+  /// #rrggbb, opacities 0-1, brightness 0.5-1.5 (1 = the colour as is) -
+  /// all CHECK-constrained in the migration.
+  coverImageEnabled            Boolean            @default(true)
+  coverTintEnabled             Boolean            @default(true)
+  coverGlobalOverlayEnabled    Boolean            @default(false)
+  coverGlobalOverlayColor      String             @default("#D6AFA4")
+  coverGlobalOverlayOpacity    Float              @default(0.25)
+  coverGlobalOverlayBrightness Float              @default(1)
+  coverBottomFadeEnabled       Boolean            @default(true)
+  coverBottomFadeColor         String             @default("#4A1626")
+  coverBottomFadeOpacity       Float              @default(0.06)
+  /// The product panel's appearance (the "panel" pencil): the owner's
+  /// OVERRIDES only, '{}' until something is changed - responses merge
+  /// them over the defaults in src/vendors/storefront-appearance.ts,
+  /// which are the stylesheet's own values (so an untouched store looks
+  /// exactly as before). Shape strictly validated by the API.
+  storefrontAppearance         Json               @default("{}")
+  /// The hero title's and the hero description's own text styling (their
+  /// pencils), fully independent of each other. Colour/font/weight null =
+  /// the stylesheet's default (every existing store); the font is one of
+  /// src/vendors/hero-text.ts HERO_FONTS (fonts the web app already
+  /// ships), weight 400/500/600/700. The shadow switch keeps its strength
+  /// (0.1-1) when turned off. All CHECK-constrained in the migration.
+  heroTitleColor               String?
+  heroTitleFont                String?
+  heroTitleWeight              Int?
+  heroTitleShadowEnabled       Boolean            @default(false)
+  heroTitleShadowStrength      Float              @default(0.5)
+  bioColor                     String?
+  bioFont                      String?
+  bioWeight                    Int?
+  bioShadowEnabled             Boolean            @default(false)
+  bioShadowStrength            Float              @default(0.5)
+  instagramUrl                 String?
+  facebookUrl                  String?
+  whatsappUrl                  String?
   /// PDR-007: "Each store must publish at least one external contact
   /// route." Enforced only at the moment of publishing (StorefrontController.publish()
   /// checked in VendorsController), not continuously - an owner can
@@ -391,8 +470,8 @@ model Vendor {
   /// StorefrontController) - the name/identity stay visible either way
   /// ("المحل غير متاح حالياً" is a status shown alongside identity, never
   /// a 404).
-  storefrontPublished Boolean            @default(false)
-  createdAt           DateTime           @default(now())
+  storefrontPublished          Boolean            @default(false)
+  createdAt                    DateTime           @default(now())
 
   /// Sprint 21 (PDR-030, FR-RET-008): selected at registration
   /// (POST /vendors's own return_policy field - CreateVendorDto makes
@@ -449,15 +528,30 @@ model Vendor {
   nameChangeRequests            CanonicalNameChangeRequest[]
   importIdentifierRecords       ImportIdentifierRecord[]
   applicableCategories          VendorApplicableCategory[]
+  storefrontCategories          StorefrontCategory[]
   storeSections                 StoreSection[]
   branchOrders                  BranchOrder[]
   deliveryWindows               DeliveryWindow[]
   followers                     StoreFollow[]
   importBatches                 ImportBatch[]
+  bulkPublishRuns               BulkPublishRun[]
   operatingHours                BranchOperatingHours[]
   closures                      BranchClosure[]
   /// Sprint 23 (PDR-032): STORE-target reviews against this vendor.
   reviews                       Review[]
+
+  /// Product-entry wizard drafts and brand requests (see OfferDraft, BrandRequest).
+  offerDrafts   OfferDraft[]
+  brandRequests BrandRequest[]
+
+  /// Barcodes and in-store sales (2026-11-20).
+  offerBarcodes  OfferBarcode[]
+  codeCounter    VendorCodeCounter?
+  storeSales     StoreSale[]
+  storeSaleItems StoreSaleItem[]
+
+  /// «الصفحة الرئيسية المرنة للمتجر» (2026-11-20).
+  homeLayout StoreHomeLayout?
 
   @@map("vendors")
 }
@@ -804,6 +898,10 @@ model StoreBranch {
   /// DELIVERY order whose zone has no override (see
   /// VendorDeliveryZone.minimumOrderValue's own comment).
   minimumOrderValue    Decimal?                 @db.Decimal(10, 2)
+  /// PD-5.1: minimum preparation time (minutes, 0-2880) before a delivery
+  /// window starts - a window closer than this is not offered or bookable
+  /// (delivery-calendar.util.ts). Owner-set; 0 = only windows not started yet.
+  deliveryLeadMinutes  Int                      @default(0)
 
   vendorUsers              VendorUser[]
   staffInvites             StaffInvite[]
@@ -823,6 +921,8 @@ model StoreBranch {
   /// returnsReceived above, this is NEVER cross-branch; an exchange's
   /// drop-off and hand-over both happen only here.
   exchangeReplacementsHere Return[]                  @relation("ReturnReplacementBranch")
+  /// In-store sales recorded at this branch (2026-11-20).
+  storeSales               StoreSale[]
 
   /// Backs the composite FKs on VendorUser/StaffInvite (vendorId,
   /// branchId) -> (vendorId, id) - a plain PK-only unique on `id`
@@ -1127,6 +1227,12 @@ model Notification {
   targetId        String
   vendorId        String?
   branchId        String?
+  /// TB-26: whom the row is for - the shopping bell (CUSTOMER), a store
+  /// workspace (STORE, always with vendorId; with branchId unless it is
+  /// a store-wide type) or the platform workspace (PLATFORM). Set
+  /// explicitly by the sender of every event (payload.audience) - never
+  /// derived from the type at send time.
+  audience        NotificationAudience
   readAt          DateTime?
   createdAt       DateTime               @default(now())
 
@@ -1136,7 +1242,15 @@ model Notification {
   /// treated as an already-successful no-op, not an error.
   @@unique([outboxEventId, recipientUserId])
   @@index([recipientUserId, readAt, createdAt])
+  @@index([recipientUserId, audience, readAt, createdAt])
   @@map("notifications")
+}
+
+/// TB-26: the context a notification belongs to (see Notification.audience).
+enum NotificationAudience {
+  CUSTOMER
+  STORE
+  PLATFORM
 }
 
 enum NotificationType {
@@ -1150,6 +1264,9 @@ enum NotificationType {
   NEW_ORDER_FOR_EMPLOYEE
   LOW_STOCK_AFTER_RESERVE
   FOLLOWED_STORE_NEW_PRODUCT
+  /// Bulk publishing (2026-11-18): ONE summary for a run that published
+  /// several products of a followed store (data: { count }).
+  FOLLOWED_STORE_NEW_PRODUCTS
   FOLLOWED_STORE_DISCOUNT
   /// Sprint 20a (PDR-025): 6h-before-slot prep reminder.
   PREP_REMINDER
@@ -1179,10 +1296,77 @@ enum NotificationType {
   /// least one - OFFER favorites only (final decision #4, no
   /// PRODUCT-level restock alert this sprint).
   FAVORITE_BACK_IN_STOCK
+  /// A customer's explicit alert for one exact product colour x size.
+  VARIANT_BACK_IN_STOCK
   /// Sprint 24 (FR-FAV-006): a new vendor offer was matched/confirmed
   /// against a favorited canonical product - fires exactly once, on
   /// the real canonicalVariantId NULL -> set transition.
   FAVORITE_NEW_OFFER
+  /// PD-3: an order became COMPLETED - its customer is invited to
+  /// review what they bought (target: the BranchOrder).
+  REVIEW_INVITATION
+  /// PD-3: an administrator hid the recipient's review (target: the
+  /// review's canonical product or store).
+  REVIEW_HIDDEN
+  /// TB-9: a branch order was found in a state the order state machine
+  /// never produces (e.g. a PICKUP order in DELIVERED) - sent once per
+  /// order to every platform administrator (target: the BranchOrder).
+  ORDER_INTEGRITY_ALERT
+  /// TB-14: the returns lifecycle (target: the Return). To the branch
+  /// (store owner + that branch's employees): a new request, and the
+  /// 48h no-decision reminder.
+  RETURN_REQUESTED
+  RETURN_VENDOR_REMINDER
+  /// TB-14: to the customer - a decision or outcome on their own return.
+  RETURN_APPROVED
+  RETURN_REJECTED
+  RETURN_ADMIN_REJECTED
+  RETURN_ESCALATED
+  RETURN_REFUNDED
+  RETURN_EXCHANGED
+  RETURN_CODE_EXPIRED
+  /// TB-14: a return reached ESCALATED and awaits a platform decision
+  /// (72h without a store decision, or a customer dispute) - to the
+  /// RETURN_ESCALATION subscribers (else every active administrator).
+  RETURN_ESCALATION_ALERT
+  /// TB-15: to the store (active owners + active employees of the
+  /// order's branch, resolved when the relay sends): the platform's
+  /// final decision on an escalated return, and a customer cancelling
+  /// a REQUESTED one. Behind `return_store_notifications_enabled`.
+  RETURN_PLATFORM_APPROVED
+  RETURN_PLATFORM_REJECTED
+  RETURN_CANCELLED_BY_CUSTOMER
+}
+
+/// TB-12.2: the kinds of platform alert an administrator can subscribe to.
+enum PlatformAlertCategory {
+  /// A branch order in a state the order state machine never produces
+  /// (TB-9's ORDER_INTEGRITY_ALERT).
+  ORDER_INTEGRITY
+  /// A return escalated to the platform (TB-14's RETURN_ESCALATION_ALERT).
+  RETURN_ESCALATION
+}
+
+/// TB-12.2: who receives each category of platform alert - an explicit
+/// subscription per (administrator, category). At send time only
+/// subscribers who are still PLATFORM_ADMIN and not deactivated count;
+/// when none do, the alert goes to every active administrator instead
+/// (and that fallback is logged), so an alert is never silently lost.
+/// Managed by platform administrators only (admin/alert-recipients).
+model PlatformAlertRecipient {
+  id            String                @id @default(uuid())
+  userId        String
+  user          User                  @relation("PlatformAlertRecipientUser", fields: [userId], references: [id], onDelete: Restrict)
+  category      PlatformAlertCategory
+  /// The administrator who added this subscription (null if that
+  /// account is ever removed).
+  addedByUserId String?
+  addedBy       User?                 @relation("PlatformAlertRecipientAddedBy", fields: [addedByUserId], references: [id], onDelete: SetNull)
+  createdAt     DateTime              @default(now())
+
+  @@unique([userId, category])
+  @@index([category])
+  @@map("platform_alert_recipients")
 }
 
 enum NotificationTargetType {
@@ -1194,6 +1378,8 @@ enum NotificationTargetType {
   /// that isn't tied to one specific offer - targetId is the
   /// canonicalProductId.
   CANONICAL_PRODUCT
+  /// TB-14: a return - targetId is the returnId.
+  RETURN
 }
 
 /// Sprint 19 (§8 plan): bounded fan-out for an outbox event with
@@ -1365,6 +1551,8 @@ model Brand {
   canonicalProducts CanonicalProduct[]
   vendorOffers      VendorOffer[]
 
+  brandRequests BrandRequest[]
+
   @@map("brands")
 }
 
@@ -1469,17 +1657,24 @@ model CanonicalProduct {
   mergedFrom        CanonicalProduct[]     @relation("CanonicalProductMerge")
   createdAt         DateTime               @default(now())
 
-  variants           CanonicalProductVariant[]
-  vendorOffers       VendorOffer[]
-  nameChangeRequests CanonicalNameChangeRequest[]
+  variants                CanonicalProductVariant[]
+  vendorOffers            VendorOffer[]
+  nameChangeRequests      CanonicalNameChangeRequest[]
+  /// PD-4: at most one PRODUCT size guide (brand/model fit) - shared by
+  /// every store's offer of this product.
+  sizeGuides              SizeGuide[]
+  /// PD-5b: the platform editorial collections listing this product.
+  platformCollectionItems PlatformCollectionItem[]
+  /// PD-5.2: derived sales rank (CANONICAL scope).
+  salesRanks              SalesRankSnapshot[]
   /// Sprint 23 (PDR-032): PRODUCT-target reviews against this canonical
   /// product.
-  reviews            Review[]
+  reviews                 Review[]
   /// Sprint 24 (FR-FAV-001/FR-COMP-002): PRODUCT-level favorites, and
   /// this product's appearances across every customer's saved
   /// comparison sets.
-  favorites          Favorite[]
-  comparisonSetItems ComparisonSetItem[]
+  favorites               Favorite[]
+  comparisonSetItems      ComparisonSetItem[]
 
   @@index([brandId])
   @@index([categoryId])
@@ -1660,10 +1855,60 @@ model VendorOffer {
   /// "new product" follower-notification dispatch uses to fire exactly
   /// once per offer, ever.
   firstPublishedAt   DateTime?
+  /// Sprint 27 (product taxonomy): one season at most - null means the
+  /// product is not seasonal (bags, watches...) or not classified yet.
+  season             ProductSeason?
+  /// Sprint 27: null = a legacy, unclassified offer (sold and shown as
+  /// before, never given a guessed taxonomy); 1 = classified under the
+  /// fixed taxonomy - from then on its audiences/categories are
+  /// mandatory, every variant shares ONE price (offer-level price
+  /// endpoint only) and variants are colour/size combinations.
+  taxonomyVersion    Int?
+  /// Sprint 27: false for every offer that existed before the taxonomy.
+  /// The owner-facing creation paths (product form, CSV import) set it to
+  /// true, and a trigger then refuses status ACTIVE while taxonomyVersion
+  /// is still null - a new product is never published unclassified,
+  /// while legacy offers keep selling exactly as before.
+  requiresTaxonomy   Boolean                   @default(false)
+  /// Phase A++ (item 5): the model in the photos - both or neither (CHECK).
+  /// Height 100-220 cm. modelSize is plain text, NOT a foreign key: one of
+  /// this product's own size codes today (checked by the server on every
+  /// write); a later phase may store a custom size label here.
+  modelHeightCm      Int?
+  modelSize          String?
+  /// Fabric composition (2026-11-19): { parts: [{ part, fibers: [{ fiber,
+  /// other_ar?, other_en?, percent }] }] } - for the whole product, each
+  /// part totalling 100% (offers/composition.ts). Null = not given.
+  composition        Json?
+  /// Country of origin: ISO 3166-1 alpha-2 (CHECK in the migration). Null = not given.
+  countryOfOrigin    String?
 
   variants                OfferVariant[]
+  /// Phase A++ (item 6): images shared by every colour (after the colour's own).
+  sharedMedia             VendorOfferSharedMedia[]
+  /// Product colours (migration 20261118120000): the product's own named colours, in order.
+  colors                  OfferColor[]
+  /// Edit drafts: the CONTENT revision, raised by database triggers on any
+  /// content change (never by stock, holds, status or archiving).
+  contentRevision         Int                      @default(1)
+  editDrafts              OfferDraft[]             @relation("OfferEditDrafts")
   importIdentifierRecords ImportIdentifierRecord[]
   sectionMemberships      StoreSectionOffer[]
+  audiences               VendorOfferAudience[]
+  categories              VendorOfferCategory[]
+  /// PD-4: the owner's choice among the published STANDARD guides that
+  /// apply to this offer's category/audience; null = the default guide.
+  /// Never a guide the owner made - stores cannot author guides.
+  sizeGuideId             String?
+  sizeGuide               SizeGuide?               @relation(fields: [sizeGuideId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  ownSizeGuide            SizeGuide?               @relation("OfferOwnSizeGuide")
+  sizeGuideRequests       SizeGuideRequest[]
+  /// PD-5.2: derived sales rank (OFFER scope).
+  salesRanks              SalesRankSnapshot[]
+  /// PD-5.4: «نسّقي معه» - the offers this one is styled with, and the
+  /// offers that list this one.
+  pairings                OfferPairing[]           @relation("OfferPairingPrimary")
+  pairedIn                OfferPairing[]           @relation("OfferPairingPaired")
 
   /// Review-round fix (Sprint 7 round 3, Blocker 2): lets
   /// ImportIdentifierRecord.vendorOffer below be a composite FK on
@@ -1672,10 +1917,20 @@ model VendorOffer {
   /// FK can reference, which is what makes a cross-tenant link (vendor A's
   /// record pointing at vendor B's offer) rejected by Postgres itself
   /// rather than merely by application code.
+  /// The wizard draft this product was created from, if any.
+  offerDraft    OfferDraft?
+  brandRequests BrandRequest[]
+  /// The product's barcodes (2026-11-20) - store-scoped, operational, never
+  /// shown to shoppers, never part of an edit draft.
+  barcodes       OfferBarcode[]
+  storeSaleItems StoreSaleItem[]
+
   @@unique([vendorId, id])
   @@index([vendorId])
   @@index([canonicalProductId])
+  @@index([sizeGuideId])
   @@index([brandId])
+  @@index([season])
   @@map("vendor_offers")
 }
 
@@ -1742,6 +1997,24 @@ enum ImportBatchStatus {
   COMPLETED
   COMPLETED_WITH_ERRORS
   FAILED
+  /// The product import (2026-11-18): checked - nothing created yet.
+  CHECKED
+  /// The product import: the chosen products were created as drafts.
+  CONFIRMED
+  /// The product import: checked, never confirmed in time.
+  EXPIRED
+  /// Images in bulk (2026-11-18): a confirm is copying the images / creating
+  /// the drafts right now (back to CHECKED if it fails; undone by the sweep
+  /// if it was interrupted).
+  CONFIRMING
+}
+
+/// Which import a batch is: the older flat CSV/XLSX one (kept for
+/// compatibility, no longer offered to owners) or the product import that
+/// creates wizard drafts.
+enum ImportBatchKind {
+  LEGACY_FLAT
+  PRODUCT_DRAFTS
 }
 
 model ImportBatch {
@@ -1759,8 +2032,36 @@ model ImportBatch {
   createdByUser User              @relation(fields: [createdBy], references: [id])
   createdAt     DateTime          @default(now())
   completedAt   DateTime?
+  /// The product import (2026-11-18).
+  kind             ImportBatchKind @default(LEGACY_FLAT)
+  /// SHA-256 of the uploaded file: the same file again is warned about.
+  fileSha256       String?
+  /// The check's result, kept on the server until confirmed (the built
+  /// drafts - never trusted back from the client).
+  checkResult      Json?
+  /// A check can be confirmed until then.
+  expiresAt        DateTime?
+  draftsCreated    Int?
+  productsRejected Int?
+  /// Images in bulk (2026-11-18): the ZIP of images checked with the file.
+  zipFileName      String?
+  zipSha256        String?
+  zipBytes         Int?
+  /// Images checked, cleaned and kept (privately - outside the public
+  /// uploads) until the check is confirmed or expires.
+  imagesStaged     Int?
+  /// While a confirm runs: the public file names its images are being
+  /// copied to - written before any copy, so an interrupted confirm can be
+  /// undone (ImportStagingSweepService).
+  plannedUploads   Json?
+  confirmStartedAt DateTime?
+
+  drafts          OfferDraft[]
+  bulkPublishRuns BulkPublishRun[]
 
   @@index([vendorId, createdAt])
+  @@index([vendorId, kind, fileSha256])
+  @@index([kind, status, expiresAt])
   @@map("import_batches")
 }
 
@@ -1849,6 +2150,29 @@ model OfferVariant {
   /// approval" (Sec 3.2) is exactly what free text already gives.
   colour                     String?
   size                       String?
+  /// Sprint 27: on a classified offer (VendorOffer.taxonomyVersion set)
+  /// a variant IS one colour/size combination - these codes come from
+  /// the fixed taxonomy tables; both null = the "no options" variant.
+  /// `colour`/`size` above keep their Arabic labels for older screens.
+  colorCode                  String?
+  color                      TaxonomyColor?           @relation(fields: [colorCode], references: [code], onDelete: Restrict)
+  sizeCode                   String?
+  sizeOption                 TaxonomySize?            @relation(fields: [sizeCode], references: [code], onDelete: Restrict)
+  /// Sprint 27: true only for a variant created as a taxonomy
+  /// combination. A partial unique index (migration SQL, not expressible
+  /// here) makes (vendorOfferId, colorCode, sizeCode) unique among these,
+  /// NULLS NOT DISTINCT - one "no options" combination at most. Legacy
+  /// variants (false) are never constrained by it.
+  isCombination              Boolean                  @default(false)
+  /// Product colours: the version's own product colour - its identity is
+  /// (offerColorId x sizeCode). The database's FK is composite
+  /// (vendorOfferId, offerColorId) -> offer_colors(vendorOfferId, id), so a
+  /// version can only use a colour of its own product; Prisma models it on
+  /// offerColorId alone (it refuses an optional relation over a required
+  /// vendorOfferId). "colorCode" is kept equal to the colour's family and
+  /// "colour" to its Arabic name by a trigger.
+  offerColorId               String?
+  offerColor                 OfferColor?              @relation(fields: [offerColorId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   basePrice                  Decimal                  @db.Decimal(10, 2)
   /// Sprint 17 (blocker 1): the MANUAL sale-price override for legacy/
   /// simple pricing. Mutually exclusive with the scheduled relative
@@ -1902,6 +2226,9 @@ model OfferVariant {
   /// Sprint 24 (FR-FAV-001): OFFER-level favorites of this exact
   /// listing.
   favorites                Favorite[]
+  availabilitySubscriptions VariantAvailabilitySubscription[]
+  /// In-store sale lines of this colour x size (2026-11-20).
+  storeSaleItems            StoreSaleItem[]
 
   @@unique([vendorId, sellerSku])
   @@unique([vendorId, storeInventoryBarcode])
@@ -1915,7 +2242,138 @@ model OfferVariant {
   @@index([vendorOfferId])
   @@index([canonicalVariantId])
   @@index([proposedCanonicalVariantId])
+  @@index([colorCode])
+  @@index([offerColorId])
+  @@index([sizeCode])
   @@map("offer_variants")
+}
+
+/// Sprint 27 (product taxonomy): the fixed, platform-wide product
+/// classification - seeded by its own migration (versioned there), never
+/// written by a store. Works alongside, and never replaces, a store's own
+/// StoreSection groupings and the legacy store-level
+/// VendorApplicableCategory.
+enum ProductAudience {
+  WOMEN
+  MEN
+  KIDS
+}
+
+enum ProductSeason {
+  SUMMER
+  WINTER
+  FALL
+  SPRING
+}
+
+/// KIDS_AGE sizes are only ever accepted on an offer whose audiences
+/// include KIDS.
+enum SizeGroup {
+  ADULT
+  KIDS_AGE
+}
+
+/// One code per distinct category; a category whose Arabic name is the
+/// same across audiences shares ONE code (e.g. JEANS), linked to each
+/// audience it applies to through TaxonomyCategoryAudience.
+model TaxonomyCategory {
+  code      String @id
+  nameAr    String
+  nameEn    String
+  sortOrder Int
+
+  audiences TaxonomyCategoryAudience[]
+  offers    VendorOfferCategory[]
+
+  @@map("taxonomy_categories")
+}
+
+model TaxonomyCategoryAudience {
+  categoryCode String
+  category     TaxonomyCategory         @relation(fields: [categoryCode], references: [code])
+  audience     ProductAudience
+  storefronts  StorefrontCategory[]
+  /// PD-4: the STANDARD size guides that apply to this category/audience.
+  sizeGuides   SizeGuideApplicability[]
+  /// PD-5.2: sales ranks computed within this category/audience.
+  salesRanks   SalesRankSnapshot[]
+
+  @@id([categoryCode, audience])
+  @@index([audience])
+  @@map("taxonomy_category_audiences")
+}
+
+/// The detailed categories a store offers under each of its departments
+/// (the storefront's subcategory chips). Departments themselves are the
+/// store's WOMEN/MEN/KIDS rows in vendor_applicable_categories. The
+/// composite FK to taxonomy_category_audiences makes an incompatible
+/// pair (e.g. GIRLS_DRESSES under MEN) impossible to store.
+model StorefrontCategory {
+  vendorId     String
+  vendor       Vendor                   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  audience     ProductAudience
+  categoryCode String
+  link         TaxonomyCategoryAudience @relation(fields: [categoryCode, audience], references: [categoryCode, audience], onDelete: Restrict)
+  sortOrder    Int
+  createdAt    DateTime                 @default(now())
+
+  @@id([vendorId, audience, categoryCode])
+  @@index([vendorId, audience, sortOrder])
+  @@map("storefront_categories")
+}
+
+model TaxonomyColor {
+  code      String  @id
+  nameAr    String
+  nameEn    String
+  /// Swatch colour; null for MULTICOLOR.
+  hex       String?
+  sortOrder Int
+
+  variants OfferVariant[]
+  /// Product colours of this family (filters and discovery).
+  offerColors OfferColor[]
+
+  @@map("taxonomy_colors")
+}
+
+model TaxonomySize {
+  code      String    @id
+  label     String
+  group     SizeGroup
+  sortOrder Int
+
+  variants      OfferVariant[]
+  /// PD-4: guide rows describing this size.
+  sizeGuideRows SizeGuideRow[]
+
+  @@map("taxonomy_sizes")
+}
+
+/// An offer's audiences (one or more). vendorId is denormalised so the
+/// composite FK to (vendorId, id) makes a cross-store link impossible in
+/// Postgres itself, the same pattern BranchStock uses.
+model VendorOfferAudience {
+  vendorOfferId String
+  vendorId      String
+  vendorOffer   VendorOffer     @relation(fields: [vendorId, vendorOfferId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  audience      ProductAudience
+
+  @@id([vendorOfferId, audience])
+  @@index([audience])
+  @@map("vendor_offer_audiences")
+}
+
+model VendorOfferCategory {
+  vendorOfferId String
+  vendorId      String
+  vendorOffer   VendorOffer      @relation(fields: [vendorId, vendorOfferId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  categoryCode  String
+  category      TaxonomyCategory @relation(fields: [categoryCode], references: [code])
+
+  @@id([vendorOfferId, categoryCode])
+  @@index([categoryCode])
+  @@map("vendor_offer_categories")
 }
 
 /// Sprint 17 (FR-PRICE-002, blocker 1): a durable, append-only snapshot
@@ -2109,12 +2567,35 @@ enum StockMovementReason {
   /// DAMAGED-condition returns write no StockMovement at all (never
   /// automatic - a separate, later, explicit owner decision).
   RETURN_RESTOCK
+  /// Sprint 27: the opening quantity of a newly created colour/size
+  /// combination - quantityDelta positive; recorded in StockMovement and
+  /// AuditLog like any movement, but never the PDR-021 owner alert (the
+  /// owner is the one creating the combination).
+  INITIAL_STOCK
   /// Sprint 21b (EPIC-RET): the replacement item's stock leaving the
   /// branch at exchange completion - quantityDelta negative, the
   /// mirror-image write to RETURN_RESTOCK's positive one (which is
   /// reused UNCHANGED for the original item's own restock in the same
   /// exchange, when resellable).
   EXCHANGE_FULFILLED
+  /// In-store sale void (2026-11-20): the owner cancelled a whole in-store
+  /// sale on its own day - quantityDelta positive, the exact colour x size
+  /// x branch the sale line took. Written only by StoreSalesService.void().
+  STORE_SALE_VOID
+  /// «إدارة مخزون الفرع v1» (2026-11-22): goods received at the branch -
+  /// quantityDelta positive only (a manual movement).
+  RECEIVE
+  /// Internal use / gift / sample - units leave without a sale; negative
+  /// only (a manual movement). Never an invoice, a sale or any money.
+  INTERNAL_USE
+  /// The log line of an online order's confirm (checkout): the units the
+  /// order took for good - negative, linked to the BranchOrder. Written in
+  /// the SAME transaction as the existing decrement; changes nothing else.
+  ORDER_SALE
+  /// The log line of a cancellation that put an order's units back -
+  /// positive, linked to the BranchOrder. Written in the same transaction
+  /// as the existing restock; changes nothing else.
+  ORDER_CANCEL_RESTOCK
 }
 
 /// Sprint 6 (RB-INV-003, PDR-021): "Manual non-sale stock reductions
@@ -2142,11 +2623,33 @@ model StockMovement {
   resultingQuantity Int
   reason            StockMovementReason
   reasonNote        String
-  actorId           String
-  actor             User                @relation(fields: [actorId], references: [id])
+  /// Null only for a system step (a sweep's cancellation restocking an
+  /// order) - every person's movement keeps who did it.
+  actorId           String?
+  actor             User?               @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  /// 2026-11-22: the actor's role at that moment, where known (OWNER |
+  /// BRANCH_EMPLOYEE | CUSTOMER | PLATFORM_STAFF | SYSTEM; CHECK in SQL).
+  actorRole         String?
+  /// 2026-11-22: the online order this line belongs to (ORDER_SALE /
+  /// ORDER_CANCEL_RESTOCK); same-vendor composite FK.
+  branchOrderId     String?
+  branchOrder       BranchOrder?        @relation(fields: [vendorId, branchOrderId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  /// 2026-11-22: the return this line belongs to (RETURN_RESTOCK /
+  /// EXCHANGE_FULFILLED).
+  returnId          String?
+  return            Return?             @relation(fields: [returnId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   createdAt         DateTime            @default(now())
 
+  /// The in-store sale line this movement sold, or the line whose void
+  /// put it back (2026-11-20) - at most one each.
+  storeSaleItemSold   StoreSaleItem? @relation("StoreSaleItemSaleMovement")
+  storeSaleItemVoided StoreSaleItem? @relation("StoreSaleItemVoidMovement")
+
   @@index([vendorId, branchId, offerVariantId])
+  @@index([branchOrderId])
+  @@index([returnId])
+  /// the branch stock line's log, newest first (paginated)
+  @@index([branchId, offerVariantId, createdAt(sort: Desc), id(sort: Desc)], map: "stock_movements_ledger_idx")
   @@index([createdAt])
   @@map("stock_movements")
 }
@@ -2348,12 +2851,22 @@ model StoreSection {
   id        String   @id @default(uuid())
   vendorId  String
   vendor    Vendor   @relation(fields: [vendorId], references: [id])
+  /// «مجموعات المتجر» (2026-11-18): the collection's ARABIC name (required).
+  /// The column keeps its original name - existing rows became Arabic names
+  /// as they were.
   name      String
+  /// Optional English name (the shopper sees the Arabic name when empty).
+  nameEn    String?
+  /// Optional cover image - one of this store's own uploads only.
+  coverUrl  String?
+  /// Hidden collections are never shown to shoppers (the owner still manages them).
+  isVisible Boolean  @default(true)
   /// Owner-controlled display order among this vendor's own custom
   /// sections (the reorder endpoint reassigns these transactionally,
   /// fully overriding row-creation order).
   sortOrder Int
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   offers StoreSectionOffer[]
 
@@ -2385,10 +2898,15 @@ model StoreSectionOffer {
   section   StoreSection @relation(fields: [vendorId, sectionId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
   offerId   String
   offer     VendorOffer  @relation(fields: [vendorId, offerId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  /// «مجموعات المتجر»: the owner's manual order inside the collection (a
+  /// product added later goes last). Reassigned in one transaction by the
+  /// reorder endpoint.
+  sortOrder Int
   createdAt DateTime     @default(now())
 
   @@unique([sectionId, offerId])
   @@index([vendorId, offerId])
+  @@index([sectionId, sortOrder])
   @@map("store_section_offers")
 }
 
@@ -2711,6 +3229,8 @@ model BranchOrder {
 
   items   BranchOrderItem[]
   refunds BranchOrderRefund[]
+  /// 2026-11-22: its stock log lines (ORDER_SALE / ORDER_CANCEL_RESTOCK)
+  stockMovements StockMovement[]
 
   /// Backs BranchOrderItem's own composite FK (vendorId,
   /// branchOrderId) -> (vendorId, id).
@@ -2725,17 +3245,39 @@ model BranchOrder {
 }
 
 model BranchOrderItem {
-  id              String       @id @default(uuid())
-  vendorId        String
-  branchOrderId   String
-  branchOrder     BranchOrder  @relation(fields: [vendorId, branchOrderId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
-  offerVariantId  String
-  offerVariant    OfferVariant @relation(fields: [vendorId, offerVariantId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
-  quantity        Int
+  id                         String            @id @default(uuid())
+  vendorId                   String
+  branchOrderId              String
+  branchOrder                BranchOrder       @relation(fields: [vendorId, branchOrderId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  offerVariantId             String
+  offerVariant               OfferVariant      @relation(fields: [vendorId, offerVariantId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  quantity                   Int
   /// Snapshot of OfferVariant.basePrice/salePrice at order time - never
   /// re-read live, so a later price change never rewrites history.
-  unitPrice       Decimal      @db.Decimal(10, 2)
-  createdAt       DateTime     @default(now())
+  unitPrice                  Decimal           @db.Decimal(10, 2)
+  /// PD-3: what was bought, copied from the offer/variant/taxonomy at
+  /// order creation and never re-read - a review shows these, so a
+  /// later rename or archive never rewrites it. Null on orders placed
+  /// before PD-3 (no guessed backfill) and for an unclassified variant's
+  /// colour/size.
+  titleArSnapshot            String?
+  titleEnSnapshot            String?
+  colorCodeSnapshot          String?
+  colorLabelSnapshot         String?
+  sizeCodeSnapshot           String?
+  sizeLabelSnapshot          String?
+  /// PD-4: the size-guide version that described this line's size when it
+  /// was bought (null: no published guide applied) - for return disputes.
+  sizeGuideVersionIdSnapshot String?
+  sizeGuideVersionSnapshot   SizeGuideVersion? @relation(fields: [sizeGuideVersionIdSnapshot], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  /// Product colours: the colour as it was bought (old lines: the colour
+  /// label they already stored; hex / swatch NULL). No FK - never blocks.
+  offerColorIdSnapshot       String?
+  colorNameArSnapshot        String?
+  colorNameEnSnapshot        String?
+  colorHexSnapshot           String?
+  colorSwatchUrlSnapshot     String?
+  createdAt                  DateTime          @default(now())
   /// Sprint 20a (PDR-028): null = still active. Set once, under this
   /// row's own lock, by whichever cancellation call (customer item-
   /// cancel, staff item-cancel, or a whole-order/last-item cancel
@@ -2746,11 +3288,11 @@ model BranchOrderItem {
   /// one layer down at the DB level too). Cancelling by full line
   /// quantity only this sprint - no partial-quantity cancellation (a
   /// deliberate, documented scope decision, not an oversight).
-  cancelledAt     DateTime?
+  cancelledAt                DateTime?
   /// Mandatory when STAFF cancels this item (after prep, before Sent),
   /// optional/null for a customer's own pre-prep self-service
   /// cancellation - same convention as BranchOrder.cancellationReason.
-  cancelledReason String?
+  cancelledReason            String?
 
   refund  BranchOrderRefund?
   /// Sprint 21: possibly several over time (resubmission after
@@ -3133,6 +3675,8 @@ model Return {
   /// above. Null for a RETURN outcome and for an EXCHANGE outcome not
   /// yet EXCHANGED.
   exchangeSettlement ExchangeSettlement?
+  /// 2026-11-22: its stock log lines (RETURN_RESTOCK / EXCHANGE_FULFILLED)
+  stockMovements StockMovement[]
 
   /// Composite-relation target for BranchOrderRefund.returnId above -
   /// plain `id` already uniquely identifies a row; this additionally
@@ -3395,14 +3939,14 @@ model PaymentTransaction {
 /// top comment for why a stateless token alone is not a reservation.
 /// One row per checkout attempt (POST /checkout/reserve), owned by
 /// exactly one customer, expiring exactly 10 minutes after creation
-/// with no renewal. Expiry is purely LAZY: nothing ever runs on a
-/// timer to clean these up (this codebase has no scheduled-job
-/// infrastructure, the same honestly-documented gap as every other
-/// deferred cron-like feature here) - an expired reservation simply
+/// with no renewal. Expiry is LAZY first: an expired reservation
 /// stops counting toward "currently held" the next time ANY
 /// reserve/confirm/cancel touches the same stock row or delivery-slot
-/// date under that operation's own lock, and is deleted at that point
-/// (see CheckoutService's own comments for the exact sweep). A
+/// date under that operation's own lock, and is released at that point
+/// (see CheckoutService's own comments for the exact sweep). TB-8 adds
+/// a periodic sweep (ReservationSweepService, behind the
+/// `reservation_sweep_enabled` flag) that releases holds expired over
+/// 60 s by the database clock even when nothing touches them again. A
 /// reservation converts into real BranchOrders atomically at confirm
 /// (this row and its items/slots are deleted in the same transaction
 /// that creates the orders), or is explicitly released early via
@@ -3616,13 +4160,139 @@ model Review {
   body                    String
   moderationStatus        ReviewModerationStatus @default(VISIBLE)
   createdAt               DateTime               @default(now())
+  /// PD-3: copied from the source item's purchase snapshot when the
+  /// review is created (PRODUCT reviews only) - null for reviews of
+  /// pre-PD-3 orders, never guessed.
+  purchasedTitle          String?
+  purchasedColorCode      String?
+  purchasedColorLabel     String?
+  purchasedSizeCode       String?
+  purchasedSizeLabel      String?
+  /// PD-3: optional structured signals (PRODUCT reviews only - CHECK).
+  fitFeedback             ReviewFit?
+  tags                    ReviewTag[]            @default([])
+  /// PD-3: how the author's name is shown - never a full name, phone
+  /// or address.
+  authorDisplay           ReviewAuthorDisplay    @default(ANONYMOUS)
+  /// PD-3: kept equal to count(helpful_votes) inside the vote's own
+  /// transaction - backs the "most helpful" sort.
+  helpfulCount            Int                    @default(0)
+  /// PD-3: set on every author edit (30-day window, see ReviewsService);
+  /// the previous values are kept in ReviewRevision.
+  editedAt                DateTime?
+  /// PD-3: the author deleted it. The row stays as a tombstone (text
+  /// purged, media removed) so the item can never be reviewed again.
+  deletedAt               DateTime?
 
-  reports ReviewReport[]
+  reports      ReviewReport[]
+  media        ReviewMedia[]
+  helpfulVotes ReviewHelpfulVote[]
+  revisions    ReviewRevision[]
 
   @@unique([sourceBranchOrderItemId, targetType])
   @@index([canonicalProductId, moderationStatus])
   @@index([vendorId, moderationStatus])
+  @@index([canonicalProductId, createdAt(sort: Desc), id])
+  @@index([canonicalProductId, helpfulCount(sort: Desc), id])
+  @@index([customerId])
   @@map("reviews")
+}
+
+/// PD-3: the author's sizing verdict on a PRODUCT review.
+enum ReviewFit {
+  SMALL
+  TRUE_TO_SIZE
+  LARGE
+  NOT_APPLICABLE
+}
+
+/// PD-3: the fixed impression tags a reviewer may pick (up to three).
+/// Never derived from the review text.
+enum ReviewTag {
+  GOOD_QUALITY
+  EXCELLENT_MATERIAL
+  MATCHES_PHOTOS
+  COMFORTABLE
+  GOOD_VALUE
+  BELOW_EXPECTATIONS
+  DIFFERS_FROM_PHOTOS
+}
+
+/// PD-3: ANONYMOUS shows "عميل موثّق"; FIRST_NAME_INITIAL shows the
+/// first word of the profile's display name plus the next word's first
+/// letter ("سارة م.") - derived at read time, never the full name.
+enum ReviewAuthorDisplay {
+  ANONYMOUS
+  FIRST_NAME_INITIAL
+}
+
+enum ReviewMediaStatus {
+  VISIBLE
+  HIDDEN
+}
+
+/// PD-3: an image the author attached to their PRODUCT review. Always
+/// re-encoded by the API (sharp -> WebP, metadata stripped) and stored
+/// under UPLOADS_DIR/reviews/<reviewId>/; a HIDDEN one is moved out of
+/// the served directory so its public URL stops working at once.
+model ReviewMedia {
+  id             String            @id @default(uuid())
+  reviewId       String
+  review         Review            @relation(fields: [reviewId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  customerId     String
+  customer       CustomerProfile   @relation(fields: [customerId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  /// The random file name ("<32 hex>.webp") - unique, never reused.
+  fileName       String            @unique
+  mimeType       String
+  sizeBytes      Int
+  width          Int
+  height         Int
+  altText        String?
+  sortOrder      Int
+  status         ReviewMediaStatus @default(VISIBLE)
+  hiddenReason   String?
+  hiddenByUserId String?
+  hiddenByUser   User?             @relation(fields: [hiddenByUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  hiddenAt       DateTime?
+  createdAt      DateTime          @default(now())
+
+  reports ReviewReport[]
+
+  @@index([reviewId, status, sortOrder])
+  @@map("review_media")
+}
+
+/// PD-3: one "helpful" per account per review (no "not helpful").
+/// Neither the author nor a member of the store that sold the item may
+/// vote (ReviewsService).
+model ReviewHelpfulVote {
+  id         String          @id @default(uuid())
+  reviewId   String
+  review     Review          @relation(fields: [reviewId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  customerId String
+  customer   CustomerProfile @relation(fields: [customerId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  createdAt  DateTime        @default(now())
+
+  @@unique([reviewId, customerId])
+  @@index([customerId])
+  @@map("review_helpful_votes")
+}
+
+/// PD-3: the values a review had before each author edit - for
+/// moderation/audit only, never public.
+model ReviewRevision {
+  id            String              @id @default(uuid())
+  reviewId      String
+  review        Review              @relation(fields: [reviewId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  rating        Int
+  body          String
+  fitFeedback   ReviewFit?
+  tags          ReviewTag[]         @default([])
+  authorDisplay ReviewAuthorDisplay
+  revisedAt     DateTime            @default(now())
+
+  @@index([reviewId, revisedAt])
+  @@map("review_revisions")
 }
 
 /// Sprint 23 (PDR-032: "reports may hide them after admin review").
@@ -3641,6 +4311,11 @@ model ReviewReport {
   decidedByUserId String?
   decidedByUser   User?              @relation(fields: [decidedByUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   decidedAt       DateTime?
+  /// PD-3: why the administrator decided this way (mandatory to uphold).
+  decisionReason  String?
+  /// PD-3: the one image the report is about, when it is about an image.
+  mediaId         String?
+  media           ReviewMedia?       @relation(fields: [mediaId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   createdAt       DateTime           @default(now())
 
   @@unique([reviewId, reporterId])
@@ -3698,6 +4373,25 @@ model Favorite {
   @@unique([userId, canonicalProductId])
   @@unique([userId, offerVariantId])
   @@map("favorites")
+}
+
+/// A customer's explicit, one-shot request to be told when one exact
+/// sellable product colour x size returns. This is not a Favorite and does
+/// not inherit the favourite alert preference: it is an intentional opt-in.
+model VariantAvailabilitySubscription {
+  id             String       @id @default(uuid())
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  offerVariantId String
+  offerVariant   OfferVariant @relation(fields: [offerVariantId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  active         Boolean      @default(true)
+  notifiedAt     DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([userId, offerVariantId])
+  @@index([offerVariantId, active])
+  @@map("variant_availability_subscriptions")
 }
 
 /// Sprint 24 (FR-COMP-001/002/007): a saved, shareable comparison set -
@@ -3765,4 +4459,729 @@ model NotificationPreference {
 
   @@unique([userId, alertType])
   @@map("notification_preferences")
+}
+
+// ---------------------------------------------------------------------
+// PD-4: size guides (docs/srs/10-product-detail-enhancement-roadmap.md,
+// PD-FR-003). Platform data only: a STANDARD guide per category/audience
+// or a PRODUCT guide for one canonical product, written by a
+// PLATFORM_ADMIN. Stores never author measurements; an owner may only
+// choose among applicable published guides or send a SizeGuideRequest.
+// Values are body (or, for PRODUCT guides, garment) measurements in
+// tenths of a centimetre - no customer measurement is ever collected.
+// ---------------------------------------------------------------------
+
+enum SizeGuideKind {
+  STANDARD
+  PRODUCT
+  /// Phase A+: one offer's own garment measurements, entered by its store.
+  OFFER
+}
+
+/// DRAFT is the only editable state; PUBLISHED is immutable (at most one
+/// per guide); RETIRED is a former PUBLISHED, kept for order snapshots.
+enum SizeGuideVersionStatus {
+  DRAFT
+  PUBLISHED
+  RETIRED
+}
+
+/// The approved, fixed column set (decision 9).
+enum SizeMeasureKey {
+  CHEST
+  WAIST
+  HIP
+  LENGTH
+  SHOULDER
+  SLEEVE
+  INSEAM
+  FOOT_LENGTH
+  HEIGHT
+}
+
+/// BODY: the wearer's measurements (STANDARD guides); GARMENT: the
+/// item's own measurements (allowed for PRODUCT guides only).
+enum SizeMeasureBasis {
+  BODY
+  GARMENT
+}
+
+enum SizeGuideRequestStatus {
+  PENDING
+  RESOLVED
+  REJECTED
+}
+
+model SizeGuide {
+  id                 String            @id @default(uuid())
+  /// Stable admin-facing key (lowercase, digits, dashes); never changes.
+  code               String            @unique
+  nameAr             String
+  nameEn             String
+  kind               SizeGuideKind
+  /// Set only for kind = PRODUCT (CHECK).
+  canonicalProductId String?
+  canonicalProduct   CanonicalProduct? @relation(fields: [canonicalProductId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  /// Set only for kind = OFFER (CHECK): that offer's own measurements.
+  vendorOfferId      String?           @unique
+  vendorOffer        VendorOffer?      @relation("OfferOwnSizeGuide", fields: [vendorOfferId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  createdById        String
+  createdBy          User              @relation("SizeGuideCreatedBy", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  versions      SizeGuideVersion[]
+  applicability SizeGuideApplicability[]
+  chosenBy      VendorOffer[]
+  requests      SizeGuideRequest[]
+
+  @@index([kind])
+  @@map("size_guides")
+}
+
+model SizeGuideVersion {
+  id            String                 @id @default(uuid())
+  guideId       String
+  guide         SizeGuide              @relation(fields: [guideId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  version       Int
+  status        SizeGuideVersionStatus @default(DRAFT)
+  basis         SizeMeasureBasis       @default(BODY)
+  notesAr       String?
+  notesEn       String?
+  createdAt     DateTime               @default(now())
+  publishedAt   DateTime?
+  publishedById String?
+  publishedBy   User?                  @relation("SizeGuideVersionPublishedBy", fields: [publishedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  retiredAt     DateTime?
+
+  measurements SizeGuideMeasurement[]
+  rows         SizeGuideRow[]
+  orderItems   BranchOrderItem[]
+
+  @@unique([guideId, version])
+  @@index([guideId, status])
+  @@map("size_guide_versions")
+}
+
+model SizeGuideMeasurement {
+  id        String           @id @default(uuid())
+  versionId String
+  version   SizeGuideVersion @relation(fields: [versionId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  key       SizeMeasureKey
+  /// true: "from-to" (min/max); false: a single value (min only).
+  isRange   Boolean          @default(true)
+  sortOrder Int
+
+  cells SizeGuideCell[]
+
+  @@unique([versionId, key])
+  @@map("size_guide_measurements")
+}
+
+model SizeGuideRow {
+  id        String           @id @default(uuid())
+  versionId String
+  version   SizeGuideVersion @relation(fields: [versionId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  sizeCode  String
+  size      TaxonomySize     @relation(fields: [sizeCode], references: [code], onDelete: Restrict, onUpdate: Cascade)
+  sortOrder Int
+
+  cells SizeGuideCell[]
+
+  @@unique([versionId, sizeCode])
+  @@map("size_guide_rows")
+}
+
+model SizeGuideCell {
+  id            String               @id @default(uuid())
+  rowId         String
+  row           SizeGuideRow         @relation(fields: [rowId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  measurementId String
+  measurement   SizeGuideMeasurement @relation(fields: [measurementId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  /// Tenths of a centimetre (905 = 90.5 cm).
+  minTenths     Int
+  /// Null for a single-value measurement.
+  maxTenths     Int?
+
+  @@unique([rowId, measurementId])
+  @@map("size_guide_cells")
+}
+
+/// Which category/audience pairs a STANDARD guide covers. At most one
+/// default guide per pair (partial unique index, migration SQL).
+model SizeGuideApplicability {
+  guideId      String
+  guide        SizeGuide                @relation(fields: [guideId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  categoryCode String
+  audience     ProductAudience
+  link         TaxonomyCategoryAudience @relation(fields: [categoryCode, audience], references: [categoryCode, audience], onDelete: Restrict, onUpdate: Cascade)
+  isDefault    Boolean                  @default(false)
+
+  @@id([guideId, categoryCode, audience])
+  @@index([categoryCode, audience])
+  @@map("size_guide_applicability")
+}
+
+/// An owner's request for a guide for one of their offers - a request
+/// only: a PLATFORM_ADMIN decides and, when resolving, links a real
+/// published guide. At most one PENDING request per offer.
+model SizeGuideRequest {
+  id              String                 @id @default(uuid())
+  vendorId        String
+  vendorOfferId   String
+  vendorOffer     VendorOffer            @relation(fields: [vendorId, vendorOfferId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  requestedById   String
+  requestedBy     User                   @relation("SizeGuideRequestRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  message         String
+  status          SizeGuideRequestStatus @default(PENDING)
+  decisionNote    String?
+  decidedById     String?
+  decidedBy       User?                  @relation("SizeGuideRequestDecidedBy", fields: [decidedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  decidedAt       DateTime?
+  resolvedGuideId String?
+  resolvedGuide   SizeGuide?             @relation(fields: [resolvedGuideId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  createdAt       DateTime               @default(now())
+
+  @@index([status, createdAt])
+  @@index([vendorId])
+  @@map("size_guide_requests")
+}
+
+// ============================================================
+// PD-5.2 (docs/srs/10-product-detail-enhancement-roadmap.md, PD-FR-005):
+// the internal sales rank - DERIVED data only, rebuilt from orders by
+// SalesRankService (hourly job + an administrator's recompute), never
+// written by anything else and never computed inside a public request.
+// Nothing here is public yet (PD-5.3 decides what a shopper sees).
+// ============================================================
+
+enum SalesRankScope {
+  /// One store's offer (store page / product page).
+  OFFER
+  /// A canonical product over every store (discovery).
+  CANONICAL
+}
+
+enum SalesRankTrigger {
+  SCHEDULED
+  ADMIN
+}
+
+/// One rebuild of the 30-day window. The latest run is the one whose
+/// rows SalesRankSnapshot holds (each rebuild replaces them all).
+model SalesRankRun {
+  id             String           @id @default(uuid())
+  windowStart    DateTime         @db.Timestamptz(3)
+  windowEnd      DateTime         @db.Timestamptz(3)
+  trigger        SalesRankTrigger
+  triggeredById  String?
+  triggeredBy    User?            @relation(fields: [triggeredById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  rowCount       Int
+  qualifiedCount Int
+  computedAt     DateTime         @default(now()) @db.Timestamptz(3)
+
+  snapshots SalesRankSnapshot[]
+
+  @@index([computedAt])
+  @@map("sales_rank_runs")
+}
+
+/// A ranked entry within one taxonomy scope (category + audience): its
+/// qualifying units/customers in the window, its rank among every entry
+/// of that scope, and whether it qualifies for a Bestseller mark
+/// (thresholds in sales-rank.rules.ts). Exact numbers are internal.
+model SalesRankSnapshot {
+  id                 String                   @id @default(uuid())
+  runId              String
+  run                SalesRankRun             @relation(fields: [runId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  scope              SalesRankScope
+  vendorId           String?
+  vendorOfferId      String?
+  vendorOffer        VendorOffer?             @relation(fields: [vendorId, vendorOfferId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  canonicalProductId String?
+  canonicalProduct   CanonicalProduct?        @relation(fields: [canonicalProductId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  categoryCode       String
+  audience           ProductAudience
+  categoryAudience   TaxonomyCategoryAudience @relation(fields: [categoryCode, audience], references: [categoryCode, audience], onDelete: Restrict, onUpdate: Cascade)
+  units              Int
+  customers          Int
+  firstSoldAt        DateTime                 @db.Timestamptz(3)
+  /// 1 = most units in this scope (ties: customers, first sale, id).
+  rank               Int
+  /// Position among the entries passing the thresholds, when qualified.
+  qualifiedRank      Int?
+  qualified          Boolean
+
+  /// Ranks are unique within a scope (also the read path of PD-5.3).
+  @@unique([scope, categoryCode, audience, rank], map: "sales_rank_snapshots_rank_key")
+  @@index([vendorOfferId])
+  @@index([canonicalProductId])
+  @@map("sales_rank_snapshots")
+}
+
+/// PD-5.4 (PD-FR-005, «نسّقي معه»): a store owner's own pick of offers
+/// styled with one of their offers - offer to offer, same store only
+/// (both composite FKs carry vendorId), never itself, at most 6 per offer
+/// (a trigger enforces it), in the owner's order. Public reads re-check
+/// each paired offer's eligibility at read time.
+/// A product's own colour (migration 20261118120000_offer_colors_expand): a
+/// free Arabic name - unique inside the product after normalisation
+/// (nameKey, generated by the database's normalize_color_name) - an
+/// optional English name (empty: the English interface shows the Arabic
+/// one), a family from taxonomy_colors for filters and discovery (it may
+/// repeat inside a product), an optional HEX and fabric swatch, and the
+/// seller's order (0 = the default colour; at most 30). Never deleted
+/// (trigger); a sellable version is (this colour x size).
+model OfferColor {
+  id            String         @id @default(uuid())
+  vendorId      String
+  vendorOfferId String
+  vendorOffer   VendorOffer    @relation(fields: [vendorId, vendorOfferId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  familyCode    String
+  family        TaxonomyColor  @relation(fields: [familyCode], references: [code], onDelete: Restrict, onUpdate: Cascade)
+  nameAr        String
+  nameEn        String?
+  /// Generated by the database (normalize_color_name(nameAr)) - never written.
+  nameKey       String         @default(dbgenerated("normalize_color_name(\"nameAr\")"))
+  hex           String?
+  swatchUrl     String?
+  sortOrder     Int
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @default(now()) @updatedAt
+  variants      OfferVariant[]
+
+  @@unique([vendorOfferId, id])
+  @@unique([vendorOfferId, nameKey])
+  @@unique([vendorOfferId, sortOrder])
+  @@index([familyCode])
+  @@map("offer_colors")
+}
+
+/// Phase A++ (item 6): a product's images shared by all its colours - each
+/// product its own rows (the same file may be used elsewhere; removing it
+/// here never touches another product or draft). At most 6 (sortOrder
+/// 0-5, CHECK + unique). Never a colour's main image.
+model VendorOfferSharedMedia {
+  id            String      @id @default(uuid())
+  vendorId      String
+  vendorOfferId String
+  vendorOffer   VendorOffer @relation(fields: [vendorId, vendorOfferId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  url           String
+  sortOrder     Int
+  createdAt     DateTime    @default(now())
+
+  @@unique([vendorOfferId, sortOrder])
+  @@unique([vendorOfferId, url])
+  @@index([url])
+  @@map("vendor_offer_shared_media")
+}
+
+model OfferPairing {
+  id            String      @id @default(uuid())
+  vendorId      String
+  offerId       String
+  offer         VendorOffer @relation("OfferPairingPrimary", fields: [vendorId, offerId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  pairedOfferId String
+  pairedOffer   VendorOffer @relation("OfferPairingPaired", fields: [vendorId, pairedOfferId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  sortOrder     Int
+  createdAt     DateTime    @default(now())
+
+  @@unique([offerId, pairedOfferId])
+  @@unique([offerId, sortOrder])
+  @@index([vendorId, pairedOfferId])
+  @@map("offer_pairings")
+}
+
+// ============================================================
+// PD-5b (docs/srs/10-product-detail-enhancement-roadmap.md §4.5,
+// FR-CMS-001): platform editorial collections - written by a
+// PLATFORM_ADMIN only, made of canonical products (cross-store), shown
+// to shoppers later (PD-5b.2+) only while live and only with items that
+// are eligible at read time.
+// ============================================================
+
+enum PlatformCollectionStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+model PlatformCollection {
+  id               String                   @id @default(uuid())
+  /// URL key (/collections/<slug>); changeable only until first published.
+  slug             String                   @unique
+  titleAr          String
+  titleEn          String
+  descriptionAr    String?
+  descriptionEn    String?
+  /// The department page it belongs to (null = no department page).
+  audience         ProductAudience?
+  showOnHome       Boolean                  @default(false)
+  status           PlatformCollectionStatus @default(DRAFT)
+  /// Optional scheduling window; live = PUBLISHED and inside it.
+  publishFrom      DateTime?                @db.Timestamptz(3)
+  publishUntil     DateTime?                @db.Timestamptz(3)
+  /// Display order among collections (the admin's order).
+  sortOrder        Int
+  /// Set on the first publish and never cleared: a collection that was
+  /// ever published is archived, never deleted.
+  firstPublishedAt DateTime?                @db.Timestamptz(3)
+  publishedAt      DateTime?                @db.Timestamptz(3)
+  archivedAt       DateTime?                @db.Timestamptz(3)
+  createdById      String
+  createdBy        User                     @relation(fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  createdAt        DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime                 @updatedAt @db.Timestamptz(3)
+
+  items PlatformCollectionItem[]
+
+  @@index([status, sortOrder])
+  @@map("platform_collections")
+}
+
+/// A canonical product in a collection, in the admin's order. At most 24
+/// per collection (a trigger enforces it under a per-collection lock).
+model PlatformCollectionItem {
+  id                 String             @id @default(uuid())
+  collectionId       String
+  collection         PlatformCollection @relation(fields: [collectionId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  canonicalProductId String
+  canonicalProduct   CanonicalProduct   @relation(fields: [canonicalProductId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  sortOrder          Int
+  addedById          String
+  addedBy            User               @relation(fields: [addedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  createdAt          DateTime           @default(now()) @db.Timestamptz(3)
+
+  @@unique([collectionId, canonicalProductId])
+  @@unique([collectionId, sortOrder])
+  @@index([canonicalProductId])
+  @@map("platform_collection_items")
+}
+
+/// Product-entry wizard (2026-11-16): a new product is entered as a draft
+/// that lives here - NOT as a VendorOffer - until the seller creates it, so
+/// a half-entered product can never reach shoppers, discovery or search.
+/// Every step is saved to `payload` on the server as the seller types;
+/// `revision` goes up by one on every save and a save must name the
+/// revision it was based on (two tabs never overwrite each other silently).
+/// Creating the product turns the whole draft into a real VendorOffer
+/// (classification, price, every colour x size, stock, images) in ONE
+/// transaction; the draft then points at it (status SUBMITTED).
+model OfferDraft {
+  id              String           @id @default(uuid())
+  vendorId        String
+  vendor          Vendor           @relation(fields: [vendorId], references: [id])
+  createdByUserId String
+  createdBy       User             @relation("OfferDraftCreator", fields: [createdByUserId], references: [id])
+  /// What the seller entered so far (see offer-drafts/draft-payload.ts).
+  payload         Json             @default("{}")
+  /// Every own upload URL this draft ever held - what the upload clean-up
+  /// may consider (never anything else).
+  uploads         Json             @default("[]")
+  revision        Int              @default(1)
+  status          OfferDraftStatus @default(OPEN)
+  offerId         String?          @unique
+  offer           VendorOffer?     @relation(fields: [offerId], references: [id])
+  /// Edit drafts (migration 20261119120000): the published product this
+  /// draft edits (composite FK with vendorId in the database), the product's
+  /// contentRevision and content when the draft was opened, and presence.
+  /// At most one OPEN edit draft per product; never SUBMITTED (trigger).
+  editOfOfferId      String?
+  editOf             VendorOffer?     @relation("OfferEditDrafts", fields: [editOfOfferId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  baseRevision       Int?
+  baseSnapshot       Json?
+  lastEditedByUserId String?
+  lastEditedBy       User?            @relation("OfferDraftLastEditor", fields: [lastEditedByUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  lastEditedAt       DateTime?
+  brandRequests   BrandRequest[]
+  /// The product import that created this draft (null = entered in the wizard).
+  importBatchId   String?
+  importBatch     ImportBatch?     @relation(fields: [importBatchId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  bulkPublishItems BulkPublishItem[]
+  /// The product's number in the import file - links its rows there only; never an SKU.
+  importRef       String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  submittedAt     DateTime?
+  closedAt        DateTime?
+
+  @@index([vendorId, status, updatedAt])
+  @@unique([importBatchId, importRef])
+  @@map("offer_drafts")
+}
+
+enum BulkPublishRunStatus {
+  RUNNING
+  DONE
+}
+
+enum BulkPublishItemState {
+  PENDING
+  PUBLISHED
+  REFUSED
+  ALREADY
+}
+
+/// Bulk publishing (2026-11-18): the drafts the owner confirmed after a
+/// preflight, published one by one by the server (each whole or not at
+/// all) - it carries on if the window is closed. One RUNNING run per store
+/// (a partial unique index in the migration).
+model BulkPublishRun {
+  id            String               @id @default(uuid())
+  vendorId      String
+  vendor        Vendor               @relation(fields: [vendorId], references: [id])
+  actorId       String
+  actor         User                 @relation(fields: [actorId], references: [id])
+  /// The import batch the drafts came from, when started from its screen.
+  importBatchId String?
+  importBatch   ImportBatch?         @relation(fields: [importBatchId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  status        BulkPublishRunStatus @default(RUNNING)
+  correlationId String
+  total         Int
+  createdAt     DateTime             @default(now())
+  finishedAt    DateTime?
+
+  items BulkPublishItem[]
+
+  @@index([vendorId, createdAt])
+  @@map("bulk_publish_runs")
+}
+
+model BulkPublishItem {
+  id               String               @id @default(uuid())
+  runId            String
+  run              BulkPublishRun       @relation(fields: [runId], references: [id], onDelete: Cascade)
+  draftId          String
+  draft            OfferDraft           @relation(fields: [draftId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  position         Int
+  /// The revision the owner saw in the preflight: a draft changed since is not published.
+  expectedRevision Int
+  state            BulkPublishItemState @default(PENDING)
+  offerId          String?
+  /// Why it was not published: the publish gate's codes, or CHANGED / ERROR.
+  problems         Json?
+  finishedAt       DateTime?
+
+  @@unique([runId, draftId])
+  @@index([runId, position])
+  @@map("bulk_publish_items")
+}
+
+enum OfferDraftStatus {
+  OPEN
+  SUBMITTED
+  DISCARDED
+  /// Untouched for too long - closed by the clean-up sweep.
+  ABANDONED
+  /// An edit draft whose changes were applied to its product.
+  APPLIED
+}
+
+/// A brand name a seller typed that is not in the platform's list. It is
+/// never created as a public Brand by the seller: an administrator approves
+/// it (creating the Brand, or pointing it at an existing one) or rejects
+/// it. Until then the product carries the "no brand" sentinel, so it can be
+/// published; on approval it is switched to the approved brand.
+model BrandRequest {
+  id                String             @id @default(uuid())
+  vendorId          String
+  vendor            Vendor             @relation(fields: [vendorId], references: [id])
+  requestedByUserId String
+  requestedBy       User               @relation("BrandRequestRequester", fields: [requestedByUserId], references: [id])
+  name              String
+  normalizedName    String
+  offerId           String?
+  offer             VendorOffer?       @relation(fields: [offerId], references: [id])
+  /// The wizard draft that asked for this brand (the product it becomes
+  /// is `offerId`). One PENDING request per draft at most.
+  draftId           String?
+  draft             OfferDraft?        @relation(fields: [draftId], references: [id])
+  status            BrandRequestStatus @default(PENDING)
+  brandId           String?
+  brand             Brand?             @relation(fields: [brandId], references: [id])
+  decidedByUserId   String?
+  decidedBy         User?              @relation("BrandRequestDecider", fields: [decidedByUserId], references: [id])
+  decidedAt         DateTime?
+  rejectionReason   String?
+  createdAt         DateTime           @default(now())
+
+  @@index([status, createdAt])
+  @@index([vendorId, createdAt])
+  @@map("brand_requests")
+}
+
+enum BrandRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  /// The seller chose another brand (or no brand) before a decision.
+  WITHDRAWN
+}
+
+// ---------------------------------------------------------------------
+// Barcodes and in-store sales (2026-11-20). The store's product barcode
+// is PRODUCT-level (one product, up to 10 codes, one primary for labels);
+// the cashier picks the colour x size x branch after a scan. Store-scoped
+// and operational: never part of an edit draft, never in a shopper
+// response. OfferVariant.storeInventoryBarcode (SIB-...) is untouched and
+// only READ by the cashier, as a legacy fallback.
+// ---------------------------------------------------------------------
+
+/// EXTERNAL = a code already printed on the item (scanned or typed);
+/// GENERATED = made by this platform for in-store use only (an EAN-13 in
+/// the GS1 restricted-circulation range "2..." - never a registered GTIN).
+enum BarcodeSource {
+  EXTERNAL
+  GENERATED
+}
+
+/// UPCA is stored as its 13-digit EAN form ("0" + the 12 digits), so a
+/// scanner that sends either form finds the same row.
+enum BarcodeFormat {
+  EAN13
+  EAN8
+  UPCA
+  CODE128
+}
+
+model OfferBarcode {
+  id            String        @id @default(uuid())
+  vendorId      String
+  vendor        Vendor        @relation(fields: [vendorId], references: [id])
+  vendorOfferId String
+  vendorOffer   VendorOffer   @relation(fields: [vendorId, vendorOfferId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  /// Normalized (barcode.util normalizeBarcode): digits only for the EAN/UPC
+  /// formats, upper-case [A-Z0-9-] for CODE128. CHECK per format (migration SQL).
+  code          String
+  format        BarcodeFormat
+  source        BarcodeSource
+  /// At most one per product (partial unique index, migration SQL).
+  isPrimary     Boolean       @default(false)
+  createdById   String
+  createdBy     User          @relation("OfferBarcodeCreator", fields: [createdById], references: [id])
+  createdAt     DateTime      @default(now())
+
+  /// Unique inside ONE store only - two stores may carry the same
+  /// manufacturer code.
+  @@unique([vendorId, code])
+  @@index([vendorOfferId])
+  @@map("offer_barcodes")
+}
+
+/// «الصفحة الرئيسية المرنة للمتجر» (2026-11-20): the owner's home page of
+/// ready blocks, shown on the store page between the store's identity and
+/// «تصفّحي المنتجات». One row per store at most - a store without one (every
+/// store before this) keeps its page exactly as before. `draft` is edited
+/// (autosaved, `draftVersion` + 1 on every write; a stale write is refused),
+/// `published` is what shoppers see - publishing copies the draft in one
+/// statement. Both documents are validated by src/store-home/ (closed block
+/// types and fields, own uploads only, internal destinations only - never a
+/// free link or HTML); references to products / collections / categories
+/// are resolved on every read, so nothing deleted or hidden leaves a gap.
+model StoreHomeLayout {
+  vendorId         String    @id
+  vendor           Vendor    @relation(fields: [vendorId], references: [id])
+  draft            Json      @default("{\"blocks\": []}")
+  published        Json?
+  draftVersion     Int       @default(0)
+  publishedVersion Int?
+  publishedAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @default(now()) @updatedAt
+
+  @@map("store_home_layouts")
+}
+
+/// Per-store counters (generated barcodes, in-store sale numbers) - each
+/// advanced by one atomic INSERT ... ON CONFLICT DO UPDATE ... RETURNING.
+model VendorCodeCounter {
+  vendorId       String @id
+  vendor         Vendor @relation(fields: [vendorId], references: [id])
+  lastBarcodeSeq BigInt @default(0)
+  lastSaleNumber Int    @default(0)
+
+  @@map("vendor_code_counters")
+}
+
+/// Cash, or a card on the store's own terminal - recorded only, never processed.
+enum StoreSalePaymentMethod {
+  CASH
+  CARD
+}
+
+enum StoreSaleStatus {
+  COMPLETED
+  /// The whole sale was cancelled by the owner on its own day; every line's
+  /// stock is back (StockMovement STORE_SALE_VOID). No partial void.
+  VOIDED
+}
+
+/// «بيع من المحل»: a real in-store sale - deliberately NOT a BranchOrder (no
+/// customer, no fulfilment, no checkout); never counted in the public
+/// bestseller ranking or trend. One row per confirmed basket.
+model StoreSale {
+  id            String                 @id @default(uuid())
+  vendorId      String
+  vendor        Vendor                 @relation(fields: [vendorId], references: [id])
+  branchId      String
+  branch        StoreBranch            @relation(fields: [vendorId, branchId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  /// Per store, from VendorCodeCounter - shown as S-000123.
+  saleNumber    Int
+  status        StoreSaleStatus        @default(COMPLETED)
+  paymentMethod StoreSalePaymentMethod
+  /// Sum of the lines' totals (ILS only - CHECK currency).
+  total         Decimal                @db.Decimal(10, 2)
+  currency      String                 @default("ILS")
+  soldById      String
+  soldBy        User                   @relation("StoreSaleSeller", fields: [soldById], references: [id])
+  createdAt     DateTime               @default(now())
+  /// All three set together exactly when status = VOIDED (CHECK).
+  voidedAt      DateTime?
+  voidedById    String?
+  voidedBy      User?                  @relation("StoreSaleVoider", fields: [voidedById], references: [id], onDelete: Restrict)
+  voidReason    String?
+
+  items StoreSaleItem[]
+
+  @@unique([vendorId, saleNumber])
+  @@unique([vendorId, id])
+  @@index([vendorId, branchId, createdAt])
+  @@index([vendorId, createdAt])
+  @@map("store_sales")
+}
+
+/// One colour x size line of an in-store sale. The price and names are
+/// snapshots taken at confirmation, never re-read.
+model StoreSaleItem {
+  id                  String        @id @default(uuid())
+  vendorId            String
+  vendor              Vendor        @relation(fields: [vendorId], references: [id])
+  storeSaleId         String
+  storeSale           StoreSale     @relation(fields: [vendorId, storeSaleId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  vendorOfferId       String
+  vendorOffer         VendorOffer   @relation(fields: [vendorId, vendorOfferId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  offerVariantId      String
+  offerVariant        OfferVariant  @relation(fields: [vendorId, offerVariantId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  quantity            Int
+  unitPrice           Decimal       @db.Decimal(10, 2)
+  lineTotal           Decimal       @db.Decimal(10, 2)
+  titleArSnapshot     String
+  titleEnSnapshot     String
+  colorNameArSnapshot String?
+  colorNameEnSnapshot String?
+  sizeCodeSnapshot    String?
+  sizeLabelSnapshot   String?
+  /// The code the line was added by (plain text, no FK) - null when the
+  /// line was picked without a scan.
+  scannedCode         String?
+  saleMovementId      String        @unique
+  saleMovement        StockMovement @relation("StoreSaleItemSaleMovement", fields: [saleMovementId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  voidMovementId      String?       @unique
+  voidMovement        StockMovement? @relation("StoreSaleItemVoidMovement", fields: [voidMovementId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  createdAt           DateTime      @default(now())
+
+  @@index([storeSaleId])
+  @@index([vendorId, vendorOfferId])
+  @@index([offerVariantId])
+  @@map("store_sale_items")
 }
