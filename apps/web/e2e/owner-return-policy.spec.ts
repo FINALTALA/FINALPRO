@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { createVendorWithBranch } from "./helpers/api";
 import { prisma } from "./helpers/db";
-import { loginAs } from "./helpers/session";
+import { enterWorkspace, loginAs } from "./helpers/session";
 import { loadSharedFixtures } from "./helpers/shared-fixtures";
 
 // Sprint 21 (PDR-030, review-round point 1): the owner's return-policy
@@ -27,6 +27,7 @@ test.describe("owner return-policy UI", () => {
     });
 
     await loginAs(page, fixtures.ownerToken);
+    await enterWorkspace(page, fixtures.ownerToken, { type: "vendor", vendor_id: vendorId });
     await page.goto(`/vendor/${vendorId}/return-policy`);
 
     const modeSelect = page.locator("select");
@@ -64,6 +65,7 @@ test.describe("owner return-policy UI", () => {
     });
 
     await loginAs(page, fixtures.ownerToken);
+    await enterWorkspace(page, fixtures.ownerToken, { type: "vendor", vendor_id: vendorId });
     await page.goto(`/vendor/${vendorId}/return-policy`);
 
     const modeSelect = page.locator("select");
@@ -94,6 +96,7 @@ test.describe("owner return-policy UI", () => {
     });
 
     await loginAs(page, fixtures.ownerToken);
+    await enterWorkspace(page, fixtures.ownerToken, { type: "vendor", vendor_id: vendorId });
     await page.goto(`/vendor/${vendorId}/return-policy`);
 
     await page.locator("select").selectOption("EXCHANGE_ONLY");

@@ -3,6 +3,14 @@
 import Image from "next/image";
 import { CSSProperties, useEffect, useRef } from "react";
 import { WomenCategory } from "@/lib/womenCategories";
+import { registerTranslations } from "@/lib/i18n";
+import { useT } from "@/lib/useLang";
+import { fmt } from "@/lib/shopText";
+
+registerTranslations({
+  ar: { "cat.section": "تصنيفات الأزياء", "cat.all": "جميع تصنيفات الأزياء", "cat.item": "{label}: {n} منتج" },
+  en: { "cat.section": "Fashion categories", "cat.all": "All fashion categories", "cat.item": "{label}: {n} products" },
+});
 
 export interface CountedWomenCategory extends WomenCategory {
   count: number;
@@ -17,6 +25,7 @@ export default function WomenCategorySection({
   selectedCategory: string;
   onSelectCategory: (category: string) => void;
 }) {
+  const t = useT();
   const listRef = useRef<HTMLDivElement>(null);
 
   // Staggered entrance, once per page load. The hidden start state lives
@@ -43,8 +52,8 @@ export default function WomenCategorySection({
   }, []);
 
   return (
-    <section className="women-categories" aria-label="تصنيفات الأزياء" id="women-categories">
-      <div className="women-category-list" role="list" aria-label="جميع تصنيفات الأزياء" ref={listRef}>
+    <section className="women-categories" aria-label={t("cat.section")} id="women-categories">
+      <div className="women-category-list" role="list" aria-label={t("cat.all")} ref={listRef}>
         {categories.map((item, index) => {
           const isSelected = selectedCategory === item.slug;
           return (
@@ -59,10 +68,14 @@ export default function WomenCategorySection({
                 type="button"
                 onClick={() => onSelectCategory(isSelected ? "" : item.slug)}
                 aria-pressed={isSelected}
-                aria-label={`${item.label}: ${item.count} منتج`}
+                aria-label={fmt(t("cat.item"), { label: item.label, n: item.count })}
               >
                 <span className="women-category-image">
-                  <Image src={item.image} alt="" fill sizes="(max-width: 639px) 52px, 64px" />
+                  {item.image ? (
+                    <Image src={item.image} alt="" fill sizes="(max-width: 639px) 52px, 64px" />
+                  ) : (
+                    <span className="kids-category-placeholder" aria-hidden="true">{item.label.slice(0, 1)}</span>
+                  )}
                   {isSelected && (
                     <span className="women-category-check" aria-hidden="true">
                       <svg viewBox="0 0 12 12" fill="none">
@@ -80,3 +93,4 @@ export default function WomenCategorySection({
     </section>
   );
 }
+

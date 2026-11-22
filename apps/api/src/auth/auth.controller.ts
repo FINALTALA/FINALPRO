@@ -41,6 +41,12 @@ import { OtpCheckResult, OtpService } from './otp.service';
 import { toPrismaOtpPurpose } from './otp-purpose.util';
 import { PhoneVerificationService } from './phone-verification.service';
 import { SessionService } from './session.service';
+import {
+  revokeWorkspacesForSession,
+  WorkspaceNeutral,
+} from './workspace-session';
+import { RedisService } from '../redis/redis.service';
+import { loginRateLimitPerMinute } from './login-rate-limit';
 
 const OTP_VERIFY_IDEMPOTENCY_TTL_MS = 5 * 60 * 1000; // Part 4, H.3's "short window (e.g. 5 minutes)"
 
@@ -81,6 +87,13 @@ function throwForOtpFailure(reason: OtpCheckResult['reason']): never {
         },
         HttpStatus.TOO_MANY_REQUESTS,
       );
+    // TB-17: an older, still-unexpired code for this phone+purpose - not
+    // the newest one sent. Refused without spending an attempt.
+    case 'superseded':
+      throw new BadRequestException({
+        code: 'OTP_SUPERSEDED',
+        message: 'A newer code was sent. Use the latest code you received.',
+      });
     case 'invalid':
     default:
       throw new BadRequestException({
@@ -104,6 +117,7 @@ export class AuthController {
     private readonly phoneVerification: PhoneVerificationService,
     private readonly auditLog: AuditLogService,
     private readonly idempotencyCompletion: IdempotencyCompletionService,
+    private readonly redis: RedisService,
   ) {}
 
   // FR-AUTH-011: auth/OTP endpoints get a materially stricter limit
@@ -183,8 +197,8 @@ export class AuthController {
         // idempotency-completion bookkeeping write then failed
         // (IdempotencyInterceptor's own COMPLETED/FAILED update is not
         // part of the same transaction as the handler's work).
-        // checkCode() only ever looks at unconsumed rows, so it can't
-        // tell those two cases apart on its own - recover the
+        // checkCode() answers "invalid" for a consumed code too (TB-17),
+        // so it can't tell those two cases apart on its own - recover the
         // already-issued token instead of failing a request that
         // actually already succeeded. Scoped to this exact
         // Idempotency-Key so a *different* concurrent request for the
@@ -334,7 +348,11 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(200)
-  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  // TB-16.4: 10 a minute per address, always - except on the isolated
+  // Playwright API (see login-rate-limit.ts). Evaluated per request.
+  @Throttle({
+    default: { limit: () => loginRateLimitPerMinute(), ttl: 60_000 },
+  })
   async login(@Body() dto: LoginDto, @Req() req: Request) {
     const user = await this.prisma.user.findUnique({
       where: { phone: dto.phone },
@@ -390,11 +408,14 @@ export class AuthController {
   // request's own header, so there is no id anyone could substitute.
   @Post('logout')
   @HttpCode(200)
+  @WorkspaceNeutral()
   @UseGuards(SessionAuthGuard)
   async logout(@CurrentUser() user: AuthenticatedUser, @Req() req: Request) {
     const header = req.header('Authorization') ?? '';
     const token = header.startsWith('Bearer ') ? header.slice(7) : '';
     await this.sessions.revoke(token, user.id);
+    // TB-26: and every workspace entered under this session.
+    await revokeWorkspacesForSession(this.redis, token);
     await this.auditLog.record({
       actorId: user.id,
       correlationId: req.correlationId,

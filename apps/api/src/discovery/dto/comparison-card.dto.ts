@@ -13,12 +13,16 @@ export function comparisonCardDto(card: ComparisonCard) {
     image_url: card.imageUrl,
     brand_name: card.brandName,
     category_name: card.categoryName,
+    // TB-25.2 (additive): the category's English name and the colour codes,
+    // so the web can show both in the interface language.
+    category_name_en: card.categoryNameEn,
     store_count: card.storeCount,
     has_discount: card.hasDiscount,
     discounted_store_count: card.discountedStoreCount,
     rating: card.rating,
     rating_count: card.ratingCount,
     colors: card.colors,
+    color_codes: card.colorCodes,
     sizes: card.sizes,
     cheapest_offer: {
       vendor_id: card.cheapestOffer.vendorId,

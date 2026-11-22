@@ -1,20 +1,34 @@
 import { BadRequestException, Controller, Get, Query } from '@nestjs/common';
-import { Prisma, StoreApplicableCategory } from '../../generated/prisma/client';
+import {
+  Prisma,
+  ProductAudience,
+  StoreApplicableCategory,
+} from '../../generated/prisma/client';
+import { FulfilmentEligibilityService } from '../fulfilment/fulfilment-eligibility.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { TaxonomyService } from '../taxonomy/taxonomy.service';
 import { ComparisonService, eligibleProductWhere } from './comparison.service';
-import { comparisonCardDto } from './dto/comparison-card.dto';
 import {
   BROWSE_FILTERS,
   BROWSE_SORTS,
   BrowseFilter,
+  BrowseParams,
   BrowseSort,
   DiscoveryBrowseService,
 } from './discovery-browse.service';
-import { isWomenCategorySlug } from './women-categories';
+import {
+  clampInt,
+  parseBoolean,
+  parseEnum,
+  parsePrice,
+  parseQuery,
+  taxonomyOfferFilter,
+  textMatch,
+} from './discovery-filters';
+import { comparisonCardDto } from './dto/comparison-card.dto';
 
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 50;
-const MAX_QUERY_LENGTH = 80;
 
 const SEGMENTS: Record<string, StoreApplicableCategory> = {
   women: 'WOMEN',
@@ -22,17 +36,6 @@ const SEGMENTS: Record<string, StoreApplicableCategory> = {
   kids: 'KIDS',
   accessories: 'ACCESSORIES',
 };
-
-function clampInt(
-  raw: string | undefined,
-  fallback: number,
-  min: number,
-  max: number,
-): number {
-  const parsed = raw === undefined ? NaN : Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.min(max, Math.max(min, parsed));
-}
 
 function parseSegment(raw: string | undefined): StoreApplicableCategory | null {
   if (raw === undefined || raw === '' || raw === 'all') return null;
@@ -46,24 +49,6 @@ function parseSegment(raw: string | undefined): StoreApplicableCategory | null {
   return segment;
 }
 
-function parseEnum<T extends string>(
-  raw: string | undefined,
-  allowed: readonly T[],
-  name: string,
-): T | null {
-  if (raw === undefined || raw === '') return null;
-  if ((allowed as readonly string[]).includes(raw)) return raw as T;
-  throw new BadRequestException({
-    code: `INVALID_${name.toUpperCase()}`,
-    message: `${name} must be one of ${allowed.join(', ')}`,
-  });
-}
-
-function parseQuery(raw: string | undefined): string | null {
-  const trimmed = raw?.trim().slice(0, MAX_QUERY_LENGTH);
-  return trimmed ? trimmed : null;
-}
-
 // Sprint 8 (RB-STOREF-004, PDR-013/014): public discovery. Sprint 13
 // adds two read-only narrowing filters on the same eligible-product
 // rule (never a second competing definition of "eligible"):
@@ -73,12 +58,25 @@ function parseQuery(raw: string | undefined): string | null {
 //  - `q`: case-insensitive match on the canonical name (AR/EN), model,
 //    brand or category name.
 // Ordering stays newest-first (RB-COMP-002's ranking is still deferred).
+// Sprint 27 adds the product-taxonomy filters (audience, category,
+// season, color, size - each a comma list: OR inside one, AND across),
+// all applied to ONE confirmed offer variant of the product, so a card
+// is never assembled from one store's audience and another's colour.
+// Only classified offers can satisfy them; colour/size additionally
+// need that very combination in stock right now (live reservations
+// subtracted, as on every public surface).
+// Browse mode (sort/filter/min_price/max_price/available_only/cursor/
+// facets) serves the women/men/kids listings, which pass
+// audience=WOMEN|MEN|KIDS - the product's own audience; `segment` keeps
+// its store-level meaning everywhere.
 @Controller('discovery')
 export class DiscoveryController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly comparison: ComparisonService,
+    private readonly taxonomy: TaxonomyService,
     private readonly browse: DiscoveryBrowseService,
+    private readonly fulfilment: FulfilmentEligibilityService,
   ) {}
 
   @Get('all')
@@ -87,9 +85,16 @@ export class DiscoveryController {
     @Query('page_size') pageSizeRaw?: string,
     @Query('segment') segmentRaw?: string,
     @Query('q') qRaw?: string,
+    @Query('audience') audience?: string,
+    @Query('category') category?: string,
+    @Query('season') season?: string,
+    @Query('color') color?: string,
+    @Query('size') size?: string,
     @Query('sort') sortRaw?: string,
     @Query('filter') filterRaw?: string,
-    @Query('category') categoryRaw?: string,
+    @Query('min_price') minPriceRaw?: string,
+    @Query('max_price') maxPriceRaw?: string,
+    @Query('available_only') availableOnlyRaw?: string,
     @Query('cursor') cursorRaw?: string,
     @Query('facets') facetsRaw?: string,
   ) {
@@ -97,55 +102,123 @@ export class DiscoveryController {
     const pageSize = clampInt(pageSizeRaw, DEFAULT_PAGE_SIZE, 1, MAX_PAGE_SIZE);
     const segment = parseSegment(segmentRaw);
     const q = parseQuery(qRaw);
+    const codes = await this.taxonomy.parseFilterCodes({
+      audience,
+      category,
+      season,
+      color,
+      size,
+    });
 
-    const base = eligibleProductWhere(
-      segment ? { applicableCategories: { some: { category: segment } } } : {},
+    const vendorFilter: Prisma.VendorWhereInput = segment
+      ? { applicableCategories: { some: { category: segment } } }
+      : {};
+    const productWhere = (
+      offerFilter: Prisma.OfferVariantWhereInput,
+    ): Prisma.CanonicalProductWhereInput => {
+      const base = eligibleProductWhere(vendorFilter, offerFilter);
+      return q ? { AND: [base, textMatch(q)] } : base;
+    };
+    const where = productWhere(
+      await taxonomyOfferFilter(
+        this.prisma,
+        this.fulfilment,
+        codes,
+        vendorFilter,
+      ),
     );
-    const where: Prisma.CanonicalProductWhereInput = q
-      ? {
-          AND: [
-            base,
-            {
-              OR: [
-                { canonicalNameAr: { contains: q, mode: 'insensitive' } },
-                { canonicalNameEn: { contains: q, mode: 'insensitive' } },
-                { modelName: { contains: q, mode: 'insensitive' } },
-                { brand: { name: { contains: q, mode: 'insensitive' } } },
-                { category: { nameAr: { contains: q, mode: 'insensitive' } } },
-                { category: { nameEn: { contains: q, mode: 'insensitive' } } },
-              ],
-            },
-          ],
-        }
-      : base;
 
-    // Infinite-scroll browsing (women's listing): opt-in via any of
-    // sort/filter/category/cursor/facets. Server-side sort + filter +
-    // cursor pagination over the same `where`; without these params the
-    // classic page/page_size response below is unchanged.
+    // Browse mode (the women/men/kids listings): opt-in via any of these
+    // params. Server-side price/availability filtering, sort, cursor
+    // pagination and taxonomy category counts over the same `where`;
+    // without them the classic page/page_size response below is
+    // unchanged.
     const browsing = [
       sortRaw,
       filterRaw,
-      categoryRaw,
+      minPriceRaw,
+      maxPriceRaw,
+      availableOnlyRaw,
       cursorRaw,
       facetsRaw,
     ].some((v) => v !== undefined && v !== '');
     if (browsing) {
-      const category = categoryRaw?.trim() || null;
-      if (category && !isWomenCategorySlug(category)) {
+      const sort =
+        parseEnum<BrowseSort>(sortRaw, BROWSE_SORTS, 'sort') ?? 'newest';
+      const filter = parseEnum<BrowseFilter>(
+        filterRaw,
+        BROWSE_FILTERS,
+        'filter',
+      );
+      const minPrice = parsePrice(minPriceRaw, 'min_price');
+      const maxPrice = parsePrice(maxPriceRaw, 'max_price');
+      if (minPrice !== null && maxPrice !== null && minPrice > maxPrice) {
         throw new BadRequestException({
-          code: 'INVALID_CATEGORY',
-          message: 'category is not a known category slug',
+          code: 'INVALID_PRICE_FILTER',
+          message: 'min_price must not exceed max_price',
         });
       }
+      const availableOnly = parseBoolean(availableOnlyRaw, 'available_only');
+      const withFacets =
+        parseEnum(facetsRaw, ['categories'] as const, 'facets') !== null;
+
+      let facets: BrowseParams['facets'];
+      if (withFacets) {
+        // Counts ignore the category selection itself (a facet never
+        // narrows its own options) but honour every other filter.
+        const offerFilter = await taxonomyOfferFilter(
+          this.prisma,
+          this.fulfilment,
+
+          { ...codes, categories: new Set<string>() },
+          vendorFilter,
+        );
+        const t = await this.taxonomy.get();
+        facets = {
+          whereWithoutCategory: productWhere(offerFilter),
+          offerWhereWithoutCategory: {
+            AND: [{ vendor: vendorFilter }, offerFilter],
+          },
+          categoryCodes: [...t.categoryAudiences.entries()]
+            .filter(
+              ([, audiences]) =>
+                codes.audiences.size === 0 ||
+                [...audiences].some((a) => codes.audiences.has(a)),
+            )
+            .map(([code]) => code),
+        };
+      }
+
       return this.browse.browse({
         where,
+        facets,
+        queryKey: JSON.stringify([
+          segment,
+          q,
+          ...[
+            codes.audiences,
+            codes.categories,
+            codes.seasons,
+            codes.colors,
+            codes.sizes,
+          ].map((set) => [...set].sort()),
+          sort,
+          filter,
+          minPrice,
+          maxPrice,
+          availableOnly,
+        ]),
         pageSize,
-        sort: parseEnum<BrowseSort>(sortRaw, BROWSE_SORTS, 'sort') ?? 'newest',
-        filter: parseEnum<BrowseFilter>(filterRaw, BROWSE_FILTERS, 'filter'),
-        category,
+        sort,
+        filter,
+        minPrice,
+        maxPrice,
+        availableOnly,
         cursor: cursorRaw?.trim() || null,
-        withCategoryCounts: facetsRaw === 'categories',
+        bestsellerScope: {
+          audiences: [...codes.audiences] as ProductAudience[],
+          categories: [...codes.categories],
+        },
       });
     }
 

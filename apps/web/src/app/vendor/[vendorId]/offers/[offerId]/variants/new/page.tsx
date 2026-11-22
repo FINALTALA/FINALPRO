@@ -5,7 +5,8 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { ErrorBanner } from "@/components/States";
 import { apiFetch, ApiError, newIdempotencyKey } from "@/lib/api";
-import { getSessionToken } from "@/lib/session";
+import { getSessionToken } from "@/lib/session";
+import { loginRedirectHref } from "@/lib/loginRedirect";
 
 interface VariantDto {
   id: string;
@@ -38,7 +39,7 @@ export default function NewVariantPage() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!getSessionToken()) router.replace("/login");
+    if (!getSessionToken()) router.replace(loginRedirectHref());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

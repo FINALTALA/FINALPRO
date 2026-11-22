@@ -11,10 +11,21 @@ import { SessionService } from './session.service';
 import { SmsService } from './sms.service';
 import { VendorMembershipGuard } from './vendor-membership.guard';
 import { VendorSuspendedGuard } from './vendor-suspended.guard';
+import { WorkspaceSessionsController } from './workspace-sessions.controller';
+import {
+  AdminNotificationsController,
+  VendorNotificationsController,
+} from './workspace-notifications.controller';
 
 @Module({
   imports: [AuditModule, IdempotencyModule],
-  controllers: [AuthController, MeController],
+  controllers: [
+    AuthController,
+    MeController,
+    WorkspaceSessionsController,
+    VendorNotificationsController,
+    AdminNotificationsController,
+  ],
   providers: [
     OtpService,
     SmsService,

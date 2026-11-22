@@ -18,6 +18,24 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { ComparisonService, eligibleProductWhere } from './comparison.service';
 import { comparisonCardDto } from './dto/comparison-card.dto';
+import { FollowingFeedService } from './following-feed.service';
+
+const BROWSE_PARAMS = [
+  'department',
+  'category',
+  'collection',
+  'q',
+  'season',
+  'color',
+  'size',
+  'brand',
+  'min_price',
+  'max_price',
+  'available_only',
+  'sort',
+  'cursor',
+  'facets',
+];
 
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 50;
@@ -47,6 +65,7 @@ export class FollowingController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly comparison: ComparisonService,
+    private readonly feedService: FollowingFeedService,
   ) {}
 
   @Get()
@@ -78,12 +97,24 @@ export class FollowingController {
     };
   }
 
+  /**
+   * The followed stores' products. Classic mode (page/page_size only) is
+   * the original paged list; any browse parameter (department, category,
+   * collection, q, season, color, size, brand, min_price, max_price,
+   * available_only, sort, cursor, facets) switches to the filtered,
+   * counted, cursor-paged feed of FollowingFeedService - the followed
+   * stores always come from the session user, never from the request.
+   */
   @Get('feed')
   async feed(
     @CurrentUser() user: AuthenticatedUser,
+    @Query() query: Record<string, string | undefined>,
     @Query('page') pageRaw?: string,
     @Query('page_size') pageSizeRaw?: string,
   ) {
+    if (BROWSE_PARAMS.some((p) => query[p] !== undefined)) {
+      return this.feedService.feed(user.id, query);
+    }
     const page = clampInt(pageRaw, 1, 1, 1_000_000);
     const pageSize = clampInt(pageSizeRaw, DEFAULT_PAGE_SIZE, 1, MAX_PAGE_SIZE);
     // The card itself (lowest price, store count, logos, cheapest offer)

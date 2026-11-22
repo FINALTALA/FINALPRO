@@ -8,6 +8,7 @@ import { HttpExceptionFilter } from './../src/common/filters/http-exception.filt
 import { PrismaService } from './../src/prisma/prisma.service';
 import { ReturnSweepService } from './../src/returns/return-sweep.service';
 import { createUniquePhone } from './helpers/e2e-phone-lanes';
+import { sweepUntil } from './helpers/sweep-until';
 
 type Res = { status: number; body: any };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -736,7 +737,12 @@ describe('Sprint 21 - returns: policy, request, code, receipt, refund (e2e)', ()
         where: { id: returnId },
         data: { disputeDeadlineAt: new Date(Date.now() - 1000) },
       });
-      await sweep.sweepOnce();
+      await sweepUntil(
+        () => sweep.sweepOnce(),
+        async () =>
+          (await prisma.return.findUniqueOrThrow({ where: { id: returnId } }))
+            .status !== 'REJECTED',
+      );
       const closed = await prisma.return.findUniqueOrThrow({
         where: { id: returnId },
       });
@@ -902,7 +908,12 @@ describe('Sprint 21 - returns: policy, request, code, receipt, refund (e2e)', ()
         where: { id: returnId },
         data: { createdAt: new Date(Date.now() - 49 * 60 * 60 * 1000) },
       });
-      await sweep.sweepOnce();
+      await sweepUntil(
+        () => sweep.sweepOnce(),
+        async () =>
+          (await prisma.return.findUniqueOrThrow({ where: { id: returnId } }))
+            .vendorReminderSentAt !== null,
+      );
       const afterReminder = await prisma.return.findUniqueOrThrow({
         where: { id: returnId },
       });
@@ -913,7 +924,12 @@ describe('Sprint 21 - returns: policy, request, code, receipt, refund (e2e)', ()
         where: { id: returnId },
         data: { createdAt: new Date(Date.now() - 73 * 60 * 60 * 1000) },
       });
-      await sweep.sweepOnce();
+      await sweepUntil(
+        () => sweep.sweepOnce(),
+        async () =>
+          (await prisma.return.findUniqueOrThrow({ where: { id: returnId } }))
+            .status !== 'REQUESTED',
+      );
       const afterEscalation = await prisma.return.findUniqueOrThrow({
         where: { id: returnId },
       });
@@ -1163,7 +1179,15 @@ describe('Sprint 21 - returns: policy, request, code, receipt, refund (e2e)', ()
         where: { id: submitted.body.id },
         data: { codeExpiresAt: new Date(Date.now() - 1000) },
       });
-      await sweep.sweepOnce();
+      await sweepUntil(
+        () => sweep.sweepOnce(),
+        async () =>
+          (
+            await prisma.return.findUniqueOrThrow({
+              where: { id: submitted.body.id },
+            })
+          ).status !== 'APPROVED_AWAITING_DROPOFF',
+      );
       const expired = await prisma.return.findUniqueOrThrow({
         where: { id: submitted.body.id },
       });

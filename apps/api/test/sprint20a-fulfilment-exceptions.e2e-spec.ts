@@ -7,6 +7,7 @@ import { HttpExceptionFilter } from './../src/common/filters/http-exception.filt
 import { PrismaService } from './../src/prisma/prisma.service';
 import { FulfilmentExceptionSweepService } from './../src/orders/fulfilment-exception-sweep.service';
 import { createUniquePhone } from './helpers/e2e-phone-lanes';
+import { sweepUntil } from './helpers/sweep-until';
 
 class FakeSmsService {
   sent: { phone: string; code: string; expiresAt: Date }[] = [];
@@ -1684,7 +1685,15 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
         data: { scheduledDate: new Date(Date.now() - 2 * 86_400_000) },
       });
 
-      await sweep.sweepOnce();
+      await sweepUntil(
+        () => sweep.sweepOnce(),
+        async () =>
+          (
+            await prisma.branchOrder.findUniqueOrThrow({
+              where: { id: branchOrderId },
+            })
+          ).slotMissedAt !== null,
+      );
 
       const order = await prisma.branchOrder.findUniqueOrThrow({
         where: { id: branchOrderId },
@@ -1737,7 +1746,20 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
         data: { slotMissedAt: new Date(Date.now() - 49 * 3_600_000) },
       });
 
-      await sweep.sweepOnce();
+      await sweepUntil(
+        () => sweep.sweepOnce(),
+        async () =>
+          (
+            await prisma.branchOrder.findUniqueOrThrow({
+              where: { id: codOrder.branchOrderId },
+            })
+          ).status !== 'PLACED' &&
+          (
+            await prisma.branchOrder.findUniqueOrThrow({
+              where: { id: onlineOrder.branchOrderId },
+            })
+          ).status !== 'PLACED',
+      );
 
       const codFinal = await prisma.branchOrder.findUniqueOrThrow({
         where: { id: codOrder.branchOrderId },
@@ -1800,7 +1822,15 @@ describe('Sprint 20a - fulfilment exceptions: cancellation, reschedule, refund (
         data: { deliveryFailedAt: new Date(Date.now() - 49 * 3_600_000) },
       });
 
-      await sweep.sweepOnce();
+      await sweepUntil(
+        () => sweep.sweepOnce(),
+        async () =>
+          (
+            await prisma.branchOrder.findUniqueOrThrow({
+              where: { id: branchOrderId },
+            })
+          ).status === 'REFUNDED',
+      );
 
       const order = await prisma.branchOrder.findUniqueOrThrow({
         where: { id: branchOrderId },

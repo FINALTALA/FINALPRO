@@ -10,13 +10,22 @@
  *
  * Idempotent: re-running with the same phone updates that user's role
  * and password rather than creating a duplicate.
+ *
+ * TB-12.4: pass "-" as the password to read it from the
+ * PLATFORM_STAFF_PASSWORD environment variable instead (keeps it out of
+ * the process list and shell history). The output names the account by
+ * id and the last three phone digits only, and a role change writes one
+ * `platform_role.granted` audit row (ids and roles - no phone).
  */
 import * as bcrypt from 'bcryptjs';
+import { randomUUID } from 'crypto';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PlatformRole, PrismaClient } from '../generated/prisma/client';
 
 async function main() {
-  const [phone, password, role] = process.argv.slice(2);
+  const [phone, passwordArg, role] = process.argv.slice(2);
+  const password =
+    passwordArg === '-' ? process.env.PLATFORM_STAFF_PASSWORD : passwordArg;
   if (!phone || !password || !role) {
     console.error(
       'Usage: ts-node scripts/seed-platform-staff.ts <phone> <password> <VERIFICATION_REVIEWER|PLATFORM_ADMIN>',
@@ -24,7 +33,9 @@ async function main() {
     process.exit(1);
   }
   if (!Object.values(PlatformRole).includes(role as PlatformRole)) {
-    console.error(`Invalid role "${role}". Must be one of: ${Object.values(PlatformRole).join(', ')}`);
+    console.error(
+      `Invalid role "${role}". Must be one of: ${Object.values(PlatformRole).join(', ')}`,
+    );
     process.exit(1);
   }
 
@@ -35,6 +46,10 @@ async function main() {
   const prisma = new PrismaClient({ adapter: new PrismaPg(connectionString) });
 
   const passwordHash = await bcrypt.hash(password, 10);
+  const before = await prisma.user.findUnique({
+    where: { phone },
+    select: { platformRole: true },
+  });
   const user = await prisma.user.upsert({
     where: { phone },
     create: {
@@ -49,7 +64,24 @@ async function main() {
     },
   });
 
-  console.log(`OK: user ${user.id} (${user.phone}) is now ${role}`);
+  if (before?.platformRole !== role) {
+    await prisma.auditLog.create({
+      data: {
+        actorId: null,
+        correlationId: randomUUID(),
+        action: 'platform_role.granted',
+        entityType: 'User',
+        entityId: user.id,
+        beforeState: { platform_role: before?.platformRole ?? null },
+        afterState: { platform_role: role },
+      },
+    });
+  }
+
+  console.log(
+    `OK: user ${user.id} (•••${user.phone.slice(-3)}) is now ${role}` +
+      (before ? '' : ' (new account)'),
+  );
   await prisma.$disconnect();
 }
 

@@ -2,8 +2,13 @@ import { Module } from '@nestjs/common';
 import { AuditModule } from '../audit/audit.module';
 import { AuthModule } from '../auth/auth.module';
 import { OutboxModule } from '../outbox/outbox.module';
+import { PlatformAlertsModule } from '../platform-alerts/platform-alerts.module';
 import { BranchOrderAddressChangeService } from './branch-order-address-change.service';
 import { BranchOrderCancellationService } from './branch-order-cancellation.service';
+import { BranchOrderIntegrityService } from './branch-order-integrity.service';
+import { BranchOrderQueueController } from './branch-order-queue.controller';
+import { BranchOrderQueueService } from './branch-order-queue.service';
+import { OrderActorContextInterceptor } from './order-actor-context.interceptor';
 import { BranchOrderRescheduleService } from './branch-order-reschedule.service';
 import { BranchOrderService } from './branch-order.service';
 import { BranchOrdersStaffController } from './branch-orders-staff.controller';
@@ -29,11 +34,19 @@ import { FulfilmentSweepService } from './fulfilment-sweep.service';
 // must be imported here for the same per-module DI reason as
 // AuditModule above).
 @Module({
-  imports: [AuditModule, AuthModule, OutboxModule],
-  controllers: [BranchOrdersStaffController, CustomerOrdersController],
+  imports: [AuditModule, AuthModule, OutboxModule, PlatformAlertsModule],
+  // 2026-11-22: the branch's order queue / details / timeline (reads only).
+  controllers: [
+    BranchOrdersStaffController,
+    CustomerOrdersController,
+    BranchOrderQueueController,
+  ],
   providers: [
+    BranchOrderQueueService,
+    OrderActorContextInterceptor,
     BranchOrderService,
     BranchOrderCancellationService,
+    BranchOrderIntegrityService,
     BranchOrderRescheduleService,
     BranchOrderAddressChangeService,
     FulfilmentReconciliationService,
@@ -43,6 +56,7 @@ import { FulfilmentSweepService } from './fulfilment-sweep.service';
   exports: [
     BranchOrderService,
     BranchOrderCancellationService,
+    BranchOrderIntegrityService,
     BranchOrderRescheduleService,
     BranchOrderAddressChangeService,
     FulfilmentReconciliationService,

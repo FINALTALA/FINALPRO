@@ -2,14 +2,18 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { type MouseEvent, useEffect, useState, useSyncExternalStore } from "react";
 import { EmptyState, ErrorBanner } from "@/components/States";
+import { BagIcon, StoreManageIcon, UserIcon } from "@/components/Icons";
 import { workspaceEntry } from "@/lib/nav";
 import AddressForm, { SavedAddress } from "@/components/AddressForm";
 import { logout } from "@/lib/auth";
-import { clearSession, setActiveWorkspace } from "@/lib/session";
+import { clearSession } from "@/lib/session";
+import { WORKSPACE_EVENT, hasWorkspace, workspaceEntryHref, workspaceSnapshot } from "@/lib/workspaceSession";
+import { enterWorkspaceNow } from "@/lib/workspaceActions";
 import { useFetch } from "@/lib/useFetch";
-import { useActiveWorkspace, useHydrated, useSessionToken, useWorkspaces } from "@/lib/useSession";
+import { useHydrated, useSessionToken, useWorkspaces } from "@/lib/useSession";
+import { loginRedirectHref, useLoginRedirectHref, useLoginWhenSessionLost } from "@/lib/loginRedirect";
 
 interface MeDto {
   id: string;
@@ -17,26 +21,92 @@ interface MeDto {
   display_name: string | null;
 }
 
+function anyWorkspaceEntered(snapshot: string): boolean {
+  try {
+    const s = JSON.parse(snapshot) as { v?: string[]; p?: boolean };
+    return Boolean(s.p) || (s.v?.length ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
+function subscribeWorkspaces(onChange: () => void): () => void {
+  window.addEventListener(WORKSPACE_EVENT, onChange);
+  return () => window.removeEventListener(WORKSPACE_EVENT, onChange);
+}
+
+// Whether this page is open inside the account overlay's iframe
+// (/account?embed=account). Only the click handlers below need it, so it
+// is read from the URL at click time - never during render, which keeps
+// this page statically prerenderable without a Suspense boundary.
+const inAccountOverlay = () =>
+  new URLSearchParams(window.location.search).get("embed") === "account";
+
 // Sprint 13: "حسابي" - the account page (also the mobile bottom-nav
 // destination). Profile, quick links, and the workspace switcher:
 // customer (shopping), owner (store dashboard) and employee (own branch
 // only). The switcher only chooses where to go and remembers the
 // choice; every store/branch route is still authorized by the backend.
 export default function AccountPage() {
+  const loginLink = useLoginRedirectHref();
   const router = useRouter();
   const hydrated = useHydrated();
   const token = useSessionToken();
+  // TB-34: a session lost to a 401 goes to sign-in (with `next` = this page) rather than showing the sign-in button.
+  useLoginWhenSessionLost(hydrated, token);
   const me = useFetch<MeDto>(token ? "/customers/me" : null, true);
   const workspaces = useWorkspaces(token);
-  const active = useActiveWorkspace();
+  const wsSnapshot = useSyncExternalStore(subscribeWorkspaces, workspaceSnapshot, () => "");
   const addressList = useFetch<SavedAddress[]>(token ? "/customers/me/addresses" : null, true);
   const [added, setAdded] = useState<SavedAddress[]>([]);
   const [showAddressForm, setShowAddressForm] = useState(false);
 
+  function leaveAccountPanel(path: string) {
+    // A workspace is a destination, not a nested account detail. When this
+    // hub is rendered in the account overlay, navigate the parent window so
+    // the selected workspace resumes as a normal full page.
+    if (inAccountOverlay() && window.parent !== window) {
+      window.parent.location.assign(path);
+      return;
+    }
+    router.push(path);
+  }
+
+  function closeOnAccountBackground(event: MouseEvent<HTMLDivElement>) {
+    if (!inAccountOverlay() || window.parent === window) return;
+    const target = event.target as HTMLElement;
+    // Cards and every useful control keep their natural click behavior.
+    // Only the deliberately empty account backdrop dismisses the overlay.
+    if (target.closest("button, a, input, select, textarea, label, .hub-tile, .workspace-icon-action, .address-list li, .card")) {
+      return;
+    }
+    window.parent.postMessage({ type: "close-account-overlay" }, window.location.origin);
+  }
+
+  // TB-26: choosing a workspace card here IS the explicit step - it enters
+  // the workspace at once (the API issues the token after its own checks)
+  // and opens its home. If entering fails, the entry page shows why.
+  // Shopping is simply the home page.
+  async function openWorkspace(w: NonNullable<typeof workspaces>[number]) {
+    const entry = workspaceEntry(w);
+    if (entry.disabled) return;
+    if (w.type === "customer") {
+      leaveAccountPanel("/");
+      return;
+    }
+    const ref = w.type === "platform" ? ({ type: "platform" } as const) : ({ type: "vendor", vendor_id: w.vendor_id } as const);
+    try {
+      await enterWorkspaceNow(ref);
+      leaveAccountPanel(entry.href);
+    } catch {
+      leaveAccountPanel(workspaceEntryHref(ref, entry.href));
+    }
+  }
+
   useEffect(() => {
     if (me.status === 401) {
       clearSession();
-      router.replace("/login?next=/account");
+      router.replace(loginRedirectHref());
     }
   }, [me.status, router]);
 
@@ -53,7 +123,7 @@ export default function AccountPage() {
       <div className="page-shell">
         <EmptyState
           title="سجّلي الدخول للوصول إلى حسابك"
-          actionHref="/login?next=/account"
+          actionHref={loginLink}
           actionLabel="تسجيل الدخول"
         >
           <p style={{ marginTop: 14 }}>
@@ -65,7 +135,17 @@ export default function AccountPage() {
   }
 
   return (
-    <div className="page-shell">
+    <div className="page-shell" onMouseDown={closeOnAccountBackground}>
+      <button
+        className="button button-secondary account-signout"
+        onClick={async () => {
+          await logout();
+          // An explicit sign-out: a plain sign-in page, no `next`.
+          router.replace("/login");
+        }}
+      >
+        تسجيل الخروج
+      </button>
       <div className="wide-shell" style={{ maxWidth: 720 }}>
         <h1 className="page-title">حسابي</h1>
         {me.error && me.status !== 401 && <ErrorBanner message={me.error} />}
@@ -76,11 +156,37 @@ export default function AccountPage() {
           </p>
         )}
 
-        <div className="hub-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", marginBottom: 8 }}>
-          <Link href="/orders" className="hub-tile"><strong>طلباتي</strong><span>تتبّع طلباتك وأكّدي الاستلام</span></Link>
-          <Link href="/following" className="hub-tile"><strong>أتابعه</strong><span>المتاجر التي تتابعينها</span></Link>
-          <Link href="/account/favorites" className="hub-tile"><strong>المفضلة</strong><span>المنتجات والعروض المحفوظة</span></Link>
-          <Link href="/cart" className="hub-tile"><strong>السلة</strong><span>عناصرك المحفوظة</span></Link>
+        {workspaces === null && <p className="muted">جارٍ التحميل...</p>}
+        <div className="workspace-list workspace-icon-list" style={{ maxWidth: "none" }}>
+          {workspaces?.map((w) => {
+            const entry = workspaceEntry(w);
+            // TB-26: shopping is always this page's context; a workspace is
+            // marked when this tab has entered it.
+            const isActive =
+              w.type === "customer"
+                ? !anyWorkspaceEntered(wsSnapshot)
+                : hydrated && wsSnapshot !== "" &&
+                  hasWorkspace(w.type === "platform" ? { type: "platform" } : { type: "vendor", vendor_id: w.vendor_id });
+            const icon = entry.kind === "customer"
+              ? <BagIcon />
+              : entry.kind === "owner"
+                ? <StoreManageIcon />
+                : <UserIcon />;
+            return (
+              <button
+                key={entry.id}
+                type="button"
+                className={`workspace-icon-action${isActive ? " active" : ""}`}
+                disabled={entry.disabled}
+                onClick={() => openWorkspace(w)}
+              >
+                <span className="workspace-icon-graphic">{icon}</span>
+                <span className="workspace-icon-label">{entry.label}</span>
+                <span className="workspace-icon-subtitle">{entry.disabled ? "الحساب معلّق" : entry.subtitle}</span>
+                {isActive && !entry.disabled && <span className="workspace-icon-active">نشطة الآن</span>}
+              </button>
+            );
+          })}
         </div>
 
         {/* Sprint 22: links into the new account/addresses/phone/deactivate
@@ -88,6 +194,7 @@ export default function AccountPage() {
             plain Arabic to match this (pre-S22, untouched) page's own style. */}
         <div className="hub-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", marginBottom: 8 }}>
           <Link href="/account/addresses" className="hub-tile"><strong>عناويني</strong><span>إدارة العناوين، تعديلها وحذفها</span></Link>
+          <Link href="/account/availability-alerts" className="hub-tile"><strong>تنبيهات عودة التوفر</strong><span>الألوان والمقاسات التي تنتظرينها</span></Link>
           <Link href="/account/phone" className="hub-tile"><strong>تغيير رقم الهاتف</strong><span>تحديث رقم الدخول إلى حسابك</span></Link>
           <Link href="/account/deactivate" className="hub-tile"><strong>إغلاق الحساب</strong><span>تعطيل حسابك مؤقتاً</span></Link>
         </div>
@@ -132,71 +239,6 @@ export default function AccountPage() {
           );
         })()}
 
-        <div className="section-heading">
-          <h2>مساحات العمل</h2>
-        </div>
-        {workspaces === null && <p className="muted">جارٍ التحميل...</p>}
-        <div className="workspace-list" style={{ maxWidth: "none" }}>
-          {workspaces?.map((w) => {
-            const entry = workspaceEntry(w);
-            const isActive =
-              active === null
-                ? w.type === "customer"
-                : w.type === "customer"
-                  ? active.type === "customer"
-                  : w.type === "platform"
-                    ? active.type === "platform"
-                    : active.type === "vendor" && active.vendor_id === w.vendor_id;
-            return (
-              <div
-                key={entry.id}
-                className={`workspace-card${isActive ? " active" : ""}`}
-                style={entry.disabled ? { opacity: 0.6 } : undefined}
-              >
-                <div>
-                  <div className="workspace-title">{entry.label}</div>
-                  <div className="workspace-subtitle">{entry.subtitle}</div>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  {entry.disabled ? (
-                    <span className="badge">معلّق</span>
-                  ) : (
-                    <>
-                      {isActive && <span className="badge badge-active">نشطة الآن</span>}
-                      <button
-                        className="button"
-                        onClick={() => {
-                          setActiveWorkspace(
-                            w.type === "customer"
-                              ? { type: "customer" }
-                              : w.type === "platform"
-                                ? { type: "platform" }
-                                : { type: "vendor", vendor_id: w.vendor_id, branch_id: w.branch_id },
-                          );
-                          router.push(entry.href);
-                        }}
-                      >
-                        {entry.kind === "customer" ? "التسوّق" : entry.kind === "owner" ? "لوحة المتجر" : entry.kind === "platform" ? "فتح الإدارة" : "طلبات الفرع"}
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        <div style={{ marginTop: 24 }}>
-          <button
-            className="button button-secondary"
-            onClick={async () => {
-              await logout();
-              router.replace("/login");
-            }}
-          >
-            تسجيل الخروج
-          </button>
-        </div>
       </div>
     </div>
   );

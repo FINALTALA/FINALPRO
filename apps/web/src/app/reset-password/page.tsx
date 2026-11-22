@@ -11,6 +11,8 @@ import { ErrorBanner } from "@/components/States";
 import { ApiError, apiFetch, newIdempotencyKey } from "@/lib/api";
 import { normalisePhone } from "@/lib/address";
 import { setSessionToken } from "@/lib/session";
+import { otpErrorText } from "@/lib/otpErrors";
+import { useLang } from "@/lib/useLang";
 import styles from "../auth-pages.module.css";
 
 type Step = "phone" | "confirm" | "done";
@@ -33,6 +35,7 @@ export default function ResetPasswordPage() {
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const lang = useLang();
   const [loading, setLoading] = useState(false);
   // One key per confirm attempt: a double-click replays it; a corrected
   // code or password is a new attempt with a new key.
@@ -44,7 +47,7 @@ export default function ResetPasswordPage() {
     try {
       await action();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "تعذّر الاتصال بالخادم، حاولي مرة أخرى");
+      setError(err instanceof ApiError ? otpErrorText(err, lang) : "تعذّر الاتصال بالخادم، حاولي مرة أخرى");
     } finally {
       setLoading(false);
     }

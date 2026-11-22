@@ -1,5 +1,6 @@
-import { IsIn, IsOptional, IsString, IsUrl } from 'class-validator';
+import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 import { MediaKind, MediaType } from '../../../generated/prisma/client';
+import { IsUrlOrOwnUpload } from '../../uploads/uploads.util';
 
 // Sprint 6 (RB-MATCH-001); Sprint 17 (D9) makes media_type mandatory -
 // there is no way to infer image vs video from a bare URL. No upload
@@ -9,7 +10,9 @@ import { MediaKind, MediaType } from '../../../generated/prisma/client';
 // from an external URL (no media-inspection capability) and is never
 // checked or claimed.
 export class CreateOfferVariantMediaDto {
-  @IsUrl(undefined, { message: 'url must be a valid URL' })
+  // Sprint 26: or a URL returned by POST /vendors/:id/uploads (same
+  // vendor only - checked in addVariantMedia).
+  @IsUrlOrOwnUpload('url must be a valid URL')
   url!: string;
 
   @IsOptional()
@@ -24,9 +27,13 @@ export class CreateOfferVariantMediaDto {
 
   @IsOptional()
   @IsString()
+  // PD-1: alt text is read aloud / shown as the image caption.
+  @MaxLength(250, { message: 'alt_text_ar must be at most 250 characters' })
   alt_text_ar?: string;
 
   @IsOptional()
   @IsString()
+  // PD-1: alt text is read aloud / shown as the image caption.
+  @MaxLength(250, { message: 'alt_text_en must be at most 250 characters' })
   alt_text_en?: string;
 }

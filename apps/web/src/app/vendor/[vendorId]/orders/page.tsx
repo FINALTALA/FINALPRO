@@ -3,8 +3,11 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { useHighlightParam, useScrollToHighlight } from "@/lib/highlightParam";
 import { apiFetch, ApiError } from "@/lib/api";
+import { orderListLoadError } from "@/lib/orders";
 import { clearSession, getSessionToken } from "@/lib/session";
+import { loginRedirectHref } from "@/lib/loginRedirect";
 
 interface OrderRow {
   id: string;
@@ -15,7 +18,6 @@ interface OrderRow {
   created_at: string;
   customer_name: string | null;
   customer_phone: string;
-  pickup_code: string | null;
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -38,11 +40,13 @@ export default function VendorOrdersPage() {
   const params = useParams<{ vendorId: string }>();
   const router = useRouter();
   const [orders, setOrders] = useState<OrderRow[] | null>(null);
+  const targetOrder = useHighlightParam("order");
+  useScrollToHighlight(targetOrder ? `[data-order-id="${CSS.escape(targetOrder)}"]` : null, Boolean(orders?.length));
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!getSessionToken()) {
-      router.replace("/login");
+      router.replace(loginRedirectHref());
       return;
     }
     apiFetch<OrderRow[]>(`/vendors/${params.vendorId}/orders`)
@@ -50,10 +54,10 @@ export default function VendorOrdersPage() {
       .catch((err) => {
         if (err instanceof ApiError && err.status === 401) {
           clearSession();
-          router.replace("/login");
+          router.replace(loginRedirectHref());
           return;
         }
-        setError(err instanceof ApiError ? err.message : "تعذّر تحميل الطلبات");
+        setError(orderListLoadError(err));
       });
   }, [params.vendorId, router]);
 
@@ -86,7 +90,7 @@ export default function VendorOrdersPage() {
 
       <div style={{ maxWidth: 720, width: "100%", display: "flex", flexDirection: "column", gap: 10 }}>
         {orders.map((o) => (
-          <div key={o.id} className="card">
+          <div key={o.id} className={`card${targetOrder === o.id ? " is-notified" : ""}`} data-order-id={o.id} aria-current={targetOrder === o.id ? "true" : undefined}>
             <div style={{ display: "flex", justifyContent: "space-between" }}>
               <span>{o.customer_name ?? "—"} — {o.customer_phone}</span>
               <span className="muted">{STATUS_LABELS[o.status] ?? o.status}</span>
@@ -95,9 +99,7 @@ export default function VendorOrdersPage() {
               {o.fulfilment_method === "PICKUP" ? "استلام من المحل" : "توصيل"} ·{" "}
               {o.payment_method === "ONLINE" ? "دفع إلكتروني" : "دفع عند الاستلام"} · {o.total} ₪
             </div>
-            {o.pickup_code && (
-              <div style={{ fontWeight: 600, marginTop: 4 }}>رمز الاستلام: {o.pickup_code}</div>
-            )}
+            {/* 2026-11-22: the store never sees the pickup code - the shopper shows it at hand-over */}
           </div>
         ))}
       </div>

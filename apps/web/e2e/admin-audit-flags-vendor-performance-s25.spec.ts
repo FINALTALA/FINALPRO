@@ -5,7 +5,7 @@ import {
   placeAndPickUpOrder,
 } from "./helpers/api";
 import { createOfferWithStock, prisma } from "./helpers/db";
-import { loginAs } from "./helpers/session";
+import { enterWorkspace, loginAs } from "./helpers/session";
 import { loadSharedFixtures } from "./helpers/shared-fixtures";
 
 // Sprint 25 review-round fix (Playwright): real-browser coverage for
@@ -47,6 +47,7 @@ test.describe("Sprint 25: admin audit logs, feature flags, vendor performance UI
     );
 
     await loginAs(page, fixtures.adminToken);
+    await enterWorkspace(page, fixtures.adminToken, { type: "platform" });
     await page.goto("/admin/audit-logs");
     await expect(page.getByRole("heading", { name: "سجل التدقيق" })).toBeVisible();
 
@@ -67,14 +68,17 @@ test.describe("Sprint 25: admin audit logs, feature flags, vendor performance UI
     page,
   }) => {
     await loginAs(page, fixtures.adminToken);
+    await enterWorkspace(page, fixtures.adminToken, { type: "platform" });
     await page.goto("/admin/feature-flags");
     await expect(page.getByRole("heading", { name: "أعلام الميزات" })).toBeVisible();
     await expect(page.getByText(FLAG_KEY)).toBeVisible();
-    await expect(page.getByText("معطَّلة")).toBeVisible();
+    // PD-5.3 added a second flag: act on this flag's own row only.
+    const row = page.locator(".card", { hasText: FLAG_KEY });
+    await expect(row.getByText("معطَّلة")).toBeVisible();
 
-    await page.getByRole("button", { name: "تفعيل" }).click();
-    await expect(page.getByText("مفعّلة")).toBeVisible();
-    await expect(page.getByRole("button", { name: "تعطيل" })).toBeVisible();
+    await row.getByRole("button", { name: "تفعيل" }).click();
+    await expect(row.getByText("مفعّلة")).toBeVisible();
+    await expect(row.getByRole("button", { name: "تعطيل" })).toBeVisible();
   });
 
   test("admin's vendor-performance page shows real indicators for a vendor with a completed order, once the flag is enabled", async ({
@@ -93,6 +97,7 @@ test.describe("Sprint 25: admin audit logs, feature flags, vendor performance UI
     const vendor = await prisma.vendor.findUniqueOrThrow({ where: { id: vendorId } });
 
     await loginAs(page, fixtures.adminToken);
+    await enterWorkspace(page, fixtures.adminToken, { type: "platform" });
     await page.goto("/admin/vendors/performance");
     await expect(page.getByRole("heading", { name: "أداء المتاجر" })).toBeVisible();
     await expect(page.getByRole("cell", { name: vendor.legalName })).toBeVisible();
@@ -112,8 +117,12 @@ test.describe("Sprint 25: admin audit logs, feature flags, vendor performance UI
       variantId,
     );
 
+    // The section now lives on its own owner page, opened from the
+    // «إدارة المتجر» card «أداء المتجر» (the old owner dashboard route
+    // redirects to the public storefront).
     await loginAs(page, fixtures.ownerToken);
-    await page.goto(`/vendor/${vendorId}`);
+    await enterWorkspace(page, fixtures.ownerToken, { type: "vendor", vendor_id: vendorId });
+    await page.goto(`/vendor/${vendorId}/performance`);
     await expect(page.getByText("مؤشرات الأداء (آخر 30 يوماً)")).toBeVisible();
     await expect(page.getByText("معدّل الإلغاء")).toBeVisible();
     // One completed, zero cancelled order in the window -> 0.0%, never
@@ -138,13 +147,16 @@ test.describe("Sprint 25: admin audit logs, feature flags, vendor performance UI
 
     // Sanity: confirmed visible while the flag is still on.
     await loginAs(page, fixtures.ownerToken);
-    await page.goto(`/vendor/${vendorId}`);
+    await enterWorkspace(page, fixtures.ownerToken, { type: "vendor", vendor_id: vendorId });
+    await page.goto(`/vendor/${vendorId}/performance`);
     await expect(page.getByText("مؤشرات الأداء (آخر 30 يوماً)")).toBeVisible();
 
     await loginAs(page, fixtures.adminToken);
+    await enterWorkspace(page, fixtures.adminToken, { type: "platform" });
     await page.goto("/admin/feature-flags");
-    await page.getByRole("button", { name: "تعطيل" }).click();
-    await expect(page.getByText("معطَّلة")).toBeVisible();
+    const flagRow = page.locator(".card", { hasText: FLAG_KEY });
+    await flagRow.getByRole("button", { name: "تعطيل" }).click();
+    await expect(flagRow.getByText("معطَّلة")).toBeVisible();
 
     await page.goto("/admin/vendors/performance");
     await expect(
@@ -152,7 +164,9 @@ test.describe("Sprint 25: admin audit logs, feature flags, vendor performance UI
     ).toBeVisible();
 
     await loginAs(page, fixtures.ownerToken);
-    await page.goto(`/vendor/${vendorId}`);
+    await enterWorkspace(page, fixtures.ownerToken, { type: "vendor", vendor_id: vendorId });
+    await page.goto(`/vendor/${vendorId}/performance`);
+    await expect(page.getByText("لوحة الأداء غير مفعّلة حالياً")).toBeVisible();
     await expect(page.getByText("مؤشرات الأداء (آخر 30 يوماً)")).not.toBeVisible();
   });
 });

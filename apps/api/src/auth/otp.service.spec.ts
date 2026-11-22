@@ -71,6 +71,7 @@ describe('OtpService', () => {
         codeHash: hashOf('654321'),
         attemptCount: 0,
         expiresAt,
+        consumedAt: null,
       });
 
       const result = await service.checkCode(
@@ -87,24 +88,46 @@ describe('OtpService', () => {
       expect(prisma.otpCode.updateMany).not.toHaveBeenCalled();
     });
 
-    it('orders by createdAt DESC then issuedSequence DESC - the tie-break fix (see the e2e spec for the real-DB proof)', async () => {
+    it('looks at the latest ISSUED code only - by issuedSequence, consumed or not (TB-17; see the auth e2e spec for the real-DB proof)', async () => {
       prisma.otpCode.findFirst.mockResolvedValue(null);
 
       await service.checkCode('+970000000001', 'SIGNUP', '654321');
 
       expect(prisma.otpCode.findFirst).toHaveBeenCalledWith({
-        where: { phone: '+970000000001', purpose: 'SIGNUP', consumedAt: null },
-        orderBy: [{ createdAt: 'desc' }, { issuedSequence: 'desc' }],
+        where: { phone: '+970000000001', purpose: 'SIGNUP' },
+        orderBy: { issuedSequence: 'desc' },
       });
     });
 
-    it('fails with "invalid" and increments attemptCount on a wrong code, without returning a claim', async () => {
+    it('fails with "invalid" when the latest code was already consumed - even the right code, and without counting an attempt (TB-17: an older code never takes its place)', async () => {
       prisma.otpCode.findFirst.mockResolvedValue({
+        id: 'otp-used',
+        codeHash: hashOf('654321'),
+        attemptCount: 0,
+        expiresAt: new Date(Date.now() + 60_000),
+        consumedAt: new Date(),
+      });
+
+      const result = await service.checkCode(
+        '+970000000001',
+        'SIGNUP',
+        '654321',
+      );
+
+      expect(result).toEqual({ ok: false, reason: 'invalid' });
+      expect(prisma.otpCode.update).not.toHaveBeenCalled();
+    });
+
+    it('fails with "invalid" and increments attemptCount on a wrong code, without returning a claim', async () => {
+      // The second lookup (TB-17: "is this an older code?") finds none.
+      prisma.otpCode.findFirst.mockResolvedValueOnce({
         id: 'otp-2',
         codeHash: hashOf('654321'),
         attemptCount: 1,
         expiresAt: new Date(Date.now() + 60_000),
+        consumedAt: null,
       });
+      prisma.otpCode.findFirst.mockResolvedValueOnce(null);
       prisma.otpCode.update.mockResolvedValue({});
 
       const result = await service.checkCode(
@@ -120,12 +143,111 @@ describe('OtpService', () => {
       });
     });
 
+    it('fails with "superseded" for an older, unexpired code - without spending an attempt of the latest (TB-17)', async () => {
+      prisma.otpCode.findFirst
+        .mockResolvedValueOnce({
+          id: 'otp-b',
+          codeHash: hashOf('222222'),
+          attemptCount: 2,
+          expiresAt: new Date(Date.now() + 60_000),
+          consumedAt: null,
+          issuedSequence: 9,
+        })
+        .mockResolvedValueOnce({ id: 'otp-a' });
+
+      const result = await service.checkCode(
+        '+970000000001',
+        'SIGNUP',
+        '111111',
+      );
+
+      expect(result).toEqual({ ok: false, reason: 'superseded' });
+      expect(prisma.otpCode.update).not.toHaveBeenCalled();
+      expect(prisma.otpCode.findFirst).toHaveBeenLastCalledWith({
+        where: {
+          phone: '+970000000001',
+          purpose: 'SIGNUP',
+          codeHash: hashOf('111111'),
+          expiresAt: { gt: expect.any(Date) },
+          issuedSequence: { lt: 9 },
+        },
+        select: { id: true },
+      });
+    });
+
+    it('once the latest code is used, an older code is plain "invalid" - never superseded, never accepted (TB-17)', async () => {
+      prisma.otpCode.findFirst
+        .mockResolvedValueOnce({
+          id: 'otp-b',
+          codeHash: hashOf('222222'),
+          attemptCount: 0,
+          expiresAt: new Date(Date.now() + 60_000),
+          consumedAt: new Date(),
+          issuedSequence: 9,
+        })
+        .mockResolvedValueOnce({ id: 'otp-a' });
+
+      const result = await service.checkCode(
+        '+970000000001',
+        'SIGNUP',
+        '111111',
+      );
+
+      expect(result).toEqual({ ok: false, reason: 'invalid' });
+      expect(prisma.otpCode.update).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['no code at all', null, 'invalid'],
+      [
+        'the latest was used',
+        { consumedAt: new Date(), attemptCount: 0, expiresIn: 60_000 },
+        'invalid',
+      ],
+      [
+        'the latest is locked out',
+        { consumedAt: null, attemptCount: 5, expiresIn: 60_000 },
+        'too_many_attempts',
+      ],
+      [
+        'the latest expired',
+        { consumedAt: null, attemptCount: 0, expiresIn: -1_000 },
+        'expired',
+      ],
+    ] as const)(
+      'every failure runs the same older-code lookup (no timing tell): %s',
+      async (_label, row, reason) => {
+        prisma.otpCode.findFirst
+          .mockResolvedValueOnce(
+            row && {
+              id: 'otp-b',
+              codeHash: hashOf('222222'),
+              attemptCount: row.attemptCount,
+              expiresAt: new Date(Date.now() + row.expiresIn),
+              consumedAt: row.consumedAt,
+              issuedSequence: 9,
+            },
+          )
+          .mockResolvedValueOnce(null);
+
+        const result = await service.checkCode(
+          '+970000000001',
+          'SIGNUP',
+          '111111',
+        );
+
+        expect(result).toEqual({ ok: false, reason });
+        expect(prisma.otpCode.findFirst).toHaveBeenCalledTimes(2);
+      },
+    );
+
     it('fails with "expired" for a code past its expiry, even if correct', async () => {
       prisma.otpCode.findFirst.mockResolvedValue({
         id: 'otp-3',
         codeHash: hashOf('654321'),
         attemptCount: 0,
         expiresAt: new Date(Date.now() - 1_000),
+        consumedAt: null,
       });
 
       const result = await service.checkCode(
@@ -144,6 +266,7 @@ describe('OtpService', () => {
         codeHash: hashOf('654321'),
         attemptCount: 5,
         expiresAt: new Date(Date.now() + 60_000),
+        consumedAt: null,
       });
 
       const result = await service.checkCode(

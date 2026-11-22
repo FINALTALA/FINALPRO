@@ -7,6 +7,40 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import { PHONE_INVALID_MARKER } from '../phone/phone-input';
+
+// Sprint 27: markers raised by the sprint27_product_taxonomy triggers.
+// Only these exact rule names are translated; any other database error
+// still surfaces as an unexpected 500.
+const DATABASE_RULES: { marker: string; code: string; message: string }[] = [
+  {
+    marker: 'OFFER_REQUIRES_COMBINATION',
+    code: 'OFFER_REQUIRES_COMBINATION',
+    message:
+      'This product is classified - add colour/size combinations from the product screen instead',
+  },
+  {
+    marker: 'OFFER_PRICE_NOT_UNIFIED',
+    code: 'PRICE_IS_OFFER_LEVEL',
+    message:
+      'This product is classified - its price is set once for the whole product (PUT .../price)',
+  },
+  {
+    marker: 'OFFER_NOT_CLASSIFIED',
+    code: 'OFFER_NOT_CLASSIFIED',
+    message:
+      'Classify this product (audience and category) before publishing it',
+  },
+  {
+    marker: 'COMBINATION_FLAG_IMMUTABLE',
+    code: 'COMBINATION_FLAG_IMMUTABLE',
+    message: 'A variant cannot be turned into, or out of, a combination',
+  },
+];
+
+function databaseRuleFor(message: string) {
+  return DATABASE_RULES.find((r) => message.includes(r.marker));
+}
 
 /**
  * Part 4, H.1's error-response format:
@@ -58,6 +92,39 @@ export class HttpExceptionFilter implements ExceptionFilter {
           typeof asRecord.code === 'string' ? asRecord.code : undefined;
       }
       code = customCode ?? HttpStatus[status] ?? 'ERROR';
+      // Phase A++ (item 8): a phone field that is not a valid number
+      // (@PhoneField) is its own code, with the field name - never
+      // class-validator's English sentence; any other validation message
+      // of the same request stays in `details`.
+      const phoneFields = details
+        .filter(
+          (d): d is string =>
+            typeof d === 'string' && d.startsWith(PHONE_INVALID_MARKER),
+        )
+        .map((d) => d.slice(PHONE_INVALID_MARKER.length));
+      if (!customCode && status === HttpStatus.BAD_REQUEST && phoneFields.length) {
+        code = 'PHONE_INVALID';
+        message =
+          'The phone number is not valid (international format, e.g. +970...)';
+        details = [
+          ...[...new Set(phoneFields)].map((field) => ({ field })),
+          ...details.filter(
+            (d) =>
+              !(typeof d === 'string' && d.startsWith(PHONE_INVALID_MARKER)),
+          ),
+        ];
+      }
+    } else if (
+      exception instanceof Error &&
+      databaseRuleFor(exception.message)
+    ) {
+      // Sprint 27: a business rule the database itself enforces (the
+      // taxonomy migration's triggers) - reported as the same clean 409
+      // a controller would have thrown, whichever endpoint hit it.
+      const rule = databaseRuleFor(exception.message)!;
+      status = HttpStatus.CONFLICT;
+      code = rule.code;
+      message = rule.message;
     } else if (exception instanceof Error) {
       message = exception.message;
       this.logger.error(exception.message, exception.stack, correlationId);

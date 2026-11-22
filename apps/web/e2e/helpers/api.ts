@@ -8,7 +8,10 @@ import { readFileSync } from "node:fs";
 // Jest e2e suite; these Playwright specs only have to prove the UI
 // renders and acts on real server responses correctly.
 
-const API_BASE = process.env.PW_API_BASE_URL ?? "http://localhost:3001/api/v1";
+// TB-12.1: no default - the old fallback was the finalpro API on :3001,
+// so a run with no environment wrote its fixtures into finalpro.
+// global-setup.ts refuses to start without PW_API_BASE_URL.
+const API_BASE = process.env.PW_API_BASE_URL;
 const API_LOG_FILE = process.env.PW_API_LOG_FILE ?? "/tmp/finalpro-playwright-api.log";
 
 let counter = 0;
@@ -53,6 +56,7 @@ export async function call<T = unknown>(
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (options.token) headers.Authorization = `Bearer ${options.token}`;
   if (options.idempotencyKey) headers["Idempotency-Key"] = options.idempotencyKey;
+  if (!API_BASE) throw new Error("PW_API_BASE_URL is not set - see apps/web/e2e/README.md");
   const res = await fetch(`${API_BASE}${path}`, {
     method: options.method ?? "GET",
     headers,

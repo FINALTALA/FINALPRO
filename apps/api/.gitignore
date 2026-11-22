@@ -3,3 +3,9 @@ node_modules
 .env
 
 /generated/prisma
+
+# Sprint 26: owner-uploaded images (local disk storage)
+/uploads
+
+# PD-3: customer review images (local disk, served only via the API)
+/review-media

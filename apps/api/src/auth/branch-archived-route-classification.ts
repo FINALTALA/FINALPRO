@@ -52,16 +52,30 @@ export const BRANCH_ARCHIVED_DENY_ROUTES: readonly string[] = [
   // Sprint 20b: a branch setting, same reasoning as operating-hours
   // above - pointless (and blocked) once the branch is retired.
   'PUT vendors/:vendorId/branches/:branchId/minimum-order',
+  // PD-5.1.
+  'PUT vendors/:vendorId/branches/:branchId/delivery-lead-time',
+  // Barcodes and in-store sales (2026-11-20): selling at an archived branch
+  // is new stock movement there; its cashier card is pointless too.
+  'GET vendors/:vendorId/branches/:branchId/cashier/lookup',
+  'POST vendors/:vendorId/branches/:branchId/store-sales',
 ];
 
 export const BRANCH_ARCHIVED_ALLOW_ROUTES: readonly string[] = [
   'GET vendors/:vendorId/branches/:branchId',
   'GET vendors/:vendorId/branches/:branchId/stock',
   'GET vendors/:vendorId/branches/:branchId/stock/page',
+  // 2026-11-22: the stock board, one line and its log (reads).
+  'GET vendors/:vendorId/branches/:branchId/stock/board',
+  'GET vendors/:vendorId/branches/:branchId/stock/:offerVariantId/detail',
+  'GET vendors/:vendorId/branches/:branchId/stock/:offerVariantId/ledger',
   'GET vendors/:vendorId/branches/:branchId/stock/lookup',
   'GET vendors/:vendorId/branches/:branchId/stock/:offerVariantId',
   'GET vendors/:vendorId/branches/:branchId/stock/:offerVariantId/movements',
   'GET vendors/:vendorId/branches/:branchId/orders',
+  // 2026-11-22: the order queue, one order and its timeline - reads.
+  'GET vendors/:vendorId/branches/:branchId/order-queue',
+  'GET vendors/:vendorId/branches/:branchId/order-queue/:branchOrderId',
+  'GET vendors/:vendorId/branches/:branchId/order-queue/:branchOrderId/timeline',
   'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/start-preparation',
   'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/mark-sent',
   'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/mark-delivered',
@@ -80,6 +94,8 @@ export const BRANCH_ARCHIVED_ALLOW_ROUTES: readonly string[] = [
   // Sprint 20b: a plain read (same reasoning as operating-hours' own
   // GET above).
   'GET vendors/:vendorId/branches/:branchId/minimum-order',
+  // PD-5.1.
+  'GET vendors/:vendorId/branches/:branchId/delivery-lead-time',
   // Sprint 20b: editing a note on an EXISTING order - same "let an
   // existing order finish" reasoning as the fulfilment actions above,
   // never new footprint.

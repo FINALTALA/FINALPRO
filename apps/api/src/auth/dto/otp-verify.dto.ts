@@ -1,8 +1,9 @@
-import { IsIn, IsPhoneNumber, IsString, Length } from 'class-validator';
+import { IsIn, IsString, Length } from 'class-validator';
 import { WIRE_OTP_PURPOSES, WireOtpPurpose } from '../otp-purpose.util';
+import { PhoneField } from '../../common/phone/phone-input';
 
 export class OtpVerifyDto {
-  @IsPhoneNumber(undefined)
+  @PhoneField()
   phone!: string;
 
   @IsString()

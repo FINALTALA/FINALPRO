@@ -9,6 +9,12 @@ import { apiFetch, ApiError } from "@/lib/api";
 import { clearSession } from "@/lib/session";
 import { useFetch } from "@/lib/useFetch";
 import { useHydrated, useSessionToken } from "@/lib/useSession";
+import { translate } from "@/lib/i18n";
+import { useLang } from "@/lib/useLang";
+import { apiErrorMessage } from "@/lib/apiErrors";
+import { pickText } from "@/lib/localized";
+import "@/lib/compareSetsText";
+import { loginRedirectHref } from "@/lib/loginRedirect";
 
 interface SetItemDto {
   canonical_product_id: string;
@@ -33,6 +39,8 @@ interface SetDetailDto {
 // link. An item that stopped being eligible stays listed, flagged
 // unavailable rather than silently vanishing.
 export default function ComparisonSetDetailPage() {
+  const lang = useLang();
+  const t = (key: string) => translate(lang, key);
   const router = useRouter();
   const params = useParams<{ id: string }>();
   const hydrated = useHydrated();
@@ -52,12 +60,12 @@ export default function ComparisonSetDetailPage() {
   useEffect(() => {
     if (detail.status === 401) {
       clearSession();
-      router.replace(`/login?next=/compare/sets/${params.id}`);
+      router.replace(loginRedirectHref());
     }
   }, [detail.status, router, params.id]);
 
   useEffect(() => {
-    if (hydrated && !token) router.replace(`/login?next=/compare/sets/${params.id}`);
+    if (hydrated && !token) router.replace(loginRedirectHref());
   }, [hydrated, token, router, params.id]);
 
   const items = override ?? detail.data?.items ?? null;
@@ -84,7 +92,7 @@ export default function ComparisonSetDetailPage() {
       const fresh = await apiFetch<SetDetailDto>(`/customers/me/comparison-sets/${params.id}`);
       setOverride(fresh.items);
     } catch (err) {
-      setActionError(err instanceof ApiError ? err.message : "تعذّر الإضافة");
+      setActionError(err instanceof ApiError ? apiErrorMessage(err, lang) : t("cset.err.add"));
     } finally {
       setBusy(false);
     }
@@ -126,9 +134,9 @@ export default function ComparisonSetDetailPage() {
       <div className="page-shell">
         <div className="wide-shell">
           {detail.status === 404 ? (
-            <EmptyState title="المجموعة غير موجودة" actionHref="/compare/sets" actionLabel="مجموعاتي" />
+            <EmptyState title={t("cset.not_found")} actionHref="/compare/sets" actionLabel={t("cset.my_sets")} />
           ) : (
-            <ErrorBanner message={detail.error} />
+            <ErrorBanner message={apiErrorMessage(detail.apiError, lang)} />
           )}
         </div>
       </div>
@@ -139,10 +147,10 @@ export default function ComparisonSetDetailPage() {
     <div className="page-shell">
       <div className="wide-shell">
         <div className="top-bar">
-          <h1 className="page-title" style={{ margin: 0 }}>مجموعة المقارنة</h1>
+          <h1 className="page-title" style={{ margin: 0 }}>{t("cset.set_title")}</h1>
           {detail.data && (
             <button className="button-link" onClick={copyShareLink}>
-              {copied ? "تم النسخ" : "نسخ رابط المشاركة"}
+              {copied ? t("cset.copied") : t("cset.copy_link")}
             </button>
           )}
         </div>
@@ -151,17 +159,17 @@ export default function ComparisonSetDetailPage() {
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <input
               type="text"
-              placeholder="معرّف منتج جديد"
+              placeholder={t("cset.new_item_placeholder")}
               value={newProductId}
               onChange={(e) => setNewProductId(e.target.value)}
               style={{ flex: "1 1 240px" }}
             />
             <button className="button" disabled={busy || !newProductId.trim() || (items?.length ?? 0) >= 4} onClick={addItem}>
-              إضافة
+              {t("cset.add")}
             </button>
           </div>
           {(items?.length ?? 0) >= 4 && (
-            <p className="muted" style={{ marginTop: 6 }}>وصلت المجموعة إلى الحد الأقصى (4 منتجات).</p>
+            <p className="muted" style={{ marginTop: 6 }}>{t("cset.full")}</p>
           )}
           {actionError && <ErrorBanner message={actionError} />}
         </div>
@@ -169,7 +177,7 @@ export default function ComparisonSetDetailPage() {
         {detail.loading && <SkeletonGrid count={4} />}
 
         {items && items.length === 0 && (
-          <EmptyState title="هذه المجموعة فارغة" message="أضيفي منتجاً أعلاه." />
+          <EmptyState title={t("cset.empty")} message={t("cset.empty_hint")} />
         )}
 
         {items && items.length > 0 && (
@@ -177,26 +185,26 @@ export default function ComparisonSetDetailPage() {
             {items.map((item) => (
               <div key={item.canonical_product_id} className="compare-card">
                 {item.image_url && (
-                  <SafeImage src={item.image_url} alt={item.name_ar ?? "منتج"} className="compare-thumb" />
+                  <SafeImage src={item.image_url} alt={pickText(lang, item.name_en, item.name_ar) || t("cset.product")} className="compare-thumb" />
                 )}
                 {item.available ? (
                   <>
                     <Link href={`/compare/${item.canonical_product_id}`}>
-                      <strong>{item.name_ar ?? item.name_en}</strong>
+                      <strong>{pickText(lang, item.name_en, item.name_ar)}</strong>
                     </Link>
                     {item.lowest_price && (
                       <div className="product-card-price">{item.lowest_price} ₪</div>
                     )}
                   </>
                 ) : (
-                  <span className="muted">غير متوفر حالياً</span>
+                  <span className="muted">{t("cset.unavailable_now")}</span>
                 )}
                 <button
                   className="button-link"
                   style={{ marginTop: "auto" }}
                   onClick={() => removeItem(item.canonical_product_id)}
                 >
-                  إزالة
+                  {t("cset.remove")}
                 </button>
               </div>
             ))}
@@ -204,8 +212,8 @@ export default function ComparisonSetDetailPage() {
         )}
 
         <div style={{ marginTop: 20, display: "flex", gap: 14 }}>
-          <Link href="/compare/sets" className="button-link">كل مجموعاتي</Link>
-          <button className="button-link" onClick={deleteSet}>حذف المجموعة</button>
+          <Link href="/compare/sets" className="button-link">{t("cset.all_sets")}</Link>
+          <button className="button-link" onClick={deleteSet}>{t("cset.delete_set")}</button>
         </div>
       </div>
     </div>

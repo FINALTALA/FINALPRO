@@ -13,19 +13,34 @@ import {
   lockOffersWideForRestock,
   lockSweepOrCreateStockRow,
 } from '../checkout/stock-lock.util';
-import { enqueueFavoriteNotification } from '../favorites/favorite-alerts.util';
+import {
+  enqueueFavoriteNotification,
+  enqueueVariantAvailabilityNotifications,
+} from '../favorites/favorite-alerts.util';
 import {
   computeEffectivePrice,
   toDecimal,
 } from '../offers/pricing/effective-price.util';
+import { FeatureFlagsService } from '../feature-flags/feature-flags.service';
 import { OutboxEventService } from '../outbox/outbox-event.service';
+import { ReturnStoreEventType } from '../outbox/return-store-events';
+import { PlatformAlertRecipientsService } from '../platform-alerts/platform-alert-recipients.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { enqueueReturnEscalationAlert } from './return-escalation-alert';
 import {
   checkReturnEligibility,
   computeExchangeSettlement,
   computeReturnRefundAmount,
   isOutcomeAllowedBySnapshot,
 } from './return-policy.util';
+import {
+  SIZE_GUIDE_SNAPSHOT_SELECT,
+  sizeGuideSnapshotDto,
+} from '../size-guides/size-guide-snapshot';
+import {
+  assertNotOwnBranchOrder,
+  assertNotOwnReturn,
+} from '../common/self-decision.util';
 
 const RETURN_CODE_MAX_ATTEMPTS = 10;
 const VENDOR_REVIEW_SLA_HOURS = 48;
@@ -139,6 +154,22 @@ function returnDto(r: {
   };
 }
 
+/** PD-4: a return for review, with the size-guide version its item was bought under. */
+function withSizeGuide(
+  r: Parameters<typeof returnDto>[0] & {
+    branchOrderItem: {
+      sizeGuideVersionSnapshot: Parameters<typeof sizeGuideSnapshotDto>[0];
+    };
+  },
+) {
+  return {
+    ...returnDto(r),
+    size_guide: sizeGuideSnapshotDto(
+      r.branchOrderItem.sizeGuideVersionSnapshot,
+    ),
+  };
+}
+
 /**
  * Review-round requirement: redeem() is deliberately reachable by any
  * employee/owner of ANY branch of this vendor (PDR-031's cross-branch
@@ -190,6 +221,8 @@ export class ReturnsService {
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
     private readonly outbox: OutboxEventService,
+    private readonly alertRecipients: PlatformAlertRecipientsService,
+    private readonly flags: FeatureFlagsService,
   ) {}
 
   // ============================================================
@@ -487,6 +520,13 @@ export class ReturnsService {
         },
         tx,
       );
+      // TB-15: the store is told (the customer made the change, so they
+      // are not).
+      await this.notifyStoreForReturn(
+        tx,
+        returnId,
+        'return.cancelled_for_store',
+      );
       return returnDto(updated);
     });
   }
@@ -528,6 +568,15 @@ export class ReturnsService {
         },
         tx,
       );
+      // TB-14: the dispute is now the platform's to decide. The
+      // customer filed it themselves, so they get no notification.
+      await enqueueReturnEscalationAlert(
+        tx,
+        this.outbox,
+        this.alertRecipients,
+        returnId,
+        'CUSTOMER_DISPUTE',
+      );
       return returnDto(updated);
     });
   }
@@ -549,6 +598,7 @@ export class ReturnsService {
           select: {
             id: true,
             branchOrderId: true,
+            sizeGuideVersionSnapshot: { select: SIZE_GUIDE_SNAPSHOT_SELECT },
             offerVariant: {
               select: {
                 vendorOffer: { select: { titleAr: true, titleEn: true } },
@@ -565,6 +615,9 @@ export class ReturnsService {
       branch_order_item_id: r.branchOrderItem.id,
       title_ar: r.branchOrderItem.offerVariant.vendorOffer.titleAr,
       title_en: r.branchOrderItem.offerVariant.vendorOffer.titleEn,
+      size_guide: sizeGuideSnapshotDto(
+        r.branchOrderItem.sizeGuideVersionSnapshot,
+      ),
     }));
   }
 
@@ -576,7 +629,14 @@ export class ReturnsService {
           branchOrder: { customerOrder: { customerId } },
         },
       },
-      include: { exchangeSettlement: true },
+      include: {
+        exchangeSettlement: true,
+        branchOrderItem: {
+          select: {
+            sizeGuideVersionSnapshot: { select: SIZE_GUIDE_SNAPSHOT_SELECT },
+          },
+        },
+      },
     });
     if (!r) {
       throw new NotFoundException({
@@ -584,7 +644,7 @@ export class ReturnsService {
         message: 'Return not found',
       });
     }
-    return returnDto(r);
+    return withSizeGuide(r);
   }
 
   /**
@@ -658,12 +718,10 @@ export class ReturnsService {
           discountStartAt: v.discountStartAt,
           discountEndAt: v.discountEndAt,
         }),
+        // TB-1: which branches have it - never how many.
         available_at_branches: v.branchStocks
           .filter((s) => s.quantity - s.reservedQuantity > 0)
-          .map((s) => ({
-            branch_id: s.branchId,
-            available_quantity: s.quantity - s.reservedQuantity,
-          })),
+          .map((s) => ({ branch_id: s.branchId })),
       }))
       .filter((v) => v.available_at_branches.length > 0);
 
@@ -707,9 +765,16 @@ export class ReturnsService {
         branchOrderItem: { branchOrder: { branchId } },
       },
       orderBy: { createdAt: 'desc' },
-      include: { exchangeSettlement: true },
+      include: {
+        exchangeSettlement: true,
+        branchOrderItem: {
+          select: {
+            sizeGuideVersionSnapshot: { select: SIZE_GUIDE_SNAPSHOT_SELECT },
+          },
+        },
+      },
     });
-    return rows.map(returnDto);
+    return rows.map(withSizeGuide);
   }
 
   // ============================================================
@@ -722,8 +787,15 @@ export class ReturnsService {
     const rows = await this.prisma.return.findMany({
       where: { status: 'ESCALATED' },
       orderBy: { escalatedAt: 'asc' },
+      include: {
+        branchOrderItem: {
+          select: {
+            sizeGuideVersionSnapshot: { select: SIZE_GUIDE_SNAPSHOT_SELECT },
+          },
+        },
+      },
     });
-    return rows.map(returnDto);
+    return rows.map(withSizeGuide);
   }
 
   async decide(
@@ -749,6 +821,8 @@ export class ReturnsService {
           message: 'Return not found for this branch',
         });
       }
+      // TB-28: never a decision on one's own return.
+      await assertNotOwnReturn(tx, returnId, actorUserId);
       if (r.status !== 'REQUESTED') {
         throw new ConflictException({
           code: 'RETURN_NOT_DECIDABLE',
@@ -951,6 +1025,13 @@ export class ReturnsService {
           message: 'This code is invalid, already used, or expired',
         });
       }
+      // TB-28: nobody accepts the code of their own return (it refunds or
+      // hands over the replacement).
+      await assertNotOwnBranchOrder(
+        tx,
+        r.branchOrderItem.branchOrderId,
+        actorUserId,
+      );
       if (!r.codeExpiresAt || new Date() > r.codeExpiresAt) {
         throw new ConflictException({
           code: 'RETURN_CODE_EXPIRED',
@@ -1074,6 +1155,7 @@ export class ReturnsService {
             resultingQuantity: restock.targetStock.quantity,
             reason: 'RETURN_RESTOCK',
             reasonNote: `Return ${r.id} - item received resellable`,
+            returnId: r.id, // 2026-11-22: the stock log's reference
             actorId: actorUserId,
           },
         });
@@ -1086,6 +1168,10 @@ export class ReturnsService {
               vendor_id: vendorId,
               offer_variant_id: item.offerVariantId,
             },
+          });
+          await enqueueVariantAvailabilityNotifications(tx, this.outbox, {
+            vendorId,
+            offerVariantId: item.offerVariantId,
           });
         }
       }
@@ -1247,6 +1333,7 @@ export class ReturnsService {
         resultingQuantity: replacementStock.targetStock.quantity,
         reason: 'EXCHANGE_FULFILLED',
         reasonNote: `Return ${r.id} - replacement handed over`,
+        returnId: r.id, // 2026-11-22: the stock log's reference
         actorId: actorUserId,
       },
     });
@@ -1262,6 +1349,7 @@ export class ReturnsService {
           resultingQuantity: originalStock.targetStock.quantity,
           reason: 'RETURN_RESTOCK',
           reasonNote: `Return ${r.id} - exchanged item received resellable`,
+          returnId: r.id, // 2026-11-22: the stock log's reference
           actorId: actorUserId,
         },
       });
@@ -1274,6 +1362,10 @@ export class ReturnsService {
             vendor_id: vendorId,
             offer_variant_id: item.offerVariantId,
           },
+        });
+        await enqueueVariantAvailabilityNotifications(tx, this.outbox, {
+          vendorId,
+          offerVariantId: item.offerVariantId,
         });
       }
     }
@@ -1357,6 +1449,8 @@ export class ReturnsService {
           message: 'Return not found',
         });
       }
+      // TB-28: an administrator never decides their own return.
+      await assertNotOwnReturn(tx, returnId, adminUserId);
       if (r.status !== 'ESCALATED') {
         throw new ConflictException({
           code: 'RETURN_NOT_ESCALATED',
@@ -1366,7 +1460,17 @@ export class ReturnsService {
 
       let updated;
       if (dto.decision === 'approve') {
-        updated = await this.approveReturn(tx, r);
+        await this.approveReturn(tx, r);
+        // TB-15: who resolved the escalation and when - recorded for an
+        // approval too, in the same transaction as the decision (it was
+        // recorded for a rejection only).
+        updated = await tx.return.update({
+          where: { id: returnId },
+          data: {
+            escalationResolvedAt: new Date(),
+            escalationResolvedByUserId: adminUserId,
+          },
+        });
       } else {
         updated = await tx.return.update({
           where: { id: returnId },
@@ -1402,6 +1506,14 @@ export class ReturnsService {
           ? 'return.approved'
           : 'return.admin_rejected',
       );
+      // TB-15: and the store.
+      await this.notifyStoreForReturn(
+        tx,
+        returnId,
+        dto.decision === 'approve'
+          ? 'return.platform_approved_for_store'
+          : 'return.platform_rejected_for_store',
+      );
       return returnDto(updated);
     });
   }
@@ -1427,15 +1539,44 @@ export class ReturnsService {
       },
       select: { userId: true },
     });
+    // vendor_id/branch_id put the notification in that store's
+    // workspace (and its link on that branch's returns page).
     for (const recipient of recipients) {
       await this.outbox.enqueue(
         {
           eventType,
-          payload: { ...payload, recipient_user_id: recipient.userId },
+          audience: 'STORE',
+          payload: {
+            ...payload,
+            vendor_id: vendorId,
+            branch_id: branchId,
+            recipient_user_id: recipient.userId,
+          },
         },
         tx,
       );
     }
+  }
+
+  /**
+   * TB-15: ONE outbox event for the transition, carrying only the return
+   * id - the relay decides the recipients when it sends (see
+   * OutboxRelayService.dispatchReturnStoreEvent). Written only while
+   * `return_store_notifications_enabled` is on: switching it off stops
+   * new events; events already written are still sent.
+   */
+  private async notifyStoreForReturn(
+    tx: Prisma.TransactionClient,
+    returnId: string,
+    eventType: ReturnStoreEventType,
+  ): Promise<void> {
+    if (!(await this.flags.isEnabled('return_store_notifications_enabled'))) {
+      return;
+    }
+    await this.outbox.enqueue(
+      { eventType, audience: 'STORE', payload: { return_id: returnId } },
+      tx,
+    );
   }
 
   private async notifyCustomerForReturn(
@@ -1462,6 +1603,7 @@ export class ReturnsService {
     await this.outbox.enqueue(
       {
         eventType,
+        audience: 'CUSTOMER',
         payload: {
           return_id: returnId,
           recipient_user_id:

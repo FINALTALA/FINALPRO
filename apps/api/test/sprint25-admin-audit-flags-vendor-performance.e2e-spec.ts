@@ -775,7 +775,10 @@ describe('Sprint 25 - admin audit logs, feature flags, vendor performance (e2e)'
         .set('Authorization', `Bearer ${admin}`)
         .expect(400);
       expect(res.body.error.code).toBe('EXPORT_TOO_LARGE');
-    }, 60_000);
+      // TB-2: inserting 50,001 real AuditLog rows and counting them for the
+      // export limit takes ~19 s alone and over 60 s when other e2e suites
+      // load the same Postgres in parallel - this test's own bound only.
+    }, 180_000);
   });
 
   // ------------------------------------------------------------
@@ -825,6 +828,32 @@ describe('Sprint 25 - admin audit logs, feature flags, vendor performance (e2e)'
         .set('Authorization', `Bearer ${stranger}`)
         .expect(403);
       expect(strangerRes.body.error.code).toBe('NOT_VENDOR_MEMBER');
+
+      // Security fix: the BRANCH_EMPLOYEE half of this test's own name
+      // was never actually exercised - and was in fact let through,
+      // because the guard ignored the controller's class-level
+      // @RequireVendorRole('OWNER').
+      const employeePhone = uniquePhone();
+      const employee = await signup(employeePhone, 'a-strong-password');
+      const employeeUser = await prisma.user.findUniqueOrThrow({
+        where: { phone: employeePhone },
+      });
+      const branch = await prisma.storeBranch.findFirstOrThrow({
+        where: { vendorId },
+      });
+      await prisma.vendorUser.create({
+        data: {
+          userId: employeeUser.id,
+          vendorId,
+          role: 'BRANCH_EMPLOYEE',
+          branchId: branch.id,
+        },
+      });
+      const employeeRes = await request(http())
+        .get(`/api/v1/vendors/${vendorId}/performance`)
+        .set('Authorization', `Bearer ${employee}`)
+        .expect(403);
+      expect(employeeRes.body.error.code).toBe('VENDOR_ROLE_FORBIDDEN');
     });
 
     it('no terminal orders at all -> cancellation_rate and average_response_time_hours are both null, never 0', async () => {

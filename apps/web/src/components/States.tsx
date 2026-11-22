@@ -1,9 +1,13 @@
+"use client";
+
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { useLang } from "@/lib/useLang";
 
 export function SkeletonGrid({ count = 8 }: { count?: number }) {
+  const lang = useLang(); // TB-25
   return (
-    <div className="product-grid" aria-busy="true" aria-label="جارٍ التحميل">
+    <div className="product-grid" aria-busy="true" aria-label={lang === "en" ? "Loading" : "جارٍ التحميل"}>
       {Array.from({ length: count }).map((_, i) => (
         <div key={i} className="skeleton skeleton-card" />
       ))}

@@ -14,11 +14,13 @@ jobs:
         env:
           POSTGRES_USER: finalpro
           POSTGRES_PASSWORD: finalpro_ci_only
-          POSTGRES_DB: finalpro
+          # TB-12.1: "finalpro" is the protected development database name -
+          # the e2e guard refuses it, so CI's throwaway database is named apart.
+          POSTGRES_DB: finalpro_ci
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U finalpro -d finalpro"
+          --health-cmd "pg_isready -U finalpro -d finalpro_ci"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -37,7 +39,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgresql://finalpro:finalpro_ci_only@localhost:5432/finalpro?schema=public
+      DATABASE_URL: postgresql://finalpro:finalpro_ci_only@localhost:5432/finalpro_ci?schema=public
       REDIS_URL: redis://localhost:6379
       API_PORT: 3001
       JWT_SECRET: ci-only-not-a-secret
@@ -71,6 +73,9 @@ jobs:
       - run: npm run lint --workspace=apps/api
       - run: npm test --workspace=apps/api
       - run: npm run build --workspace=apps/api
+      # TB-12.1: the e2e guard (apps/api/test/guard-disposable-database.ts)
+      # runs only on a database marked as a disposable test database.
+      - run: psql "postgresql://finalpro:finalpro_ci_only@localhost:5432/finalpro_ci" -c "COMMENT ON DATABASE finalpro_ci IS 'finalpro:disposable-test'"
       - run: npm run test:e2e --workspace=apps/api
 
   web:

@@ -35,6 +35,11 @@ import { ChangeBranchOrderAddressDto } from './dto/change-branch-order-address.d
 import { ReportNotReceivedDto } from './dto/report-not-received.dto';
 import { RescheduleBranchOrderDto } from './dto/reschedule-branch-order.dto';
 import { FulfilmentReconciliationService } from './fulfilment-reconciliation.service';
+import { editableUntil } from '../reviews/review-presenter';
+import {
+  SIZE_GUIDE_SNAPSHOT_SELECT,
+  sizeGuideSnapshotDto,
+} from '../size-guides/size-guide-snapshot';
 
 function minutesToTime(minutes: number): string {
   const h = Math.floor(minutes / 60)
@@ -57,13 +62,45 @@ const ORDER_INCLUDE = {
       offerVariant: {
         select: {
           sellerSku: true,
+          canonicalVariantId: true,
           vendorOffer: { select: { titleAr: true, titleEn: true } },
+        },
+      },
+      // PD-4: the size-guide version this line was bought under.
+      sizeGuideVersionSnapshot: { select: SIZE_GUIDE_SNAPSHOT_SELECT },
+      // PD-3: the customer's own reviews of this line (one PRODUCT, one
+      // STORE at most - a deleted one stays as a tombstone).
+      reviews: {
+        select: {
+          id: true,
+          targetType: true,
+          createdAt: true,
+          deletedAt: true,
+          moderationStatus: true,
         },
       },
     },
   },
   refunds: true,
 } as const;
+
+type ItemReviewRow = OrderRow['items'][number]['reviews'][number];
+
+/** PD-3: what "طلباتي" shows for one review slot of a purchased line. */
+function reviewSlot(r: ItemReviewRow | undefined) {
+  if (!r) return null;
+  const until = editableUntil(r.createdAt);
+  return {
+    id: r.id,
+    deleted: r.deletedAt !== null,
+    hidden: r.moderationStatus === 'HIDDEN',
+    editable_until: until.toISOString(),
+    can_edit:
+      r.deletedAt === null &&
+      r.moderationStatus === 'VISIBLE' &&
+      until > new Date(),
+  };
+}
 
 type OrderRow = Prisma.BranchOrderGetPayload<{ include: typeof ORDER_INCLUDE }>;
 
@@ -88,10 +125,33 @@ function orderDto(o: OrderRow) {
       offer_variant_id: i.offerVariantId,
       title_ar: i.offerVariant.vendorOffer.titleAr,
       title_en: i.offerVariant.vendorOffer.titleEn,
-      seller_sku: i.offerVariant.sellerSku,
       quantity: i.quantity,
       unit_price: Number(i.unitPrice),
       cancelled_at: i.cancelledAt?.toISOString() ?? null,
+      // PD-3: the purchase snapshot (null on orders placed before PD-3).
+      color_label: i.colorLabelSnapshot,
+      size_label: i.sizeLabelSnapshot,
+      // Product colours: the colour as bought (older lines: the label above,
+      // no HEX / swatch - the page falls back to the family's colour).
+      color_name_ar: i.colorNameArSnapshot ?? i.colorLabelSnapshot,
+      color_name_en: i.colorNameEnSnapshot,
+      color_hex: i.colorHexSnapshot,
+      color_swatch_url: i.colorSwatchUrlSnapshot,
+      // TB-25.2: the same snapshot's taxonomy codes (additive), so the web
+      // can name the colour/size in the shopper's language; the labels
+      // above stay the source when a code is unknown.
+      color_code: i.colorCodeSnapshot,
+      size_code: i.sizeCodeSnapshot,
+      // PD-4: null when no published guide applied (or the order predates PD-4).
+      size_guide: sizeGuideSnapshotDto(i.sizeGuideVersionSnapshot),
+      // PD-3: review eligibility and state. A product review needs the
+      // listing to be matched to a canonical product.
+      review: {
+        eligible: o.status === 'COMPLETED' && i.cancelledAt === null,
+        product_reviewable: i.offerVariant.canonicalVariantId !== null,
+        product: reviewSlot(i.reviews.find((r) => r.targetType === 'PRODUCT')),
+        store: reviewSlot(i.reviews.find((r) => r.targetType === 'STORE')),
+      },
     })),
     // Sprint 20a (review-round requirement): subtotal/delivery_fee/
     // total are ALWAYS the original, immutable values - never
@@ -357,6 +417,7 @@ export class CustomerOrdersController {
         await this.outbox.enqueue(
           {
             eventType: 'branch_order.not_received_reported',
+            audience: 'STORE',
             payload: {
               branch_order_id: branchOrderId,
               vendor_id: order.vendorId,
@@ -393,7 +454,11 @@ export class CustomerOrdersController {
     });
     for (const r of recipients) {
       await this.outbox.enqueue(
-        { eventType, payload: { ...payload, recipient_user_id: r.userId } },
+        {
+          eventType,
+          audience: 'STORE',
+          payload: { ...payload, recipient_user_id: r.userId },
+        },
         tx,
       );
     }

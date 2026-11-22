@@ -8,7 +8,8 @@ import { ApiError, apiFetch, newIdempotencyKey } from "@/lib/api";
 import { clearSession } from "@/lib/session";
 import { registerTranslations } from "@/lib/i18n";
 import { useT } from "@/lib/useLang";
-import { useHydrated, useSessionToken } from "@/lib/useSession";
+import { useLoginRedirectHref, useLoginWhenSessionLost } from "@/lib/loginRedirect";
+import { useHydrated, useSessionToken } from "@/lib/useSession";
 
 registerTranslations({
   ar: {
@@ -42,9 +43,12 @@ registerTranslations({
 // (DELETE /customers/me) is actually this reversible deactivation, so
 // the UI is honest about that rather than calling it a deletion.
 export default function DeactivateAccountPage() {
+  const loginLink = useLoginRedirectHref();
   const router = useRouter();
   const hydrated = useHydrated();
   const token = useSessionToken();
+  // TB-34: a session lost to a 401 goes to sign-in (with `next` = this page) rather than showing the sign-in button.
+  useLoginWhenSessionLost(hydrated, token);
   const t = useT();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -57,7 +61,8 @@ export default function DeactivateAccountPage() {
         method: "DELETE",
         idempotencyKey: newIdempotencyKey("deactivate"),
       });
-      clearSession();
+      clearSession({ lost: false });
+      // The account was just deactivated by its owner: a plain sign-in page, no `next`.
       router.replace("/login");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t("deactivate.failed"));
@@ -77,7 +82,7 @@ export default function DeactivateAccountPage() {
   if (!token) {
     return (
       <div className="page-shell">
-        <EmptyState title={t("deactivate.login_required")} actionHref="/login?next=/account/deactivate" actionLabel={t("deactivate.login_action")} />
+        <EmptyState title={t("deactivate.login_required")} actionHref={loginLink} actionLabel={t("deactivate.login_action")} />
       </div>
     );
   }

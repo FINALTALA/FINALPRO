@@ -1,7 +1,10 @@
 import { ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { PrismaService } from '../prisma/prisma.service';
+import { RedisService } from '../redis/redis.service';
 import { PlatformRoleGuard } from './platform-role.guard';
+
+const NO_REDIS = {} as unknown as RedisService;
 
 function makeContext(user?: { id: string }, required?: string[]) {
   const req: { user?: { id: string } } = { user };
@@ -16,6 +19,9 @@ function makeContext(user?: { id: string }, required?: string[]) {
 function makePrisma(platformRole: string | null) {
   return {
     user: { findUnique: jest.fn().mockResolvedValue({ platformRole }) },
+    // TB-26: workspace_scoping_enabled off (no row) - the workspace
+    // check is a no-op; it has its own e2e coverage.
+    featureFlag: { findUnique: jest.fn().mockResolvedValue(null) },
   };
 }
 
@@ -26,6 +32,7 @@ describe('PlatformRoleGuard', () => {
     const guard = new PlatformRoleGuard(
       reflector as unknown as Reflector,
       prisma as unknown as PrismaService,
+      NO_REDIS,
     );
 
     await expect(guard.canActivate(context)).resolves.toBe(true);
@@ -38,6 +45,7 @@ describe('PlatformRoleGuard', () => {
     const guard = new PlatformRoleGuard(
       reflector as unknown as Reflector,
       prisma as unknown as PrismaService,
+      NO_REDIS,
     );
 
     await expect(guard.canActivate(context)).rejects.toBeInstanceOf(
@@ -53,6 +61,7 @@ describe('PlatformRoleGuard', () => {
     const guard = new PlatformRoleGuard(
       reflector as unknown as Reflector,
       prisma as unknown as PrismaService,
+      NO_REDIS,
     );
 
     await expect(guard.canActivate(context)).rejects.toBeInstanceOf(
@@ -68,6 +77,7 @@ describe('PlatformRoleGuard', () => {
     const guard = new PlatformRoleGuard(
       reflector as unknown as Reflector,
       prisma as unknown as PrismaService,
+      NO_REDIS,
     );
 
     await expect(guard.canActivate(context)).rejects.toBeInstanceOf(
@@ -84,6 +94,7 @@ describe('PlatformRoleGuard', () => {
     const guard = new PlatformRoleGuard(
       reflector as unknown as Reflector,
       prisma as unknown as PrismaService,
+      NO_REDIS,
     );
 
     await expect(guard.canActivate(context)).resolves.toBe(true);

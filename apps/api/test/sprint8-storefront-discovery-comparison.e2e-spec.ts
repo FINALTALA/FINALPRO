@@ -1,6 +1,10 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
+import {
+  TEST_CLASSIFICATION,
+  postCombination,
+} from './helpers/taxonomy-offers';
 import { AppModule } from './../src/app.module';
 import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
@@ -318,20 +322,23 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         // these comparison/discovery fixtures have no need for a real
         // Brand row.
         brand_id: NO_BRAND_SENTINEL_ID,
+        ...TEST_CLASSIFICATION,
       })
       .expect(201);
-    const variantRes = await request(app.getHttpServer())
-      .post(`/api/v1/vendors/${vendorId}/offers/${offerRes.body.id}/variants`)
-      .set('Authorization', `Bearer ${ownerToken}`)
-      .set('Idempotency-Key', unique('variant'))
-      .send({
+    const variantRes = await postCombination(
+      app.getHttpServer(),
+      ownerToken,
+      vendorId,
+      offerRes.body.id,
+      {
         seller_sku: unique('sku'),
         base_price: basePrice,
         sale_price: salePrice,
         identifier_type: 'GTIN',
         identifier_value: identifierValue,
-      })
-      .expect(201);
+      },
+    );
+    expect(variantRes.status).toBe(201);
     await request(app.getHttpServer())
       .post(
         `/api/v1/vendors/${vendorId}/offers/${offerRes.body.id}/variants/${variantRes.body.id}/match-confirmation`,
@@ -440,12 +447,19 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
    * (one user may legitimately own several vendors) - callers that need
    * several vendors in one test use this to stay under the OTP-request
    * throttle instead of signing up a fresh owner per vendor. */
-  async function setupEligibleOffer(basePrice = 100, ownerToken?: string) {
+  async function setupEligibleOffer(
+    basePrice = 100,
+    ownerToken?: string,
+    modelName?: string,
+  ) {
     const admin = await getOrCreatePlatformAdmin();
     const { canonicalProductId, variantId: canonicalVariantId } =
-      await createCanonicalVariant(admin, unique('Brand'), unique('Model'), {
-        color: 'Red',
-      });
+      await createCanonicalVariant(
+        admin,
+        unique('Brand'),
+        modelName ?? unique('Model'),
+        { color: 'Red' },
+      );
     const owner =
       ownerToken ?? (await signup(uniquePhone(), 'a-strong-password'));
     const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
@@ -662,7 +676,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         .post(`/api/v1/vendors/${vendorId}/offers`)
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('offer'))
-        .send({ title_ar: 'منتج', title_en: 'Product' })
+        .send({ title_ar: 'منتج', title_en: 'Product', ...TEST_CLASSIFICATION })
         .expect(201);
       const section = await request(app.getHttpServer())
         .post(`/api/v1/vendors/${vendorId}/sections`)
@@ -699,7 +713,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         .post(`/api/v1/vendors/${vendorId}/offers`)
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('offer'))
-        .send({ title_ar: 'منتج', title_en: 'Product' })
+        .send({ title_ar: 'منتج', title_en: 'Product', ...TEST_CLASSIFICATION })
         .expect(201);
       const sectionA = await request(app.getHttpServer())
         .post(`/api/v1/vendors/${vendorId}/sections`)
@@ -755,7 +769,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         .post(`/api/v1/vendors/${vendor2Id}/offers`)
         .set('Authorization', `Bearer ${owner2}`)
         .set('Idempotency-Key', unique('offer'))
-        .send({ title_ar: 'منتج', title_en: 'Product' })
+        .send({ title_ar: 'منتج', title_en: 'Product', ...TEST_CLASSIFICATION })
         .expect(201);
 
       const res = await request(app.getHttpServer())
@@ -780,16 +794,17 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
           title_ar: 'مخفض',
           title_en: 'Discounted',
           brand_id: NO_BRAND_SENTINEL_ID,
+          ...TEST_CLASSIFICATION,
         })
         .expect(201);
-      const discountedVariant = await request(app.getHttpServer())
-        .post(
-          `/api/v1/vendors/${vendorId}/offers/${discountedOffer.body.id}/variants`,
-        )
-        .set('Authorization', `Bearer ${owner}`)
-        .set('Idempotency-Key', unique('variant'))
-        .send({ seller_sku: unique('sku'), base_price: 50, sale_price: 30 })
-        .expect(201);
+      const discountedVariant = await postCombination(
+        app.getHttpServer(),
+        owner,
+        vendorId,
+        discountedOffer.body.id,
+        { seller_sku: unique('sku'), base_price: 50, sale_price: 30 },
+      );
+      expect(discountedVariant.status).toBe(201);
       // Sprint 17's publish gate: a PRIMARY image and live stock.
       await request(app.getHttpServer())
         .post(
@@ -912,16 +927,17 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
           title_ar: 'غير مطابق',
           title_en: 'Unmatched',
           brand_id: NO_BRAND_SENTINEL_ID,
+          ...TEST_CLASSIFICATION,
         })
         .expect(201);
-      const unmatchedVariant = await request(app.getHttpServer())
-        .post(
-          `/api/v1/vendors/${vendorId}/offers/${unmatchedOffer.body.id}/variants`,
-        )
-        .set('Authorization', `Bearer ${owner}`)
-        .set('Idempotency-Key', unique('variant'))
-        .send({ seller_sku: unique('sku'), base_price: 50 })
-        .expect(201);
+      const unmatchedVariant = await postCombination(
+        app.getHttpServer(),
+        owner,
+        vendorId,
+        unmatchedOffer.body.id,
+        { seller_sku: unique('sku'), base_price: 50 },
+      );
+      expect(unmatchedVariant.status).toBe(201);
       // Sprint 17's publish gate: a PRIMARY image and live stock.
       await request(app.getHttpServer())
         .post(
@@ -1212,6 +1228,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
           title_ar: 'منتج',
           title_en: 'Product',
           brand_id: NO_BRAND_SENTINEL_ID,
+          ...TEST_CLASSIFICATION,
         })
         .expect(201);
       expect(offerRes.body.status).toBe('DRAFT');
@@ -1219,12 +1236,14 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
       // Sprint 17's publish gate (this test is plumbing/RBAC-focused,
       // not the gate's own test - satisfy it minimally: a variant with
       // a PRIMARY image and live stock).
-      const variantRes = await request(app.getHttpServer())
-        .post(`/api/v1/vendors/${vendorId}/offers/${offerRes.body.id}/variants`)
-        .set('Authorization', `Bearer ${owner}`)
-        .set('Idempotency-Key', unique('variant'))
-        .send({ seller_sku: unique('sku'), base_price: 20 })
-        .expect(201);
+      const variantRes = await postCombination(
+        app.getHttpServer(),
+        owner,
+        vendorId,
+        offerRes.body.id,
+        { seller_sku: unique('sku'), base_price: 20 },
+      );
+      expect(variantRes.status).toBe(201);
       await request(app.getHttpServer())
         .post(
           `/api/v1/vendors/${vendorId}/offers/${offerRes.body.id}/variants/${variantRes.body.id}/media`,
@@ -1272,7 +1291,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         .post(`/api/v1/vendors/${vendor1Id}/offers`)
         .set('Authorization', `Bearer ${owner1}`)
         .set('Idempotency-Key', unique('offer'))
-        .send({ title_ar: 'منتج', title_en: 'Product' })
+        .send({ title_ar: 'منتج', title_en: 'Product', ...TEST_CLASSIFICATION })
         .expect(201);
 
       const owner2 = await signup(uniquePhone(), 'a-strong-password');
@@ -1464,21 +1483,24 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         .post(`/api/v1/vendors/${proposerVendorId}/offers`)
         .set('Authorization', `Bearer ${proposer}`)
         .set('Idempotency-Key', unique('offer'))
-        .send({ title_ar: 'منتج', title_en: 'Product' })
+        .send({ title_ar: 'منتج', title_en: 'Product', ...TEST_CLASSIFICATION })
         .expect(201);
-      await request(app.getHttpServer())
-        .post(
-          `/api/v1/vendors/${proposerVendorId}/offers/${offerRes.body.id}/variants`,
-        )
-        .set('Authorization', `Bearer ${proposer}`)
-        .set('Idempotency-Key', unique('variant'))
-        .send({
-          seller_sku: unique('sku'),
-          base_price: 10,
-          identifier_type: 'GTIN',
-          identifier_value: gtin,
-        })
-        .expect(201);
+      expect(
+        (
+          await postCombination(
+            app.getHttpServer(),
+            proposer,
+            proposerVendorId,
+            offerRes.body.id,
+            {
+              seller_sku: unique('sku'),
+              base_price: 10,
+              identifier_type: 'GTIN',
+              identifier_value: gtin,
+            },
+          )
+        ).status,
+      ).toBe(201);
       await publishStorefront(proposer, proposerVendorId);
 
       const noEligibleRes = await request(app.getHttpServer()).get(
@@ -1497,21 +1519,21 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         .post(`/api/v1/vendors/${draftVendorId}/offers`)
         .set('Authorization', `Bearer ${draftOwner}`)
         .set('Idempotency-Key', unique('offer'))
-        .send({ title_ar: 'م', title_en: 'P' })
+        .send({ title_ar: 'م', title_en: 'P', ...TEST_CLASSIFICATION })
         .expect(201);
-      const draftVariantRes = await request(app.getHttpServer())
-        .post(
-          `/api/v1/vendors/${draftVendorId}/offers/${draftOfferRes.body.id}/variants`,
-        )
-        .set('Authorization', `Bearer ${draftOwner}`)
-        .set('Idempotency-Key', unique('variant'))
-        .send({
+      const draftVariantRes = await postCombination(
+        app.getHttpServer(),
+        draftOwner,
+        draftVendorId,
+        draftOfferRes.body.id,
+        {
           seller_sku: unique('sku'),
           base_price: 10,
           identifier_type: 'GTIN',
           identifier_value: gtin,
-        })
-        .expect(201);
+        },
+      );
+      expect(draftVariantRes.status).toBe(201);
       await request(app.getHttpServer())
         .post(
           `/api/v1/vendors/${draftVendorId}/offers/${draftOfferRes.body.id}/variants/${draftVariantRes.body.id}/match-confirmation`,
@@ -1717,20 +1739,28 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
 
   describe('RB-STOREF-004: discovery All page', () => {
     it('lists only canonical products with at least one eligible offer, newest-first', async () => {
+      // TB-13: this test's three products share a model name no other
+      // product has, and the list is read with q=<that name>. Reading the
+      // global first page failed twice: products other files created
+      // meanwhile filled the first 50 and pushed `older` off it.
+      const model = unique('NewestModel');
       const sharedOwner = await signup(uniquePhone(), 'a-strong-password');
-      const older = await setupEligibleOffer(100, sharedOwner);
+      const older = await setupEligibleOffer(100, sharedOwner, `${model}-a`);
       // Ensure a strictly later createdAt for deterministic ordering.
       await prisma.canonicalProduct.update({
         where: { id: older.canonicalProductId },
         data: { createdAt: new Date(Date.now() - 60_000) },
       });
-      const newer = await setupEligibleOffer(200, sharedOwner);
+      const newer = await setupEligibleOffer(200, sharedOwner, `${model}-b`);
 
       // A third canonical product with NO eligible offer at all - must
       // never appear.
       const admin = await getOrCreatePlatformAdmin();
       const { canonicalProductId: noOfferProductId } =
-        await createCanonicalVariant(admin, unique('Brand'), unique('Model'));
+        await createCanonicalVariant(admin, unique('Brand'), `${model}-c`);
+      // An eligible product outside q, newer than both: must not affect
+      // the result.
+      const outside = await setupEligibleOffer(300, sharedOwner);
 
       // Sprint 8 review note: discovery is deliberately GLOBAL, not
       // vendor/tenant-scoped (that's the whole point of the feature),
@@ -1742,63 +1772,63 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
       // presence/absence of the specific ids this test itself created,
       // never an exact total count.
       const res = await request(app.getHttpServer())
-        .get('/api/v1/discovery/all?page_size=50')
+        .get(
+          `/api/v1/discovery/all?q=${encodeURIComponent(model)}&page_size=50`,
+        )
         .expect(200);
       const ids = res.body.items.map(
         (i: { canonical_product_id: string }) => i.canonical_product_id,
       );
+      expect(ids).toContain(newer.canonicalProductId);
+      expect(ids).toContain(older.canonicalProductId);
       expect(ids.indexOf(newer.canonicalProductId)).toBeLessThan(
         ids.indexOf(older.canonicalProductId),
       );
       expect(ids).not.toContain(noOfferProductId);
+      expect(ids).not.toContain(outside.canonicalProductId);
     });
 
     it('paginates with page/page_size', async () => {
-      // Same "discovery is global, don't assume an empty DB" note as
-      // the test above - captures the total BEFORE creating anything,
-      // then asserts the total grew by exactly 3 and that pagination's
-      // own mechanics (no overlap, no gap between consecutive pages)
-      // hold, rather than asserting an absolute total.
-      const before = await request(app.getHttpServer())
-        .get('/api/v1/discovery/all?page=1&page_size=1')
-        .expect(200);
-      const totalBefore = before.body.total as number;
-
+      // TB-13: discovery is global and other files add products to the
+      // shared database while this runs, so a global total proves nothing
+      // (it failed once: +6 instead of +3). This test's three products
+      // share a model name no other product has, and every page is asked
+      // with q=<that name> - pagination is checked on exactly them.
+      const model = unique('PageModel');
       const sharedOwner = await signup(uniquePhone(), 'a-strong-password');
       const createdIds: string[] = [];
       for (let i = 0; i < 3; i += 1) {
-        const setup = await setupEligibleOffer(100 + i, sharedOwner);
+        const setup = await setupEligibleOffer(
+          100 + i,
+          sharedOwner,
+          `${model}-${i}`,
+        );
         createdIds.push(setup.canonicalProductId);
       }
+      const page = (n: number) =>
+        request(app.getHttpServer())
+          .get(
+            `/api/v1/discovery/all?q=${encodeURIComponent(model)}&page=${n}&page_size=2`,
+          )
+          .expect(200);
+      const idsOf = (res: {
+        body: { items: { canonical_product_id: string }[] };
+      }) => res.body.items.map((i) => i.canonical_product_id);
 
-      const page1 = await request(app.getHttpServer())
-        .get('/api/v1/discovery/all?page=1&page_size=2')
-        .expect(200);
-      expect(page1.body.items).toHaveLength(2);
-      expect(page1.body.total).toBe(totalBefore + 3);
-
-      const page2 = await request(app.getHttpServer())
-        .get('/api/v1/discovery/all?page=2&page_size=2')
-        .expect(200);
-      const page1Ids = page1.body.items.map(
-        (i: { canonical_product_id: string }) => i.canonical_product_id,
-      );
-      const page2Ids = page2.body.items.map(
-        (i: { canonical_product_id: string }) => i.canonical_product_id,
-      );
+      const page1 = await page(1);
+      const page2 = await page(2);
+      expect(page1.body.total).toBe(3);
+      expect(page2.body.total).toBe(3);
+      expect(idsOf(page1)).toHaveLength(2);
+      expect(idsOf(page2)).toHaveLength(1);
+      // No overlap, no gap: the two pages are exactly the three products.
       expect(
-        page1Ids.filter((id: string) => page2Ids.includes(id)),
+        idsOf(page1).filter((id) => idsOf(page2).includes(id)),
       ).toHaveLength(0);
-
-      const full = await request(app.getHttpServer())
-        .get(`/api/v1/discovery/all?page=1&page_size=${totalBefore + 3}`)
-        .expect(200);
-      const fullIds = full.body.items.map(
-        (i: { canonical_product_id: string }) => i.canonical_product_id,
+      expect([...idsOf(page1), ...idsOf(page2)].sort()).toEqual(
+        [...createdIds].sort(),
       );
-      for (const id of createdIds) {
-        expect(fullIds).toContain(id);
-      }
+      expect(idsOf(await page(3))).toHaveLength(0);
     });
 
     it('never shows an inactive offer or an unavailable store as a discovery item', async () => {

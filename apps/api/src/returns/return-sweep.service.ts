@@ -8,9 +8,18 @@ import { randomUUID } from 'crypto';
 import { Prisma } from '../../generated/prisma/client';
 import { AuditLogService } from '../audit/audit-log.service';
 import { PeriodicTask } from '../common/periodic-task.util';
+import {
+  logSweepTick,
+  runSweepStep,
+  SweepBackoff,
+  sweepTransaction,
+  type SweepStepResult,
+} from '../common/sweep-runner.util';
 import { OutboxEventService } from '../outbox/outbox-event.service';
+import { PlatformAlertRecipientsService } from '../platform-alerts/platform-alert-recipients.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { lockSweepOrCreateStockRow } from '../checkout/stock-lock.util';
+import { enqueueReturnEscalationAlert } from './return-escalation-alert';
 
 const SWEEP_INTERVAL_MS = 60_000;
 const BATCH_LIMIT = 200;
@@ -48,12 +57,23 @@ export class ReturnSweepService implements OnModuleInit, OnModuleDestroy {
     SWEEP_INTERVAL_MS,
     () => this.sweepOnce().then(() => undefined),
     (err) => this.logger.error('ReturnSweepService tick failed', err as Error),
+    ReturnSweepService.name,
   );
+  /** TB-11: one backoff per step - a return failing in one step is not deferred in another. */
+  private readonly backoff = {
+    vendorReminders: new SweepBackoff(),
+    autoEscalation: new SweepBackoff(),
+    disputeWindows: new SweepBackoff(),
+    codeExpiry: new SweepBackoff(),
+  };
+  /** TB-11: the last tick's per-step results (tests read it). */
+  lastTick: SweepStepResult[] = [];
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly outbox: OutboxEventService,
     private readonly auditLog: AuditLogService,
+    private readonly alertRecipients: PlatformAlertRecipientsService,
   ) {}
 
   onModuleInit() {
@@ -70,10 +90,19 @@ export class ReturnSweepService implements OnModuleInit, OnModuleDestroy {
     disputeWindowsClosed: number;
     codesExpired: number;
   }> {
-    const vendorReminders = await this.sweepVendorReminders();
-    const autoEscalated = await this.sweepAutoEscalation();
-    const disputeWindowsClosed = await this.sweepDisputeWindowClosure();
-    const codesExpired = await this.sweepCodeExpiry();
+    // TB-11: each step isolated (runSweepStep never throws), so a failure
+    // in one never stops the next.
+    const startedAt = Date.now();
+    const steps = [
+      await this.sweepVendorReminders(),
+      await this.sweepAutoEscalation(),
+      await this.sweepDisputeWindowClosure(),
+      await this.sweepCodeExpiry(),
+    ];
+    this.lastTick = steps;
+    logSweepTick(this.logger, steps, startedAt);
+    const [vendorReminders, autoEscalated, disputeWindowsClosed, codesExpired] =
+      steps.map((s) => s.done);
     return {
       vendorReminders,
       autoEscalated,
@@ -82,30 +111,35 @@ export class ReturnSweepService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  private async sweepVendorReminders(): Promise<number> {
-    const candidates = await this.prisma.$queryRaw<{ id: string }[]>`
-      SELECT id FROM returns
-      WHERE status = 'REQUESTED'
-        AND "vendorReminderSentAt" IS NULL
-        AND "createdAt" <= now() - make_interval(hours => ${VENDOR_REVIEW_SLA_HOURS})
-      ORDER BY "createdAt" ASC
-      LIMIT ${BATCH_LIMIT}
-    `;
-    let count = 0;
-    for (const { id } of candidates) {
-      const sent = await this.prisma.$transaction((tx) =>
-        this.sendVendorReminderOnce(tx, id),
-      );
-      if (sent) count += 1;
-    }
-    return count;
+  private sweepVendorReminders(): Promise<SweepStepResult> {
+    return runSweepStep({
+      step: 'vendorReminders',
+      logger: this.logger,
+      backoff: this.backoff.vendorReminders,
+      findCandidates: async (excluded) =>
+        (
+          await this.prisma.$queryRaw<{ id: string }[]>`
+            SELECT id FROM returns
+            WHERE status = 'REQUESTED'
+              AND "vendorReminderSentAt" IS NULL
+              AND "createdAt" <= now() - make_interval(hours => ${VENDOR_REVIEW_SLA_HOURS})
+              AND id <> ALL(${excluded}::text[])
+            ORDER BY "createdAt" ASC
+            LIMIT ${BATCH_LIMIT}
+          `
+        ).map((r) => r.id),
+      processItem: (id) =>
+        sweepTransaction(this.prisma, (tx) =>
+          this.sendVendorReminderOnce(tx, id),
+        ),
+    });
   }
 
   private async sendVendorReminderOnce(
     tx: Prisma.TransactionClient,
     returnId: string,
   ): Promise<boolean> {
-    await tx.$queryRaw`SELECT id FROM returns WHERE id = ${returnId} FOR UPDATE`;
+    if (!(await this.lockReturnRow(tx, returnId))) return false;
     const r = await tx.return.findUnique({ where: { id: returnId } });
     if (!r || r.status !== 'REQUESTED' || r.vendorReminderSentAt !== null) {
       return false;
@@ -128,29 +162,32 @@ export class ReturnSweepService implements OnModuleInit, OnModuleDestroy {
     return true;
   }
 
-  private async sweepAutoEscalation(): Promise<number> {
-    const candidates = await this.prisma.$queryRaw<{ id: string }[]>`
-      SELECT id FROM returns
-      WHERE status = 'REQUESTED'
-        AND "createdAt" <= now() - make_interval(hours => ${ESCALATION_TIMEOUT_HOURS})
-      ORDER BY "createdAt" ASC
-      LIMIT ${BATCH_LIMIT}
-    `;
-    let count = 0;
-    for (const { id } of candidates) {
-      const escalated = await this.prisma.$transaction((tx) =>
-        this.escalateOnce(tx, id),
-      );
-      if (escalated) count += 1;
-    }
-    return count;
+  private sweepAutoEscalation(): Promise<SweepStepResult> {
+    return runSweepStep({
+      step: 'autoEscalation',
+      logger: this.logger,
+      backoff: this.backoff.autoEscalation,
+      findCandidates: async (excluded) =>
+        (
+          await this.prisma.$queryRaw<{ id: string }[]>`
+            SELECT id FROM returns
+            WHERE status = 'REQUESTED'
+              AND "createdAt" <= now() - make_interval(hours => ${ESCALATION_TIMEOUT_HOURS})
+              AND id <> ALL(${excluded}::text[])
+            ORDER BY "createdAt" ASC
+            LIMIT ${BATCH_LIMIT}
+          `
+        ).map((r) => r.id),
+      processItem: (id) =>
+        sweepTransaction(this.prisma, (tx) => this.escalateOnce(tx, id)),
+    });
   }
 
   private async escalateOnce(
     tx: Prisma.TransactionClient,
     returnId: string,
   ): Promise<boolean> {
-    await tx.$queryRaw`SELECT id FROM returns WHERE id = ${returnId} FOR UPDATE`;
+    if (!(await this.lockReturnRow(tx, returnId))) return false;
     const r = await tx.return.findUnique({ where: { id: returnId } });
     if (!r || r.status !== 'REQUESTED') {
       return false;
@@ -176,37 +213,46 @@ export class ReturnSweepService implements OnModuleInit, OnModuleDestroy {
       },
       tx,
     );
-    await this.notifyAdmins(tx, 'return.auto_escalated', {
-      return_id: returnId,
-    });
+    await enqueueReturnEscalationAlert(
+      tx,
+      this.outbox,
+      this.alertRecipients,
+      returnId,
+      'SLA_TIMEOUT',
+    );
     await this.notifyCustomerForReturn(tx, returnId, 'return.escalated');
     return true;
   }
 
-  private async sweepDisputeWindowClosure(): Promise<number> {
-    const candidates = await this.prisma.$queryRaw<{ id: string }[]>`
-      SELECT id FROM returns
-      WHERE status = 'REJECTED'
-        AND "disputeDeadlineAt" IS NOT NULL
-        AND "disputeDeadlineAt" <= now()
-      ORDER BY "disputeDeadlineAt" ASC
-      LIMIT ${BATCH_LIMIT}
-    `;
-    let count = 0;
-    for (const { id } of candidates) {
-      const closed = await this.prisma.$transaction((tx) =>
-        this.closeDisputeWindowOnce(tx, id),
-      );
-      if (closed) count += 1;
-    }
-    return count;
+  private sweepDisputeWindowClosure(): Promise<SweepStepResult> {
+    return runSweepStep({
+      step: 'disputeWindows',
+      logger: this.logger,
+      backoff: this.backoff.disputeWindows,
+      findCandidates: async (excluded) =>
+        (
+          await this.prisma.$queryRaw<{ id: string }[]>`
+            SELECT id FROM returns
+            WHERE status = 'REJECTED'
+              AND "disputeDeadlineAt" IS NOT NULL
+              AND "disputeDeadlineAt" <= now()
+              AND id <> ALL(${excluded}::text[])
+            ORDER BY "disputeDeadlineAt" ASC
+            LIMIT ${BATCH_LIMIT}
+          `
+        ).map((r) => r.id),
+      processItem: (id) =>
+        sweepTransaction(this.prisma, (tx) =>
+          this.closeDisputeWindowOnce(tx, id),
+        ),
+    });
   }
 
   private async closeDisputeWindowOnce(
     tx: Prisma.TransactionClient,
     returnId: string,
   ): Promise<boolean> {
-    await tx.$queryRaw`SELECT id FROM returns WHERE id = ${returnId} FOR UPDATE`;
+    if (!(await this.lockReturnRow(tx, returnId))) return false;
     const r = await tx.return.findUnique({ where: { id: returnId } });
     if (
       !r ||
@@ -235,30 +281,33 @@ export class ReturnSweepService implements OnModuleInit, OnModuleDestroy {
     return true;
   }
 
-  private async sweepCodeExpiry(): Promise<number> {
-    const candidates = await this.prisma.$queryRaw<{ id: string }[]>`
-      SELECT id FROM returns
-      WHERE status = 'APPROVED_AWAITING_DROPOFF'
-        AND "codeExpiresAt" IS NOT NULL
-        AND "codeExpiresAt" <= now()
-      ORDER BY "codeExpiresAt" ASC
-      LIMIT ${BATCH_LIMIT}
-    `;
-    let count = 0;
-    for (const { id } of candidates) {
-      const expired = await this.prisma.$transaction((tx) =>
-        this.expireCodeOnce(tx, id),
-      );
-      if (expired) count += 1;
-    }
-    return count;
+  private sweepCodeExpiry(): Promise<SweepStepResult> {
+    return runSweepStep({
+      step: 'codeExpiry',
+      logger: this.logger,
+      backoff: this.backoff.codeExpiry,
+      findCandidates: async (excluded) =>
+        (
+          await this.prisma.$queryRaw<{ id: string }[]>`
+            SELECT id FROM returns
+            WHERE status = 'APPROVED_AWAITING_DROPOFF'
+              AND "codeExpiresAt" IS NOT NULL
+              AND "codeExpiresAt" <= now()
+              AND id <> ALL(${excluded}::text[])
+            ORDER BY "codeExpiresAt" ASC
+            LIMIT ${BATCH_LIMIT}
+          `
+        ).map((r) => r.id),
+      processItem: (id) =>
+        sweepTransaction(this.prisma, (tx) => this.expireCodeOnce(tx, id)),
+    });
   }
 
   private async expireCodeOnce(
     tx: Prisma.TransactionClient,
     returnId: string,
   ): Promise<boolean> {
-    await tx.$queryRaw`SELECT id FROM returns WHERE id = ${returnId} FOR UPDATE`;
+    if (!(await this.lockReturnRow(tx, returnId))) return false;
     const r = await tx.return.findUnique({ where: { id: returnId } });
     if (
       !r ||
@@ -317,6 +366,21 @@ export class ReturnSweepService implements OnModuleInit, OnModuleDestroy {
     return true;
   }
 
+  /**
+   * TB-11: the return row for one sweep item - SKIP LOCKED, so another
+   * API instance (or a customer/staff action) already working on it is
+   * left alone instead of waited for; the caller re-checks the state
+   * under the lock as before. False when it is held elsewhere or gone.
+   */
+  private async lockReturnRow(
+    tx: Prisma.TransactionClient,
+    returnId: string,
+  ): Promise<boolean> {
+    const rows = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM returns WHERE id = ${returnId} FOR UPDATE SKIP LOCKED`;
+    return rows.length > 0;
+  }
+
   private async notifyBranch(
     tx: Prisma.TransactionClient,
     vendorId: string,
@@ -332,28 +396,20 @@ export class ReturnSweepService implements OnModuleInit, OnModuleDestroy {
       },
       select: { userId: true },
     });
+    // vendor_id/branch_id put the notification in that store's
+    // workspace (and its link on that branch's returns page).
     for (const r of recipients) {
       await this.outbox.enqueue(
-        { eventType, payload: { ...payload, recipient_user_id: r.userId } },
-        tx,
-      );
-    }
-  }
-
-  /** No separate support-agent role exists - PLATFORM_ADMIN is the
-   * only resolver (see Return's own ESCALATED/ADMIN_REJECTED comment). */
-  private async notifyAdmins(
-    tx: Prisma.TransactionClient,
-    eventType: string,
-    payload: Record<string, unknown>,
-  ): Promise<void> {
-    const admins = await tx.user.findMany({
-      where: { platformRole: 'PLATFORM_ADMIN' },
-      select: { id: true },
-    });
-    for (const a of admins) {
-      await this.outbox.enqueue(
-        { eventType, payload: { ...payload, recipient_user_id: a.id } },
+        {
+          eventType,
+          audience: 'STORE',
+          payload: {
+            ...payload,
+            vendor_id: vendorId,
+            branch_id: branchId,
+            recipient_user_id: r.userId,
+          },
+        },
         tx,
       );
     }
@@ -383,6 +439,7 @@ export class ReturnSweepService implements OnModuleInit, OnModuleDestroy {
     await this.outbox.enqueue(
       {
         eventType,
+        audience: 'CUSTOMER',
         payload: {
           return_id: returnId,
           recipient_user_id:

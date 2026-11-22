@@ -4,7 +4,8 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { apiFetch, ApiError, newIdempotencyKey } from "@/lib/api";
-import { clearSession, getSessionToken } from "@/lib/session";
+import { clearSession, getSessionToken } from "@/lib/session";
+import { loginRedirectHref } from "@/lib/loginRedirect";
 
 interface ZoneDto {
   region: "WEST_BANK" | "JERUSALEM" | "INSIDE";
@@ -53,7 +54,7 @@ export default function DeliveryZonesPage() {
       .catch((err) => {
         if (err instanceof ApiError && err.status === 401) {
           clearSession();
-          router.replace("/login");
+          router.replace(loginRedirectHref());
           return;
         }
         setError(err instanceof ApiError ? err.message : "تعذّر تحميل مناطق التوصيل");
@@ -62,7 +63,7 @@ export default function DeliveryZonesPage() {
 
   useEffect(() => {
     if (!getSessionToken()) {
-      router.replace("/login");
+      router.replace(loginRedirectHref());
       return;
     }
     load();

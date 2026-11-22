@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { withActorSnapshot } from './audit-actor-context';
 
 export interface RecordAuditEntryInput {
   actorId?: string | null;
@@ -28,6 +29,15 @@ export class AuditLogService {
 
   async record(input: RecordAuditEntryInput, tx?: Prisma.TransactionClient) {
     const client = tx ?? this.prisma;
+    // «إدارة طلبات الفرع v1»: a branch-order row written by the staff
+    // member serving this request also keeps who they were at that moment
+    // (afterState.actor_snapshot - see audit-actor-context.ts). Every other
+    // row is stored exactly as before.
+    const afterState = withActorSnapshot(
+      input.entityType,
+      input.actorId,
+      input.afterState,
+    );
     return client.auditLog.create({
       data: {
         actorId: input.actorId ?? null,
@@ -36,7 +46,7 @@ export class AuditLogService {
         entityType: input.entityType,
         entityId: input.entityId,
         beforeState: (input.beforeState ?? undefined) as Prisma.InputJsonValue,
-        afterState: (input.afterState ?? undefined) as Prisma.InputJsonValue,
+        afterState: (afterState ?? undefined) as Prisma.InputJsonValue,
       },
     });
   }

@@ -1,3 +1,5 @@
+import type { NotImportedColumn } from '../import/not-imported';
+
 // Sprint 7 (RB-MATCH-004): the plain response shape for a completed
 // import - not a class-validator DTO (nothing here is request input),
 // just a documented, stable shape for OffersImportController's report.
@@ -20,6 +22,12 @@ export interface FailedRow {
 
 export interface ImportReport {
   total_rows: number;
+  /**
+   * Phase A++ (condition 7): columns that had values but were NOT imported -
+   * a product field the import does not take yet, or an unknown column.
+   * Never silently ignored.
+   */
+  not_imported?: NotImportedColumn[];
   imported: ImportedRow[];
   skipped_already_imported: SkippedRow[];
   invalid_rows: FailedRow[];

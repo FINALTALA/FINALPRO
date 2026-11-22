@@ -8,9 +8,10 @@ import AuthLogo from "@/components/AuthLogo";
 import { MessageCodeIcon, PhoneIcon } from "@/components/AuthIcons";
 import { ErrorBanner } from "@/components/States";
 import { ApiError, apiFetch, newIdempotencyKey } from "@/lib/api";
+import { otpErrorText } from "@/lib/otpErrors";
 import { normalisePhone } from "@/lib/address";
 import { registerTranslations } from "@/lib/i18n";
-import { useT } from "@/lib/useLang";
+import { useLang, useT } from "@/lib/useLang";
 import { setSessionToken } from "@/lib/session";
 import styles from "../auth-pages.module.css";
 
@@ -65,6 +66,7 @@ interface ReactivateConfirmResponse {
 export default function ReactivateAccountPage() {
   const router = useRouter();
   const t = useT();
+  const lang = useLang();
   const [step, setStep] = useState<Step>("phone");
   const [phone, setPhone] = useState("");
   const [code, setCode] = useState("");
@@ -78,7 +80,7 @@ export default function ReactivateAccountPage() {
     try {
       await action();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : t("reactivate.generic_error"));
+      setError(err instanceof ApiError ? otpErrorText(err, lang) : t("reactivate.generic_error"));
     } finally {
       setLoading(false);
     }

@@ -18,3 +18,40 @@ export async function loginAs(page: Page, token: string): Promise<void> {
     { key: SESSION_TOKEN_KEY, value: token },
   );
 }
+
+// TB-26: signing in is shopping only. A spec that is ABOUT a store or the
+// platform workspace (not about entering it - tb26-workspaces.spec.ts covers
+// that through the real confirmation page) enters it the way the page does:
+// a real workspace token from the real API (POST /me/workspace-sessions,
+// re-checked on every request), kept in this tab's sessionStorage under the
+// web app's own key. Never a security bypass.
+const WORKSPACE_TOKENS_KEY = "finalpro_workspace_tokens";
+const API_BASE = process.env.PW_API_BASE_URL;
+
+export async function enterWorkspace(
+  page: Page,
+  sessionToken: string,
+  ref: { type: "vendor"; vendor_id: string } | { type: "platform" },
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/me/workspace-sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${sessionToken}` },
+    body: JSON.stringify(ref),
+  });
+  const body = (await res.json()) as { workspace_token?: string };
+  if (!res.ok || !body.workspace_token) throw new Error(`entering ${ref.type} failed (status ${res.status})`);
+  await page.addInitScript(
+    ({ key, ref: r, token }) => {
+      let stored: { vendors: Record<string, string>; platform: string | null } = { vendors: {}, platform: null };
+      try {
+        stored = { ...stored, ...JSON.parse(window.sessionStorage.getItem(key) ?? "{}") };
+      } catch {
+        // start empty
+      }
+      if (r.type === "platform") stored.platform = token;
+      else stored.vendors = { ...stored.vendors, [r.vendor_id]: token };
+      window.sessionStorage.setItem(key, JSON.stringify(stored));
+    },
+    { key: WORKSPACE_TOKENS_KEY, ref, token: body.workspace_token },
+  );
+}

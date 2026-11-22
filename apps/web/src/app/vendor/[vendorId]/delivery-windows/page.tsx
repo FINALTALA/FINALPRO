@@ -4,7 +4,8 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
-import { clearSession, getSessionToken } from "@/lib/session";
+import { clearSession, getSessionToken } from "@/lib/session";
+import { loginRedirectHref } from "@/lib/loginRedirect";
 
 interface BranchDto {
   id: string;
@@ -25,7 +26,7 @@ export default function DeliveryWindowsBranchPickerPage() {
 
   useEffect(() => {
     if (!getSessionToken()) {
-      router.replace("/login");
+      router.replace(loginRedirectHref());
       return;
     }
     apiFetch<BranchDto[]>(`/vendors/${params.vendorId}/branches`)
@@ -33,7 +34,7 @@ export default function DeliveryWindowsBranchPickerPage() {
       .catch((err) => {
         if (err instanceof ApiError && err.status === 401) {
           clearSession();
-          router.replace("/login");
+          router.replace(loginRedirectHref());
           return;
         }
         setError(err instanceof ApiError ? err.message : "تعذّر تحميل الفروع");

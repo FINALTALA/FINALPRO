@@ -4,6 +4,8 @@
   "testEnvironment": "node",
   "testTimeout": 30000,
   "testRegex": ".e2e-spec.ts$",
+  "globalSetup": "./guard-disposable-database.ts",
+  "setupFiles": ["./setup-e2e-env.ts"],
   "transform": {
     "^.+\\.(t|j)s$": "ts-jest"
   }

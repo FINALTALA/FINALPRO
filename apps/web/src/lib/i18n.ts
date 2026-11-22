@@ -36,7 +36,17 @@ export function getLang(): Lang {
   }
 }
 
+// How many times this page has set the language (a user's toggle, or the
+// account sync applying the saved preference). useSyncServerLanguagePref
+// compares it before and after its request: a choice made meanwhile is
+// newer than whatever that request brings back, so it must win.
+let langChanges = 0;
+export function langChangeCount(): number {
+  return langChanges;
+}
+
 export function setLang(lang: Lang): void {
+  langChanges += 1;
   try {
     localStorage.setItem(LANG_KEY, lang);
     notifyLangChanged();
@@ -55,7 +65,8 @@ export function withEnglishFallback(
   en: string | null | undefined,
   original: string,
 ): string {
-  return lang === "en" && en ? en : original;
+  // Phase A+: blank / whitespace-only is no English value.
+  return lang === "en" && en && en.trim() ? en : original;
 }
 
 const DICT: Record<Lang, Record<string, string>> = {
@@ -73,6 +84,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "appshell.search.placeholder": "ابحث عن منتج أو متجر",
     "appshell.search.submit_aria": "بحث",
     "appshell.notifications_aria": "الإشعارات",
+    // TB-16.3: the bell that opens the notifications drawer.
+    "appshell.bell_aria": "التنبيهات",
     "appshell.account_menu_aria": "الحساب ومساحات العمل",
     "appshell.workspaces_title": "مساحات العمل",
     "appshell.badge.suspended": "معلّق",
@@ -102,6 +115,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "appshell.search.placeholder": "Search for a product or store",
     "appshell.search.submit_aria": "Search",
     "appshell.notifications_aria": "Notifications",
+    "appshell.bell_aria": "Notifications",
     "appshell.account_menu_aria": "Account and workspaces",
     "appshell.workspaces_title": "Workspaces",
     "appshell.badge.suspended": "Suspended",

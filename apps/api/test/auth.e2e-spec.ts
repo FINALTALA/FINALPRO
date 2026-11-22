@@ -111,6 +111,77 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
     return register.body.session_token as string;
   }
 
+  // Phase A++ (item 8): a phone number is cleaned by ONE rule on the server
+  // (normalizePhoneInput, through @PhoneField) - spaces, dashes, brackets,
+  // invisible direction marks, Arabic/Persian digits - then strictly
+  // validated; storage stays E.164. An invalid number is PHONE_INVALID with
+  // the field name, never class-validator's English sentence.
+  describe('Phase A++: phone numbers as people type them', () => {
+    const arabicDigits = (p: string) =>
+      p.replace(/\d/g, (d) => String.fromCharCode(0x0660 + Number(d)));
+    const persianDigits = (p: string) =>
+      p.replace(/\d/g, (d) => String.fromCharCode(0x06f0 + Number(d)));
+    const spaced = (p: string) =>
+      `${p.slice(0, 4)} (${p.slice(4, 6)}) ${p.slice(6, 9)}-${p.slice(9)}`;
+    const login = (phone: string, password = 'a-strong-password') =>
+      request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ phone, password });
+
+    it('signs in with a hidden RTL mark, with Arabic digits and with spaces/brackets/dashes - the stored number stays E.164', async () => {
+      const phone = uniquePhone();
+      await signup(phone, 'a-strong-password');
+      await login(`\u200F${phone}\u200E`).expect(200);
+      await login(arabicDigits(phone)).expect(200);
+      await login(spaced(phone)).expect(200);
+      const user = await prisma.user.findUniqueOrThrow({ where: { phone } });
+      expect(user.phone).toBe(phone);
+      expect(user.phone).toMatch(/^\+[1-9]\d{7,14}$/);
+    });
+
+    it('a really invalid number is refused as PHONE_INVALID with the field name - not the English validation sentence; a wrong password stays INVALID_CREDENTIALS', async () => {
+      const phone = uniquePhone();
+      await signup(phone, 'a-strong-password');
+      for (const bad of ['0591234567', '12345', '+970abc']) {
+        const r = await login(bad).expect(400);
+        expect(r.body.error.code).toBe('PHONE_INVALID');
+        expect(r.body.error.details).toEqual([{ field: 'phone' }]);
+        expect(JSON.stringify(r.body)).not.toContain('must be a valid');
+      }
+      const wrong = await login(phone, 'not-the-password').expect(400);
+      expect(wrong.body.error.code).toBe('INVALID_CREDENTIALS');
+    });
+
+    it('the OTP request with Persian digits and an invisible mark reaches the same E.164 number', async () => {
+      const phone = uniquePhone();
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/otp/request')
+        .send({ phone: `\u202B${persianDigits(phone)}\u202C`, purpose: 'signup' })
+        .expect(202);
+      expect(fakeSms.sentCountFor(phone)).toBe(1);
+    });
+
+    it('an address phone typed with Arabic digits and spaces is stored E.164; an invalid one names its own field', async () => {
+      const phone = uniquePhone();
+      const token = await signup(phone, 'a-strong-password');
+      const other = uniquePhone();
+      const base = { lat: 31.9, lng: 35.2, zone: 'WEST_BANK' };
+      const ok = await request(app.getHttpServer())
+        .post('/api/v1/customers/me/addresses')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ ...base, phone_number_1: arabicDigits(spaced(other)) })
+        .expect(201);
+      expect(ok.body.phone_number_1).toBe(other);
+      const bad = await request(app.getHttpServer())
+        .post('/api/v1/customers/me/addresses')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ ...base, phone_number_1: other, phone_number_2: '059-123' })
+        .expect(400);
+      expect(bad.body.error.code).toBe('PHONE_INVALID');
+      expect(bad.body.error.details).toEqual([{ field: 'phone_number_2' }]);
+    });
+  });
+
   describe('signup -> verify -> register -> login', () => {
     it('completes the full flow and the resulting session authenticates a protected route', async () => {
       const phone = uniquePhone();
@@ -722,16 +793,46 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
       ]);
 
       // OtpService.checkCode() only ever considers the single most
-      // recently issued, still-unconsumed OTP for a given phone+purpose
-      // (see its own doc comment) - it was never designed to let two
-      // outstanding OTPs both be independently valid at once. Issuing a
-      // second OTP therefore supersedes the first deterministically,
-      // not as a race: codeA can never succeed once codeB exists,
+      // recently ISSUED OTP for a given phone+purpose (TB-17 - see its
+      // own doc comment): issuing a second OTP supersedes the first for
+      // good, not as a race - codeA can never succeed once codeB exists,
       // regardless of timing, so only resB can be a 200 here.
       expect(resA.status).toBe(400);
-      expect(resA.body.error.code).toBe('OTP_INVALID');
+      // Which refusal codeA gets depends only on timing: "superseded" if
+      // it was checked while codeB was still unused, "invalid" once
+      // codeB had been used. Both are refusals; what must hold either
+      // way is checked right below, on the database itself.
+      expect(['OTP_SUPERSEDED', 'OTP_INVALID']).toContain(resA.body.error.code);
       expect(resB.status).toBe(200);
       expect(resB.body.password_reset_completed).toBe(true);
+
+      // The atomic-consumption outcome, whatever the interleaving:
+      // exactly one reset happened, it was codeB's, codeB was consumed
+      // once - by its own request - and codeA never was; and codeA cost
+      // codeB no attempt (superseded and post-use refusals count none).
+      const user = await prisma.user.findUniqueOrThrow({ where: { phone } });
+      expect(
+        await prisma.auditLog.count({
+          where: { action: 'user.password_reset', entityId: user.id },
+        }),
+      ).toBe(1);
+      const [rowA, rowB] = await prisma.otpCode.findMany({
+        where: { phone, purpose: 'PASSWORD_RESET' },
+        orderBy: { issuedSequence: 'asc' },
+      });
+      expect(rowA.consumedAt).toBeNull();
+      expect(rowB.consumedAt).not.toBeNull();
+      expect(rowB.consumedByKey).toBe(`concurrent-b-${phone}`);
+      expect(rowB.attemptCount).toBe(0);
+      for (const [password, status] of [
+        ['password-b', 200],
+        ['password-a', 400],
+      ] as const) {
+        const login = await request(app.getHttpServer())
+          .post('/api/v1/auth/login')
+          .send({ phone, password });
+        expect(login.status).toBe(status);
+      }
 
       // Whatever session_status resB got, it must be internally
       // consistent - and critically, if a token WAS issued, it must be
@@ -792,7 +893,9 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
         .set('Idempotency-Key', `tie-older-${phone}`)
         .send({ phone, otp_code: olderCode, new_password: 'password-older' });
       expect(olderAttempt.status).toBe(400);
-      expect(olderAttempt.body.error.code).toBe('OTP_INVALID');
+      // TB-17: an older, unexpired code is refused as superseded (and
+      // costs the newer code no attempt).
+      expect(olderAttempt.body.error.code).toBe('OTP_SUPERSEDED');
 
       // Only the newer (higher issuedSequence) code succeeds.
       const newerAttempt = await request(app.getHttpServer())
@@ -833,6 +936,280 @@ describe('Auth, customers, vendors (e2e) - Sprint 2, EPIC-AUTH', () => {
       expect(res.body).toEqual({ expires_in_seconds: 300 });
       expect(fakeSms.sentCountFor(phone)).toBe(0);
     });
+  });
+
+  // TB-17: only the latest ISSUED code can ever succeed, for every OTP
+  // purpose. The old lookup took the latest UNCONSUMED code, so once
+  // code B was used, the superseded code A (still within its TTL)
+  // became valid again - a second password reset, one second later.
+  describe('TB-17: only the latest issued OTP, never a superseded one', () => {
+    const server = () => request(app.getHttpServer());
+    const resetRequest = (phone: string) =>
+      server()
+        .post('/api/v1/auth/password/reset-request')
+        .send({ phone })
+        .expect(202);
+    const resetConfirm = (
+      phone: string,
+      code: string,
+      newPassword: string,
+      key = `tb17-${phone}-${code}-${Math.random()}`,
+    ) =>
+      server()
+        .post('/api/v1/auth/password/reset-confirm')
+        .set('Idempotency-Key', key)
+        .send({ phone, otp_code: code, new_password: newPassword });
+    const canLogin = async (phone: string, password: string) =>
+      (await server().post('/api/v1/auth/login').send({ phone, password }))
+        .status === 200;
+    const resets = async (phone: string) => {
+      const user = await prisma.user.findUniqueOrThrow({ where: { phone } });
+      return prisma.auditLog.count({
+        where: { action: 'user.password_reset', entityId: user.id },
+      });
+    };
+    /** Two codes for one phone and purpose: A, then B (the latest). */
+    async function twoResetCodes(phone: string) {
+      await resetRequest(phone);
+      const a = fakeSms.lastCodeFor(phone);
+      await resetRequest(phone);
+      const b = fakeSms.lastCodeFor(phone);
+      expect(a).not.toBe(b);
+      return { a, b };
+    }
+    const latestRow = (phone: string, purpose: 'PASSWORD_RESET') =>
+      prisma.otpCode.findFirstOrThrow({
+        where: { phone, purpose },
+        orderBy: { issuedSequence: 'desc' },
+      });
+
+    it('password reset: B succeeds, then the superseded A is refused - every time, and the password stays B', async () => {
+      const phone = uniquePhone();
+      await signup(phone, 'old-password');
+      const { a, b } = await twoResetCodes(phone);
+
+      expect((await resetConfirm(phone, b, 'password-b')).status).toBe(200);
+      for (let i = 0; i < 3; i++) {
+        const res = await resetConfirm(phone, a, 'password-a');
+        expect(res.status).toBe(400);
+        expect(res.body.error.code).toBe('OTP_INVALID');
+      }
+      expect(await canLogin(phone, 'password-b')).toBe(true);
+      expect(await canLogin(phone, 'password-a')).toBe(false);
+      expect(await resets(phone)).toBe(1);
+      // A was never consumed - it just never counts again.
+      const rows = await prisma.otpCode.findMany({
+        where: { phone, purpose: 'PASSWORD_RESET' },
+        orderBy: { issuedSequence: 'asc' },
+      });
+      expect(rows.map((r) => r.consumedAt !== null)).toEqual([false, true]);
+    });
+
+    it('password reset: A used before B is refused as OTP_SUPERSEDED without spending any attempt of B - even five times - then B still works', async () => {
+      const phone = uniquePhone();
+      await signup(phone, 'old-password');
+      const { a, b } = await twoResetCodes(phone);
+
+      for (let i = 0; i < 5; i++) {
+        const early = await resetConfirm(phone, a, 'password-a');
+        expect(early.status).toBe(400);
+        expect(early.body.error.code).toBe('OTP_SUPERSEDED');
+      }
+      expect((await latestRow(phone, 'PASSWORD_RESET')).attemptCount).toBe(0);
+      expect((await resetConfirm(phone, b, 'password-b')).status).toBe(200);
+      expect(await canLogin(phone, 'password-b')).toBe(true);
+      expect(await resets(phone)).toBe(1);
+    });
+
+    it('password reset: an OLD code past its own TTL is a plain wrong code - OTP_INVALID, one attempt of B spent', async () => {
+      const phone = uniquePhone();
+      await signup(phone, 'old-password');
+      const { a } = await twoResetCodes(phone);
+      const rows = await prisma.otpCode.findMany({
+        where: { phone, purpose: 'PASSWORD_RESET' },
+        orderBy: { issuedSequence: 'asc' },
+      });
+      await prisma.otpCode.update({
+        where: { id: rows[0].id },
+        data: { expiresAt: new Date(Date.now() - 1_000) },
+      });
+
+      const res = await resetConfirm(phone, a, 'password-a');
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('OTP_INVALID');
+      expect((await latestRow(phone, 'PASSWORD_RESET')).attemptCount).toBe(1);
+    });
+
+    it('password reset: wrong guesses still lock B after five, whatever old codes were tried in between', async () => {
+      const phone = uniquePhone();
+      await signup(phone, 'old-password');
+      const { a, b } = await twoResetCodes(phone);
+      const wrong = (n: number) =>
+        String(((Number(b) + n) % 900_000) + 100_000).padStart(6, '0');
+      let guesses = 0;
+      for (let n = 1; guesses < 5; n++) {
+        const g = wrong(n);
+        if (g === a || g === b) continue;
+        expect(
+          (await resetConfirm(phone, g, 'x-password')).body.error.code,
+        ).toBe('OTP_INVALID');
+        guesses += 1;
+        // An old code between guesses never counts; after the fifth
+        // guess B is locked, and that answer wins for any code.
+        if (guesses < 5) {
+          expect(
+            (await resetConfirm(phone, a, 'password-a')).body.error.code,
+          ).toBe('OTP_SUPERSEDED');
+        }
+      }
+      expect((await latestRow(phone, 'PASSWORD_RESET')).attemptCount).toBe(5);
+      const locked = await resetConfirm(phone, b, 'password-b');
+      expect(locked.status).toBe(429);
+      expect(locked.body.error.code).toBe('TOO_MANY_ATTEMPTS');
+      expect(await canLogin(phone, 'old-password')).toBe(true);
+    });
+
+    it('password reset: the old A sent five times at once alongside B - B succeeds once, A never counts, nothing reset twice', async () => {
+      const phone = uniquePhone();
+      await signup(phone, 'old-password');
+      const { a, b } = await twoResetCodes(phone);
+
+      const results = await Promise.all([
+        ...[1, 2, 3, 4, 5].map((i) => resetConfirm(phone, a, `password-a${i}`)),
+        resetConfirm(phone, b, 'password-b'),
+      ]);
+      const forA = results.slice(0, 5);
+      // Each A either came before B was used (superseded) or after it
+      // (invalid) - never accepted.
+      for (const r of forA) {
+        expect(r.status).toBe(400);
+        expect(['OTP_SUPERSEDED', 'OTP_INVALID']).toContain(r.body.error.code);
+      }
+      expect(results[5].status).toBe(200);
+      expect((await latestRow(phone, 'PASSWORD_RESET')).attemptCount).toBe(0);
+      expect(await resets(phone)).toBe(1);
+      expect(await canLogin(phone, 'password-b')).toBe(true);
+    });
+
+    it('password reset: an expired or locked-out B does not bring A back', async () => {
+      const phone = uniquePhone();
+      await signup(phone, 'old-password');
+      const { a } = await twoResetCodes(phone);
+      const b = await latestRow(phone, 'PASSWORD_RESET');
+
+      await prisma.otpCode.update({
+        where: { id: b.id },
+        data: { expiresAt: new Date(Date.now() - 1_000) },
+      });
+      const expired = await resetConfirm(phone, a, 'password-a');
+      expect(expired.status).toBe(409);
+      expect(expired.body.error.code).toBe('OTP_EXPIRED');
+
+      await prisma.otpCode.update({
+        where: { id: b.id },
+        data: { expiresAt: new Date(Date.now() + 60_000), attemptCount: 5 },
+      });
+      const locked = await resetConfirm(phone, a, 'password-a');
+      expect(locked.body.error.code).toBe('TOO_MANY_ATTEMPTS');
+
+      expect(await canLogin(phone, 'old-password')).toBe(true);
+      expect(await resets(phone)).toBe(0);
+    });
+
+    it('password reset: B sent three times at once (different keys) succeeds exactly once', async () => {
+      const phone = uniquePhone();
+      await signup(phone, 'old-password');
+      const { b } = await twoResetCodes(phone);
+
+      const results = await Promise.all(
+        ['x', 'y', 'z'].map((k) => resetConfirm(phone, b, `password-${k}`)),
+      );
+      const ok = results.filter((r) => r.status === 200);
+      expect(ok).toHaveLength(1);
+      for (const r of results.filter((x) => x.status !== 200)) {
+        expect(r.status).toBe(400);
+        expect(r.body.error.code).toBe('OTP_INVALID');
+      }
+      expect(await resets(phone)).toBe(1);
+      expect(
+        (await latestRow(phone, 'PASSWORD_RESET')).consumedAt,
+      ).not.toBeNull();
+    });
+
+    it('password reset: the same request replayed with the same Idempotency-Key returns its result and does not reset again', async () => {
+      const phone = uniquePhone();
+      await signup(phone, 'old-password');
+      const { b } = await twoResetCodes(phone);
+      const key = `tb17-replay-${phone}`;
+
+      const first = await resetConfirm(phone, b, 'password-b', key);
+      expect(first.status).toBe(200);
+      const versionAfter = (
+        await prisma.user.findUniqueOrThrow({ where: { phone } })
+      ).sessionVersion;
+
+      const replay = await resetConfirm(phone, b, 'password-b', key);
+      expect(replay.status).toBe(200);
+      expect(replay.body).toEqual(first.body);
+      expect(
+        (await prisma.user.findUniqueOrThrow({ where: { phone } }))
+          .sessionVersion,
+      ).toBe(versionAfter);
+      expect(await resets(phone)).toBe(1);
+
+      // A different request with the same, now used, code is refused.
+      expect((await resetConfirm(phone, b, 'password-c')).status).toBe(400);
+      expect(await canLogin(phone, 'password-b')).toBe(true);
+    });
+
+    for (const purpose of ['signup', 'phone_change'] as const) {
+      it(`otp/verify (${purpose}): only the latest code verifies - A superseded before B (no attempt spent), invalid after it; a same-key retry of B still gets its result`, async () => {
+        const phone = uniquePhone();
+        const otpRequest = () =>
+          server()
+            .post('/api/v1/auth/otp/request')
+            .send({ phone, purpose })
+            .expect(202);
+        const verify = (code: string, key: string) =>
+          server()
+            .post('/api/v1/auth/otp/verify')
+            .set('Idempotency-Key', key)
+            .send({ phone, otp_code: code, purpose });
+
+        await otpRequest();
+        const a = fakeSms.lastCodeFor(phone);
+        await otpRequest();
+        const b = fakeSms.lastCodeFor(phone);
+        expect(a).not.toBe(b);
+
+        const early = await verify(a, `tb17-a1-${phone}`);
+        expect(early.status).toBe(400);
+        expect(early.body.error.code).toBe('OTP_SUPERSEDED');
+        const latest = await prisma.otpCode.findFirstOrThrow({
+          where: {
+            phone,
+            purpose: purpose === 'signup' ? 'SIGNUP' : 'PHONE_CHANGE',
+          },
+          orderBy: { issuedSequence: 'desc' },
+        });
+        expect(latest.attemptCount).toBe(0);
+
+        const keyB = `tb17-b-${phone}`;
+        const okB = await verify(b, keyB);
+        expect(okB.status).toBe(200);
+        expect(typeof okB.body.session_token).toBe('string');
+
+        // After B is used, A is a plain wrong code - not "superseded".
+        const late = await verify(a, `tb17-a2-${phone}`);
+        expect(late.status).toBe(400);
+        expect(late.body.error.code).toBe('OTP_INVALID');
+
+        const retry = await verify(b, keyB);
+        expect(retry.status).toBe(200);
+        expect(retry.body.session_token).toBe(okB.body.session_token);
+        expect((await verify(b, `tb17-b2-${phone}`)).status).toBe(400);
+      });
+    }
   });
 
   describe('protected routes require a valid session (FR-AUTH-004)', () => {

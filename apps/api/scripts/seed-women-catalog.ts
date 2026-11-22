@@ -1,80 +1,312 @@
 /**
- * Women's catalog demo seed - LOCAL DEVELOPMENT DATABASE ONLY.
+ * Women / men / kids catalog demo seed - LOCAL DEVELOPMENT DATABASE ONLY.
  *
- * Adds ~90 women's fashion products (dresses, tops, knitwear, outerwear,
- * bottoms, modest wear, shoes, bags, jewellery, watches, accessories)
- * offered by the two existing demo stores, so the women's listing has a
+ * Adds ~90 women's, 20 men's and 20 kids' fashion products offered by the
+ * two existing demo stores, so the /women, /men and /kids listings have a
  * realistic catalogue for infinite scroll, filters, sorting and
  * multi-store comparison.
+ *
+ * Every offer is created CLASSIFIED with the fixed product taxonomy
+ * (Sprint 27): one audience, a taxonomy category, a season (or none for
+ * accessories), and its variants as colour/size combinations
+ * (isCombination, colorCode/sizeCode, the taxonomy's own labels) at one
+ * unified price per store offer, with branch stock - exactly what the
+ * owner's combinations endpoint produces, so the taxonomy filters of
+ * /discovery/all find them.
  *
  * - Refuses to run against anything but a local database
  *   (requireLocalDatabase, shared with the other demo seeds).
  * - Idempotent: every row gets a deterministic id derived from a stable
- *   key ("via-women-catalog-v1:<key>") and is written with
- *   upsert({ update: {} }), so re-runs add nothing and never overwrite.
- * - Additive only: never updates or deletes existing products, offers,
- *   stores, reviews, favourites or orders. Creates no reviews, ratings,
- *   purchases or favourites.
+ *   key and is created once; re-runs add nothing and never overwrite.
+ * - Additive only: never deletes anything, and never updates rows it did
+ *   not create. Creates no reviews, ratings, purchases or favourites.
+ * - Needs the product-taxonomy migrations applied
+ *   (20261021120000_sprint27_product_taxonomy, then
+ *   20261023090000_product_taxonomy_spring_gray).
  * - Everything it creates is identifiable: brands use normalizedName
- *   "via-demo-*", categories use nameEn "Via Demo Women - *", platform
- *   barcodes "PPB-WDEMO-*", seller SKUs "WDEMO-*".
+ *   "via-demo-*", categories use nameEn "Via Demo * - *", platform
+ *   barcodes "PPB-VCAT-*", seller SKUs "VCAT-*".
  *
- * Images: Pexels photos (Pexels License, free for commercial use),
- * stored locally in apps/web/public/demo-assets/women-catalog/ and
- * referenced as /demo-assets/women-catalog/wd-<pexelsId>.jpg.
+ * Earlier runs of this seed (the "via-women-catalog-v1" products, SKUs
+ * "WDEMO-*") created UNCLASSIFIED offers. Those cannot be converted in
+ * place (a variant's isCombination flag is immutable), so the classified
+ * catalogue is created next to them under new ids; pass --retire-v1 to
+ * set exactly those old demo offers to INACTIVE (hidden from customers,
+ * nothing deleted) so the listings do not show both.
  *
- * Run from apps/api:  npx ts-node scripts/seed-women-catalog.ts
+ * Images: women - Pexels photos (Pexels License), stored in
+ * apps/web/public/demo-assets/women-catalog/; men and kids - the
+ * listings' own category images (public/images/men-categories,
+ * public/images/kids-categories), reused as product photos.
+ *
+ * Run from apps/api:  npx ts-node scripts/seed-women-catalog.ts [--retire-v1]
  */
 import 'dotenv/config';
 import { createHash } from 'crypto';
 import { PrismaPg } from '@prisma/adapter-pg';
-import { PrismaClient } from '../generated/prisma/client';
+import {
+  PrismaClient,
+  ProductAudience,
+  ProductSeason,
+} from '../generated/prisma/client';
 import { requireLocalDatabase } from './local-db-guard';
 import { VENDOR_ONE, VENDOR_TWO } from './seed-demo.constants';
 
+// Brand/category rows keep the first version's ids (they were never
+// unclassified data); products and everything under them use v2.
 const NAMESPACE = 'via-women-catalog-v1';
+const CATALOG_NAMESPACE = 'via-catalog-v2';
 
 /** Deterministic UUID-shaped id, same scheme as seed-scenarios.ts. */
-function stableId(key: string): string {
-  const h = createHash('sha256').update(`${NAMESPACE}:${key}`).digest('hex');
+function idFor(namespace: string, key: string): string {
+  const h = createHash('sha256').update(`${namespace}:${key}`).digest('hex');
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
+const stableId = (key: string) => idFor(NAMESPACE, key);
+const catalogId = (key: string) => idFor(CATALOG_NAMESPACE, key);
 
-const CLOTHING_SIZES = ['XS', 'S', 'M', 'L', 'XL'];
-const SHOE_SIZES = ['37', '38', '39', '40', '41'];
+type Kind = 'clothing' | 'shoes' | 'onesize' | 'baby';
 
-type Kind = 'clothing' | 'shoes' | 'onesize';
+// Taxonomy size codes (labels come from taxonomy_sizes).
+const SIZE_CODES: Record<'adult' | 'kids', Record<Kind, string[]>> = {
+  adult: {
+    clothing: ['XS', 'S', 'M', 'L', 'XL'],
+    shoes: ['EU_36', 'EU_38', 'EU_40', 'EU_42', 'EU_44'],
+    baby: [],
+    onesize: [],
+  },
+  kids: {
+    clothing: ['AGE_2_3Y', 'AGE_4_5Y', 'AGE_6_7Y', 'AGE_8_9Y', 'AGE_10_11Y'],
+    baby: ['AGE_0_3M', 'AGE_3_6M', 'AGE_6_9M', 'AGE_9_12M'],
+    shoes: [],
+    onesize: [],
+  },
+};
 
-// Category per product type. The Arabic names are what the storefront's
-// category terms match against, so each is a single unambiguous type.
-const CATEGORIES: Record<string, { ar: string; en: string; kind: Kind }> = {
-  dresses: { ar: 'فساتين', en: 'Dresses', kind: 'clothing' },
-  tops: { ar: 'بلايز', en: 'Blouses', kind: 'clothing' },
-  shirts: { ar: 'قمصان', en: 'Shirts', kind: 'clothing' },
-  tshirts: { ar: 'تيشيرتات', en: 'T-Shirts', kind: 'clothing' },
-  knitwear: { ar: 'كنزات', en: 'Knitwear', kind: 'clothing' },
-  cardigans: { ar: 'كارديغان', en: 'Cardigans', kind: 'clothing' },
-  hoodies: { ar: 'هوديز', en: 'Hoodies', kind: 'clothing' },
-  sweatshirts: { ar: 'سويت شيرت', en: 'Sweatshirts', kind: 'clothing' },
-  jackets: { ar: 'جاكيتات', en: 'Jackets', kind: 'clothing' },
-  coats: { ar: 'معاطف', en: 'Coats', kind: 'clothing' },
-  blazers: { ar: 'بليزرات', en: 'Blazers', kind: 'clothing' },
-  suits: { ar: 'بدلات', en: 'Suits', kind: 'clothing' },
-  jeans: { ar: 'جينز', en: 'Jeans', kind: 'clothing' },
-  trousers: { ar: 'بناطيل', en: 'Trousers', kind: 'clothing' },
-  skirts: { ar: 'تنانير', en: 'Skirts', kind: 'clothing' },
-  jumpsuits: { ar: 'أوفرولات', en: 'Jumpsuits', kind: 'clothing' },
-  sets: { ar: 'أطقم', en: 'Sets', kind: 'clothing' },
-  abayas: { ar: 'عبايات', en: 'Abayas', kind: 'clothing' },
-  kaftans: { ar: 'قفاطين', en: 'Kaftans', kind: 'clothing' },
-  hijabs: { ar: 'حجابات', en: 'Hijabs', kind: 'onesize' },
-  shoes: { ar: 'أحذية', en: 'Shoes', kind: 'shoes' },
-  bags: { ar: 'حقائب', en: 'Handbags', kind: 'onesize' },
-  jewelry: { ar: 'مجوهرات', en: 'Jewellery', kind: 'onesize' },
-  watches: { ar: 'ساعات', en: 'Watches', kind: 'onesize' },
-  eyewear: { ar: 'نظارات', en: 'Eyewear', kind: 'onesize' },
-  hats: { ar: 'قبعات', en: 'Hats', kind: 'onesize' },
-  socks: { ar: 'جوارب', en: 'Socks', kind: 'onesize' },
+// Category per product type (women's list). `code` is the taxonomy
+// category, `season` the offer's season (null = not seasonal).
+const CATEGORIES: Record<
+  string,
+  {
+    ar: string;
+    en: string;
+    kind: Kind;
+    code: string;
+    season: ProductSeason | null;
+  }
+> = {
+  dresses: {
+    ar: 'فساتين',
+    en: 'Dresses',
+    kind: 'clothing',
+    code: 'DRESSES_WOMEN',
+    season: 'SUMMER',
+  },
+  tops: {
+    ar: 'بلايز',
+    en: 'Blouses',
+    kind: 'clothing',
+    code: 'TOPS',
+    season: 'SPRING',
+  },
+  shirts: {
+    ar: 'قمصان',
+    en: 'Shirts',
+    kind: 'clothing',
+    code: 'SHIRTS',
+    season: 'SPRING',
+  },
+  tshirts: {
+    ar: 'تيشيرتات',
+    en: 'T-Shirts',
+    kind: 'clothing',
+    code: 'TSHIRTS',
+    season: 'SUMMER',
+  },
+  knitwear: {
+    ar: 'كنزات',
+    en: 'Knitwear',
+    kind: 'clothing',
+    code: 'KNITWEAR',
+    season: 'WINTER',
+  },
+  cardigans: {
+    ar: 'كارديغان',
+    en: 'Cardigans',
+    kind: 'clothing',
+    code: 'CARDIGANS',
+    season: 'FALL',
+  },
+  hoodies: {
+    ar: 'هوديز',
+    en: 'Hoodies',
+    kind: 'clothing',
+    code: 'HOODIES',
+    season: 'WINTER',
+  },
+  sweatshirts: {
+    ar: 'سويت شيرت',
+    en: 'Sweatshirts',
+    kind: 'clothing',
+    code: 'SWEATSHIRTS',
+    season: 'FALL',
+  },
+  jackets: {
+    ar: 'جاكيتات',
+    en: 'Jackets',
+    kind: 'clothing',
+    code: 'JACKETS',
+    season: 'FALL',
+  },
+  coats: {
+    ar: 'معاطف',
+    en: 'Coats',
+    kind: 'clothing',
+    code: 'COATS',
+    season: 'WINTER',
+  },
+  blazers: {
+    ar: 'بليزرات',
+    en: 'Blazers',
+    kind: 'clothing',
+    code: 'BLAZERS',
+    season: 'FALL',
+  },
+  suits: {
+    ar: 'بدلات',
+    en: 'Suits',
+    kind: 'clothing',
+    code: 'FORMAL_SUITS',
+    season: null,
+  },
+  jeans: {
+    ar: 'جينز',
+    en: 'Jeans',
+    kind: 'clothing',
+    code: 'JEANS',
+    season: null,
+  },
+  trousers: {
+    ar: 'بناطيل',
+    en: 'Trousers',
+    kind: 'clothing',
+    code: 'TROUSERS',
+    season: 'SPRING',
+  },
+  skirts: {
+    ar: 'تنانير',
+    en: 'Skirts',
+    kind: 'clothing',
+    code: 'SKIRTS',
+    season: 'SPRING',
+  },
+  jumpsuits: {
+    ar: 'أوفرولات',
+    en: 'Jumpsuits',
+    kind: 'clothing',
+    code: 'JUMPSUITS',
+    season: 'SUMMER',
+  },
+  sets: {
+    ar: 'أطقم',
+    en: 'Sets',
+    kind: 'clothing',
+    code: 'TWO_PIECE_SETS',
+    season: 'SPRING',
+  },
+  abayas: {
+    ar: 'عبايات',
+    en: 'Abayas',
+    kind: 'clothing',
+    code: 'ABAYAS',
+    season: null,
+  },
+  kaftans: {
+    ar: 'قفاطين',
+    en: 'Kaftans',
+    kind: 'clothing',
+    code: 'JALABIYAS_KAFTANS',
+    season: 'SUMMER',
+  },
+  hijabs: {
+    ar: 'حجابات',
+    en: 'Hijabs',
+    kind: 'onesize',
+    code: 'HIJABS_SHAWLS',
+    season: null,
+  },
+  shoes: {
+    ar: 'أحذية',
+    en: 'Shoes',
+    kind: 'shoes',
+    code: 'SHOES',
+    season: null,
+  },
+  bags: {
+    ar: 'حقائب',
+    en: 'Handbags',
+    kind: 'onesize',
+    code: 'BAGS',
+    season: null,
+  },
+  jewelry: {
+    ar: 'مجوهرات',
+    en: 'Jewellery',
+    kind: 'onesize',
+    code: 'JEWELLERY',
+    season: null,
+  },
+  watches: {
+    ar: 'ساعات',
+    en: 'Watches',
+    kind: 'onesize',
+    code: 'WATCHES',
+    season: null,
+  },
+  eyewear: {
+    ar: 'نظارات',
+    en: 'Eyewear',
+    kind: 'onesize',
+    code: 'EYEWEAR',
+    season: 'SUMMER',
+  },
+  hats: {
+    ar: 'قبعات',
+    en: 'Hats',
+    kind: 'onesize',
+    code: 'HATS_CAPS',
+    season: 'WINTER',
+  },
+  socks: {
+    ar: 'جوارب',
+    en: 'Socks',
+    kind: 'onesize',
+    code: 'SOCKS',
+    season: null,
+  },
+};
+
+/** The women's list names colours in Arabic; the taxonomy code for each
+ * (gold/silver have no exact taxonomy colour - nearest one). */
+const COLOR_CODE: Record<string, string> = {
+  أسود: 'BLACK',
+  بيج: 'BEIGE',
+  أبيض: 'WHITE',
+  أزرق: 'BLUE',
+  رمادي: 'GRAY',
+  ذهبي: 'YELLOW',
+  بني: 'BROWN',
+  أخضر: 'GREEN',
+  وردي: 'PINK',
+  كحلي: 'NAVY',
+  برتقالي: 'ORANGE',
+  أحمر: 'RED',
+  كريمي: 'CREAM',
+  خمري: 'BURGUNDY',
+  ليلكي: 'LILAC',
+  فضي: 'GRAY',
+  زيتي: 'OLIVE',
+  أصفر: 'YELLOW',
 };
 
 const BRANDS: Record<string, string> = {
@@ -84,6 +316,8 @@ const BRANDS: Record<string, string> = {
   sahara: 'Sahara Leather',
   yasmin: 'Yasmin Jewels',
   urban: 'Urban Thread',
+  rawi: 'Rawi Menswear',
+  zaytoon: 'Zaytoon Kids',
 };
 
 interface DemoProduct {
@@ -97,6 +331,554 @@ interface DemoProduct {
   colors: string[];
   price: number;
 }
+
+/** A men's or kids' product (taxonomy codes directly). */
+interface AudienceProduct {
+  key: string;
+  code: string;
+  /** Category label used for the demo `categories` row. */
+  catAr: string;
+  kind: Kind;
+  season: ProductSeason | null;
+  brand: keyof typeof BRANDS;
+  ar: string;
+  en: string;
+  colors: string[];
+  price: number;
+  image: string;
+}
+
+const MEN_IMG = (file: string) => `/images/men-categories/${file}`;
+const KIDS_IMG = (label: string) =>
+  `/images/kids-categories/${encodeURIComponent(label)}.png`;
+
+// Men's products - one or two per main category.
+const MEN_PRODUCTS: AudienceProduct[] = [
+  {
+    key: 'm-shirt-oxford',
+    code: 'SHIRTS',
+    catAr: 'قمصان',
+    kind: 'clothing',
+    season: 'SPRING',
+    brand: 'rawi',
+    ar: 'قميص أكسفورد رجالي',
+    en: "Men's Oxford Shirt",
+    colors: ['WHITE', 'BLUE'],
+    price: 149,
+    image: MEN_IMG('shirts-new.jpg'),
+  },
+  {
+    key: 'm-shirt-linen',
+    code: 'SHIRTS',
+    catAr: 'قمصان',
+    kind: 'clothing',
+    season: 'SUMMER',
+    brand: 'rawi',
+    ar: 'قميص كتان رجالي',
+    en: "Men's Linen Shirt",
+    colors: ['BEIGE', 'OLIVE'],
+    price: 169,
+    image: MEN_IMG('shirts-new.jpg'),
+  },
+  {
+    key: 'm-tshirt-basic',
+    code: 'TSHIRTS',
+    catAr: 'تيشيرتات',
+    kind: 'clothing',
+    season: 'SUMMER',
+    brand: 'urban',
+    ar: 'تيشيرت قطني أساسي',
+    en: 'Basic Cotton T-Shirt',
+    colors: ['BLACK', 'WHITE', 'GRAY'],
+    price: 59,
+    image: MEN_IMG('t-shirts.jpg'),
+  },
+  {
+    key: 'm-polo',
+    code: 'BLOUSES_MEN',
+    catAr: 'بلايز',
+    kind: 'clothing',
+    season: 'SUMMER',
+    brand: 'rawi',
+    ar: 'بلوزة بولو رجالية',
+    en: "Men's Polo Top",
+    colors: ['NAVY', 'WHITE'],
+    price: 99,
+    image: MEN_IMG('blouses-men.jpg'),
+  },
+  {
+    key: 'm-chino',
+    code: 'TROUSERS',
+    catAr: 'بناطيل',
+    kind: 'clothing',
+    season: 'SPRING',
+    brand: 'rawi',
+    ar: 'بنطال تشينو',
+    en: 'Chino Trousers',
+    colors: ['BEIGE', 'NAVY'],
+    price: 159,
+    image: MEN_IMG('trousers.jpg'),
+  },
+  {
+    key: 'm-jeans-slim',
+    code: 'JEANS',
+    catAr: 'جينز',
+    kind: 'clothing',
+    season: null,
+    brand: 'urban',
+    ar: 'جينز ضيق رجالي',
+    en: "Men's Slim Jeans",
+    colors: ['DENIM', 'BLACK'],
+    price: 189,
+    image: MEN_IMG('jeans.jpg'),
+  },
+  {
+    key: 'm-formal-trousers',
+    code: 'FORMAL_TROUSERS',
+    catAr: 'بناطيل رسمية',
+    kind: 'clothing',
+    season: 'FALL',
+    brand: 'rawi',
+    ar: 'بنطال رسمي',
+    en: 'Formal Trousers',
+    colors: ['BLACK', 'GRAY'],
+    price: 179,
+    image: MEN_IMG('formal-trousers-new.webp'),
+  },
+  {
+    key: 'm-shorts',
+    code: 'SHORTS',
+    catAr: 'شورتات',
+    kind: 'clothing',
+    season: 'SUMMER',
+    brand: 'urban',
+    ar: 'شورت قطني',
+    en: 'Cotton Shorts',
+    colors: ['OLIVE', 'BEIGE'],
+    price: 79,
+    image: MEN_IMG('shorts-new.webp'),
+  },
+  {
+    key: 'm-jacket-bomber',
+    code: 'JACKETS',
+    catAr: 'جكيتات',
+    kind: 'clothing',
+    season: 'FALL',
+    brand: 'urban',
+    ar: 'جاكيت بومبر',
+    en: 'Bomber Jacket',
+    colors: ['OLIVE', 'BLACK'],
+    price: 279,
+    image: MEN_IMG('jackets.jpg'),
+  },
+  {
+    key: 'm-coat-wool',
+    code: 'COATS',
+    catAr: 'معاطف',
+    kind: 'clothing',
+    season: 'WINTER',
+    brand: 'rawi',
+    ar: 'معطف صوف',
+    en: 'Wool Coat',
+    colors: ['CAMEL', 'NAVY'],
+    price: 459,
+    image: MEN_IMG('coats.jpg'),
+  },
+  {
+    key: 'm-blazer',
+    code: 'BLAZERS',
+    catAr: 'بليزرات',
+    kind: 'clothing',
+    season: 'FALL',
+    brand: 'rawi',
+    ar: 'بليزر رجالي',
+    en: "Men's Blazer",
+    colors: ['NAVY', 'GRAY'],
+    price: 349,
+    image: MEN_IMG('blazers.jpg'),
+  },
+  {
+    key: 'm-hoodie',
+    code: 'HOODIES',
+    catAr: 'هوديز',
+    kind: 'clothing',
+    season: 'WINTER',
+    brand: 'urban',
+    ar: 'هودي رجالي',
+    en: "Men's Hoodie",
+    colors: ['GRAY', 'BLACK'],
+    price: 139,
+    image: MEN_IMG('hoodies.jpg'),
+  },
+  {
+    key: 'm-knit',
+    code: 'KNITWEAR',
+    catAr: 'كنزات وتريكو',
+    kind: 'clothing',
+    season: 'WINTER',
+    brand: 'qasr',
+    ar: 'كنزة تريكو رجالية',
+    en: "Men's Knit Sweater",
+    colors: ['BURGUNDY', 'CREAM'],
+    price: 189,
+    image: MEN_IMG('knitwear-new.jpg'),
+  },
+  {
+    key: 'm-suit',
+    code: 'FORMAL_SUITS',
+    catAr: 'بدلات رسمية',
+    kind: 'clothing',
+    season: null,
+    brand: 'rawi',
+    ar: 'بدلة رسمية',
+    en: 'Formal Suit',
+    colors: ['NAVY', 'BLACK'],
+    price: 899,
+    image: MEN_IMG('formal-suits.jpg'),
+  },
+  {
+    key: 'm-sport-set',
+    code: 'SPORTSWEAR',
+    catAr: 'ملابس رياضية',
+    kind: 'clothing',
+    season: null,
+    brand: 'urban',
+    ar: 'طقم رياضي رجالي',
+    en: "Men's Training Set",
+    colors: ['BLACK', 'NAVY'],
+    price: 199,
+    image: MEN_IMG('sportswear-new.webp'),
+  },
+  {
+    key: 'm-sneakers',
+    code: 'SHOES',
+    catAr: 'أحذية',
+    kind: 'shoes',
+    season: null,
+    brand: 'sahara',
+    ar: 'حذاء رياضي رجالي',
+    en: "Men's Sneakers",
+    colors: ['WHITE', 'BLACK'],
+    price: 259,
+    image: MEN_IMG('shoes-new.jpg'),
+  },
+  {
+    key: 'm-wallet',
+    code: 'WALLETS',
+    catAr: 'محافظ',
+    kind: 'onesize',
+    season: null,
+    brand: 'sahara',
+    ar: 'محفظة جلد',
+    en: 'Leather Wallet',
+    colors: ['BROWN', 'BLACK'],
+    price: 89,
+    image: MEN_IMG('wallets.jpg'),
+  },
+  {
+    key: 'm-watch',
+    code: 'WATCHES',
+    catAr: 'ساعات',
+    kind: 'onesize',
+    season: null,
+    brand: 'yasmin',
+    ar: 'ساعة يد رجالية',
+    en: "Men's Watch",
+    colors: ['BLACK', 'BROWN'],
+    price: 399,
+    image: MEN_IMG('watches-new.jpg'),
+  },
+  {
+    key: 'm-belt',
+    code: 'BELTS',
+    catAr: 'أحزمة',
+    kind: 'onesize',
+    season: null,
+    brand: 'sahara',
+    ar: 'حزام جلد',
+    en: 'Leather Belt',
+    colors: ['BROWN', 'BLACK'],
+    price: 79,
+    image: MEN_IMG('belts.jpg'),
+  },
+  {
+    key: 'm-cap',
+    code: 'HATS_CAPS',
+    catAr: 'قبعات وطواقي',
+    kind: 'onesize',
+    season: 'SUMMER',
+    brand: 'urban',
+    ar: 'قبعة كاب',
+    en: 'Baseball Cap',
+    colors: ['NAVY', 'BEIGE'],
+    price: 49,
+    image: MEN_IMG('hats-caps-new.webp'),
+  },
+];
+
+// Kids' products - age sizes (or baby ages) on clothing.
+const KIDS_PRODUCTS: AudienceProduct[] = [
+  {
+    key: 'k-girls-dress',
+    code: 'GIRLS_DRESSES',
+    catAr: 'فساتين بنات',
+    kind: 'clothing',
+    season: 'SUMMER',
+    brand: 'zaytoon',
+    ar: 'فستان بنات مطبع',
+    en: "Girls' Printed Dress",
+    colors: ['PINK', 'YELLOW'],
+    price: 119,
+    image: KIDS_IMG('فساتين بنات'),
+  },
+  {
+    key: 'k-girls-dress-party',
+    code: 'GIRLS_DRESSES',
+    catAr: 'فساتين بنات',
+    kind: 'clothing',
+    season: null,
+    brand: 'zaytoon',
+    ar: 'فستان سهرة للبنات',
+    en: "Girls' Party Dress",
+    colors: ['LILAC', 'WHITE'],
+    price: 169,
+    image: KIDS_IMG('فساتين بنات'),
+  },
+  {
+    key: 'k-tshirt',
+    code: 'TSHIRTS',
+    catAr: 'تيشيرتات',
+    kind: 'clothing',
+    season: 'SUMMER',
+    brand: 'zaytoon',
+    ar: 'تيشيرت أطفال',
+    en: 'Kids T-Shirt',
+    colors: ['WHITE', 'BLUE', 'RED'],
+    price: 39,
+    image: KIDS_IMG('تيشيرتات'),
+  },
+  {
+    key: 'k-shirt',
+    code: 'SHIRTS',
+    catAr: 'قمصان',
+    kind: 'clothing',
+    season: 'SPRING',
+    brand: 'zaytoon',
+    ar: 'قميص أولاد',
+    en: "Boys' Shirt",
+    colors: ['BLUE', 'WHITE'],
+    price: 69,
+    image: KIDS_IMG('قمصان'),
+  },
+  {
+    key: 'k-jeans',
+    code: 'JEANS',
+    catAr: 'جينز',
+    kind: 'clothing',
+    season: null,
+    brand: 'urban',
+    ar: 'جينز أطفال',
+    en: 'Kids Jeans',
+    colors: ['DENIM'],
+    price: 89,
+    image: KIDS_IMG('جينز'),
+  },
+  {
+    key: 'k-trousers',
+    code: 'TROUSERS',
+    catAr: 'بناطيل',
+    kind: 'clothing',
+    season: 'FALL',
+    brand: 'zaytoon',
+    ar: 'بنطال قطني للأطفال',
+    en: 'Kids Cotton Trousers',
+    colors: ['BEIGE', 'NAVY'],
+    price: 59,
+    image: KIDS_IMG('بناطيل'),
+  },
+  {
+    key: 'k-shorts',
+    code: 'SHORTS',
+    catAr: 'شورتات',
+    kind: 'clothing',
+    season: 'SUMMER',
+    brand: 'zaytoon',
+    ar: 'شورت أطفال',
+    en: 'Kids Shorts',
+    colors: ['GREEN', 'NAVY'],
+    price: 45,
+    image: KIDS_IMG('شورتات'),
+  },
+  {
+    key: 'k-hoodie',
+    code: 'HOODIES',
+    catAr: 'هوديز',
+    kind: 'clothing',
+    season: 'WINTER',
+    brand: 'urban',
+    ar: 'هودي أطفال',
+    en: 'Kids Hoodie',
+    colors: ['GRAY', 'PINK'],
+    price: 99,
+    image: KIDS_IMG('هوديز'),
+  },
+  {
+    key: 'k-jacket',
+    code: 'JACKETS',
+    catAr: 'جكيتات',
+    kind: 'clothing',
+    season: 'FALL',
+    brand: 'zaytoon',
+    ar: 'جاكيت أطفال',
+    en: 'Kids Jacket',
+    colors: ['RED', 'NAVY'],
+    price: 149,
+    image: KIDS_IMG('جكيتات'),
+  },
+  {
+    key: 'k-coat',
+    code: 'COATS',
+    catAr: 'معاطف',
+    kind: 'clothing',
+    season: 'WINTER',
+    brand: 'zaytoon',
+    ar: 'معطف شتوي للأطفال',
+    en: 'Kids Winter Coat',
+    colors: ['NAVY', 'BURGUNDY'],
+    price: 199,
+    image: KIDS_IMG('معاطف'),
+  },
+  {
+    key: 'k-knit',
+    code: 'KNITWEAR',
+    catAr: 'كنزات وتريكو',
+    kind: 'clothing',
+    season: 'WINTER',
+    brand: 'qasr',
+    ar: 'كنزة صوف للأطفال',
+    en: 'Kids Wool Sweater',
+    colors: ['CREAM', 'GREEN'],
+    price: 89,
+    image: KIDS_IMG('كنزات وتريكو'),
+  },
+  {
+    key: 'k-leggings',
+    code: 'LEGGINGS',
+    catAr: 'ليغينغز',
+    kind: 'clothing',
+    season: 'SPRING',
+    brand: 'zaytoon',
+    ar: 'ليغينغز بنات',
+    en: "Girls' Leggings",
+    colors: ['BLACK', 'PINK'],
+    price: 35,
+    image: KIDS_IMG('ليغينغز'),
+  },
+  {
+    key: 'k-skirt',
+    code: 'SKIRTS',
+    catAr: 'تنانير',
+    kind: 'clothing',
+    season: 'SPRING',
+    brand: 'zaytoon',
+    ar: 'تنورة بنات',
+    en: "Girls' Skirt",
+    colors: ['PINK', 'DENIM'],
+    price: 55,
+    image: KIDS_IMG('تنانير'),
+  },
+  {
+    key: 'k-sport',
+    code: 'SPORTSWEAR',
+    catAr: 'ملابس رياضية',
+    kind: 'clothing',
+    season: null,
+    brand: 'urban',
+    ar: 'طقم رياضي أطفال',
+    en: 'Kids Tracksuit',
+    colors: ['BLUE', 'GRAY'],
+    price: 109,
+    image: KIDS_IMG('ملابس رياضية'),
+  },
+  {
+    key: 'k-pajamas',
+    code: 'SLEEPWEAR',
+    catAr: 'ملابس نوم',
+    kind: 'clothing',
+    season: null,
+    brand: 'zaytoon',
+    ar: 'بيجامة أطفال',
+    en: 'Kids Pajamas',
+    colors: ['BLUE', 'PINK'],
+    price: 69,
+    image: KIDS_IMG('ملابس نوم'),
+  },
+  {
+    key: 'k-occasion',
+    code: 'OCCASION_WEAR',
+    catAr: 'ملابس مناسبات وأعياد',
+    kind: 'clothing',
+    season: null,
+    brand: 'zaytoon',
+    ar: 'طقم العيد للأطفال',
+    en: 'Kids Eid Outfit',
+    colors: ['WHITE', 'BEIGE'],
+    price: 159,
+    image: KIDS_IMG('ملابس مناسبات وأعياد'),
+  },
+  {
+    key: 'k-newborn',
+    code: 'NEWBORN',
+    catAr: 'ملابس مواليد',
+    kind: 'baby',
+    season: null,
+    brand: 'zaytoon',
+    ar: 'طقم مواليد قطني',
+    en: 'Newborn Cotton Set',
+    colors: ['WHITE', 'YELLOW'],
+    price: 79,
+    image: KIDS_IMG('ملابس مواليد'),
+  },
+  {
+    key: 'k-bodysuit',
+    code: 'BABY_BODYSUITS',
+    catAr: 'بودي أطفال',
+    kind: 'baby',
+    season: 'SUMMER',
+    brand: 'zaytoon',
+    ar: 'بودي أطفال قطني',
+    en: 'Baby Cotton Bodysuit',
+    colors: ['WHITE', 'PINK', 'BLUE'],
+    price: 39,
+    image: KIDS_IMG('ملابس مواليد'),
+  },
+  {
+    key: 'k-dungarees',
+    code: 'DUNGAREES',
+    catAr: 'سالوبيت',
+    kind: 'clothing',
+    season: 'SPRING',
+    brand: 'zaytoon',
+    ar: 'سالوبيت جينز للأطفال',
+    en: 'Kids Denim Dungarees',
+    colors: ['DENIM'],
+    price: 99,
+    image: KIDS_IMG('سالوبيت'),
+  },
+  {
+    key: 'k-hair',
+    code: 'HAIR_ACCESSORIES',
+    catAr: 'إكسسوارات الشعر',
+    kind: 'onesize',
+    season: null,
+    brand: 'yasmin',
+    ar: 'طوق شعر للبنات',
+    en: "Girls' Hair Band",
+    colors: ['PINK', 'RED'],
+    price: 25,
+    image: KIDS_IMG('إكسسوارات الشعر'),
+  },
+];
 
 // Names describe what each photo actually shows.
 const PRODUCTS: DemoProduct[] = [
@@ -905,6 +1687,7 @@ const PRODUCTS: DemoProduct[] = [
 
 const now = new Date();
 const DAY = 86_400_000;
+const HOUR = 3_600_000;
 
 /** Store split: every third product is sold by both stores (comparison). */
 function storesFor(index: number): (1 | 2)[] {
@@ -912,10 +1695,14 @@ function storesFor(index: number): (1 | 2)[] {
   return index % 3 === 1 ? [1] : [2];
 }
 
-function sizesFor(kind: Kind, index: number): (string | null)[] {
-  if (kind === 'onesize') return [null];
-  const sizes = kind === 'shoes' ? SHOE_SIZES : CLOTHING_SIZES;
-  // 3 to 5 consecutive sizes, varied per product.
+/** 3 to 5 consecutive size codes, varied per product; [null] = no size. */
+function sizesFor(
+  audience: ProductAudience,
+  kind: Kind,
+  index: number,
+): (string | null)[] {
+  const sizes = SIZE_CODES[audience === 'KIDS' ? 'kids' : 'adult'][kind];
+  if (sizes.length === 0) return [null];
   const start = index % 2;
   const end = sizes.length - (index % 3 === 0 ? 1 : 0);
   return sizes.slice(start, Math.max(start + 3, end));
@@ -934,10 +1721,99 @@ function storePrice(base: number, store: 1 | 2, index: number): number {
   return Math.max(15, base + delta);
 }
 
+/** One product to create, whatever list it came from. */
+interface SeedProduct {
+  key: string;
+  audience: ProductAudience;
+  code: string;
+  /** The demo `categories` row (canonical products need one). */
+  categoryId: string;
+  categoryAr: string;
+  categoryEn: string;
+  season: ProductSeason | null;
+  brand: keyof typeof BRANDS;
+  ar: string;
+  en: string;
+  colorCodes: string[];
+  sizeCodes: (string | null)[];
+  price: number;
+  image: string;
+  /** Position within its own list - decides which store(s) sell it. */
+  listIndex: number;
+}
+
+function catalog(): SeedProduct[] {
+  const women = PRODUCTS.map((p, index): SeedProduct => {
+    const category = CATEGORIES[p.cat];
+    const colorCodes = [
+      ...new Set(
+        p.colors.map((c) => {
+          const code = COLOR_CODE[c];
+          if (!code) throw new Error(`No taxonomy colour for "${c}"`);
+          return code;
+        }),
+      ),
+    ];
+    return {
+      key: `w-${p.img}`,
+      audience: 'WOMEN',
+      code: category.code,
+      categoryId: stableId(`category:${p.cat}`),
+      categoryAr: category.ar,
+      categoryEn: `Via Demo Women - ${category.en}`,
+      season: category.season,
+      brand: p.brand,
+      ar: p.ar,
+      en: p.en,
+      colorCodes,
+      sizeCodes: sizesFor('WOMEN', category.kind, index),
+      price: p.price,
+      image: `/demo-assets/women-catalog/wd-${p.img}.jpg`,
+      listIndex: index,
+    };
+  });
+  const other = (audience: ProductAudience, list: AudienceProduct[]) =>
+    list.map((p, index): SeedProduct => ({
+      key: p.key,
+      audience,
+      code: p.code,
+      categoryId: catalogId(`category:${audience}:${p.code}`),
+      categoryAr: p.catAr,
+      categoryEn: `Via Demo ${audience === 'MEN' ? 'Men' : 'Kids'} - ${p.code}`,
+      season: p.season,
+      brand: p.brand,
+      ar: p.ar,
+      en: p.en,
+      colorCodes: p.colors,
+      sizeCodes: sizesFor(audience, p.kind, index),
+      price: p.price,
+      image: p.image,
+      listIndex: index,
+    }));
+  // Interleaved, so "newest" mixes the three audiences realistically.
+  const men = other('MEN', MEN_PRODUCTS);
+  const kids = other('KIDS', KIDS_PRODUCTS);
+  const all: SeedProduct[] = [];
+  for (let i = 0; i < Math.max(women.length, men.length, kids.length); i++) {
+    if (women[i]) all.push(women[i]);
+    if (men[i]) all.push(men[i]);
+    if (kids[i]) all.push(kids[i]);
+  }
+  return all;
+}
+
+/** The first version's unclassified demo offers (for --retire-v1). */
+function v1OfferIds(): string[] {
+  return PRODUCTS.flatMap((p, index) =>
+    storesFor(index).map((store) => stableId(`offer:${p.img}:${store}`)),
+  );
+}
+
 async function main() {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error('DATABASE_URL is not set');
   requireLocalDatabase(url);
+  const retireV1 = process.argv.includes('--retire-v1');
   const prisma = new PrismaClient({ adapter: new PrismaPg(url) });
 
   try {
@@ -962,24 +1838,62 @@ async function main() {
       branches[n] = branch.id;
     }
 
+    // The taxonomy's own labels (and a check every code exists).
+    const [colors, sizes, categoryLinks] = await Promise.all([
+      prisma.taxonomyColor.findMany(),
+      prisma.taxonomySize.findMany(),
+      prisma.taxonomyCategoryAudience.findMany(),
+    ]);
+    if (!colors.some((c) => c.code === 'GRAY')) {
+      throw new Error(
+        'Taxonomy colour GRAY missing - apply migration 20261023090000_product_taxonomy_spring_gray first.',
+      );
+    }
+    const colorLabel = new Map(colors.map((c) => [c.code, c.nameAr]));
+    const sizeLabel = new Map(sizes.map((s) => [s.code, s.label]));
+    const linked = new Set(
+      categoryLinks.map((l) => `${l.categoryCode}:${l.audience}`),
+    );
+    const products = catalog();
+    for (const p of products) {
+      if (!linked.has(`${p.code}:${p.audience}`)) {
+        throw new Error(
+          `${p.key}: category ${p.code} is not a ${p.audience} category`,
+        );
+      }
+      for (const c of p.colorCodes) {
+        if (!colorLabel.has(c))
+          throw new Error(`${p.key}: unknown colour ${c}`);
+      }
+      for (const s of p.sizeCodes) {
+        if (s !== null && !sizeLabel.has(s)) {
+          throw new Error(`${p.key}: unknown size ${s}`);
+        }
+      }
+    }
+
     const stats = {
       productsCreated: 0,
       productsExisting: 0,
       offers: 0,
       offerVariants: 0,
+      retired: 0,
     };
 
     await prisma.$transaction(
       async (tx) => {
-        // Both demo stores must list the women's segment (vendor_applicable_categories).
+        // Both demo stores list all three segments
+        // (vendor_applicable_categories - the store-level `segment`).
         for (const n of [1, 2] as const) {
-          await tx.vendorApplicableCategory.upsert({
-            where: {
-              vendorId_category: { vendorId: vendors[n].id, category: 'WOMEN' },
-            },
-            create: { vendorId: vendors[n].id, category: 'WOMEN' },
-            update: {},
-          });
+          for (const category of ['WOMEN', 'MEN', 'KIDS'] as const) {
+            await tx.vendorApplicableCategory.upsert({
+              where: {
+                vendorId_category: { vendorId: vendors[n].id, category },
+              },
+              create: { vendorId: vendors[n].id, category },
+              update: {},
+            });
+          }
         }
 
         const brandIds: Record<string, string> = {};
@@ -996,23 +1910,20 @@ async function main() {
           brandIds[key] = brand.id;
         }
 
-        const categoryIds: Record<string, string> = {};
-        for (const [key, cat] of Object.entries(CATEGORIES)) {
-          const id = stableId(`category:${key}`);
+        for (const p of products) {
           await tx.category.upsert({
-            where: { id },
+            where: { id: p.categoryId },
             create: {
-              id,
-              nameAr: cat.ar,
-              nameEn: `Via Demo Women - ${cat.en}`,
+              id: p.categoryId,
+              nameAr: p.categoryAr,
+              nameEn: p.categoryEn,
             },
             update: {},
           });
-          categoryIds[key] = id;
         }
 
-        for (const [index, p] of PRODUCTS.entries()) {
-          const productId = stableId(`product:${p.img}`);
+        for (const [index, p] of products.entries()) {
+          const productId = catalogId(`product:${p.key}`);
           const exists = await tx.canonicalProduct.findUnique({
             where: { id: productId },
             select: { id: true },
@@ -1021,41 +1932,50 @@ async function main() {
             stats.productsExisting++;
             continue;
           }
-          const category = CATEGORIES[p.cat];
+          // Staggered so "newest" ordering is stable and meaningful.
+          const addedAt = new Date(now.getTime() - index * HOUR);
           await tx.canonicalProduct.create({
             data: {
               id: productId,
               brandId: brandIds[p.brand],
-              categoryId: categoryIds[p.cat],
-              modelName: `${p.en} (WDEMO-${p.img})`,
+              categoryId: p.categoryId,
+              modelName: `${p.en} (VCAT-${p.key})`,
               status: 'PUBLISHED',
               canonicalNameAr: p.ar,
               canonicalNameEn: p.en,
-              // Staggered so "newest" ordering is stable and meaningful.
-              createdAt: new Date(now.getTime() - index * 3_600_000),
+              createdAt: addedAt,
             },
           });
 
-          const variants = p.colors.flatMap((color, ci) =>
-            sizesFor(category.kind, index).map((size, si) => ({
-              key: `${p.img}-${ci}-${si}`,
-              attrs: size ? { color, size } : { color },
+          const variants = p.colorCodes.flatMap((colorCode, ci) =>
+            p.sizeCodes.map((sizeCode, si) => ({
+              key: `${p.key}-${ci}-${si}`,
+              colorCode,
+              sizeCode,
+              colour: colorLabel.get(colorCode)!,
+              size: sizeCode ? sizeLabel.get(sizeCode)! : null,
             })),
           );
           for (const v of variants) {
             await tx.canonicalProductVariant.create({
               data: {
-                id: stableId(`variant:${v.key}`),
+                id: catalogId(`variant:${v.key}`),
                 canonicalProductId: productId,
-                structuralAttributes: v.attrs,
-                platformProductBarcode: `PPB-WDEMO-${v.key}`,
+                structuralAttributes: v.size
+                  ? { color: v.colour, size: v.size }
+                  : { color: v.colour },
+                platformProductBarcode: `PPB-VCAT-${v.key}`,
               },
             });
           }
 
-          for (const store of storesFor(index)) {
+          const stores = storesFor(p.listIndex);
+          for (const store of stores) {
             const vendor = vendors[store];
-            const offerId = stableId(`offer:${p.img}:${store}`);
+            const offerId = catalogId(`offer:${p.key}:${store}`);
+            // Classified from birth: the classification exists before
+            // any variant, which is then a combination (the DB triggers
+            // refuse anything else on a classified offer).
             await tx.vendorOffer.create({
               data: {
                 id: offerId,
@@ -1066,25 +1986,43 @@ async function main() {
                 titleEn: p.en,
                 status: 'ACTIVE',
                 firstPublishedAt: now,
+                createdAt: new Date(addedAt.getTime() + store * 60_000),
+                season: p.season,
+                taxonomyVersion: 1,
+                requiresTaxonomy: true,
+              },
+            });
+            await tx.vendorOfferAudience.create({
+              data: {
+                vendorId: vendor.id,
+                vendorOfferId: offerId,
+                audience: p.audience,
+              },
+            });
+            await tx.vendorOfferCategory.create({
+              data: {
+                vendorId: vendor.id,
+                vendorOfferId: offerId,
+                categoryCode: p.code,
               },
             });
             stats.offers++;
 
+            // One price per store offer (the unified-price rule).
+            // A manual sale price on every 5th product (first store), a
+            // scheduled % discount on every 7th (last store).
             const base = storePrice(p.price, store, index);
-            // Discounts, using only the schema's own pricing fields:
-            // a manual sale price on every 5th product (first store),
-            // a scheduled % discount on every 7th (second store).
             const sale =
-              index % 5 === 0 && store === storesFor(index)[0]
+              index % 5 === 0 && store === stores[0]
                 ? Math.round(base * 0.8)
                 : null;
             const scheduled =
               index % 7 === 3 &&
-              store === storesFor(index)[storesFor(index).length - 1] &&
+              store === stores[stores.length - 1] &&
               sale === null;
 
             for (const [vi, v] of variants.entries()) {
-              const offerVariantId = stableId(
+              const offerVariantId = catalogId(
                 `offer-variant:${v.key}:${store}`,
               );
               await tx.offerVariant.create({
@@ -1092,12 +2030,15 @@ async function main() {
                   id: offerVariantId,
                   vendorId: vendor.id,
                   vendorOfferId: offerId,
-                  canonicalVariantId: stableId(`variant:${v.key}`),
+                  canonicalVariantId: catalogId(`variant:${v.key}`),
                   matchProposalStatus: 'CONFIRMED',
-                  sellerSku: `WDEMO-${v.key}`,
-                  storeInventoryBarcode: `WDEMO-INV-${v.key}-S${store}`,
-                  colour: v.attrs.color,
-                  size: 'size' in v.attrs ? v.attrs.size : null,
+                  sellerSku: `VCAT-${v.key}`,
+                  storeInventoryBarcode: `VCAT-INV-${v.key}-S${store}`,
+                  isCombination: true,
+                  colorCode: v.colorCode,
+                  sizeCode: v.sizeCode,
+                  colour: v.colour,
+                  size: v.size,
                   basePrice: base,
                   salePrice: sale,
                   discountPercent: scheduled ? 25 : null,
@@ -1111,10 +2052,10 @@ async function main() {
               });
               await tx.offerVariantMedia.create({
                 data: {
-                  id: stableId(`media:${v.key}:${store}`),
+                  id: catalogId(`media:${v.key}:${store}`),
                   vendorId: vendor.id,
                   offerVariantId,
-                  url: `/demo-assets/women-catalog/wd-${p.img}.jpg`,
+                  url: p.image,
                   kind: 'PRIMARY',
                   altTextAr: p.ar,
                   altTextEn: p.en,
@@ -1122,7 +2063,7 @@ async function main() {
               });
               await tx.branchStock.create({
                 data: {
-                  id: stableId(`stock:${v.key}:${store}`),
+                  id: catalogId(`stock:${v.key}:${store}`),
                   vendorId: vendor.id,
                   branchId: branches[store],
                   offerVariantId,
@@ -1134,17 +2075,47 @@ async function main() {
           }
           stats.productsCreated++;
         }
+
+        if (retireV1) {
+          const retired = await tx.vendorOffer.updateMany({
+            where: {
+              id: { in: v1OfferIds() },
+              taxonomyVersion: null,
+              status: 'ACTIVE',
+            },
+            data: { status: 'INACTIVE' },
+          });
+          stats.retired = retired.count;
+        }
       },
-      { timeout: 120_000 },
+      { timeout: 180_000 },
     );
 
-    console.log('Women catalog demo seed complete:');
+    console.log('Women / men / kids catalog demo seed complete:');
     console.log(
-      `  products created: ${stats.productsCreated} (already present: ${stats.productsExisting}, total defined: ${PRODUCTS.length})`,
+      `  products created: ${stats.productsCreated} (already present: ${stats.productsExisting}, total defined: ${products.length})`,
     );
     console.log(
-      `  offers created: ${stats.offers}, offer variants created: ${stats.offerVariants}`,
+      `  offers created: ${stats.offers}, offer variants (combinations) created: ${stats.offerVariants}`,
     );
+    if (retireV1) {
+      console.log(
+        `  old unclassified v1 demo offers set to INACTIVE: ${stats.retired}`,
+      );
+    } else {
+      const v1Active = await prisma.vendorOffer.count({
+        where: {
+          id: { in: v1OfferIds() },
+          taxonomyVersion: null,
+          status: 'ACTIVE',
+        },
+      });
+      if (v1Active > 0) {
+        console.log(
+          `  note: ${v1Active} old unclassified v1 demo offers are still ACTIVE - re-run with --retire-v1 to hide them.`,
+        );
+      }
+    }
   } finally {
     await prisma.$disconnect();
   }

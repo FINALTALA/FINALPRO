@@ -7,12 +7,13 @@
   --women-ink: #1C1416;
   --women-muted: #6B5F5A;
   --women-line: #E4D9D4;
+  --women-deep-surface: #0C0102;
   --color-text: var(--women-ink);
   --color-text-muted: var(--women-muted);
   --color-primary: var(--women-wine);
   --color-primary-hover: var(--women-wine-hover);
   width: 100%;
-  background-color: #070607;
+  background-color: var(--women-deep-surface);
   color: var(--women-ink);
   font-family: 'Finalpro Noto', 'Segoe UI', sans-serif;
 }
@@ -54,7 +55,7 @@
   aspect-ratio: 16 / 9;
   max-height: 760px;
   margin: 0 auto;
-  overflow: hidden;
+  overflow: visible;
   /* background-color: #35151e; */
 }
 
@@ -67,6 +68,7 @@
   object-fit: contain;
   object-position: center;
 }
+
 .women-section-kicker {
   display: block;
   color: #8E5D6B;
@@ -521,12 +523,25 @@
 }
 /* Product listing: four-control toolbar + push-style category sidebar. */
 .women-listing-toolbar {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: flex-start;
   direction: rtl;
   gap: 8px;
+  padding-inline-start: calc(clamp(20px, 3vw, 58px) + 50px);
   margin-bottom: 20px;
+}
+.women-listing-toolbar::after {
+  position: absolute;
+  bottom: -18px;
+  left: 50%;
+  width: 85vw;
+  height: 1px;
+  background: linear-gradient(to right, transparent 0%, rgba(36, 2, 5, .26) 8%, #210104 30%, #210104 70%, rgba(36, 2, 5, .26) 92%, transparent 100%);
+  box-shadow: 0 1px 5px rgba(66, 5, 10, .16);
+  content: "";
+  transform: translateX(-50%);
 }
 .women-tool {
   display: inline-flex;
@@ -534,18 +549,25 @@
   align-items: center;
   gap: 7px;
   padding: 0 14px;
-  border: 1px solid var(--women-line);
+  border: 1px solid #E3CBC4;
   border-radius: 999px;
-  background: #fff;
-  color: #4C4241;
+  background: #FFF9F5;
+  color: #54202D;
   font: inherit;
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
-  transition: border-color .18s ease, color .18s ease, background-color .18s ease;
+  box-shadow: 0 2px 7px rgba(74, 22, 38, .06);
+  transition: border-color .18s ease, color .18s ease, background-color .18s ease, box-shadow .18s ease, transform .18s ease;
 }
-.women-tool:hover { border-color: var(--women-wine); color: var(--women-wine); }
+.women-tool:hover {
+  border-color: #C98D7F;
+  background: #FFF0E8;
+  color: var(--women-wine);
+  box-shadow: 0 5px 12px rgba(74, 22, 38, .12);
+  transform: translateY(-1px);
+}
 .women-tool[aria-pressed="true"],
 .women-tool[aria-expanded="true"] {
   border-color: var(--women-wine);
@@ -574,6 +596,86 @@
   cursor: pointer;
 }
 .women-tool-sort select:focus-visible { outline: 2px solid var(--women-wine); outline-offset: 2px; border-radius: 4px; }
+.women-filter-toggle { letter-spacing: .2px; }
+.women-discovery.filter-is-open { z-index: 10000; }
+.women-discovery > .women-listing-toolbar,
+.women-discovery > .women-results-layout { transition: filter .24s ease; }
+/* Keep the drawer crisp while the product panel behind it visibly recedes. */
+.women-discovery.filter-is-open > .women-listing-toolbar,
+.women-discovery.filter-is-open > .women-results-layout { filter: blur(5px); }
+.women-filter-scrim {
+  position: fixed;
+  z-index: 10001;
+  inset: 0;
+  border: 0;
+  background: rgba(30, 15, 20, .35);
+  backdrop-filter: blur(3px);
+  cursor: pointer;
+  animation: women-filter-scrim-in .22s ease both;
+}
+@keyframes women-filter-scrim-in { from { opacity: 0; } to { opacity: 1; } }
+.women-filter-drawer {
+  --filter-accent: var(--women-wine);
+  --filter-ink: #3D252B;
+  --filter-muted: #826A6E;
+  --filter-surface: #FFFDFB;
+  --filter-surface-rgb: 255, 253, 251;
+  --filter-fade-rgb: 69, 31, 42;
+  --filter-ornament-filter: sepia(1) saturate(1.3) hue-rotate(294deg) brightness(.64);
+  position: fixed;
+  z-index: 10002;
+  top: 0;
+  right: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(33.333vw, 510px);
+  min-width: 360px;
+  height: 100dvh;
+  bottom: 0;
+  overflow: hidden;
+  border-inline-start: 0;
+  border-radius: 26px 0 0 26px;
+  background: var(--filter-surface);
+  color: var(--filter-ink);
+  box-shadow: -24px 0 46px rgba(28, 12, 17, .2), -4px 0 10px rgba(28, 12, 17, .12), inset 1px 0 rgba(255, 255, 255, .78);
+  direction: rtl;
+  isolation: isolate;
+  transform: translateX(103%);
+  visibility: hidden;
+  transition: transform .36s cubic-bezier(.22, 1, .36, 1), visibility 0s linear .36s;
+}
+.women-filter-drawer.is-open { transform: none; visibility: visible; transition: transform .36s cubic-bezier(.22, 1, .36, 1); }
+.women-filter-drawer::before { position: absolute; z-index: -1; top: 0; bottom: 0; left: -150px; width: 150px; background: linear-gradient(to left, rgba(var(--filter-fade-rgb), .72) 0%, rgba(var(--filter-fade-rgb), .42) 34%, rgba(var(--filter-fade-rgb), .14) 69%, transparent 100%); content: ""; pointer-events: none; }
+.women-filter-drawer::after { position: absolute; z-index: 0; inset: 0; background-image: url("/images/floral_ornaments_transparent_svg/ornament_03.svg"), url("/images/floral_ornaments_transparent_svg/ornament_08.svg"); background-repeat: no-repeat; background-position: -58px 12%, calc(100% + 60px) 82%; background-size: 165px auto, 175px auto; content: ""; filter: var(--filter-ornament-filter); opacity: .045; pointer-events: none; }
+.women-filter-head,.women-filter-scroll,.women-filter-actions { position: relative; z-index: 1; }
+.women-filter-head h2,.women-filter-group legend { display: flex; align-items: center; gap: 8px; }
+.women-filter-head h2::after,.women-filter-group legend::after { display: inline-block; width: 25px; height: 18px; flex: 0 0 auto; background: url("/images/floral_ornaments_transparent_svg/ornament_11.svg") center / contain no-repeat; content: ""; filter: var(--filter-ornament-filter); opacity: .46; }
+.women-filter-head { display: flex; align-items: center; justify-content: space-between; padding: 26px 28px 20px; border-bottom: 1px solid rgba(105, 55, 66, .12); }
+.women-filter-head span { display: block; margin-bottom: 3px; color: var(--filter-muted); font-size: 11px; }
+.women-filter-head h2 { margin: 0; color: var(--filter-accent); font-size: 24px; line-height: 1; letter-spacing: .3px; }
+.women-filter-close { display: grid; width: 36px; height: 36px; place-items: center; border: 1px solid rgba(105, 55, 66, .18); border-radius: 50%; background: #fff; color: var(--filter-ink); cursor: pointer; transition: transform .18s ease, background .18s ease; }
+.women-filter-close:hover { background: color-mix(in srgb, var(--filter-accent) 8%, #fff); transform: rotate(90deg); }
+.women-filter-close svg { width: 18px; height: 18px; }
+.women-filter-scroll { min-height: 0; overflow-y: auto; padding: 7px 28px 20px; direction: ltr; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--filter-accent) 40%, #fff) transparent; }
+.women-filter-scroll > * { direction: rtl; }
+.women-filter-scroll::-webkit-scrollbar { width: 7px; }
+.women-filter-scroll::-webkit-scrollbar-track { background: transparent; }
+.women-filter-scroll::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: color-mix(in srgb, var(--filter-accent) 40%, #fff); background-clip: padding-box; }
+.women-filter-group { margin: 0; padding: 20px 0; border: 0; border-bottom: 1px solid rgba(105, 55, 66, .11); }
+.women-filter-group legend { width: 100%; padding: 0 0 12px; color: var(--filter-ink); font-size: 14px; font-weight: 800; }
+.women-filter-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.women-filter-options button { min-height: 33px; padding: 0 12px; border: 1px solid rgba(105, 55, 66, .22); border-radius: 999px; background: #fff; color: var(--filter-muted); font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; transition: .18s ease; }
+.women-filter-options button:hover,.women-filter-options button[aria-pressed="true"] { border-color: var(--filter-accent); background: var(--filter-accent); color: #fff; box-shadow: 0 4px 10px color-mix(in srgb, var(--filter-accent) 26%, transparent); }
+.women-filter-options-compact button { min-width: 43px; padding-inline: 9px; }
+.women-filter-price { display: grid; gap: 10px; color: var(--filter-muted); font-size: 12px; font-weight: 700; }
+.women-filter-price input { width: 100%; accent-color: var(--filter-accent); cursor: pointer; }
+.women-filter-colors { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 18px; }
+.women-filter-colors label,.women-filter-availability { display: inline-flex; align-items: center; gap: 8px; color: var(--filter-muted); font-size: 12px; font-weight: 600; cursor: pointer; }
+.women-filter-colors input,.women-filter-availability input { width: 15px; height: 15px; margin: 0; accent-color: var(--filter-accent); }
+.women-filter-availability { min-height: 48px; padding: 17px 0; }
+.women-filter-actions { display: grid; grid-template-columns: 1fr 1.35fr; gap: 10px; padding: 16px 28px max(18px, env(safe-area-inset-bottom)); border-top: 1px solid rgba(105, 55, 66, .12); background: transparent; }
+.women-filter-actions button { min-height: 43px; border: 1px solid var(--filter-accent); border-radius: 12px; background: transparent; color: var(--filter-accent); font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; }
+.women-filter-actions button:last-child { background: var(--filter-accent); color: #fff; box-shadow: 0 6px 14px color-mix(in srgb, var(--filter-accent) 28%, transparent); }
 .women-results-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -590,6 +692,11 @@
   gap: 22px 18px;
 }
 .women-results-layout.has-sidebar .women-product-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+/* The category drawer trigger is no longer part of this toolbar.  Keep the
+   results as a normal block so legacy grid placement cannot reserve a blank
+   row before the first product card. */
+.women-page .women-results-layout { display: block; margin-top: 28px; }
+.women-page .women-results { grid-column: auto; grid-row: auto; }
 /* Women listing card: borderless, image-led tile with compact overlays
    (store pill + AI top-left, favorite top-right, discount bottom-left,
    colour capsule bottom-right) and a three-line text block below. */
@@ -1021,10 +1128,15 @@
   .women-tool-sort { padding-inline-end: 4px; }
   .women-tool-sort span { display: none; }
   .women-tool-sort select { max-width: 112px; }
+  .women-filter-drawer { top: 0; bottom: 0; width: min(92vw, 390px); min-width: 0; border-radius: 20px 0 0 20px; }
+  .women-filter-head { padding-inline: 20px; }
+  .women-filter-scroll { padding-inline: 20px; }
+  .women-filter-actions { padding-inline: 20px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .women-results-layout.has-sidebar .women-category-sidebar { animation: none; }
   .women-category-sidebar { transition: none !important; }
+  .women-filter-drawer { transition: none !important; }
 }
 .women-more-results {
   display: flex;
@@ -1340,37 +1452,105 @@
   min-height: clamp(46px, 3.25vw, 66px);
   align-items: center;
   justify-content: center;
+  gap: 9px;
+  isolation: isolate;
   transform: translateX(-50%);
   padding: 12px 28px;
-  border: 1px solid rgba(255, 243, 233, .9);
+  border: 1px solid rgba(236, 190, 169, .9);
   border-radius: 999px;
-  background: #FFF3E9;
-  box-shadow: 0 8px 28px rgba(20, 0, 0, .2);
+  background: radial-gradient(ellipse at 50% 38%, #FFFDF9 0%, #FFF5ED 45%, #EBCBC1 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .95), inset 0 0 15px rgba(164, 76, 69, .15), 0 8px 28px rgba(20, 0, 0, .26), 0 0 0 4px rgba(255, 241, 232, .08);
   color: var(--women-wine);
-  font-size: 14px;
-  font-weight: 600;
+  font: 700 18px/1 'Finalpro Amiri', Georgia, serif;
+  font-weight: 700;
+  letter-spacing: .01em;
   text-decoration: none;
-  transition: background .18s ease, color .18s ease, box-shadow .18s ease;
+  transition: background .18s ease, color .18s ease, box-shadow .18s ease, transform .18s ease;
 }
+.women-hero-cta::before {
+  position: absolute;
+  z-index: 0;
+  inset: 5px;
+  border: 1px solid rgba(125, 39, 48, .27);
+  border-radius: inherit;
+  content: "";
+  pointer-events: none;
+}
+.women-hero-cta > span,
+.women-hero-cta > svg { position: relative; z-index: 1; }
+.women-hero-cta > svg { width: 18px; height: 18px; }
 .women-hero-cta:hover {
-  background: #fff;
-  box-shadow: 0 10px 32px rgba(20, 0, 0, .3);
+  transform: translateX(-50%) translateY(-3px);
+  background: linear-gradient(135deg, #fff 0%, #FFF5EC 52%, #F1D4C7 100%);
+  box-shadow: inset 0 1px 0 #fff, 0 14px 34px rgba(20, 0, 0, .36), 0 0 0 5px rgba(255, 231, 215, .14);
   color: var(--women-wine-hover);
 }
 .women-hero-cta:focus-visible {
   outline: 3px solid #FFF3E9;
   outline-offset: 4px;
 }
+@media (min-width: 900px) {
+  /* Reserve curtain space below the floating header, then move every hero
+     layer together so the subject begins below the navigation panel. */
+  .women-hero {
+    padding-top: 54px;
+    background: #070607 url("/images/women-hero-runway.png") center top / 100% auto no-repeat;
+  }
+  .women-hero-title-art,
+  .women-hero-subject {
+    transform: translateY(54px);
+  }
+}
+@media (min-width: 900px) {
+  /* Fade the actual image edge into the curtain extension above it instead
+     of laying a visible blur strip over the composition. */
+  .women-hero-image {
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, rgba(0, 0, 0, .22) 18px, #000 92px);
+    mask-image: linear-gradient(to bottom, transparent 0, rgba(0, 0, 0, .22) 18px, #000 92px);
+  }
+}
 .women-hero::after {
   display: none;
 }
 /* Moving announcement line, tinted to the hero's runway floor. */
 .women-ticker {
+  position: relative;
+  isolation: isolate;
   overflow: hidden;
   border-block: 1px solid rgba(232, 200, 196, .12);
-  background: #120203;
+  background: linear-gradient(
+    to right,
+    rgba(6, 1, 1, .18) 0%,
+    rgba(18, 2, 3, .66) 7%,
+    rgba(18, 2, 3, .94) 15%,
+    var(--women-deep-surface) 23%,
+    var(--women-deep-surface) 77%,
+    rgba(18, 2, 3, .94) 85%,
+    rgba(18, 2, 3, .66) 93%,
+    rgba(6, 1, 1, .18) 100%
+  );
   color: #F3E3DC;
   direction: ltr;
+}
+.women-ticker::after {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  pointer-events: none;
+  -webkit-backdrop-filter: blur(7px);
+  backdrop-filter: blur(7px);
+  -webkit-mask-image: linear-gradient(to right, #000 0%, #000 10%, transparent 24%, transparent 76%, #000 90%, #000 100%);
+  mask-image: linear-gradient(to right, #000 0%, #000 10%, transparent 24%, transparent 76%, #000 90%, #000 100%);
+  background: linear-gradient(
+    to right,
+    rgba(5, 1, 1, .72) 0%,
+    rgba(5, 1, 1, .42) 5%,
+    rgba(18, 2, 3, 0) 17%,
+    rgba(18, 2, 3, 0) 83%,
+    rgba(5, 1, 1, .42) 95%,
+    rgba(5, 1, 1, .72) 100%
+  );
 }
 .women-ticker-track {
   display: flex;
@@ -1389,10 +1569,37 @@
   font-size: 12px;
   letter-spacing: .2px;
 }
+.women-ticker-group::before,
+.women-ticker-group::after {
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  background: center / contain no-repeat url("/images/floral_ornaments_transparent_svg/ornament_02.svg");
+  content: "";
+  opacity: .72;
+  filter: brightness(1.25) saturate(.82);
+}
+.women-ticker-group::after {
+  background-image: url("/images/floral_ornaments_transparent_svg/ornament_09.svg");
+  transform: rotate(180deg);
+}
+.women-ticker-group > span::after {
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  margin-inline-start: 12px;
+  vertical-align: -3px;
+  background: center / contain no-repeat url("/images/floral_ornaments_transparent_svg/ornament_06.svg");
+  content: "";
+  opacity: .62;
+  filter: brightness(1.3) saturate(.8);
+}
 .women-ticker-group i {
-  color: #E8C8C4;
+  color: #FFF0DF;
   font-size: 10px;
   font-style: normal;
+  text-shadow: 0 0 5px rgba(255, 230, 205, .92), 0 0 10px rgba(235, 178, 143, .5);
 }
 @keyframes women-ticker-scroll {
   to { transform: translateX(-50%); }
@@ -1406,11 +1613,55 @@
   gap: 8px 14px;
   min-height: 44px;
   padding: 8px 16px;
-  border-bottom: 1px solid #EAD6D1;
-  background: #F6E9E5;
+  border-bottom: 0;
+  background: linear-gradient(
+    to right,
+    var(--women-deep-surface) 0%,
+    var(--women-deep-surface) 9%,
+    #351012 15%,
+    #9a6663 21%,
+    #e6cbc5 28%,
+    #F6E9E5 35%,
+    #F6E9E5 65%,
+    #e6cbc5 72%,
+    #9a6663 79%,
+    #351012 85%,
+    var(--women-deep-surface) 91%,
+    var(--women-deep-surface) 100%
+  );
   color: var(--women-wine);
   font-size: 13px;
   text-align: center;
+}
+.women-offer-strip::before,
+.women-offer-strip::after {
+  display: inline-block;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  background: center / contain no-repeat url("/images/floral_ornaments_transparent_svg/ornament_04.svg");
+  content: "";
+  opacity: .5;
+  pointer-events: none;
+}
+.women-offer-strip::after {
+  background-image: url("/images/floral_ornaments_transparent_svg/ornament_11.svg");
+  transform: rotate(180deg);
+}
+.women-offer-strip > span:nth-of-type(2)::before,
+.women-offer-strip > span:nth-of-type(2)::after {
+  display: inline-block;
+  width: 17px;
+  height: 17px;
+  margin-inline: 10px;
+  vertical-align: -4px;
+  background: center / contain no-repeat url("/images/floral_ornaments_transparent_svg/ornament_08.svg");
+  content: "";
+  opacity: .58;
+}
+.women-offer-strip > span:nth-of-type(2)::after {
+  background-image: url("/images/floral_ornaments_transparent_svg/ornament_12.svg");
+  transform: rotate(180deg);
 }
 .women-offer-strip strong { font-weight: 700; }
 .women-offer-icon {
@@ -1445,10 +1696,203 @@
   .women-ticker-track { animation: none; }
 }
 .women-floor-extension {
-  background:
-    radial-gradient(ellipse at 50% 0%, rgba(232, 200, 196, .17), transparent 34%),
-    #FAF8F5;
+  background: var(--women-deep-surface);
   color: var(--women-ink);
+}
+
+/* The global stylesheet also has an older, horizontal category-carousel.
+   Scope the women catalogue back to the compact circular taxonomy layout. */
+.women-page .women-category-list {
+  display: grid;
+  width: min(100%, 1280px);
+  grid-auto-columns: auto;
+  grid-auto-flow: row;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px 8px;
+  overflow: visible;
+  padding: 0;
+  margin-inline: auto;
+  scroll-snap-type: none;
+}
+.women-page .women-categories {
+  position: relative;
+  isolation: isolate;
+  box-sizing: border-box;
+  width: 100vw;
+  margin-inline: calc(50% - 50vw);
+  padding-inline: max(16px, calc((100vw - 1280px) / 2));
+  border-bottom: 0;
+  background: transparent;
+}
+.women-page .women-categories::before { content: none; }
+.women-page .women-discovery {
+  position: relative;
+  isolation: isolate;
+  box-sizing: border-box;
+  width: 100vw;
+  margin: 26px calc(50% - 50vw) 0;
+  padding: 32px;
+  border-radius: 28px 28px 0 0;
+  background: #F8F0EE;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .55),
+    0 -20px 38px rgba(8, 1, 2, .36),
+    0 18px 42px rgba(11, 1, 2, .2);
+}
+.women-page .women-category-card {
+  position: static;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  aspect-ratio: auto;
+  align-items: center;
+  flex-direction: column;
+  gap: 7px;
+  overflow: visible;
+  padding: 3px 2px 4px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--women-ink);
+  isolation: auto;
+  scroll-snap-align: none;
+}
+.women-page .women-category-card::after { content: none; }
+.women-page .women-category-image > img {
+  position: absolute;
+  z-index: auto;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.women-page .women-category-card > .women-category-name {
+  max-width: 100%;
+  padding: 0;
+  color: #F3E3DC;
+  font: 500 11px/1.45 'Finalpro Noto', 'Segoe UI', sans-serif;
+  text-wrap: balance;
+}
+.women-page .women-category-card.selected { outline: 0; }
+.women-page .women-category-image {
+  overflow: visible;
+  isolation: isolate;
+  box-shadow:
+    0 0 0 1px rgba(255, 244, 231, .78),
+    0 7px 18px rgba(255, 226, 205, .14);
+  transition: transform .25s ease, box-shadow .25s ease;
+}
+.women-page .women-category-image::before {
+  position: absolute;
+  z-index: -1;
+  inset: -15px;
+  border-radius: inherit;
+  background: radial-gradient(circle, rgba(255, 252, 245, .48) 0%, rgba(255, 226, 198, .22) 40%, transparent 72%);
+  content: "";
+  filter: blur(4px);
+  opacity: .68;
+  pointer-events: none;
+  animation: women-category-halo 4s ease-in-out infinite;
+  animation-delay: calc(var(--reveal-index, 0) * 75ms);
+}
+@keyframes women-category-halo {
+  0%, 100% { opacity: .5; transform: scale(.91); }
+  50% { opacity: .92; transform: scale(1.08); }
+}
+.women-page .women-category-image::after {
+  position: absolute;
+  z-index: 1;
+  inset: -2px;
+  padding: 1.25px;
+  border-radius: inherit;
+  border: 0;
+  background: conic-gradient(from 215deg, #350005, #7A0710 14%, #E42A38 25%, #9A0915 35%, #FFD230 52%, #FFF2A6 64%, #FFB900 78%, #350005 100%);
+  content: "";
+  opacity: 1;
+  pointer-events: none;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  filter: drop-shadow(0 0 3px rgba(255, 210, 103, .68));
+  transition: padding .18s ease, filter .18s ease;
+}
+.women-page .women-category-image > img { border-radius: inherit; }
+.women-page .women-category-card:hover .women-category-image {
+  transform: translateY(-2px) scale(1.045);
+  box-shadow: 0 8px 20px rgba(215, 174, 85, .28);
+}
+.women-page .women-category-card.selected .women-category-image {
+  box-shadow: 0 8px 22px rgba(215, 174, 85, .34);
+}
+
+.women-page .women-discovery::after {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  background:
+    url("/images/floral_ornaments_transparent_svg/ornament_07.svg") no-repeat -54px 10% / 190px auto,
+    url("/images/floral_ornaments_transparent_svg/ornament_02.svg") no-repeat calc(100% + 64px) 79% / 210px auto;
+  content: "";
+  filter: sepia(.95) saturate(1.15) hue-rotate(302deg) brightness(.72);
+  opacity: .1;
+  pointer-events: none;
+}
+.women-page .women-discovery > .women-listing-toolbar,
+.women-page .women-discovery > .women-results-layout { position: relative; z-index: 1; }
+.women-page .women-discovery .women-tool::after {
+  width: 18px;
+  height: 14px;
+  flex: 0 0 auto;
+  background: center / contain no-repeat url("/images/floral_ornaments_transparent_svg/ornament_11.svg");
+  content: "";
+  filter: sepia(.95) saturate(1.15) hue-rotate(302deg) brightness(.48);
+  opacity: .5;
+}
+.women-page .women-discovery .women-tool[aria-pressed="true"]::after,
+.women-page .women-discovery .women-tool[aria-expanded="true"]::after {
+  filter: sepia(.85) saturate(.9) hue-rotate(302deg) brightness(1.7);
+  opacity: .74;
+}
+.women-page .women-ticker::before {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  background:
+    url("/images/floral_ornaments_transparent_svg/ornament_04.svg") no-repeat 4% center / 44px auto,
+    url("/images/floral_ornaments_transparent_svg/ornament_04.svg") no-repeat 96% center / 44px auto;
+  content: "";
+  filter: sepia(.95) saturate(1.15) hue-rotate(302deg) brightness(1.8);
+  opacity: .46;
+  pointer-events: none;
+}
+.women-page .women-category-card:hover .women-category-image::after,
+.women-page .women-category-card.selected .women-category-image::after {
+  padding: 1.75px;
+  animation: women-category-ring-spin 1.45s linear infinite;
+  filter: drop-shadow(0 0 4px rgba(255, 221, 137, .82));
+}
+@keyframes women-category-ring-spin { to { transform: rotate(1turn); } }
+.women-page .women-category-check { z-index: 2; }
+.women-page .women-category-card.selected > .women-category-name { color: #F0CC73; }
+@media (prefers-reduced-motion: reduce) {
+  .women-page .women-category-image::before,
+  .women-page .women-category-card:hover .women-category-image::after,
+  .women-page .women-category-card.selected .women-category-image::after { animation: none; }
+}
+@media (min-width: 640px) {
+  .women-page .women-category-list { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+  .women-page .women-category-card > .women-category-name { font-size: 12px; }
+}
+@media (min-width: 768px) {
+  .women-page .women-category-list { grid-template-columns: repeat(10, minmax(0, 1fr)); }
+}
+@media (min-width: 1024px) {
+  .women-page .women-category-list { grid-template-columns: repeat(13, minmax(0, 1fr)); }
+  /* 38 = 13 + 13 + 12. Centre the final, incomplete row. */
+  .women-page .women-category-item:nth-child(n + 27) {
+    transform: translateX(-50%);
+  }
 }
 @media (max-width: 1100px) and (min-width: 900px) {
   .women-header-inner {
@@ -1472,7 +1916,10 @@
     aspect-ratio: auto;
     padding-bottom: 54px;
   }
-  .women-hero-title-art { top: 1%; left: 2%; width: 86%; }
+  /* On a narrow hero the transparent calligraphy layer can expose a single
+     accent over the subject's hair. The full title is decorative, so hide it
+     rather than letting a detached character appear over the photo. */
+  .women-hero-title-art { display: none; }
   .women-hero-cta {
     top: auto;
     bottom: 4px;
@@ -1520,3 +1967,4 @@
   color: #d8b574;
   cursor: pointer;
 }
+

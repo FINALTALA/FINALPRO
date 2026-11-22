@@ -2,6 +2,10 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ThrottlerStorage } from '@nestjs/throttler';
 import * as request from 'supertest';
+import {
+  TEST_CLASSIFICATION,
+  postCombination,
+} from './helpers/taxonomy-offers';
 import { AppModule } from './../src/app.module';
 import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
@@ -288,14 +292,20 @@ describe('Sprint 17b - platform catalog administration (e2e)', () => {
       .post(`/api/v1/vendors/${vendorId}/offers`)
       .set('Authorization', `Bearer ${ownerToken}`)
       .set('Idempotency-Key', unique('offer'))
-      .send({ title_ar: unique('عرض'), title_en: unique('Offer') })
+      .send({
+        title_ar: unique('عرض'),
+        title_en: unique('Offer'),
+        ...TEST_CLASSIFICATION,
+      })
       .expect(201);
-    const variantRes = await request(app.getHttpServer())
-      .post(`/api/v1/vendors/${vendorId}/offers/${offerRes.body.id}/variants`)
-      .set('Authorization', `Bearer ${ownerToken}`)
-      .set('Idempotency-Key', unique('variant'))
-      .send({ seller_sku: unique('sku'), base_price: 10, ...extra })
-      .expect(201);
+    const variantRes = await postCombination(
+      app.getHttpServer(),
+      ownerToken,
+      vendorId,
+      offerRes.body.id,
+      { seller_sku: unique('sku'), base_price: 10, ...extra },
+    );
+    expect(variantRes.status).toBe(201);
     return { offerId: offerRes.body.id, variantId: variantRes.body.id };
   }
 
@@ -1777,7 +1787,11 @@ describe('Sprint 17b - platform catalog administration (e2e)', () => {
         .post(`/api/v1/vendors/${vendorId}/offers`)
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('offer'))
-        .send({ title_ar: unique('عرض'), title_en: unique('Offer') })
+        .send({
+          title_ar: unique('عرض'),
+          title_en: unique('Offer'),
+          ...TEST_CLASSIFICATION,
+        })
         .expect(201);
       const gtinKeep = uniqueGtin();
       const gtinMove = uniqueGtin();
@@ -1790,17 +1804,19 @@ describe('Sprint 17b - platform catalog administration (e2e)', () => {
         data: { gtin: gtinMove },
       });
 
-      const variant1Res = await request(app.getHttpServer())
-        .post(`/api/v1/vendors/${vendorId}/offers/${offerRes.body.id}/variants`)
-        .set('Authorization', `Bearer ${owner}`)
-        .set('Idempotency-Key', unique('variant'))
-        .send({
+      const variant1Res = await postCombination(
+        app.getHttpServer(),
+        owner,
+        vendorId,
+        offerRes.body.id,
+        {
           seller_sku: unique('sku'),
           base_price: 10,
           identifier_type: 'GTIN',
           identifier_value: gtinKeep,
-        })
-        .expect(201);
+        },
+      );
+      expect(variant1Res.status).toBe(201);
       await request(app.getHttpServer())
         .post(
           `/api/v1/vendors/${vendorId}/offers/${offerRes.body.id}/variants/${variant1Res.body.id}/match-confirmation`,
@@ -1810,17 +1826,19 @@ describe('Sprint 17b - platform catalog administration (e2e)', () => {
         .send({ decision: 'confirm' })
         .expect(200);
 
-      const variant2Res = await request(app.getHttpServer())
-        .post(`/api/v1/vendors/${vendorId}/offers/${offerRes.body.id}/variants`)
-        .set('Authorization', `Bearer ${owner}`)
-        .set('Idempotency-Key', unique('variant2'))
-        .send({
+      const variant2Res = await postCombination(
+        app.getHttpServer(),
+        owner,
+        vendorId,
+        offerRes.body.id,
+        {
           seller_sku: unique('sku2'),
           base_price: 10,
           identifier_type: 'GTIN',
           identifier_value: gtinMove,
-        })
-        .expect(201);
+        },
+      );
+      expect(variant2Res.status).toBe(201);
       await request(app.getHttpServer())
         .post(
           `/api/v1/vendors/${vendorId}/offers/${offerRes.body.id}/variants/${variant2Res.body.id}/match-confirmation`,

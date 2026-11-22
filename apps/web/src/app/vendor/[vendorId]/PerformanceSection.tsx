@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { ApiError, apiFetch } from "@/lib/api";
 
 // Sprint 25 (FR-VEND-011, FR-VPORTAL-007) - review round: the owner's
@@ -213,7 +213,14 @@ function ColumnChart({
   );
 }
 
-export default function PerformanceSection({ vendorId }: { vendorId: string }) {
+export default function PerformanceSection({
+  vendorId,
+  whenDisabled = null,
+}: {
+  vendorId: string;
+  /** What to show while the dashboard flag is off (default: nothing). */
+  whenDisabled?: ReactNode;
+}) {
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<{ attempt: number; value: LoadState }>({
     attempt: -1,
@@ -248,7 +255,7 @@ export default function PerformanceSection({ vendorId }: { vendorId: string }) {
   // A new attempt shows "loading" again until its own answer arrives.
   const current: LoadState = state.attempt === attempt ? state.value : { kind: "loading" };
 
-  if (current.kind === "disabled") return null;
+  if (current.kind === "disabled") return <>{whenDisabled}</>;
 
   if (current.kind === "loading") {
     return (

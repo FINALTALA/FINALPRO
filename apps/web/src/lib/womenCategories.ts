@@ -1,13 +1,14 @@
-// The women's page category grid - presentation only (slug, label,
-// image). Which products belong to a category is decided by the API
-// (apps/api/src/discovery/women-categories.ts, matched on the server so
-// it works across paginated results); the slugs here must match it.
+// The women's page category images - presentation only. Which
+// categories the page shows, their names and order come from
+// GET /taxonomy, and which products belong to one is the product's own
+// taxonomy classification (see lib/listingCategories.ts, which matches
+// each slug here to its taxonomy code).
 // Images are licensed demo photography (Pexels License, see
 // public/images/women-categories/CREDITS.md).
 export interface WomenCategory {
   slug: string;
   label: string;
-  image: string;
+  image?: string;
 }
 
 const img = (slug: string) => `/images/women-categories/${slug}.jpg`;
@@ -52,3 +53,4 @@ export const WOMEN_CATEGORIES: WomenCategory[] = [
   { slug: "accessories", label: "إكسسوارات", image: img("accessories-flatlay") },
   { slug: "socks", label: "جوارب", image: img("socks") },
 ];
+

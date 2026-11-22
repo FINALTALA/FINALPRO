@@ -1,6 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
+import {
+  TEST_CLASSIFICATION,
+  postCombination,
+} from './helpers/taxonomy-offers';
 import { AppModule } from './../src/app.module';
 import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
@@ -32,6 +37,18 @@ let counter = 0;
 function unique(label: string): string {
   counter += 1;
   return `${label}-${Date.now()}-${counter}`;
+}
+
+/**
+ * A fixture brand created through POST /brands, which (by design) refuses a
+ * name too similar to an existing one (POSSIBLE_DUPLICATE, trigram
+ * similarity >= 0.6). `unique()` names are `Brand-<ms>-<n>`, and other files
+ * running at the same time insert brands named that way within the same
+ * milliseconds - similar enough to be refused. A random name is never close
+ * to another brand, whatever runs alongside.
+ */
+function fixtureBrandName(): string {
+  return `Brand ${randomUUID()}`;
 }
 
 describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)', () => {
@@ -237,7 +254,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
     it('refuses to delete a category that has canonical products (409 CATEGORY_IN_USE)', async () => {
       const admin = await signupWithPlatformRole('PLATFORM_ADMIN');
       const categoryId = await createCategory(admin, unique('DeleteMe'));
-      const brandId = await createBrand(admin, unique('Brand'));
+      const brandId = await createBrand(admin, fixtureBrandName());
       await request(app.getHttpServer())
         .post('/api/v1/canonical-products')
         .set('Authorization', `Bearer ${admin}`)
@@ -355,6 +372,27 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
   });
 
   describe('brands (FK-satisfying minimum for BL-MATCH-001)', () => {
+    it('a fixture brand is created even while another file has just inserted brands named like unique() (the parallel-run case, made deterministic)', async () => {
+      const admin = await signupWithPlatformRole('PLATFORM_ADMIN');
+      // What a file running alongside does in the same milliseconds.
+      const stamp = Date.now();
+      await prisma.brand.createMany({
+        data: [1, 2, 3].map((n) => ({
+          name: `Brand-${stamp}-${n}`,
+          normalizedName: `brand-${stamp}-${n}-${randomUUID()}`,
+        })),
+      });
+      // The old fixture name was refused here as POSSIBLE_DUPLICATE (409).
+      const refused = await request(app.getHttpServer())
+        .post('/api/v1/brands')
+        .set('Authorization', `Bearer ${admin}`)
+        .set('Idempotency-Key', unique('brand-near'))
+        .send({ name: `Brand-${stamp}-9` })
+        .expect(409);
+      expect(refused.body.error.code).toBe('POSSIBLE_DUPLICATE');
+      await createBrand(admin, fixtureBrandName());
+    });
+
     it('rejects a duplicate brand name (mechanical collision guard, not fuzzy detection)', async () => {
       const admin = await signupWithPlatformRole('PLATFORM_ADMIN');
       const name = unique('UniqueBrand');
@@ -372,7 +410,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
     it('creates a canonical product and a variant with a gtin', async () => {
       const admin = await signupWithPlatformRole('PLATFORM_ADMIN');
       const categoryId = await createCategory(admin, unique('Cat'));
-      const brandId = await createBrand(admin, unique('Brand'));
+      const brandId = await createBrand(admin, fixtureBrandName());
 
       const product = await request(app.getHttpServer())
         .post('/api/v1/canonical-products')
@@ -407,7 +445,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
     it('rejects a second variant reusing the same gtin (globally unique)', async () => {
       const admin = await signupWithPlatformRole('PLATFORM_ADMIN');
       const categoryId = await createCategory(admin, unique('Cat'));
-      const brandId = await createBrand(admin, unique('Brand'));
+      const brandId = await createBrand(admin, fixtureBrandName());
       const p1 = await request(app.getHttpServer())
         .post('/api/v1/canonical-products')
         .set('Authorization', `Bearer ${admin}`)
@@ -1060,7 +1098,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .post(`/api/v1/vendors/${vendorId}/offers`)
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('offer-after-renewal'))
-        .send({ title_ar: 'عرض', title_en: 'Offer' })
+        .send({ title_ar: 'عرض', title_en: 'Offer', ...TEST_CLASSIFICATION })
         .expect(201);
     });
 
@@ -1140,7 +1178,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
       const vendorId = await activateVendor(owner, reviewer);
 
       const categoryId = await createCategory(admin, unique('Cat'));
-      const brandId = await createBrand(admin, unique('Brand'));
+      const brandId = await createBrand(admin, fixtureBrandName());
       const product = await request(app.getHttpServer())
         .post('/api/v1/canonical-products')
         .set('Authorization', `Bearer ${admin}`)
@@ -1166,21 +1204,27 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .post(`/api/v1/vendors/${vendorId}/offers`)
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('offer'))
-        .send({ title_ar: 'منتج مطابق', title_en: 'Matching Product' })
+        .send({
+          title_ar: 'منتج مطابق',
+          title_en: 'Matching Product',
+          ...TEST_CLASSIFICATION,
+        })
         .expect(201);
       expect(offer.body.canonical_product_id).toBeNull();
 
-      const variant = await request(app.getHttpServer())
-        .post(`/api/v1/vendors/${vendorId}/offers/${offer.body.id}/variants`)
-        .set('Authorization', `Bearer ${owner}`)
-        .set('Idempotency-Key', unique('offer-variant'))
-        .send({
+      const variant = await postCombination(
+        app.getHttpServer(),
+        owner,
+        vendorId,
+        offer.body.id,
+        {
           seller_sku: unique('sku'),
           base_price: 100,
           identifier_type: 'GTIN',
           identifier_value: gtin,
-        })
-        .expect(201);
+        },
+      );
+      expect(variant.status).toBe(201);
 
       // The exact match is a *proposal* only - not entered comparison
       // yet (no canonical_variant_id), and the parent offer is still
@@ -1231,7 +1275,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
       const vendorId = await activateVendor(owner, reviewer);
 
       const categoryId = await createCategory(admin, unique('Cat'));
-      const brandId = await createBrand(admin, unique('Brand'));
+      const brandId = await createBrand(admin, fixtureBrandName());
       const product = await request(app.getHttpServer())
         .post('/api/v1/canonical-products')
         .set('Authorization', `Bearer ${admin}`)
@@ -1257,19 +1301,21 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .post(`/api/v1/vendors/${vendorId}/offers`)
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('offer-reject'))
-        .send({ title_ar: 'منتج', title_en: 'Product' })
+        .send({ title_ar: 'منتج', title_en: 'Product', ...TEST_CLASSIFICATION })
         .expect(201);
-      const variant = await request(app.getHttpServer())
-        .post(`/api/v1/vendors/${vendorId}/offers/${offer.body.id}/variants`)
-        .set('Authorization', `Bearer ${owner}`)
-        .set('Idempotency-Key', unique('offer-variant-reject'))
-        .send({
+      const variant = await postCombination(
+        app.getHttpServer(),
+        owner,
+        vendorId,
+        offer.body.id,
+        {
           seller_sku: unique('sku'),
           base_price: 100,
           identifier_type: 'GTIN',
           identifier_value: gtin,
-        })
-        .expect(201);
+        },
+      );
+      expect(variant.status).toBe(201);
 
       const rejected = await request(app.getHttpServer())
         .post(
@@ -1303,20 +1349,26 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .post(`/api/v1/vendors/${vendorId}/offers`)
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('offer-unique'))
-        .send({ title_ar: 'منتج فريد', title_en: 'Unique Product' })
+        .send({
+          title_ar: 'منتج فريد',
+          title_en: 'Unique Product',
+          ...TEST_CLASSIFICATION,
+        })
         .expect(201);
 
-      const variant = await request(app.getHttpServer())
-        .post(`/api/v1/vendors/${vendorId}/offers/${offer.body.id}/variants`)
-        .set('Authorization', `Bearer ${owner}`)
-        .set('Idempotency-Key', unique('offer-variant-unique'))
-        .send({
+      const variant = await postCombination(
+        app.getHttpServer(),
+        owner,
+        vendorId,
+        offer.body.id,
+        {
           seller_sku: unique('sku'),
           base_price: 50,
           identifier_type: 'GTIN',
           identifier_value: '000000000000',
-        })
-        .expect(201);
+        },
+      );
+      expect(variant.status).toBe(201);
 
       expect(variant.body.canonical_variant_id).toBeNull();
       expect(variant.body.match_proposal_status).toBe('NONE');
@@ -1331,7 +1383,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .post(`/api/v1/vendors/${vendorId}/offers`)
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('offer-ils'))
-        .send({ title_ar: 'منتج', title_en: 'Product' })
+        .send({ title_ar: 'منتج', title_en: 'Product', ...TEST_CLASSIFICATION })
         .expect(201);
 
       const rejected = await request(app.getHttpServer())
@@ -1344,12 +1396,14 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
 
       // Omitting currency (the only real use case) still works and is
       // always ILS.
-      const ok = await request(app.getHttpServer())
-        .post(`/api/v1/vendors/${vendorId}/offers/${offer.body.id}/variants`)
-        .set('Authorization', `Bearer ${owner}`)
-        .set('Idempotency-Key', unique('offer-variant-ils'))
-        .send({ seller_sku: unique('sku'), base_price: 10 })
-        .expect(201);
+      const ok = await postCombination(
+        app.getHttpServer(),
+        owner,
+        vendorId,
+        offer.body.id,
+        { seller_sku: unique('sku'), base_price: 10 },
+      );
+      expect(ok.status).toBe(201);
       expect(ok.body.currency).toBe('ILS');
     });
 
@@ -1362,23 +1416,31 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .post(`/api/v1/vendors/${vendorId}/offers`)
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('offer-sku'))
-        .send({ title_ar: 'منتج', title_en: 'Product' })
+        .send({ title_ar: 'منتج', title_en: 'Product', ...TEST_CLASSIFICATION })
         .expect(201);
 
       const sku = unique('dup-sku');
-      await request(app.getHttpServer())
-        .post(`/api/v1/vendors/${vendorId}/offers/${offer.body.id}/variants`)
-        .set('Authorization', `Bearer ${owner}`)
-        .set('Idempotency-Key', unique('variant-1'))
-        .send({ seller_sku: sku, base_price: 10 })
-        .expect(201);
+      expect(
+        (
+          await postCombination(
+            app.getHttpServer(),
+            owner,
+            vendorId,
+            offer.body.id,
+            { seller_sku: sku, base_price: 10 },
+          )
+        ).status,
+      ).toBe(201);
 
-      await request(app.getHttpServer())
-        .post(`/api/v1/vendors/${vendorId}/offers/${offer.body.id}/variants`)
-        .set('Authorization', `Bearer ${owner}`)
-        .set('Idempotency-Key', unique('variant-2'))
-        .send({ seller_sku: sku, base_price: 20 })
-        .expect(409);
+      const duplicate = await postCombination(
+        app.getHttpServer(),
+        owner,
+        vendorId,
+        offer.body.id,
+        { seller_sku: sku, base_price: 10 },
+      );
+      expect(duplicate.status).toBe(409);
+      expect(duplicate.body.error.code).toBe('SELLER_SKU_ALREADY_EXISTS');
     });
 
     it('under two concurrent match confirmations for the same offer proposing different canonical products, the offer never ends up linked to a product one of its own variants disagrees with', async () => {
@@ -1388,7 +1450,7 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
       const vendorId = await activateVendor(owner, reviewer);
 
       const categoryId = await createCategory(admin, unique('Cat'));
-      const brandId = await createBrand(admin, unique('Brand'));
+      const brandId = await createBrand(admin, fixtureBrandName());
       const [productA, productB] = await Promise.all(
         ['A', 'B'].map((label) =>
           request(app.getHttpServer())
@@ -1429,34 +1491,43 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
         .post(`/api/v1/vendors/${vendorId}/offers`)
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('offer-race'))
-        .send({ title_ar: 'منتج للسباق', title_en: 'Race Offer' })
+        .send({
+          title_ar: 'منتج للسباق',
+          title_en: 'Race Offer',
+          ...TEST_CLASSIFICATION,
+        })
         .expect(201);
 
       // Both variants are created first (sequentially - creation itself
       // no longer contends for any lock, see createVariant()'s comment)
       // with different proposed matches, each still PENDING.
-      const variantOfferA = await request(app.getHttpServer())
-        .post(`/api/v1/vendors/${vendorId}/offers/${offer.body.id}/variants`)
-        .set('Authorization', `Bearer ${owner}`)
-        .set('Idempotency-Key', unique('variant-race-a'))
-        .send({
+      const variantOfferA = await postCombination(
+        app.getHttpServer(),
+        owner,
+        vendorId,
+        offer.body.id,
+        {
           seller_sku: unique('sku-race-a'),
           base_price: 10,
           identifier_type: 'GTIN',
           identifier_value: gtinA,
-        })
-        .expect(201);
-      const variantOfferB = await request(app.getHttpServer())
-        .post(`/api/v1/vendors/${vendorId}/offers/${offer.body.id}/variants`)
-        .set('Authorization', `Bearer ${owner}`)
-        .set('Idempotency-Key', unique('variant-race-b'))
-        .send({
+        },
+      );
+      expect(variantOfferA.status).toBe(201);
+      const variantOfferB = await postCombination(
+        app.getHttpServer(),
+        owner,
+        vendorId,
+        offer.body.id,
+        {
           seller_sku: unique('sku-race-b'),
-          base_price: 20,
+          // One price per classified product - B inherits A's.
+          base_price: 10,
           identifier_type: 'GTIN',
           identifier_value: gtinB,
-        })
-        .expect(201);
+        },
+      );
+      expect(variantOfferB.status).toBe(201);
       expect(variantOfferA.body.match_proposal_status).toBe('PENDING');
       expect(variantOfferB.body.match_proposal_status).toBe('PENDING');
 
@@ -1538,7 +1609,11 @@ describe('Sprint 3 - catalog, matching, vendor verification, subscription (e2e)'
 
       const key = unique('offer-completion-blip');
       const distinctiveTitle = unique('CompletionBlipOffer');
-      const body = { title_ar: 'عرض الاختبار', title_en: distinctiveTitle };
+      const body = {
+        title_ar: 'عرض الاختبار',
+        title_en: distinctiveTitle,
+        ...TEST_CLASSIFICATION,
+      };
 
       const first = await request(app.getHttpServer())
         .post(`/api/v1/vendors/${vendorId}/offers`)

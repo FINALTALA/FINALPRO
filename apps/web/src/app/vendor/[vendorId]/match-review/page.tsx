@@ -5,7 +5,8 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { EmptyState, ErrorBanner } from "@/components/States";
 import { ApiError, apiFetch, newIdempotencyKey } from "@/lib/api";
-import { useHydrated, useSessionToken, useWorkspaces } from "@/lib/useSession";
+import { useHydrated, useSessionToken, useWorkspaces } from "@/lib/useSession";
+import { loginRedirectHref } from "@/lib/loginRedirect";
 
 interface QueueCandidateDto {
   id: string;
@@ -84,7 +85,7 @@ export default function MatchReviewQueuePage() {
   useEffect(() => {
     if (!hydrated) return;
     if (!token) {
-      router.replace(`/login?next=/vendor/${params.vendorId}/match-review`);
+      router.replace(loginRedirectHref());
       return;
     }
     if (!isOwner) return;

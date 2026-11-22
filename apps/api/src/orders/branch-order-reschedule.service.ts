@@ -7,16 +7,12 @@ import { Prisma } from '../../generated/prisma/client';
 import { lockDeliveryWindowRow } from '../delivery-windows/delivery-window-locking.util';
 import { BranchOrderService } from './branch-order.service';
 import { TERMINAL_BRANCH_ORDER_STATUSES } from './branch-order-state-machine';
+import {
+  daysFromToday,
+  isWindowOpen,
+} from '../checkout/delivery-calendar.util';
 
-// Same tiny date-only helpers CheckoutService/slot-availability.util.ts
-// already each keep their own private copy of, rather than a shared
-// export - matching that same established convention here.
-function utcDateOnly(d: Date): Date {
-  return new Date(
-    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()),
-  );
-}
-
+// Same tiny date-only helper CheckoutService keeps its own copy of.
 function parseDateOnly(s: string): Date {
   return new Date(`${s}T00:00:00.000Z`);
 }
@@ -94,10 +90,10 @@ export class BranchOrderRescheduleService {
     }
 
     const scheduledDate = parseDateOnly(newScheduledDateStr);
-    const today = utcDateOnly(new Date());
-    const diffDays = Math.round(
-      (scheduledDate.getTime() - today.getTime()) / 86_400_000,
-    );
+    // PD-5.1: the same Palestine-time calendar and open-window rule as
+    // checkout (delivery-calendar.util.ts).
+    const now = new Date();
+    const diffDays = daysFromToday(scheduledDate, now);
     if (diffDays < 0 || diffDays > 2) {
       throw new ConflictException({
         code: 'INVALID_SLOT_DATE',
@@ -108,6 +104,24 @@ export class BranchOrderRescheduleService {
       throw new ConflictException({
         code: 'INVALID_SLOT_DATE',
         message: "This date does not match the window's day of week",
+      });
+    }
+    const branchLead = await tx.storeBranch.findUnique({
+      where: { id: order.branchId },
+      select: { deliveryLeadMinutes: true },
+    });
+    if (
+      !isWindowOpen(
+        scheduledDate,
+        window.startMinute,
+        now,
+        branchLead?.deliveryLeadMinutes ?? 0,
+      )
+    ) {
+      throw new ConflictException({
+        code: 'SLOT_NO_LONGER_AVAILABLE',
+        message:
+          'This delivery window has started or is too close to prepare for - choose a later one',
       });
     }
 

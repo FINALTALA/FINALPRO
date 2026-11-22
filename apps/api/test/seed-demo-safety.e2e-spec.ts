@@ -14,8 +14,12 @@ function runSeedWithRawUrl(databaseUrl: string): {
 } {
   try {
     const out = execFileSync(
-      'npx',
-      ['ts-node', '--transpile-only', 'scripts/seed-demo.ts'],
+      process.execPath,
+      [
+        require.resolve('ts-node/dist/bin.js'),
+        '--transpile-only',
+        'scripts/seed-demo.ts',
+      ],
       {
         cwd: API_ROOT,
         env: { ...process.env, DATABASE_URL: databaseUrl },

@@ -23,6 +23,8 @@ import { OutboxEventService } from '../outbox/outbox-event.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { BranchOrderCancellationService } from '../orders/branch-order-cancellation.service';
 import { AdminCancelBranchOrderDto } from '../orders/dto/admin-cancel-branch-order.dto';
+import { assertNotOwnBranchOrder } from '../common/self-decision.util';
+import { OrderActorContextInterceptor } from '../orders/order-actor-context.interceptor';
 
 /**
  * Sprint 20a (BR-019, review-round requirement): PLATFORM_ADMIN's
@@ -54,6 +56,8 @@ import { AdminCancelBranchOrderDto } from '../orders/dto/admin-cancel-branch-ord
  */
 @Controller('admin/branch-orders')
 @UseGuards(SessionAuthGuard, PlatformRoleGuard)
+// 2026-11-22: the order's timeline shows a forced cancel as the platform's.
+@UseInterceptors(OrderActorContextInterceptor)
 export class AdminBranchOrdersController {
   constructor(
     private readonly prisma: PrismaService,
@@ -78,6 +82,7 @@ export class AdminBranchOrdersController {
     await this.outbox.enqueue(
       {
         eventType,
+        audience: 'CUSTOMER',
         payload: {
           ...payload,
           recipient_user_id: order.customerOrder.customer.userId,
@@ -122,6 +127,9 @@ export class AdminBranchOrdersController {
   ) {
     const result = await this.prisma.$transaction(async (tx) => {
       const order = await this.lockBranchOrder(tx, branchOrderId);
+      // TB-28: an administrator never force-cancels (and so refunds) their
+      // own order.
+      await assertNotOwnBranchOrder(tx, branchOrderId, user.id);
       if (order.status !== 'PLACED' && order.status !== 'PREPARING') {
         throw new ConflictException({
           code: 'INVALID_BRANCH_ORDER_TRANSITION',

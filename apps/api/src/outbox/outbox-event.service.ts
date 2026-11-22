@@ -1,9 +1,15 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma } from '../../generated/prisma/client';
+import { NotificationAudience, Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface EnqueueOutboxEventInput {
   eventType: string;
+  /** TB-26: whom the notification(s) this event produces are for - the
+   * shopping bell (CUSTOMER), the store workspace (STORE) or the platform
+   * workspace (PLATFORM). Required at every call site: the relay never
+   * derives it from the event or notification type. Stored in the payload
+   * as `audience`. */
+  audience: NotificationAudience;
   payload: Record<string, unknown>;
 }
 
@@ -30,7 +36,10 @@ export class OutboxEventService {
     return client.outboxEvent.create({
       data: {
         eventType: input.eventType,
-        payload: input.payload as Prisma.InputJsonValue,
+        payload: {
+          ...input.payload,
+          audience: input.audience,
+        } as Prisma.InputJsonValue,
       },
     });
   }

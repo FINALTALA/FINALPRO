@@ -14,6 +14,7 @@ export type WorkspaceInfo =
       type: "vendor";
       vendor_id: string;
       vendor_legal_name: string;
+      storefront_slug: string;
       role: "OWNER" | "BRANCH_EMPLOYEE";
       branch_id: string | null;
       branch_name: string | null;
@@ -33,8 +34,11 @@ export interface NavLink {
 const HOME: NavLink = { key: "home", href: "/", label: "الرئيسية" };
 const DISCOVER: NavLink = { key: "discover", href: "/discovery", label: "اكتشف" };
 const CART: NavLink = { key: "cart", href: "/cart", label: "السلة" };
-const ORDERS: NavLink = { key: "orders", href: "/orders", label: "طلباتي" };
-const FOLLOWING: NavLink = { key: "following", href: "/following", label: "أتابعه" };
+const ORDERS: NavLink = { key: "orders", href: "/cart?tab=orders", label: "طلباتي" };
+// Saved stores now live inside the private shopping profile, alongside
+// favourites. Keep the destination explicit so the profile opens on its
+// relevant tab rather than showing a disconnected standalone page.
+const FOLLOWING: NavLink = { key: "following", href: "/profile?tab=following", label: "أتابعه" };
 
 /** Desktop header links, in display order. */
 export function desktopLinks(): NavLink[] {
@@ -70,8 +74,9 @@ export interface WorkspaceEntry {
 
 /**
  * Where choosing a workspace takes you. An owner lands on the store
- * dashboard; an employee lands on their own branch's orders and nowhere
- * else - the entry never links to any owner-only page.
+ * dashboard; an employee first sees their store's public storefront. Their
+ * own branch operations are exposed there as a staff-only control, never as
+ * an owner-only route.
  */
 export function workspaceEntry(w: WorkspaceInfo): WorkspaceEntry {
   if (w.type === "customer") {
@@ -79,7 +84,7 @@ export function workspaceEntry(w: WorkspaceInfo): WorkspaceEntry {
       id: "customer",
       label: "التسوّق",
       subtitle: "تصفّح ومقارنة وشراء",
-      href: "/",
+      href: "/profile",
       kind: "customer",
     };
   }
@@ -116,9 +121,7 @@ export function workspaceEntry(w: WorkspaceInfo): WorkspaceEntry {
     id: `vendor:${w.vendor_id}`,
     label: w.vendor_legal_name,
     subtitle: `موظف فرع${w.branch_name ? ` - ${w.branch_name}` : ""}`,
-    href: w.branch_id
-      ? `/vendor/${w.vendor_id}/branches/${w.branch_id}/orders`
-      : "/account",
+    href: `/store/${w.storefront_slug}`,
     kind: "employee",
   };
 }
@@ -133,6 +136,8 @@ export interface HubTile {
   href: string;
   title: string;
   description: string;
+  /** a deferred tool: last in the grid and visually quiet */
+  deferred?: boolean;
 }
 
 /** The owner dashboard's direct links (owner only - see the hub page). */
@@ -140,10 +145,12 @@ export function ownerHubTiles(vendorId: string): HubTile[] {
   const base = `/vendor/${vendorId}`;
   return [
     { href: `${base}/storefront`, title: "صفحة المتجر", description: "الاسم والشعار والغلاف والتواصل والنشر" },
-    { href: `${base}/sections`, title: "الأقسام", description: "أقسام المنتجات في صفحة المتجر" },
+    // «الصفحة الرئيسية المرنة للمتجر» (2026-11-20): the store page hides this
+    // tile while store_home_blocks_enabled is off.
+    { href: `${base}/storefront/home`, title: "تصميم الصفحة الرئيسية", description: "بانرات ومجموعات ومنتجات مختارة أعلى قائمة المنتجات" },
+    // «مجموعات المتجر» are reached from «المنتجات والعروض» (its toolbar), not a tile of their own.
     { href: `${base}/offers`, title: "المنتجات والعروض", description: "قائمة عروض المتجر وحالتها" },
-    { href: `${base}/match-review`, title: "مراجعة التطابق", description: "مرشّحو التطابق غير الدقيق بانتظار قرارك" },
-    { href: `${base}/branches`, title: "الفروع", description: "فروع المتجر وطلباتها ونوافذ توصيلها" },
+    { href: `${base}/branches`, title: "إدارة الفروع", description: "الفرع الحالي وطلباته ومخزونه ونوافذ توصيله وساعاته" },
     { href: `${base}/staff`, title: "الموظفون", description: "قائمة موظفي الفروع، نقلهم وتعليقهم" },
     { href: `${base}/delivery-zones`, title: "مناطق التوصيل", description: "الأسعار والمناطق المفعّلة" },
     { href: `${base}/delivery-windows`, title: "نوافذ التوصيل", description: "أوقات التوصيل وسعتها لكل فرع" },
@@ -156,6 +163,21 @@ export function ownerHubTiles(vendorId: string): HubTile[] {
     // queue which is reached from the branches page itself.
     { href: `${base}/return-policy`, title: "سياسة الإرجاع", description: "تفعيل الإرجاع، مهلته ورسومه" },
     { href: `${base}/returns/redeem`, title: "استبدال كود إرجاع", description: "استلام منتج مُرجَع بكوده في أي فرع" },
+    // PD-3 (decision 11): read-only - a store never edits, deletes or replies.
+    { href: `${base}/reviews`, title: "تقييمات العملاء", description: "قراءة تقييمات منتجاتكم ومتجركم الموثّقة" },
+    // Sprint 25 (FR-VEND-011): the owner's performance indicators - back
+    // here after the old owner dashboard became the public storefront.
+    { href: `${base}/performance`, title: "أداء المتجر", description: "الإلغاء وزمن الاستجابة والتقييم خلال آخر 30 يوماً" },
+    // PD-5.3: the owner's own sales in the bestseller window (own data only).
+    { href: `${base}/sales`, title: "مبيعات آخر 30 يوماً", description: "الوحدات والعملاء لكل منتج وأهليته لشارة الأكثر مبيعاً" },
+    // Barcodes and in-store sales (2026-11-20): what was sold in the shop
+    // (never part of the bestseller numbers above). The store page hides
+    // this tile while store_cashier_enabled is off.
+    { href: `${base}/store-sales`, title: "مبيعات المحل", description: "ما بِيع في المحل من «بيع من المحل»، مع إلغاء بيع اليوم" },
+    { href: `${base}/labels`, title: "طباعة ملصقات", description: "ملصقات باركود لعدة منتجات دفعة واحدة، حرارية أو A4" },
+    // Deferred (2026-11-20): kept and still openable, but last and muted -
+    // it may be removed later and must not compete with the active tiles.
+    { href: `${base}/match-review`, title: "مراجعة التطابق", description: "مرشّحو التطابق غير الدقيق بانتظار قرارك", deferred: true },
   ];
 }
 
@@ -246,6 +268,24 @@ export function adminTiles(role: PlatformRoleName): HubTile[] {
         href: "/admin/vendors/performance",
         title: "أداء المتاجر",
         description: "معدل الإلغاء وزمن الاستجابة والتقييم لكل متجر",
+      },
+      // PD-4: أدلة المقاسات وطلبات المتاجر - PLATFORM_ADMIN فقط.
+      {
+        href: "/admin/size-guides",
+        title: "أدلة المقاسات",
+        description: "إنشاء أدلة المقاسات ونشرها وربطها بالتصنيفات، وطلبات المتاجر",
+      },
+      // PD-5b: مجموعات المنصة التحريرية - PLATFORM_ADMIN فقط.
+      {
+        href: "/admin/collections",
+        title: "مجموعات المنصة",
+        description: "مجموعات تحريرية من المنتجات، نشرها وأرشفتها وترتيبها",
+      },
+      // TB-12.3: مستلمو تنبيهات المنصة لكل فئة - PLATFORM_ADMIN فقط.
+      {
+        href: "/admin/alert-recipients",
+        title: "مستلمو تنبيهات المنصة",
+        description: "من يستقبل تنبيهات سلامة الطلبات وتصعيد الإرجاعات",
       },
     );
   }

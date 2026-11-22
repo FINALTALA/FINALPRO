@@ -1,9 +1,13 @@
+import { optionalName } from '../../common/text/optional-name';
 import {
   ClothingCategoryTemplate,
   OfferCondition,
   OfferIdentifierType,
 } from '../../../generated/prisma/client';
-import { validateTemplateAttributes } from '../catalog/clothing-category-templates';
+import {
+  describeTemplateProblems,
+  validateTemplateAttributes,
+} from '../catalog/clothing-category-templates';
 
 const VALID_CONDITIONS = new Set(Object.values(OfferCondition));
 const VALID_IDENTIFIER_TYPES = new Set(Object.values(OfferIdentifierType));
@@ -64,8 +68,8 @@ export function validateImportRow(
 
   const titleAr = readString(row, 'title_ar');
   if (!titleAr) problems.push('title_ar is required');
-  const titleEn = readString(row, 'title_en');
-  if (!titleEn) problems.push('title_en is required');
+  // Optional (FR-CAT-014/015): an imported product may have no English name.
+  const titleEn = optionalName(readString(row, 'title_en')) ?? '';
   const sellerSku = readString(row, 'seller_sku');
   if (!sellerSku) problems.push('seller_sku is required');
 
@@ -161,10 +165,9 @@ export function validateImportRow(
         const template = categoryTemplateRaw as ClothingCategoryTemplate;
         const templateProblems = validateTemplateAttributes(template, parsed);
         if (templateProblems.length > 0) {
+          // Phase A++ (item 4): the key and what it accepts, not only the problem type.
           problems.push(
-            `template_attributes_json is invalid for ${template}: ${templateProblems
-              .map((p) => p.type)
-              .join(', ')}`,
+            `template_attributes_json is invalid for ${template}: ${describeTemplateProblems(templateProblems)}`,
           );
         } else {
           categoryTemplate = template;
@@ -182,7 +185,7 @@ export function validateImportRow(
     row: {
       rowNumber,
       titleAr: titleAr!,
-      titleEn: titleEn!,
+      titleEn,
       sellerSku: sellerSku!,
       basePrice,
       salePrice,

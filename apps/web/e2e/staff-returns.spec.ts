@@ -11,7 +11,7 @@ import {
   itemIdForOrder,
   prisma,
 } from "./helpers/db";
-import { loginAs } from "./helpers/session";
+import { enterWorkspace, loginAs } from "./helpers/session";
 import { loadSharedFixtures } from "./helpers/shared-fixtures";
 
 // Sprint 21 (FR-RET-002, PDR-031, review-round point 1): the branch-
@@ -23,6 +23,7 @@ test.describe("staff/owner returns UI", () => {
   test("empty state: a branch with no returns yet", async ({ page }) => {
     const { vendorId, branchId } = await createVendorWithBranch(fixtures.ownerToken);
     await loginAs(page, fixtures.ownerToken);
+    await enterWorkspace(page, fixtures.ownerToken, { type: "vendor", vendor_id: vendorId });
     await page.goto(`/vendor/${vendorId}/branches/${branchId}/returns`);
     await expect(page.getByText("لا توجد طلبات إرجاع لهذا الفرع")).toBeVisible();
   });
@@ -43,6 +44,7 @@ test.describe("staff/owner returns UI", () => {
     const submitted = await submitReturn(fixtures.customerAToken, branchOrderId, itemId);
 
     await loginAs(page, fixtures.ownerToken);
+    await enterWorkspace(page, fixtures.ownerToken, { type: "vendor", vendor_id: vendorId });
     await page.goto(`/vendor/${vendorId}/branches/${branchId}/returns`);
     await expect(page.getByText("قيد مراجعة المتجر")).toBeVisible();
     await page.getByRole("button", { name: "اعتماد" }).click();
@@ -65,6 +67,7 @@ test.describe("staff/owner returns UI", () => {
   test("redeem with an invalid code shows the server's error", async ({ page }) => {
     const { vendorId } = await createVendorWithBranch(fixtures.ownerToken);
     await loginAs(page, fixtures.ownerToken);
+    await enterWorkspace(page, fixtures.ownerToken, { type: "vendor", vendor_id: vendorId });
     await page.goto(`/vendor/${vendorId}/returns/redeem`);
     await page.locator("main input").first().fill("000000");
     await page.getByRole("button", { name: "استبدال" }).click();
@@ -89,6 +92,7 @@ test.describe("staff/owner returns UI", () => {
     await submitReturn(fixtures.customerAToken, branchOrderId, itemId);
 
     await loginAs(page, fixtures.ownerToken);
+    await enterWorkspace(page, fixtures.ownerToken, { type: "vendor", vendor_id: vendorId });
     await page.goto(`/vendor/${vendorId}/branches/${branchId}/returns`);
     await page.getByRole("button", { name: "رفض" }).click();
     await page.getByRole("textbox").fill("Visible wear inconsistent with the stated reason.");
@@ -141,6 +145,7 @@ test.describe("staff/owner returns UI", () => {
     );
 
     await loginAs(page, fixtures.ownerToken);
+    await enterWorkspace(page, fixtures.ownerToken, { type: "vendor", vendor_id: vendorId });
     await page.goto(`/vendor/${vendorId}/branches/${branchId}/returns`);
     await expect(page.getByText("(طلب تبديل)")).toBeVisible();
     await page.getByRole("button", { name: "اعتماد" }).click();

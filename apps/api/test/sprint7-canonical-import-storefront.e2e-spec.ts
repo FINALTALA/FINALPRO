@@ -1,6 +1,10 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
+import {
+  TEST_CLASSIFICATION,
+  postCombination,
+} from './helpers/taxonomy-offers';
 import { AppModule } from './../src/app.module';
 import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
@@ -283,19 +287,21 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
       .post(`/api/v1/vendors/${vendorId}/offers`)
       .set('Authorization', `Bearer ${ownerToken}`)
       .set('Idempotency-Key', unique('offer'))
-      .send({ title_ar: titleAr, title_en: titleEn })
+      .send({ title_ar: titleAr, title_en: titleEn, ...TEST_CLASSIFICATION })
       .expect(201);
-    const variantRes = await request(app.getHttpServer())
-      .post(`/api/v1/vendors/${vendorId}/offers/${offerRes.body.id}/variants`)
-      .set('Authorization', `Bearer ${ownerToken}`)
-      .set('Idempotency-Key', unique('variant'))
-      .send({
+    const variantRes = await postCombination(
+      app.getHttpServer(),
+      ownerToken,
+      vendorId,
+      offerRes.body.id,
+      {
         seller_sku: unique('sku'),
         base_price: 10,
         identifier_type: 'GTIN',
         identifier_value: identifierValue,
-      })
-      .expect(201);
+      },
+    );
+    expect(variantRes.status).toBe(201);
     await request(app.getHttpServer())
       .post(
         `/api/v1/vendors/${vendorId}/offers/${offerRes.body.id}/variants/${variantRes.body.id}/match-confirmation`,
@@ -395,21 +401,25 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
         .post(`/api/v1/vendors/${vendorAId}/offers`)
         .set('Authorization', `Bearer ${ownerA}`)
         .set('Idempotency-Key', unique('offer'))
-        .send({ title_ar: 'ديل اكس بي اس', title_en: 'Dell XPS Store A' })
-        .expect(201);
-      const variantAres = await request(app.getHttpServer())
-        .post(
-          `/api/v1/vendors/${vendorAId}/offers/${offerAres.body.id}/variants`,
-        )
-        .set('Authorization', `Bearer ${ownerA}`)
-        .set('Idempotency-Key', unique('variant'))
         .send({
+          title_ar: 'ديل اكس بي اس',
+          title_en: 'Dell XPS Store A',
+          ...TEST_CLASSIFICATION,
+        })
+        .expect(201);
+      const variantAres = await postCombination(
+        app.getHttpServer(),
+        ownerA,
+        vendorAId,
+        offerAres.body.id,
+        {
           seller_sku: unique('sku'),
           base_price: 10,
           identifier_type: 'GTIN',
           identifier_value: gtin,
-        })
-        .expect(201);
+        },
+      );
+      expect(variantAres.status).toBe(201);
 
       const ownerB = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId: vendorBId } = await createVendorWithTwoBranches(ownerB);
@@ -418,21 +428,25 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
         .post(`/api/v1/vendors/${vendorBId}/offers`)
         .set('Authorization', `Bearer ${ownerB}`)
         .set('Idempotency-Key', unique('offer'))
-        .send({ title_ar: 'ديل اكس بي اس 13', title_en: 'Dell XPS Store B' })
-        .expect(201);
-      const variantBres = await request(app.getHttpServer())
-        .post(
-          `/api/v1/vendors/${vendorBId}/offers/${offerBres.body.id}/variants`,
-        )
-        .set('Authorization', `Bearer ${ownerB}`)
-        .set('Idempotency-Key', unique('variant'))
         .send({
+          title_ar: 'ديل اكس بي اس 13',
+          title_en: 'Dell XPS Store B',
+          ...TEST_CLASSIFICATION,
+        })
+        .expect(201);
+      const variantBres = await postCombination(
+        app.getHttpServer(),
+        ownerB,
+        vendorBId,
+        offerBres.body.id,
+        {
           seller_sku: unique('sku'),
           base_price: 10,
           identifier_type: 'GTIN',
           identifier_value: gtin,
-        })
-        .expect(201);
+        },
+      );
+      expect(variantBres.status).toBe(201);
 
       const [confirmA, confirmB] = await Promise.all([
         request(app.getHttpServer())

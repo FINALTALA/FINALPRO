@@ -26,7 +26,7 @@ describe('ComparisonService', () => {
   // undefined stand-in is fine for these unit tests. findEligibleOffers()
   // itself (the only method that touches the DB) is covered by the
   // Sprint 8 e2e spec instead.
-  const service = new ComparisonService(undefined as never);
+  const service = new ComparisonService(undefined as never, undefined as never);
 
   describe('compareOffersByPrice', () => {
     it('sorts strictly by price first', () => {
@@ -257,7 +257,10 @@ describe('ComparisonService', () => {
             { canonicalProductId: product.id, average, count },
           ]),
       };
-      const ratedService = new ComparisonService(prisma as never);
+      const ratedService = new ComparisonService(
+        prisma as never,
+        undefined as never,
+      );
       jest
         .spyOn(ratedService, 'findEligibleOffers')
         .mockResolvedValue([offer({})]);
@@ -283,7 +286,10 @@ describe('ComparisonService', () => {
         },
         $queryRaw: jest.fn().mockResolvedValueOnce([{ available: false }]),
       };
-      const unavailableRatingsService = new ComparisonService(prisma as never);
+      const unavailableRatingsService = new ComparisonService(
+        prisma as never,
+        undefined as never,
+      );
       jest
         .spyOn(unavailableRatingsService, 'findEligibleOffers')
         .mockResolvedValue([offer({})]);

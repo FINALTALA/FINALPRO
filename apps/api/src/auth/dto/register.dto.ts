@@ -1,7 +1,8 @@
-import { IsPhoneNumber, IsString, MinLength } from 'class-validator';
+import { IsString, MinLength } from 'class-validator';
+import { PhoneField } from '../../common/phone/phone-input';
 
 export class RegisterDto {
-  @IsPhoneNumber(undefined)
+  @PhoneField()
   phone!: string;
 
   // Minimum length only - the SRS doesn't specify a full password

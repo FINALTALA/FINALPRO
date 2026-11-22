@@ -50,7 +50,9 @@ export class BrandsController {
     const brands = await this.prisma.brand.findMany({
       orderBy: { name: 'asc' },
     });
-    return brands.map((b) => ({ id: b.id, name: b.name }));
+    // is_no_brand: the platform's "no brand" entry (additive field - the
+    // product-entry wizard offers it as «بدون علامة تجارية», not as a name).
+    return brands.map((b) => ({ id: b.id, name: b.name, is_no_brand: b.isNoBrandSentinel }));
   }
 
   @Post()

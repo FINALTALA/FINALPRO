@@ -1,145 +1,48 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import Footer from "@/components/Footer";
 import { ErrorBanner } from "@/components/States";
 import WomenCategorySection from "@/components/women/WomenCategorySection";
 import WomenDiscoverySection from "@/components/women/WomenDiscoverySection";
-import type { WomenBrowseTab, WomenSortOption } from "@/components/women/WomenDiscoverySection";
-import { ApiError, apiFetch } from "@/lib/api";
-import { ComparisonCardDto } from "@/lib/types";
-import { WOMEN_CATEGORIES } from "@/lib/womenCategories";
-import { takeWomenListingRestore, useWomenListing } from "@/lib/womenListing";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useSessionToken } from "@/lib/useSession";
+import { takeListingRestore, useAudienceListing } from "@/lib/audienceListing";
+import { listingCategories, listingFilterOptions } from "@/lib/listingCategories";
+import { useTaxonomy } from "@/lib/taxonomy";
+import { useListingFilters } from "@/lib/useListingFilters";
+import { useMemo, useState } from "react";
+import { useProductFavorites } from "@/lib/useProductFavorites";
+import { useLang } from "@/lib/useLang";
+import { translate } from "@/lib/i18n";
+import "@/lib/sectionText";
+import homeStyles from "@/app/home-via.module.css";
 import "./women.css";
-
-interface FavoriteDto {
-  id: string;
-  target_type: "PRODUCT" | "OFFER";
-  canonical_product_id: string | null;
-}
-
-type SortOption = WomenSortOption;
-type BrowseTab = WomenBrowseTab;
+import CollectionShowcase from "@/components/CollectionShowcase";
 
 export default function WomenPage() {
-  const router = useRouter();
-  const token = useSessionToken();
-  // Returning with the browser's back button restores the loaded list,
-  // filters and scroll position (see lib/womenListing.ts).
-  const [restore] = useState(takeWomenListingRestore);
-  const [category, setCategory] = useState(restore?.query.category ?? "");
-  const [sort, setSort] = useState<SortOption>(restore?.query.sort ?? "newest");
-  const [browseTab, setBrowseTab] = useState<BrowseTab>(restore?.query.filter ?? "all");
+  // The filters are the page URL (refresh, back/forward, shared links);
+  // returning with the back button also restores the loaded list and
+  // scroll position (see lib/audienceListing.ts).
+  const { filters, setFilters } = useListingFilters();
+  const [restoreScrollY] = useState(() => takeListingRestore("WOMEN"));
+  const taxonomy = useTaxonomy();
+  const lang = useLang();
+  const t = (key: string) => translate(lang, key);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [favoriteState, setFavoriteState] = useState<{
-    token: string;
-    rows: FavoriteDto[] | null;
-    error: string | null;
-  } | null>(null);
-  const [favoritePendingIds, setFavoritePendingIds] = useState<Set<string>>(new Set());
-  const [favoriteError, setFavoriteError] = useState<string | null>(null);
+  const { favoriteIds, favoritePendingIds, favoritesLoading, favoriteLoadError, favoriteError, onToggleFavorite } =
+    useProductFavorites("/women");
 
-  const listing = useWomenListing(
-    { sort, filter: browseTab === "all" ? null : browseTab, category: category || null },
-    restore?.scrollY ?? null,
-  );
-  const favoriteRows = useMemo(
-    () => favoriteState?.token === token ? favoriteState.rows ?? [] : [],
-    [favoriteState, token],
-  );
-  const favoriteLoadError = favoriteState?.token === token ? favoriteState.error : null;
-  const favoritesLoading = Boolean(token) && favoriteState?.token !== token;
-  const favoriteIds = useMemo(
-    () => new Set(favoriteRows
-      .flatMap((favorite) =>
-        favorite.target_type === "PRODUCT" && favorite.canonical_product_id
-          ? [favorite.canonical_product_id]
-          : [],
-      )),
-    [favoriteRows],
-  );
+  const listing = useAudienceListing("WOMEN", filters, restoreScrollY);
   const { categoryCounts } = listing;
   const categoryGrid = useMemo(
-    () => WOMEN_CATEGORIES.map((item) => ({ ...item, count: categoryCounts?.[item.slug] ?? 0 })),
-    [categoryCounts],
+    () => listingCategories("WOMEN", taxonomy.data, categoryCounts, lang),
+    [taxonomy.data, categoryCounts, lang],
   );
-
-  useEffect(() => {
-    if (!token) return;
-    let cancelled = false;
-    apiFetch<FavoriteDto[]>("/favorites")
-      .then((rows) => {
-        if (!cancelled) setFavoriteState({ token, rows, error: null });
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        setFavoriteState({
-          token,
-          rows: null,
-          error: error instanceof ApiError ? error.message : "تعذّر تحميل المفضلة",
-        });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [token]);
-
-  function clearFilters() {
-    setCategory("");
-  }
-
-  async function toggleFavorite(card: ComparisonCardDto) {
-    if (!token) {
-      router.push(`/login?next=${encodeURIComponent("/women")}`);
-      return;
-    }
-    if (favoritesLoading || favoriteLoadError || favoritePendingIds.has(card.canonical_product_id)) return;
-
-    const existing = favoriteRows.find(
-      (favorite) => favorite.target_type === "PRODUCT" &&
-        favorite.canonical_product_id === card.canonical_product_id,
-    );
-    setFavoriteError(null);
-    setFavoritePendingIds((previous) => new Set(previous).add(card.canonical_product_id));
-    try {
-      let updatedRows: FavoriteDto[];
-      if (existing) {
-        await apiFetch(`/favorites/${existing.id}`, { method: "DELETE" });
-        updatedRows = favoriteRows.filter((favorite) => favorite.id !== existing.id);
-      } else {
-        await apiFetch("/favorites", {
-          method: "POST",
-          body: { target_type: "PRODUCT", canonical_product_id: card.canonical_product_id },
-        });
-        updatedRows = await apiFetch<FavoriteDto[]>("/favorites");
-      }
-      setFavoriteState({ token, rows: updatedRows, error: null });
-    } catch (error) {
-      setFavoriteError(error instanceof ApiError ? error.message : "تعذّر تحديث المفضلة");
-    } finally {
-      setFavoritePendingIds((previous) => {
-        const next = new Set(previous);
-        next.delete(card.canonical_product_id);
-        return next;
-      });
-    }
-  }
-
-  // A stable callback, so the memoized cards don't re-render on every
-  // page append; it always runs the latest toggleFavorite.
-  const toggleFavoriteRef = useRef(toggleFavorite);
-  useLayoutEffect(() => {
-    toggleFavoriteRef.current = toggleFavorite;
-  });
-  const onToggleFavorite = useCallback((card: ComparisonCardDto) => toggleFavoriteRef.current(card), []);
+  const filterOptions = useMemo(() => listingFilterOptions("WOMEN", taxonomy.data, lang), [taxonomy.data, lang]);
 
   return (
-    <div className="women-page">
+    <div className={`${homeStyles.home} women-page`}>
       <section className="women-hero" aria-labelledby="women-hero-title">
-        <h1 className="visually-hidden" id="women-hero-title">ما وراء المألوف</h1>
+        <h1 className="visually-hidden" id="women-hero-title">{t("sec.women.title")}</h1>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           className="women-hero-image"
@@ -169,18 +72,24 @@ export default function WomenPage() {
           width={2037}
           height={768}
         />
-        <Link className="women-hero-cta" href="#women-products">تسوّق الآن</Link>
+        <Link className="women-hero-cta" href="#women-products">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M5 8.5h14l-1 11H6l-1-11Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+            <path d="M8.5 9V6.75a3.5 3.5 0 0 1 7 0V9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          </svg>
+          <span>{t("sec.shop_now")}</span>
+        </Link>
       </section>
 
-      <div className="women-ticker" aria-label="اكتشفي وقارني واختاري">
+      <div className="women-ticker" aria-label={t("sec.f.ticker_aria")}>
         <div className="women-ticker-track">
           {[0, 1].map((copy) => (
             <span className="women-ticker-group" key={copy} aria-hidden={copy === 1}>
-              <span>اكتشفي أزياء من محلات فلسطينية</span>
+              <span>{t("sec.f.ticker_1")}</span>
               <i aria-hidden="true">✦</i>
-              <span>قارني أسعار المنتج نفسه</span>
+              <span>{t("sec.f.ticker_2")}</span>
               <i aria-hidden="true">✦</i>
-              <span>السعر والتوفر حسب بيانات المتاجر</span>
+              <span>{t("sec.ticker_3")}</span>
               <i aria-hidden="true">✦</i>
             </span>
           ))}
@@ -196,24 +105,27 @@ export default function WomenPage() {
           </svg>
         </span>
         <span>
-          اشتري بـ <strong>500 ₪</strong> واحصلي على <strong>توصيل مجاني</strong>
+          {t("sec.f.offer_pre")}<strong>{t("sec.offer_amount")}</strong>{t("sec.f.offer_mid")}<strong>{t("sec.offer_free")}</strong>
         </span>
-        <Link href="#women-products" className="women-offer-link">تسوّقي الآن <span aria-hidden="true">←</span></Link>
+        <Link href="#women-products" className="women-offer-link">{t("sec.f.shop_now")} <span aria-hidden="true">←</span></Link>
       </div>
 
       <div className="women-floor-extension">
       <div className="women-content">
         <WomenCategorySection
           categories={categoryGrid}
-          selectedCategory={category}
+          selectedCategory={filters.category}
           onSelectCategory={(value) => {
-            setCategory(value);
+            setFilters({ ...filters, category: value });
             if (value) document.getElementById("women-products")?.scrollIntoView({ behavior: "smooth" });
           }}
         />
+        {/* PD-5b.4: one live collection for women (none -> nothing). */}
+        <CollectionShowcase placement="AUDIENCE" audience="WOMEN" presentation="women" favoriteIds={favoriteIds} favoritePendingIds={favoritePendingIds} favoritesLoading={favoritesLoading} onToggleFavorite={onToggleFavorite} />
 
+        {taxonomy.status === "error" && <ErrorBanner message={taxonomy.error} />}
         {(favoriteLoadError || favoriteError) && (
-          <ErrorBanner message={favoriteError ?? favoriteLoadError ?? "تعذّر تحميل المفضلة"} />
+          <ErrorBanner message={favoriteError ?? favoriteLoadError ?? t("fav.load_failed")} />
         )}
         <WomenDiscoverySection
           items={listing.items}
@@ -223,17 +135,14 @@ export default function WomenPage() {
           error={listing.error}
           onLoadMore={listing.loadMore}
           onRetry={listing.retry}
+          bestsellerEnabled={listing.bestsellerEnabled}
           allCount={listing.allCount}
           categories={categoryGrid}
-          category={category}
-          setCategory={setCategory}
-          sort={sort}
-          setSort={setSort}
-          browseTab={browseTab}
-          setBrowseTab={setBrowseTab}
+          filters={filters}
+          setFilters={setFilters}
+          filterOptions={filterOptions}
           sidebarOpen={sidebarOpen}
           setSidebarOpen={setSidebarOpen}
-          clearFilters={clearFilters}
           favoriteIds={favoriteIds}
           favoritePendingIds={favoritePendingIds}
           favoritesLoading={favoritesLoading}

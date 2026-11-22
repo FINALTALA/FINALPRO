@@ -1,5 +1,8 @@
 import { Controller, Get, NotFoundException, Param } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { coverLookDto } from './cover-look';
+import { heroTextDto } from './hero-text';
+import { resolveAppearance } from './storefront-appearance';
 
 // Sprint 7 (RB-STOREF-001, PDR-011): the actual public storefront -
 // deliberately NO guard at all (no SessionAuthGuard, reachable by
@@ -32,10 +35,11 @@ export class StorefrontPublicController {
         message: 'No store found for this URL',
       });
     }
-    const isVerified = await this.computeIsVerified(
-      vendor.id,
-      vendor.storeType,
-    );
+    const [isVerified, followerCount] = await Promise.all([
+      this.computeIsVerified(vendor.id, vendor.storeType),
+      // Sprint 26: an aggregate count only - never who follows.
+      this.prisma.storeFollow.count({ where: { vendorId: vendor.id } }),
+    ]);
 
     // "إن كان المحل غير متاح، يبقى الاسم/الهوية ظاهرين مع حالة واضحة" -
     // identity always shows; is_available combines the owner's own
@@ -49,15 +53,21 @@ export class StorefrontPublicController {
     return {
       slug: vendor.slug,
       display_name: vendor.displayName ?? vendor.legalName,
+      hero_title: vendor.heroTitle,
+      ...heroTextDto(vendor),
       logo_url: vendor.logoUrl,
       bio: vendor.bio,
       cover_image_url: vendor.coverImageUrl,
       cover_color: vendor.coverColor,
+      ...coverLookDto(vendor),
       instagram_url: vendor.instagramUrl,
       facebook_url: vendor.facebookUrl,
       whatsapp_url: vendor.whatsappUrl,
       is_available: isAvailable,
       is_verified: isVerified,
+      follower_count: followerCount,
+      // Read-only here; only the owner's PUT changes it.
+      storefront_appearance: resolveAppearance(vendor.storefrontAppearance),
     };
   }
 

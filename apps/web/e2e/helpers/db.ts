@@ -9,10 +9,13 @@ import { PrismaPg } from "@prisma/adapter-pg";
 // never shipped.
 import { PrismaClient } from "../../../api/generated/prisma/client";
 
-const DATABASE_URL = process.env.PW_DATABASE_URL ?? process.env.DATABASE_URL;
+// TB-12.1: PW_DATABASE_URL only - never DATABASE_URL, which in a dev
+// shell is the finalpro development database. global-setup.ts also
+// checks this database carries the disposable-test marker.
+export const DATABASE_URL = process.env.PW_DATABASE_URL;
 if (!DATABASE_URL) {
   throw new Error(
-    "PW_DATABASE_URL (or DATABASE_URL) must be set - the Playwright DB fixtures connect directly, the same way apps/api's own PrismaService does",
+    "PW_DATABASE_URL must be set to a disposable test database - the Playwright DB fixtures connect directly (see apps/web/e2e/README.md)",
   );
 }
 
@@ -187,4 +190,23 @@ export async function escalateReturn(returnId: string): Promise<void> {
 
 export async function disconnectDb(): Promise<void> {
   await prisma.$disconnect();
+}
+
+// TB-26: a notification row needs its audience (CUSTOMER / STORE /
+// PLATFORM) - the one the type's senders write. ORDER_CANCELLED goes to
+// both sides, so its row says which (default: the customer's).
+const STORE_TYPES = new Set([
+  "STOCK_ADJUSTMENT", "NOT_RECEIVED_REPORTED", "VENDOR_SUSPENDED", "VENDOR_REACTIVATED",
+  "NEW_ORDER_FOR_EMPLOYEE", "LOW_STOCK_AFTER_RESERVE", "ORDER_RESCHEDULED", "REFUND_REQUESTED",
+  "PREP_REMINDER", "RETURN_REQUESTED", "RETURN_VENDOR_REMINDER", "RETURN_PLATFORM_APPROVED",
+  "RETURN_PLATFORM_REJECTED", "RETURN_CANCELLED_BY_CUSTOMER",
+]);
+const PLATFORM_TYPES = new Set(["ORDER_INTEGRITY_ALERT", "RETURN_ESCALATION_ALERT"]);
+export function audienceOf(
+  type: string,
+  orderCancelledTo: "CUSTOMER" | "STORE" = "CUSTOMER",
+): "CUSTOMER" | "STORE" | "PLATFORM" {
+  if (type === "ORDER_CANCELLED") return orderCancelledTo;
+  if (PLATFORM_TYPES.has(type)) return "PLATFORM";
+  return STORE_TYPES.has(type) ? "STORE" : "CUSTOMER";
 }

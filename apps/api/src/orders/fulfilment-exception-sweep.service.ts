@@ -7,6 +7,13 @@ import {
 import { randomUUID } from 'crypto';
 import { BranchOrderStatus, Prisma } from '../../generated/prisma/client';
 import { PeriodicTask } from '../common/periodic-task.util';
+import {
+  logSweepTick,
+  runSweepStep,
+  SweepBackoff,
+  sweepTransaction,
+  type SweepStepResult,
+} from '../common/sweep-runner.util';
 import { OutboxEventService } from '../outbox/outbox-event.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { BranchOrderCancellationService } from './branch-order-cancellation.service';
@@ -82,7 +89,17 @@ export class FulfilmentExceptionSweepService
         'FulfilmentExceptionSweepService tick failed',
         err as Error,
       ),
+    FulfilmentExceptionSweepService.name,
   );
+  /** TB-11: one backoff per step. */
+  private readonly backoff = {
+    prepReminders: new SweepBackoff(),
+    slotMissed: new SweepBackoff(),
+    slotMissedTimeouts: new SweepBackoff(),
+    deliveryFailureTimeouts: new SweepBackoff(),
+  };
+  /** TB-11: the last tick's per-step results (tests read it). */
+  lastTick: SweepStepResult[] = [];
 
   constructor(
     private readonly prisma: PrismaService,
@@ -103,20 +120,34 @@ export class FulfilmentExceptionSweepService
     slotMissedDetected: number;
     timeoutsResolved: number;
   }> {
-    const prepReminders = await this.sweepPrepReminders();
-    const slotMissedDetected = await this.sweepSlotMissedDetection();
-    const timeoutsResolved = await this.sweepTimeouts();
-    return { prepReminders, slotMissedDetected, timeoutsResolved };
+    // TB-11: each step isolated (runSweepStep never throws).
+    const startedAt = Date.now();
+    const steps = [
+      await this.sweepPrepReminders(),
+      await this.sweepSlotMissedDetection(),
+      ...(await this.sweepTimeouts()),
+    ];
+    this.lastTick = steps;
+    logSweepTick(this.logger, steps, startedAt);
+    return {
+      prepReminders: steps[0].done,
+      slotMissedDetected: steps[1].done,
+      timeoutsResolved: steps[2].done + steps[3].done,
+    };
   }
 
   /** PDR-025/027 pre-slot reminder, 6h out - DELIVERY orders not yet
    * SENT, whose (deliveryWindowId, scheduledDate) hasn't already had a
    * reminder sent for THIS exact slot. */
-  private async sweepPrepReminders(): Promise<number> {
-    const candidates = await this.prisma.$queryRaw<
-      { id: string; vendorId: string; branchId: string }[]
-    >`
-      SELECT bo.id, bo."vendorId", bo."branchId"
+  private sweepPrepReminders(): Promise<SweepStepResult> {
+    return runSweepStep({
+      step: 'prepReminders',
+      logger: this.logger,
+      backoff: this.backoff.prepReminders,
+      findCandidates: async (excluded) =>
+        (
+          await this.prisma.$queryRaw<{ id: string }[]>`
+      SELECT bo.id
       FROM branch_orders bo
       JOIN delivery_windows dw ON dw.id = bo."deliveryWindowId"
       WHERE bo.status IN ('PLACED', 'PREPARING')
@@ -131,17 +162,16 @@ export class FulfilmentExceptionSweepService
         AND (bo."scheduledDate" AT TIME ZONE 'UTC') + (dw."startMinute" || ' minutes')::interval
             <= now() + make_interval(hours => ${PREP_REMINDER_LEAD_HOURS})
         AND (bo."scheduledDate" AT TIME ZONE 'UTC') + (dw."startMinute" || ' minutes')::interval > now()
+        AND bo.id <> ALL(${excluded}::text[])
       ORDER BY bo."createdAt" ASC
       LIMIT ${BATCH_LIMIT}
-    `;
-    let count = 0;
-    for (const candidate of candidates) {
-      const sent = await this.prisma.$transaction((tx) =>
-        this.sendPrepReminderOnce(tx, candidate.id),
-      );
-      if (sent) count += 1;
-    }
-    return count;
+    `
+        ).map((r) => r.id),
+      processItem: (id) =>
+        sweepTransaction(this.prisma, (tx) =>
+          this.sendPrepReminderOnce(tx, id),
+        ),
+    });
   }
 
   private async sendPrepReminderOnce(
@@ -163,7 +193,7 @@ export class FulfilmentExceptionSweepService
     >`SELECT id, "vendorId", "branchId", status, "fulfilmentMethod",
         "deliveryWindowId", "scheduledDate", "prepReminderSentForWindowId",
         "prepReminderSentForDate"
-      FROM branch_orders WHERE id = ${branchOrderId} FOR UPDATE`;
+      FROM branch_orders WHERE id = ${branchOrderId} FOR UPDATE SKIP LOCKED`;
     const order = rows[0];
     if (
       !order ||
@@ -208,8 +238,14 @@ export class FulfilmentExceptionSweepService
   /** PDR-025: the first moment a DELIVERY order is found still
    * PLACED/PREPARING past its own slot's start time. Sets
    * slotMissedAt (starting the 48h clock) and notifies the customer. */
-  private async sweepSlotMissedDetection(): Promise<number> {
-    const candidates = await this.prisma.$queryRaw<{ id: string }[]>`
+  private sweepSlotMissedDetection(): Promise<SweepStepResult> {
+    return runSweepStep({
+      step: 'slotMissed',
+      logger: this.logger,
+      backoff: this.backoff.slotMissed,
+      findCandidates: async (excluded) =>
+        (
+          await this.prisma.$queryRaw<{ id: string }[]>`
       SELECT bo.id
       FROM branch_orders bo
       JOIN delivery_windows dw ON dw.id = bo."deliveryWindowId"
@@ -218,17 +254,14 @@ export class FulfilmentExceptionSweepService
         AND bo."scheduledDate" IS NOT NULL
         AND bo."slotMissedAt" IS NULL
         AND (bo."scheduledDate" AT TIME ZONE 'UTC') + (dw."startMinute" || ' minutes')::interval <= now()
+        AND bo.id <> ALL(${excluded}::text[])
       ORDER BY bo."createdAt" ASC
       LIMIT ${BATCH_LIMIT}
-    `;
-    let count = 0;
-    for (const { id } of candidates) {
-      const detected = await this.prisma.$transaction((tx) =>
-        this.markSlotMissedOnce(tx, id),
-      );
-      if (detected) count += 1;
-    }
-    return count;
+    `
+        ).map((r) => r.id),
+      processItem: (id) =>
+        sweepTransaction(this.prisma, (tx) => this.markSlotMissedOnce(tx, id)),
+    });
   }
 
   private async markSlotMissedOnce(
@@ -245,7 +278,7 @@ export class FulfilmentExceptionSweepService
         slotMissedAt: Date | null;
       }[]
     >`SELECT id, "vendorId", "branchId", status, "fulfilmentMethod", "slotMissedAt"
-      FROM branch_orders WHERE id = ${branchOrderId} FOR UPDATE`;
+      FROM branch_orders WHERE id = ${branchOrderId} FOR UPDATE SKIP LOCKED`;
     const order = rows[0];
     if (
       !order ||
@@ -272,43 +305,56 @@ export class FulfilmentExceptionSweepService
    * Both funnel through BranchOrderCancellationService.finalizeTimeout,
    * which performs the full item/stock/refund-ledger-safe close-out and
    * returns the real terminal status. */
-  private async sweepTimeouts(): Promise<number> {
-    const slotMissedCandidates = await this.prisma.$queryRaw<{ id: string }[]>`
+  private async sweepTimeouts(): Promise<SweepStepResult[]> {
+    const slotMissed = await runSweepStep({
+      step: 'slotMissedTimeouts',
+      logger: this.logger,
+      backoff: this.backoff.slotMissedTimeouts,
+      findCandidates: async (excluded) =>
+        (
+          await this.prisma.$queryRaw<{ id: string }[]>`
       SELECT id FROM branch_orders
       WHERE status IN ('PLACED', 'PREPARING')
         AND "slotMissedAt" IS NOT NULL
         AND "slotMissedAt" <= now() - make_interval(hours => ${SLOT_MISSED_TIMEOUT_HOURS})
+        AND id <> ALL(${excluded}::text[])
       ORDER BY "slotMissedAt" ASC
       LIMIT ${BATCH_LIMIT}
-    `;
-    const deliveryFailureCandidates = await this.prisma.$queryRaw<
-      { id: string }[]
-    >`
+    `
+        ).map((r) => r.id),
+      processItem: (id) =>
+        sweepTransaction(this.prisma, (tx) =>
+          this.resolveTimeoutOnce(tx, id, 'SLOT_MISSED', [
+            'PLACED',
+            'PREPARING',
+          ]),
+        ),
+    });
+    const deliveryFailure = await runSweepStep({
+      step: 'deliveryFailureTimeouts',
+      logger: this.logger,
+      backoff: this.backoff.deliveryFailureTimeouts,
+      findCandidates: async (excluded) =>
+        (
+          await this.prisma.$queryRaw<{ id: string }[]>`
       SELECT id FROM branch_orders
       WHERE status = 'DELIVERY_FAILED'
         AND "deliveryAttemptCount" = 1
         AND "deliveryFailedAt" IS NOT NULL
         AND "deliveryFailedAt" <= now() - make_interval(hours => ${DELIVERY_FAILURE_TIMEOUT_HOURS})
+        AND id <> ALL(${excluded}::text[])
       ORDER BY "deliveryFailedAt" ASC
       LIMIT ${BATCH_LIMIT}
-    `;
-
-    let count = 0;
-    for (const { id } of slotMissedCandidates) {
-      const resolved = await this.prisma.$transaction((tx) =>
-        this.resolveTimeoutOnce(tx, id, 'SLOT_MISSED', ['PLACED', 'PREPARING']),
-      );
-      if (resolved) count += 1;
-    }
-    for (const { id } of deliveryFailureCandidates) {
-      const resolved = await this.prisma.$transaction((tx) =>
-        this.resolveTimeoutOnce(tx, id, 'DELIVERY_FAILURE_TIMEOUT', [
-          'DELIVERY_FAILED',
-        ]),
-      );
-      if (resolved) count += 1;
-    }
-    return count;
+    `
+        ).map((r) => r.id),
+      processItem: (id) =>
+        sweepTransaction(this.prisma, (tx) =>
+          this.resolveTimeoutOnce(tx, id, 'DELIVERY_FAILURE_TIMEOUT', [
+            'DELIVERY_FAILED',
+          ]),
+        ),
+    });
+    return [slotMissed, deliveryFailure];
   }
 
   private async resolveTimeoutOnce(
@@ -326,7 +372,7 @@ export class FulfilmentExceptionSweepService
         "fulfilmentMethod", "paymentMethod", "deliveryAttemptCount",
         "deliveryFee", total, "paymentTransactionId", "slotMissedAt",
         "deliveryFailedAt"
-      FROM branch_orders WHERE id = ${branchOrderId} FOR UPDATE`;
+      FROM branch_orders WHERE id = ${branchOrderId} FOR UPDATE SKIP LOCKED`;
     const order = rows[0];
     if (!order || !allowedStatuses.includes(order.status)) {
       return false;
@@ -384,7 +430,11 @@ export class FulfilmentExceptionSweepService
     });
     for (const r of recipients) {
       await this.outbox.enqueue(
-        { eventType, payload: { ...payload, recipient_user_id: r.userId } },
+        {
+          eventType,
+          audience: 'STORE',
+          payload: { ...payload, recipient_user_id: r.userId },
+        },
         tx,
       );
     }
@@ -407,6 +457,7 @@ export class FulfilmentExceptionSweepService
     await this.outbox.enqueue(
       {
         eventType,
+        audience: 'CUSTOMER',
         payload: {
           ...payload,
           recipient_user_id: order.customerOrder.customer.userId,

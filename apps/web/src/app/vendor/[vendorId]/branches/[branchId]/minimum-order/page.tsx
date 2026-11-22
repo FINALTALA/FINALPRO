@@ -5,7 +5,8 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { ErrorBanner } from "@/components/States";
 import { ApiError, apiFetch, newIdempotencyKey } from "@/lib/api";
-import { useHydrated, useSessionToken, useWorkspaces } from "@/lib/useSession";
+import { useHydrated, useSessionToken, useWorkspaces } from "@/lib/useSession";
+import { loginRedirectHref } from "@/lib/loginRedirect";
 
 // Sprint 20b (FR-PRICE-006, FR-CART-003): the branch's own default
 // minimum order value - the floor for every PICKUP order at this
@@ -48,7 +49,7 @@ export default function BranchMinimumOrderPage() {
     if (!hydrated) return;
     if (!token) {
       router.replace(
-        `/login?next=/vendor/${params.vendorId}/branches/${params.branchId}/minimum-order`,
+        loginRedirectHref(),
       );
       return;
     }

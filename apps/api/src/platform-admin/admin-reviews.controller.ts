@@ -18,7 +18,10 @@ import {
   SessionAuthGuard,
 } from '../auth/session-auth.guard';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
-import { ReviewDecisionDto } from '../reviews/dto/review-decision.dto';
+import {
+  HideReviewMediaDto,
+  ReviewDecisionDto,
+} from '../reviews/dto/review-decision.dto';
 import { ReviewsService } from '../reviews/reviews.service';
 
 // Sprint 23 (PDR-032): the review-report queue's own resolution -
@@ -47,6 +50,28 @@ export class AdminReviewsController {
       user.id,
       reviewId,
       dto.decision,
+      req.correlationId,
+      dto.reason,
+    );
+  }
+
+  // PD-3: hide one image of a review (the review itself stays), with a
+  // mandatory reason - audited.
+  @Patch(':reviewId/media/:mediaId/hide')
+  @RequirePlatformRole(PlatformRole.PLATFORM_ADMIN)
+  @UseInterceptors(IdempotencyInterceptor)
+  async hideMedia(
+    @Param('reviewId') reviewId: string,
+    @Param('mediaId') mediaId: string,
+    @Body() dto: HideReviewMediaDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
+  ) {
+    return this.reviews.hideMedia(
+      user.id,
+      reviewId,
+      mediaId,
+      dto.reason,
       req.correlationId,
     );
   }

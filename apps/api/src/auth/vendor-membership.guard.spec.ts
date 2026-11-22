@@ -1,7 +1,11 @@
 import { ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { PrismaService } from '../prisma/prisma.service';
+import { RedisService } from '../redis/redis.service';
 import { VendorMembershipGuard } from './vendor-membership.guard';
+import { RequireVendorRole } from './vendor-role.decorator';
+
+const NO_REDIS = {} as unknown as RedisService;
 
 function makeContext(
   user: { id: string } | undefined,
@@ -16,8 +20,13 @@ function makeContext(
   const context = {
     switchToHttp: () => ({ getRequest: () => req }),
     getHandler: () => ({}),
+    getClass: () => ({}),
   } as unknown as ExecutionContext;
-  const reflector = { get: jest.fn().mockReturnValue(requiredRoles) };
+  // The guard reads @RequireVendorRole from the handler AND the class
+  // (getAllAndOverride) - see the class-level test at the end.
+  const reflector = {
+    getAllAndOverride: jest.fn().mockReturnValue(requiredRoles),
+  };
   return { context, req, reflector };
 }
 
@@ -30,6 +39,9 @@ function makePrisma(
 ) {
   return {
     vendorUser: { findUnique: jest.fn().mockResolvedValue(membership) },
+    // TB-26: workspace_scoping_enabled off (no row) - the workspace
+    // check is a no-op; it has its own e2e coverage.
+    featureFlag: { findUnique: jest.fn().mockResolvedValue(null) },
   };
 }
 
@@ -42,6 +54,7 @@ describe('VendorMembershipGuard', () => {
     const guard = new VendorMembershipGuard(
       reflector as unknown as Reflector,
       prisma as unknown as PrismaService,
+      NO_REDIS,
     );
 
     await expect(guard.canActivate(context)).rejects.toBeInstanceOf(
@@ -55,6 +68,7 @@ describe('VendorMembershipGuard', () => {
     const guard = new VendorMembershipGuard(
       reflector as unknown as Reflector,
       prisma as unknown as PrismaService,
+      NO_REDIS,
     );
 
     await expect(guard.canActivate(context)).rejects.toBeInstanceOf(
@@ -73,6 +87,7 @@ describe('VendorMembershipGuard', () => {
     const guard = new VendorMembershipGuard(
       reflector as unknown as Reflector,
       prisma as unknown as PrismaService,
+      NO_REDIS,
     );
 
     await expect(guard.canActivate(context)).rejects.toMatchObject({
@@ -89,6 +104,7 @@ describe('VendorMembershipGuard', () => {
     const guard = new VendorMembershipGuard(
       reflector as unknown as Reflector,
       prisma as unknown as PrismaService,
+      NO_REDIS,
     );
 
     await expect(guard.canActivate(context)).resolves.toBe(true);
@@ -109,6 +125,7 @@ describe('VendorMembershipGuard', () => {
     const guard = new VendorMembershipGuard(
       reflector as unknown as Reflector,
       prisma as unknown as PrismaService,
+      NO_REDIS,
     );
 
     await expect(guard.canActivate(context)).rejects.toMatchObject({
@@ -126,6 +143,7 @@ describe('VendorMembershipGuard', () => {
     const guard = new VendorMembershipGuard(
       reflector as unknown as Reflector,
       prisma as unknown as PrismaService,
+      NO_REDIS,
     );
 
     await expect(guard.canActivate(context)).resolves.toBe(true);
@@ -143,6 +161,7 @@ describe('VendorMembershipGuard', () => {
     const guard = new VendorMembershipGuard(
       reflector as unknown as Reflector,
       prisma as unknown as PrismaService,
+      NO_REDIS,
     );
 
     await expect(guard.canActivate(context)).rejects.toMatchObject({
@@ -162,6 +181,7 @@ describe('VendorMembershipGuard', () => {
     const guard = new VendorMembershipGuard(
       reflector as unknown as Reflector,
       prisma as unknown as PrismaService,
+      NO_REDIS,
     );
 
     await expect(guard.canActivate(context)).resolves.toBe(true);
@@ -181,6 +201,7 @@ describe('VendorMembershipGuard', () => {
     const guard = new VendorMembershipGuard(
       reflector as unknown as Reflector,
       prisma as unknown as PrismaService,
+      NO_REDIS,
     );
 
     await expect(guard.canActivate(context)).resolves.toBe(true);
@@ -200,6 +221,7 @@ describe('VendorMembershipGuard', () => {
     const guard = new VendorMembershipGuard(
       reflector as unknown as Reflector,
       prisma as unknown as PrismaService,
+      NO_REDIS,
     );
 
     await expect(guard.canActivate(context)).rejects.toMatchObject({
@@ -220,8 +242,34 @@ describe('VendorMembershipGuard', () => {
     const guard = new VendorMembershipGuard(
       reflector as unknown as Reflector,
       prisma as unknown as PrismaService,
+      NO_REDIS,
     );
 
     await expect(guard.canActivate(context)).resolves.toBe(true);
+  });
+
+  it('honours a CLASS-level @RequireVendorRole(OWNER) (real Reflector): a BRANCH_EMPLOYEE is refused on a handler that has none of its own', async () => {
+    @RequireVendorRole('OWNER')
+    class OwnerOnlyController {
+      handler() {}
+    }
+    const req = { user: { id: 'u1' }, params: { vendorId: 'v1' } };
+    const context = {
+      switchToHttp: () => ({ getRequest: () => req }),
+      getHandler: () => OwnerOnlyController.prototype.handler,
+      getClass: () => OwnerOnlyController,
+    } as unknown as ExecutionContext;
+    const guard = new VendorMembershipGuard(
+      new Reflector(),
+      makePrisma({
+        role: 'BRANCH_EMPLOYEE',
+        branchId: 'b1',
+      }) as unknown as PrismaService,
+      NO_REDIS,
+    );
+
+    await expect(guard.canActivate(context)).rejects.toMatchObject({
+      response: { code: 'VENDOR_ROLE_FORBIDDEN' },
+    });
   });
 });

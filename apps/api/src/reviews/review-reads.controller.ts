@@ -1,4 +1,10 @@
-import { Controller, Get, Param } from '@nestjs/common';
+import { Controller, Get, Param, Query, Req } from '@nestjs/common';
+import { Request } from 'express';
+import { optionalSessionUserId } from '../auth/optional-session';
+import { SessionService } from '../auth/session.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { ProductReviewsQueryDto } from './dto/product-reviews-query.dto';
+import { ReviewReadsService } from './review-reads.service';
 import { ReviewsService } from './reviews.service';
 
 // Sprint 23 (PDR-032): public, unauthenticated reads - every
@@ -11,11 +17,24 @@ import { ReviewsService } from './reviews.service';
 // module controller convention (see ReturnsModule's three).
 @Controller()
 export class ReviewReadsController {
-  constructor(private readonly reviews: ReviewsService) {}
+  constructor(
+    private readonly reviews: ReviewsService,
+    private readonly reads: ReviewReadsService,
+    private readonly sessions: SessionService,
+    private readonly prisma: PrismaService,
+  ) {}
 
+  // PD-3: paginated, filtered, with the summary; a signed-in viewer
+  // also gets their own vote/edit/report state per review (a missing
+  // or stale token is simply a guest, never a 401).
   @Get('canonical-products/:id/reviews')
-  async forProduct(@Param('id') id: string) {
-    return this.reviews.listForProduct(id);
+  async forProduct(
+    @Param('id') id: string,
+    @Query() query: ProductReviewsQueryDto,
+    @Req() req: Request,
+  ) {
+    const userId = await optionalSessionUserId(this.sessions, this.prisma, req);
+    return this.reads.listForProduct(id, query, userId);
   }
 
   @Get('vendors/:vendorId/reviews')

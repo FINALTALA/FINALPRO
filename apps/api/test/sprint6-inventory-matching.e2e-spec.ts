@@ -1,6 +1,10 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
+import {
+  TEST_CLASSIFICATION,
+  postCombination,
+} from './helpers/taxonomy-offers';
 import { AppModule } from './../src/app.module';
 import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
@@ -221,14 +225,16 @@ describe('Sprint 6 - branch inventory, stock movements, media, non-exact match r
       .post(`/api/v1/vendors/${vendorId}/offers`)
       .set('Authorization', `Bearer ${ownerToken}`)
       .set('Idempotency-Key', unique('offer'))
-      .send({ title_ar: 'منتج', title_en: 'Product' })
+      .send({ title_ar: 'منتج', title_en: 'Product', ...TEST_CLASSIFICATION })
       .expect(201);
-    const variantRes = await request(app.getHttpServer())
-      .post(`/api/v1/vendors/${vendorId}/offers/${offerRes.body.id}/variants`)
-      .set('Authorization', `Bearer ${ownerToken}`)
-      .set('Idempotency-Key', unique('variant'))
-      .send({ seller_sku: unique('sku'), base_price: 10, ...extra })
-      .expect(201);
+    const variantRes = await postCombination(
+      app.getHttpServer(),
+      ownerToken,
+      vendorId,
+      offerRes.body.id,
+      { seller_sku: unique('sku'), base_price: 10, ...extra },
+    );
+    expect(variantRes.status).toBe(201);
     return { offerId: offerRes.body.id, variantId: variantRes.body.id };
   }
 
@@ -1127,7 +1133,9 @@ describe('Sprint 6 - branch inventory, stock movements, media, non-exact match r
           owner,
           vendorId,
           branchAId,
-          { colour: 'Red', size: '42' },
+          // A combination's colour/size labels come from the taxonomy:
+          // RED = أحمر, EU_42 = 42.
+          { color_code: 'RED', size_code: 'EU_42' },
         );
         await prisma.vendorOffer.update({
           where: { id: offerId },
@@ -1152,7 +1160,7 @@ describe('Sprint 6 - branch inventory, stock movements, media, non-exact match r
         expect(item.offer_variant_id).toBe(variantId);
         expect(item.offer_title_ar).toBe('حذاء رياضي');
         expect(item.offer_title_en).toBe('Sport Shoe');
-        expect(item.variant_colour).toBe('Red');
+        expect(item.variant_colour).toBe('أحمر');
         expect(item.variant_size).toBe('42');
         expect(item.canonical_variant_id).toBe(canonicalVariantId);
         expect(item.canonical_brand_name).toBe('Nike');
@@ -1292,12 +1300,14 @@ describe('Sprint 6 - branch inventory, stock movements, media, non-exact match r
         // createOfferVariant(), which would re-activate this vendor's
         // already-ACTIVE subscription and 409) is enough to be "a
         // different offer variant".
-        const otherVariantRes = await request(app.getHttpServer())
-          .post(`/api/v1/vendors/${vendorId}/offers/${offerId}/variants`)
-          .set('Authorization', `Bearer ${owner}`)
-          .set('Idempotency-Key', unique('variant'))
-          .send({ seller_sku: unique('sku'), base_price: 10 })
-          .expect(201);
+        const otherVariantRes = await postCombination(
+          app.getHttpServer(),
+          owner,
+          vendorId,
+          offerId,
+          { seller_sku: unique('sku'), base_price: 10 },
+        );
+        expect(otherVariantRes.status).toBe(201);
         const otherVariantId = otherVariantRes.body.id;
         const { variantId: unrelatedCv } = await createCanonicalVariant(
           admin,

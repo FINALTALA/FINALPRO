@@ -11,12 +11,17 @@ import { Prisma } from '../../generated/prisma/client';
  * reads it again) already deactivated.
  *
  * Taken by: CustomersController.deactivateAccount() (first, before the
- * active-vendor-ownership and active-order checks below), and
- * CheckoutService.confirm()'s own final transaction (first, before its
- * existing lockReservationRowIfExists() call - never after).
- * `reserve()` does NOT take this lock - a reservation with no
- * BranchOrder behind it is harmless to let expire normally; only the
- * moment an order is actually created needs this protection.
+ * active-vendor-ownership and active-order checks below), the account
+ * reactivation in AuthController, and - through lockCustomerCheckout()
+ * (checkout/reservation-customer-lock.util.ts), always before the
+ * customer's reservation lock - every checkout path: reserve(),
+ * cancelReservation() and both of confirm()'s transactions.
+ * TB-5: reserve() and cancelReservation() take it too, not because they
+ * create an order, but because a transaction holding the reservation
+ * lock must never wait for this row (reserve()'s audit row references
+ * it, which needs FOR KEY SHARE on it) - that wait, against confirm()
+ * holding this row and waiting for the reservation lock, was a real
+ * deadlock.
  */
 export async function lockCustomerAccountState(
   tx: Prisma.TransactionClient,

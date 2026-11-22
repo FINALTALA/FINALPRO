@@ -5,8 +5,9 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import SafeImage from "@/components/SafeImage";
 import { ErrorBanner } from "@/components/States";
-import { apiFetch, ApiError, newIdempotencyKey } from "@/lib/api";
-import { getSessionToken } from "@/lib/session";
+import { apiFetch, ApiError, IMAGE_UPLOAD_ACCEPT, newIdempotencyKey, uploadVendorImage } from "@/lib/api";
+import { getSessionToken } from "@/lib/session";
+import { loginRedirectHref } from "@/lib/loginRedirect";
 
 interface VariantDto {
   id: string;
@@ -50,6 +51,8 @@ interface PriceHistoryRow {
 
 interface OfferSummaryDto {
   canonical_product_id: string | null;
+  /** Phase A++: one price and discount for all versions - edited on the product page only. */
+  price_is_offer_level?: boolean;
 }
 
 interface NameChangeRequestDto {
@@ -101,6 +104,7 @@ export default function VariantDetailPage() {
   const [specsAr, setSpecsAr] = useState("");
   const [specsEn, setSpecsEn] = useState("");
   const [priceMode, setPriceMode] = useState<PriceMode>("none");
+  const [priceIsOfferLevel, setPriceIsOfferLevel] = useState(false);
   const [salePrice, setSalePrice] = useState("");
   const [discountPercent, setDiscountPercent] = useState("");
   const [discountStart, setDiscountStart] = useState("");
@@ -237,6 +241,7 @@ export default function VariantDetailPage() {
       .then((offer) => {
         if (generation !== generationRef.current) return;
         setOfferCanonicalProductId(offer.canonical_product_id);
+        setPriceIsOfferLevel(Boolean(offer.price_is_offer_level));
         if (offer.canonical_product_id) {
           loadNameChangeRequests(offer.canonical_product_id, generation);
         } else {
@@ -273,7 +278,7 @@ export default function VariantDetailPage() {
 
   useEffect(() => {
     if (!getSessionToken()) {
-      router.replace("/login");
+      router.replace(loginRedirectHref());
       return;
     }
     // Deferred one microtask - load() itself calls setState
@@ -401,6 +406,28 @@ export default function VariantDetailPage() {
     }
   }
 
+  // Sprint 26: an image from the owner's device - uploaded first, then
+  // attached through the very same media endpoint as a pasted URL, so
+  // the per-variant limits and PRIMARY rules still apply.
+  async function uploadMediaFile(file: File) {
+    setBusy(true);
+    setError(null);
+    try {
+      const { url } = await uploadVendorImage(params.vendorId, file);
+      await apiFetch(`${base}/media`, {
+        method: "POST",
+        body: { url, kind: newMediaKind, media_type: "IMAGE" },
+        idempotencyKey: newIdempotencyKey("media-upload"),
+      });
+      setNotice("تم رفع الصورة وإضافتها");
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "تعذّر رفع الصورة");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function deleteMedia(id: string) {
     setBusy(true);
     setError(null);
@@ -495,9 +522,15 @@ export default function VariantDetailPage() {
 
       <div className="card" style={{ maxWidth: 560, marginTop: 16 }}>
         <h3 style={{ marginTop: 0 }}>السعر والخيارات</h3>
+        {priceIsOfferLevel && (
+          <p className="muted" data-testid="variant-price-offer-level">
+            سعر هذا المنتج وخصمه واحد لكل ألوانه ومقاساته، ويُعدَّلان من بطاقة «السعر والخصم» في{" "}
+            <a href={`/vendor/${params.vendorId}/offers/${params.offerId}#price`}>صفحة المنتج</a>.
+          </p>
+        )}
         <div className="field">
           <label>سعر الأساس (₪)</label>
-          <input type="number" value={basePrice} onChange={(e) => setBasePrice(e.target.value)} />
+          <input type="number" value={basePrice} onChange={(e) => setBasePrice(e.target.value)} disabled={priceIsOfferLevel} />
         </div>
         <div className="field">
           <label>حالة المنتج</label>
@@ -526,7 +559,7 @@ export default function VariantDetailPage() {
         </div>
         <div className="field">
           <label>نمط السعر</label>
-          <select value={priceMode} onChange={(e) => setPriceMode(e.target.value as PriceMode)}>
+          <select value={priceMode} onChange={(e) => setPriceMode(e.target.value as PriceMode)} disabled={priceIsOfferLevel}>
             <option value="none">بدون تخفيض</option>
             <option value="sale">سعر مخفّض ثابت</option>
             <option value="discount">خصم مجدوَل</option>
@@ -535,7 +568,7 @@ export default function VariantDetailPage() {
         {priceMode === "sale" && (
           <div className="field">
             <label>السعر بعد التخفيض (₪)</label>
-            <input type="number" value={salePrice} onChange={(e) => setSalePrice(e.target.value)} />
+            <input type="number" value={salePrice} onChange={(e) => setSalePrice(e.target.value)} disabled={priceIsOfferLevel} />
           </div>
         )}
         {priceMode === "discount" && (
@@ -546,6 +579,7 @@ export default function VariantDetailPage() {
                 type="number"
                 value={discountPercent}
                 onChange={(e) => setDiscountPercent(e.target.value)}
+                disabled={priceIsOfferLevel}
               />
             </div>
             <div className="field">
@@ -554,6 +588,7 @@ export default function VariantDetailPage() {
                 type="datetime-local"
                 value={discountStart?.slice(0, 16) ?? ""}
                 onChange={(e) => setDiscountStart(e.target.value)}
+                disabled={priceIsOfferLevel}
               />
             </div>
             <div className="field">
@@ -562,6 +597,7 @@ export default function VariantDetailPage() {
                 type="datetime-local"
                 value={discountEnd?.slice(0, 16) ?? ""}
                 onChange={(e) => setDiscountEnd(e.target.value)}
+                disabled={priceIsOfferLevel}
               />
             </div>
           </>
@@ -588,7 +624,21 @@ export default function VariantDetailPage() {
           />
         ))}
         <div className="field">
-          <label>رابط الوسائط</label>
+          <label>رفع صورة من جهازك (JPG / PNG / WebP / GIF - حتى 5 ميغابايت)</label>
+          <input
+            type="file"
+            accept={IMAGE_UPLOAD_ACCEPT}
+            disabled={busy}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (file) uploadMediaFile(file);
+            }}
+          />
+          <small className="muted">تُضاف كصورة {newMediaKind === "PRIMARY" ? "رئيسية" : "إضافية"} حسب الاختيار أدناه.</small>
+        </div>
+        <div className="field">
+          <label>أو رابط وسائط (صورة أو فيديو)</label>
           <input value={newMediaUrl} onChange={(e) => setNewMediaUrl(e.target.value)} placeholder="https://..." />
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>

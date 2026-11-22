@@ -10,7 +10,8 @@ import { clearSession } from "@/lib/session";
 import { registerTranslations } from "@/lib/i18n";
 import { useT } from "@/lib/useLang";
 import { useFetch } from "@/lib/useFetch";
-import { useHydrated, useSessionToken } from "@/lib/useSession";
+import { useHydrated, useSessionToken } from "@/lib/useSession";
+import { loginRedirectHref, useLoginRedirectHref, useLoginWhenSessionLost } from "@/lib/loginRedirect";
 
 registerTranslations({
   ar: {
@@ -47,9 +48,12 @@ registerTranslations({
 // set-default, on top of the create flow the pre-S22 /account page
 // already had inline. A brand-new route, not a retrofit of that page.
 export default function AddressesPage() {
+  const loginLink = useLoginRedirectHref();
   const router = useRouter();
   const hydrated = useHydrated();
   const token = useSessionToken();
+  // TB-34: a session lost to a 401 goes to sign-in (with `next` = this page) rather than showing the sign-in button.
+  useLoginWhenSessionLost(hydrated, token);
   const t = useT();
   const list = useFetch<SavedAddress[]>(token ? "/customers/me/addresses" : null, true);
   const [items, setItems] = useState<SavedAddress[] | null>(null);
@@ -109,14 +113,14 @@ export default function AddressesPage() {
   if (!token) {
     return (
       <div className="page-shell">
-        <EmptyState title={t("addresses.login_required")} actionHref="/login?next=/account/addresses" actionLabel={t("addresses.login_action")} />
+        <EmptyState title={t("addresses.login_required")} actionHref={loginLink} actionLabel={t("addresses.login_action")} />
       </div>
     );
   }
 
   if (list.status === 401) {
     clearSession();
-    router.replace("/login?next=/account/addresses");
+    router.replace(loginRedirectHref());
     return null;
   }
 

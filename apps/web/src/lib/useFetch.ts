@@ -8,6 +8,7 @@ interface FetchState<T> {
   data: T | null;
   error: string | null;
   status: number | null;
+  apiError: unknown;
 }
 
 /**
@@ -20,6 +21,7 @@ export function useFetch<T>(path: string | null, auth = false) {
     data: null,
     error: null,
     status: null,
+    apiError: null,
   });
 
   useEffect(() => {
@@ -27,7 +29,7 @@ export function useFetch<T>(path: string | null, auth = false) {
     let cancelled = false;
     apiFetch<T>(path, { auth })
       .then((data) => {
-        if (!cancelled) setState({ path, data, error: null, status: 200 });
+        if (!cancelled) setState({ path, data, error: null, status: 200, apiError: null });
       })
       .catch((err) => {
         if (cancelled) return;
@@ -36,6 +38,7 @@ export function useFetch<T>(path: string | null, auth = false) {
           data: null,
           error: err instanceof ApiError ? err.message : "تعذّر الاتصال بالخادم",
           status: err instanceof ApiError ? err.status : 0,
+          apiError: err,
         });
       });
     return () => {
@@ -48,6 +51,9 @@ export function useFetch<T>(path: string | null, auth = false) {
     data: ready ? state.data : null,
     error: ready ? state.error : null,
     status: ready ? state.status : null,
+    // TB-16.1: the raw failure, for screens that must not show `error`
+    // (the API's own message) - they pass it to apiErrorMessage instead.
+    apiError: ready ? state.apiError : null,
     loading: path !== null && !ready,
   };
 }

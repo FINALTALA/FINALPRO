@@ -12,7 +12,8 @@ import {
   formatDateTime,
 } from "@/lib/admin";
 import { useFetch } from "@/lib/useFetch";
-import { useHydrated, useSessionToken, useWorkspaces } from "@/lib/useSession";
+import { useHydrated, useSessionToken, useWorkspaces } from "@/lib/useSession";
+import { loginRedirectHref } from "@/lib/loginRedirect";
 
 interface StatusDto {
   vendor: { id: string; legal_name: string; store_type: string; status: string };
@@ -68,7 +69,7 @@ export default function OwnerVerificationPage() {
 
   useEffect(() => {
     if (hydrated && !token) {
-      router.replace(`/login?next=/vendor/${params.vendorId}/verification`);
+      router.replace(loginRedirectHref());
     }
   }, [hydrated, token, params.vendorId, router]);
 

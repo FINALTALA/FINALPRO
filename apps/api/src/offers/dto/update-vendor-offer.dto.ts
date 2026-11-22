@@ -1,5 +1,6 @@
 import { IsEnum, IsOptional, IsString } from 'class-validator';
 import { ClothingCategoryTemplate } from '../../../generated/prisma/client';
+import { Transform } from 'class-transformer';
 import { IsTemplateAttributesShape } from './template-attributes-shape.decorator';
 
 // Sprint 17 (PDR-036, D1, blocker 2): every field optional (a partial
@@ -13,7 +14,11 @@ export class UpdateVendorOfferDto {
   @IsString()
   title_ar?: string;
 
+  /** Optional (FR-CAT-014/015): '' clears the English name. */
   @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
   @IsString()
   title_en?: string;
 

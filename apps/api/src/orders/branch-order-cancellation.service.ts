@@ -12,7 +12,10 @@ import {
 } from '../../generated/prisma/client';
 import { AuditLogService } from '../audit/audit-log.service';
 import { lockOffersWideForRestock } from '../checkout/stock-lock.util';
-import { enqueueFavoriteNotification } from '../favorites/favorite-alerts.util';
+import {
+  enqueueFavoriteNotification,
+  enqueueVariantAvailabilityNotifications,
+} from '../favorites/favorite-alerts.util';
 import { toDecimal } from '../offers/pricing/effective-price.util';
 import { OutboxEventService } from '../outbox/outbox-event.service';
 import { BranchOrderService } from './branch-order.service';
@@ -400,6 +403,40 @@ export class BranchOrderCancellationService {
       })),
     );
 
+    // «إدارة مخزون الفرع v1» (2026-11-22): the stock log line of each
+    // restock just done (same transaction; the restock itself is unchanged).
+    // The role is the actor's at this moment: the shopper, the platform, the
+    // system (a sweep - no actor), or the staff member's store role.
+    let actorRole: string | null;
+    if (initiatedBy === 'CUSTOMER_REQUEST') actorRole = 'CUSTOMER';
+    else if (initiatedBy === 'PLATFORM_ADMIN') actorRole = 'PLATFORM_STAFF';
+    else if (initiatedBy === 'SYSTEM' || !actorId) actorRole = 'SYSTEM';
+    else {
+      const member = await tx.vendorUser.findFirst({
+        where: { vendorId: order.vendorId, userId: actorId },
+        select: { role: true },
+      });
+      actorRole = member?.role ?? null; // unknown: never guessed
+    }
+    for (const [offerVariantId, quantity] of qtyByOffer) {
+      const restock = restockResults.get(`${order.branchId}:${offerVariantId}`);
+      if (!restock) continue;
+      await tx.stockMovement.create({
+        data: {
+          vendorId: order.vendorId,
+          branchId: order.branchId,
+          offerVariantId,
+          quantityDelta: quantity,
+          resultingQuantity: restock.targetStock.quantity,
+          reason: 'ORDER_CANCEL_RESTOCK',
+          reasonNote: 'إلغاء طلب أونلاين - إعادة إلى المخزون',
+          actorId,
+          actorRole,
+          branchOrderId: order.id,
+        },
+      });
+    }
+
     const isOnline = order.paymentMethod === 'ONLINE';
     let refundedAmount = new Decimal(0);
 
@@ -446,6 +483,10 @@ export class BranchOrderCancellationService {
             vendor_id: order.vendorId,
             offer_variant_id: offerVariantId,
           },
+        });
+        await enqueueVariantAvailabilityNotifications(tx, this.outbox, {
+          vendorId: order.vendorId,
+          offerVariantId,
         });
       }
     }

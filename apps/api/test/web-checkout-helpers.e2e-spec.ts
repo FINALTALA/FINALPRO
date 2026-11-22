@@ -13,6 +13,7 @@ import {
 } from '../../web/src/lib/sandbox-card';
 import {
   CartLineState,
+  cartQuantityErrorMessage,
   canSelect,
   checkoutBlock,
   lineMessage,
@@ -143,35 +144,43 @@ describe('Sprint 14 - sandbox card helpers', () => {
   });
 });
 
-describe('Sprint 14 - cart line state', () => {
+describe('Sprint 14 / TB-1 - cart line state', () => {
   const base: CartLineState = {
     id: 'l1',
     quantity: 1,
     availability: 'available',
-    max_quantity: 10,
+    max_quantity: null,
+    purchase_limit: 10,
     purchasable: true,
   };
 
   it('classifies ok, sold out, unavailable and over-maximum lines', () => {
     expect(lineState(base)).toBe('ok');
-    expect(
-      lineState({ ...base, availability: 'sold_out', max_quantity: 0 }),
-    ).toBe('sold_out');
-    expect(lineState({ ...base, purchasable: false, max_quantity: 0 })).toBe(
-      'unavailable',
-    );
+    expect(lineState({ ...base, availability: 'sold_out' })).toBe('sold_out');
+    expect(lineState({ ...base, purchasable: false })).toBe('unavailable');
+    // The server only sends max_quantity when the line asks for too much.
     expect(lineState({ ...base, quantity: 5, max_quantity: 2 })).toBe(
+      'exceeds_max',
+    );
+    // A pre-limit line above the public limit can't be checked out either.
+    expect(lineState({ ...base, quantity: 12, max_quantity: 10 })).toBe(
       'exceeds_max',
     );
   });
 
-  it('shows the maximum for an over-quantity line and a low-stock hint', () => {
+  it('names the reported maximum only when the quantity fails, the limit when over it, and no number for low stock', () => {
     expect(lineMessage({ ...base, quantity: 5, max_quantity: 2 })).toContain(
       '2',
     );
-    expect(
-      lineMessage({ ...base, availability: 'low_stock', max_quantity: 2 }),
-    ).toContain('2');
+    const overLimit = lineMessage({ ...base, quantity: 12, max_quantity: 10 });
+    expect(overLimit).toContain('الحد الأقصى 10');
+    // Over the limit AND over stock: the (smaller) available figure.
+    expect(lineMessage({ ...base, quantity: 12, max_quantity: 7 })).toContain(
+      '7',
+    );
+    const low = lineMessage({ ...base, availability: 'low_stock' });
+    expect(low).toBe('كمية محدودة.');
+    expect(low).not.toMatch(/\d/);
     expect(lineMessage(base)).toBeNull();
   });
 
@@ -181,7 +190,6 @@ describe('Sprint 14 - cart line state', () => {
       ...base,
       id: 'l2',
       availability: 'sold_out' as const,
-      max_quantity: 0,
     };
     expect(canSelect(ok)).toBe(true);
     expect(canSelect(soldOut)).toBe(false);
@@ -190,6 +198,16 @@ describe('Sprint 14 - cart line state', () => {
       'SELECTION_NEEDS_ADJUSTMENT',
     );
     expect(checkoutBlock([ok, soldOut], new Set())).toBe('NOTHING_SELECTED');
+  });
+
+  it('the limit and stock refusals say the public limit at most, never a quantity', () => {
+    expect(
+      cartQuantityErrorMessage('CART_LINE_LIMIT_EXCEEDED', [{ limit: 10 }]),
+    ).toContain('10');
+    const stock = cartQuantityErrorMessage('INSUFFICIENT_STOCK');
+    expect(stock).toContain('الكمية المطلوبة غير متاحة');
+    expect(stock).not.toMatch(/\d/);
+    expect(cartQuantityErrorMessage('SOMETHING_ELSE')).toBeNull();
   });
 });
 

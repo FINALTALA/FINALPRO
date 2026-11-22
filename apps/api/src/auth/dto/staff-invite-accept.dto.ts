@@ -1,9 +1,5 @@
-import {
-  IsOptional,
-  IsPhoneNumber,
-  IsString,
-  MinLength,
-} from 'class-validator';
+import { IsOptional, IsString, MinLength } from 'class-validator';
+import { PhoneField } from '../../common/phone/phone-input';
 
 // Sprint 4 (RB-ROLE-002): same shape as RegisterDto's
 // verification_token contract (the session_token POST /auth/otp/verify
@@ -12,7 +8,7 @@ import {
 // An existing user proves the same phone via the same OTP but keeps
 // their current password.
 export class StaffInviteAcceptDto {
-  @IsPhoneNumber(undefined)
+  @PhoneField()
   phone!: string;
 
   @IsString()

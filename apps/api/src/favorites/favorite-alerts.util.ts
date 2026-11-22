@@ -4,6 +4,75 @@ import { OutboxEventService } from '../outbox/outbox-event.service';
 export type FavoriteAlertType = 'PRICE_DROP' | 'BACK_IN_STOCK' | 'NEW_OFFER';
 
 /**
+ * Explicit availability requests are intentionally not Favorites. A request
+ * is for one exact sellable variant (product colour x size) and is consumed
+ * only after that variant genuinely crosses from unavailable everywhere to
+ * available. `updateMany(active:true)` is the concurrency backstop: two
+ * simultaneous restocks can enqueue at most one alert for a subscription.
+ */
+export async function enqueueVariantAvailabilityNotifications(
+  tx: Prisma.TransactionClient,
+  outbox: OutboxEventService,
+  params: { vendorId: string; offerVariantId: string },
+): Promise<void> {
+  const variant = await tx.offerVariant.findFirst({
+    where: {
+      id: params.offerVariantId,
+      vendorId: params.vendorId,
+      vendorOffer: {
+        status: 'ACTIVE',
+        vendor: { status: 'ACTIVE', storefrontPublished: true },
+      },
+    },
+    select: {
+      id: true,
+      colorCode: true,
+      colour: true,
+      sizeCode: true,
+      size: true,
+      offerColor: { select: { id: true, nameAr: true, nameEn: true } },
+      vendorOffer: { select: { id: true, vendor: { select: { slug: true } } } },
+    },
+  });
+  if (!variant) return;
+
+  const subscriptions = await tx.variantAvailabilitySubscription.findMany({
+    where: { offerVariantId: variant.id, active: true },
+    select: { id: true, userId: true },
+  });
+  for (const sub of subscriptions) {
+    const claimed = await tx.variantAvailabilitySubscription.updateMany({
+      where: { id: sub.id, active: true },
+      data: { active: false, notifiedAt: new Date() },
+    });
+    if (claimed.count !== 1) continue;
+    await outbox.enqueue(
+      {
+        eventType: 'availability_subscription.back_in_stock',
+        audience: 'CUSTOMER',
+        payload: {
+          recipient_user_id: sub.userId,
+          vendor_id: params.vendorId,
+          offer_variant_id: variant.id,
+          offer_id: variant.vendorOffer.id,
+          vendor_slug: variant.vendorOffer.vendor.slug,
+          color_id: variant.offerColor?.id ?? null,
+          color_name_ar:
+            variant.offerColor?.nameAr ??
+            variant.colour ??
+            variant.colorCode ??
+            '',
+          color_name_en: variant.offerColor?.nameEn ?? null,
+          size_code: variant.sizeCode ?? null,
+          size_label: variant.size ?? variant.sizeCode ?? '',
+        },
+      },
+      tx,
+    );
+  }
+}
+
+/**
  * Sprint 24 (FR-FAV-003/004/006): the one snapshot-and-enqueue path
  * every favorite-driven alert trigger goes through - mirrors the
  * existing follower-fanout pattern (offer.published_for_followers /
@@ -37,9 +106,24 @@ export async function enqueueFavoriteNotification(
     offerVariantId?: string;
     payload: Record<string, unknown>;
   },
-): Promise<string> {
+): Promise<string | null> {
+  // Back in stock: only a product shoppers can buy now. A version of an
+  // INACTIVE or ARCHIVED (or DRAFT) product gets no event and no
+  // notification - one place for every caller (stock movements, order
+  // cancellation, returns).
+  if (params.alertType === 'BACK_IN_STOCK' && params.offerVariantId) {
+    const rows = await tx.$queryRaw<{ status: string }[]>`
+      SELECT o.status::text AS status
+      FROM offer_variants v JOIN vendor_offers o ON o.id = v."vendorOfferId"
+      WHERE v.id = ${params.offerVariantId}`;
+    if (rows[0]?.status !== 'ACTIVE') return null;
+  }
   const outboxEvent = await outbox.enqueue(
-    { eventType: params.eventType, payload: params.payload },
+    {
+      eventType: params.eventType,
+      audience: 'CUSTOMER',
+      payload: params.payload,
+    },
     tx,
   );
 

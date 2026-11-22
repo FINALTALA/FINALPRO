@@ -1,7 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import { OutboxEventService } from '../outbox/outbox-event.service';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  BranchOrderIntegrityService,
+  branchOrderIntegrityIssue,
+} from './branch-order-integrity.service';
 import { BranchOrderService } from './branch-order.service';
 
 const CONFIRM_REMINDER_HOURS = 48;
@@ -12,6 +16,7 @@ interface DeliveredOrderRow {
   vendorId: string;
   branchId: string;
   customerOrderId: string;
+  fulfilmentMethod: string;
   status: string;
   deliveredAt: Date | null;
   confirmReminderSentAt: Date | null;
@@ -36,10 +41,13 @@ interface DeliveredOrderRow {
  */
 @Injectable()
 export class FulfilmentReconciliationService {
+  private readonly logger = new Logger(FulfilmentReconciliationService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly branchOrderService: BranchOrderService,
     private readonly outbox: OutboxEventService,
+    private readonly integrity: BranchOrderIntegrityService,
   ) {}
 
   async reconcileOne(
@@ -48,11 +56,22 @@ export class FulfilmentReconciliationService {
     correlationId: string,
   ): Promise<void> {
     const rows = await tx.$queryRaw<DeliveredOrderRow[]>`
-      SELECT id, "vendorId", "branchId", "customerOrderId", status,
-        "deliveredAt", "confirmReminderSentAt", "notReceivedReportedAt"
+      SELECT id, "vendorId", "branchId", "customerOrderId",
+        "fulfilmentMethod", status, "deliveredAt", "confirmReminderSentAt",
+        "notReceivedReportedAt"
       FROM branch_orders WHERE id = ${branchOrderId} FOR UPDATE`;
     const order = rows[0];
-    if (!order || order.status !== 'DELIVERED' || !order.deliveredAt) {
+    if (!order || order.status !== 'DELIVERED') {
+      return;
+    }
+    // TB-9: the reminder and the auto-confirm are DELIVERY-only - a
+    // pickup order is completed at its hand-over and never reaches
+    // DELIVERED. One that did anyway (or a DELIVERED order with no
+    // deliveredAt) is never moved: it is flagged once for platform
+    // administrators and left as it is.
+    const issue = branchOrderIntegrityIssue(order);
+    if (issue) {
+      await this.integrity.flagOnce(tx, order, issue, correlationId);
       return;
     }
     // A pending "not received" report freezes the clock entirely -
@@ -99,20 +118,33 @@ export class FulfilmentReconciliationService {
   }
 
   /**
-   * Convenience sweep for a list of candidate order ids (the customer's
-   * own DELIVERED orders, or a branch's own DELIVERED orders) - each
-   * reconciled in its own transaction, so one order's outcome never
-   * blocks or depends on another's.
+   * Reconciles a list of candidate order ids (the periodic sweep's due
+   * orders, the customer's own DELIVERED orders, or a branch's) - each
+   * in its own transaction AND its own try/catch (TB-9), so one order's
+   * failure rolls back only that order's writes, is logged with its id,
+   * and never stops the rest or fails the caller's request.
    */
   async reconcileMany(
     branchOrderIds: string[],
     correlationId: string,
-  ): Promise<void> {
+  ): Promise<{ reconciled: number; failed: number }> {
+    let reconciled = 0;
+    let failed = 0;
     for (const id of branchOrderIds) {
-      await this.prisma.$transaction((tx) =>
-        this.reconcileOne(tx, id, correlationId),
-      );
+      try {
+        await this.prisma.$transaction((tx) =>
+          this.reconcileOne(tx, id, correlationId),
+        );
+        reconciled += 1;
+      } catch (err) {
+        failed += 1;
+        this.logger.error(
+          `Fulfilment reconciliation failed for branch order ${id} (correlation ${correlationId})`,
+          (err as Error).stack,
+        );
+      }
     }
+    return { reconciled, failed };
   }
 
   private async enqueueCustomerNotification(
@@ -127,6 +159,7 @@ export class FulfilmentReconciliationService {
     await this.outbox.enqueue(
       {
         eventType,
+        audience: 'CUSTOMER',
         payload: {
           branch_order_id: order.id,
           vendor_id: order.vendorId,

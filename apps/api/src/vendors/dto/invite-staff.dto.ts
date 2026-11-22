@@ -1,8 +1,6 @@
-import { IsPhoneNumber } from 'class-validator';
+import { PhoneField } from '../../common/phone/phone-input';
 
 export class InviteStaffDto {
-  @IsPhoneNumber(undefined, {
-    message: 'phone must be a valid phone number in international format',
-  })
+  @PhoneField()
   phone!: string;
 }

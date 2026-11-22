@@ -2,6 +2,10 @@ import { randomUUID } from 'crypto';
 import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { Client } from 'pg';
+import {
+  createDisposableDatabase,
+  dropDisposableDatabase,
+} from './helpers/test-databases';
 
 const MIGRATION = '20261003070000_sprint18b_branches_operations';
 const MIGRATIONS_DIR = join(__dirname, '..', 'prisma', 'migrations');
@@ -37,7 +41,8 @@ describe('Sprint 18b - branch_operating_hours_day_of_week_range CHECK constraint
     if (!url) throw new Error('DATABASE_URL is not set');
     admin = new Client({ connectionString: withDatabase(url, 'postgres') });
     await admin.connect();
-    await admin.query(`CREATE DATABASE "${scratch}"`);
+    // TB-13: created marked as a disposable test database.
+    await createDisposableDatabase(process.env.DATABASE_URL!, scratch);
     db = new Client({ connectionString: withDatabase(url, scratch) });
     await db.connect();
 
@@ -64,7 +69,10 @@ describe('Sprint 18b - branch_operating_hours_day_of_week_range CHECK constraint
 
   afterAll(async () => {
     await db?.end();
-    await admin?.query(`DROP DATABASE IF EXISTS "${scratch}" WITH (FORCE)`);
+    // TB-13: dropped only after its own marker is checked.
+    if (process.env.DATABASE_URL) {
+      await dropDisposableDatabase(process.env.DATABASE_URL, scratch);
+    }
     await admin?.end();
   });
 

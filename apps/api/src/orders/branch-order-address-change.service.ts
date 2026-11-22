@@ -261,7 +261,9 @@ export class BranchOrderAddressChangeService {
         action: 'branch_order.converted_to_pickup',
         entityType: 'BranchOrder',
         entityId: order.id,
-        afterState: { pickup_code: updated.pickupCode },
+        // 2026-11-22: the audit log never keeps the raw pickup code (only
+        // that one was issued) - the code is the shopper's alone.
+        afterState: { pickup_code_issued: updated.pickupCode !== null },
       },
       tx,
     );

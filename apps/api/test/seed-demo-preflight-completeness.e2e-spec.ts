@@ -11,6 +11,10 @@ import {
   BRANCH_ONE_A_NAME,
 } from '../scripts/seed-demo.constants';
 import { snapshotDemoCounts } from './helpers/seed-demo-snapshot';
+import {
+  createDisposableDatabase,
+  dropDisposableDatabase,
+} from './helpers/test-databases';
 
 const API_ROOT = path.resolve(__dirname, '..');
 const BASE_DB = 'finalpro_seedpreflight_test_base';
@@ -27,8 +31,12 @@ function urlForDb(dbName: string): string {
 function runSeed(databaseUrl: string): { ok: boolean; output: string } {
   try {
     const out = execFileSync(
-      'npx',
-      ['ts-node', '--transpile-only', 'scripts/seed-demo.ts'],
+      process.execPath,
+      [
+        require.resolve('ts-node/dist/bin.js'),
+        '--transpile-only',
+        'scripts/seed-demo.ts',
+      ],
       {
         cwd: API_ROOT,
         env: { ...process.env, DATABASE_URL: databaseUrl },
@@ -56,12 +64,11 @@ function runSeed(databaseUrl: string): { ok: boolean; output: string } {
  * proven from a genuinely empty starting state.
  */
 describe('Sprint 12 demo seed preflight completeness', () => {
-  let admin: PrismaClient;
+  let adminUrl = '';
 
   async function scenarioDb(dbName: string): Promise<PrismaClient> {
-    await admin.$executeRawUnsafe(
-      `CREATE DATABASE "${dbName}" TEMPLATE "${BASE_DB}"`,
-    );
+    // TB-13: created marked as a disposable test database.
+    await createDisposableDatabase(adminUrl, dbName, { template: BASE_DB });
     return new PrismaClient({ adapter: new PrismaPg(urlForDb(dbName)) });
   }
 
@@ -79,16 +86,20 @@ describe('Sprint 12 demo seed preflight completeness', () => {
   }
 
   beforeAll(async () => {
-    admin = new PrismaClient({
-      adapter: new PrismaPg(process.env.DATABASE_URL as string),
-    });
-    for (const db of [BASE_DB, ...SCENARIO_DBS]) {
-      await admin.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${db}"`);
+    adminUrl = process.env.DATABASE_URL as string;
+    for (const db of SCENARIO_DBS) {
+      await dropDisposableDatabase(adminUrl, db);
     }
-    await admin.$executeRawUnsafe(`CREATE DATABASE "${BASE_DB}"`);
+    await createDisposableDatabase(adminUrl, BASE_DB);
     execFileSync(
-      'npx',
-      ['prisma', 'migrate', 'deploy', '--config', 'prisma7.config.ts'],
+      process.execPath,
+      [
+        require.resolve('prisma/build/index.js'),
+        'migrate',
+        'deploy',
+        '--config',
+        'prisma7.config.ts',
+      ],
       {
         cwd: API_ROOT,
         env: { ...process.env, DATABASE_URL: urlForDb(BASE_DB) },
@@ -99,10 +110,10 @@ describe('Sprint 12 demo seed preflight completeness', () => {
   }, 180_000);
 
   afterAll(async () => {
+    // TB-13: each dropped only after its own marker is checked.
     for (const db of [...SCENARIO_DBS, BASE_DB]) {
-      await admin.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${db}"`);
+      await dropDisposableDatabase(adminUrl, db);
     }
-    await admin.$disconnect();
   }, 120_000);
 
   it('rejects when the demo employee is already a BRANCH_EMPLOYEE at another vendor', async () => {

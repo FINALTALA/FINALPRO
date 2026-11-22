@@ -32,7 +32,10 @@ import {
   lockAndSweepStockRow,
   lockOfferWideForRestock,
 } from '../checkout/stock-lock.util';
-import { enqueueFavoriteNotification } from '../favorites/favorite-alerts.util';
+import {
+  enqueueFavoriteNotification,
+  enqueueVariantAvailabilityNotifications,
+} from '../favorites/favorite-alerts.util';
 import {
   decodeCursor,
   encodeCursor,
@@ -42,10 +45,19 @@ import {
 } from '../platform-admin/cursor.util';
 import { Prisma } from '../../generated/prisma/client';
 import { OutboxEventService } from '../outbox/outbox-event.service';
+import {
+  crossesIntoLowStock,
+  enqueueLowStockAlert,
+} from '../common/low-stock-alert.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfirmPhysicalCountDto } from './dto/confirm-physical-count.dto';
 import { CreateStockMovementDto } from './dto/create-stock-movement.dto';
 import { SetSafetyStockThresholdDto } from './dto/set-safety-stock-threshold.dto';
+import {
+  StockBoardQueryDto,
+  StockLedgerQueryDto,
+} from './dto/stock-board-query.dto';
+import { StockBoardService } from './stock-board.service';
 
 const STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000; // Sprint 18a (NFR-STALE-001): 7 days, manual-count only - no API/feed freshness source exists yet.
 
@@ -178,7 +190,7 @@ function movementDto(m: {
   resultingQuantity: number;
   reason: string;
   reasonNote: string;
-  actorId: string;
+  actorId: string | null;
   createdAt: Date;
 }) {
   return {
@@ -222,6 +234,7 @@ export class InventoryController {
     private readonly auditLog: AuditLogService,
     private readonly idempotencyCompletion: IdempotencyCompletionService,
     private readonly outbox: OutboxEventService,
+    private readonly board: StockBoardService,
   ) {}
 
   private async requireBranch(vendorId: string, branchId: string) {
@@ -392,6 +405,47 @@ export class InventoryController {
     );
   }
 
+  // «إدارة مخزون الفرع v1» (2026-11-22): the branch's stock board - lines
+  // with search and filters, the branch summary, and a line pinned from a
+  // low-stock link (`variant`). Read only; declared before the
+  // `stock/:offerVariantId` route so `board` is never read as an id.
+  @Get(':vendorId/branches/:branchId/stock/board')
+  async stockBoard(
+    @Param('vendorId') vendorId: string,
+    @Param('branchId') branchId: string,
+    @Query() query: StockBoardQueryDto,
+  ) {
+    await this.requireBranch(vendorId, branchId);
+    return this.board.board(vendorId, branchId, query);
+  }
+
+  // One line: its numbers, threshold, last count, and (read only) the units
+  // of open orders not yet handed over.
+  @Get(':vendorId/branches/:branchId/stock/:offerVariantId/detail')
+  async stockLine(
+    @Param('vendorId') vendorId: string,
+    @Param('branchId') branchId: string,
+    @Param('offerVariantId') offerVariantId: string,
+  ) {
+    await this.requireBranch(vendorId, branchId);
+    await this.requireOfferVariant(vendorId, offerVariantId);
+    return this.board.detail(vendorId, branchId, offerVariantId);
+  }
+
+  // The line's stock log, newest first, paginated: every movement - manual,
+  // cashier, online orders, cancellations, returns - with its reference.
+  @Get(':vendorId/branches/:branchId/stock/:offerVariantId/ledger')
+  async stockLedger(
+    @Param('vendorId') vendorId: string,
+    @Param('branchId') branchId: string,
+    @Param('offerVariantId') offerVariantId: string,
+    @Query() query: StockLedgerQueryDto,
+  ) {
+    await this.requireBranch(vendorId, branchId);
+    await this.requireOfferVariant(vendorId, offerVariantId);
+    return this.board.ledger(vendorId, branchId, offerVariantId, query);
+  }
+
   @Get(':vendorId/branches/:branchId/stock/:offerVariantId')
   async getStock(
     @Param('vendorId') vendorId: string,
@@ -470,23 +524,81 @@ export class InventoryController {
     await this.requireBranch(vendorId, branchId);
     await this.requireOfferVariant(vendorId, offerVariantId);
 
-    // DAMAGE/LOSS/SALE can only ever reduce stock - PDR-021 lists
-    // DAMAGE/LOSS/COUNT_CORRECTION as the non-sale reasons, and SALE
-    // (Sprint 18a) joins the "reduction only" side of that same rule;
-    // only a count correction can legitimately go either direction (a
-    // physical recount can find more stock than recorded).
-    if (
-      (dto.reason === 'DAMAGE' ||
-        dto.reason === 'LOSS' ||
-        dto.reason === 'SALE') &&
-      dto.quantity_delta > 0
-    ) {
-      throw new ConflictException({
-        code: 'INVALID_MOVEMENT_DIRECTION',
+    // «إدارة مخزون الفرع v1» (2026-11-22): a sale is the cashier's alone -
+    // refused here by the server, not only hidden by the screen.
+    if (dto.reason === 'SALE') {
+      throw new BadRequestException({
+        code: 'MANUAL_SALE_NOT_ALLOWED',
         message:
-          'DAMAGE/LOSS/SALE movements must have a negative quantity_delta',
+          'A sale is recorded only by the cashier, never as a stock movement',
       });
     }
+    const reason = dto.reason;
+    // COUNT_CORRECTION from the screen: the counted quantity and the one the
+    // count started from; the difference is the server's. The older signed
+    // quantity_delta stays accepted for a count only (existing callers).
+    let delta: number;
+    let expected: number | null = null;
+    if (reason === 'COUNT_CORRECTION' && dto.counted_quantity !== undefined) {
+      if (dto.expected_quantity === undefined) {
+        throw new BadRequestException({
+          code: 'EXPECTED_QUANTITY_REQUIRED',
+          message: 'A count needs the quantity it started from',
+        });
+      }
+      if (dto.quantity_delta !== undefined) {
+        throw new BadRequestException({
+          code: 'COUNT_TAKES_COUNTED_QUANTITY',
+          message: 'Send the counted quantity, not a difference',
+        });
+      }
+      expected = dto.expected_quantity;
+      delta = dto.counted_quantity - dto.expected_quantity;
+      if (delta === 0) {
+        throw new ConflictException({
+          code: 'COUNT_NO_DIFFERENCE',
+          message:
+            'The count matches the stock - confirm the count instead (confirm-count)',
+        });
+      }
+    } else {
+      if (dto.quantity_delta === undefined) {
+        throw new BadRequestException({
+          code: 'QUANTITY_DELTA_REQUIRED',
+          message: 'quantity_delta is required for this movement',
+        });
+      }
+      delta = dto.quantity_delta;
+      // RECEIVE only adds; DAMAGE / LOSS / INTERNAL_USE only take away; a
+      // count can go either way (a recount can find more than recorded).
+      if (reason === 'RECEIVE' && delta < 0) {
+        throw new ConflictException({
+          code: 'INVALID_MOVEMENT_DIRECTION',
+          message: 'RECEIVE movements must have a positive quantity_delta',
+        });
+      }
+      if (
+        (reason === 'DAMAGE' ||
+          reason === 'LOSS' ||
+          reason === 'INTERNAL_USE') &&
+        delta > 0
+      ) {
+        throw new ConflictException({
+          code: 'INVALID_MOVEMENT_DIRECTION',
+          message:
+            'DAMAGE/LOSS/INTERNAL_USE movements must have a negative quantity_delta',
+        });
+      }
+    }
+    const recountNeeded = () =>
+      new ConflictException({
+        code: 'STOCK_CHANGED_RECOUNT',
+        message:
+          'The stock changed since the count began - count this line again',
+      });
+    // the low-stock alert decision of a decrease (DAMAGE / LOSS / INTERNAL_USE)
+    let lowStock: { before: number; after: number; threshold: number } | null =
+      null;
 
     const body = await this.prisma.$transaction(async (tx) => {
       let resultingQuantity: number;
@@ -497,7 +609,7 @@ export class InventoryController {
       let restockBefore: number | undefined;
       let restockAfter: number | undefined;
 
-      if (dto.quantity_delta > 0) {
+      if (delta > 0) {
         // The only direction that can cross 0 -> positive. Uses the
         // SAME batched primitive every other quantity-increasing
         // writer now shares (stock-lock.util.ts) - full active-branch
@@ -518,10 +630,15 @@ export class InventoryController {
           vendorId,
           branchId,
           offerVariantId,
-          quantityDelta: dto.quantity_delta,
+          quantityDelta: delta,
           siblingBranchIds: siblingBranches.map((b) => b.id),
         });
         resultingQuantity = restock.targetStock.quantity;
+        // a count: the stock it started from must still be there (else the
+        // whole transaction - the restock included - is rolled back)
+        if (expected !== null && resultingQuantity - delta !== expected) {
+          throw recountNeeded();
+        }
         restockBefore = restock.before;
         restockAfter = restock.after;
       } else {
@@ -542,14 +659,49 @@ export class InventoryController {
         // - before the conditional UPDATE below even runs, so this sale
         // is judged against the TRUE current hold, not a stale one.
         await lockAndSweepStockRow(tx, vendorId, branchId, offerVariantId);
+        // the row is locked (and its expired holds swept): its state now
+        const [current] = await tx.$queryRaw<
+          {
+            quantity: number;
+            reservedQuantity: number;
+            safetyStockThreshold: number;
+          }[]
+        >`
+          SELECT quantity, "reservedQuantity", "safetyStockThreshold" FROM branch_stock
+          WHERE "branchId" = ${branchId} AND "offerVariantId" = ${offerVariantId}
+        `;
+        if (expected !== null) {
+          if (current.quantity !== expected) throw recountNeeded();
+          // a count never goes below what open orders hold
+          if (current.quantity + delta < current.reservedQuantity) {
+            throw new ConflictException({
+              code: 'COUNT_BELOW_RESERVED',
+              message:
+                'The counted quantity is below what open orders hold for this line',
+            });
+          }
+        }
         const updated = await tx.$queryRaw<{ id: string; quantity: number }[]>`
           UPDATE branch_stock
-          SET quantity = quantity + ${dto.quantity_delta}, "updatedAt" = now()
+          SET quantity = quantity + ${delta}, "updatedAt" = now()
           WHERE "branchId" = ${branchId}
             AND "offerVariantId" = ${offerVariantId}
-            AND quantity + ${dto.quantity_delta} - "reservedQuantity" >= 0
+            AND quantity + ${delta} - "reservedQuantity" >= 0
           RETURNING id, quantity
         `;
+        if (
+          reason === 'DAMAGE' ||
+          reason === 'LOSS' ||
+          reason === 'INTERNAL_USE'
+        ) {
+          if (updated.length > 0) {
+            lowStock = {
+              before: current.quantity - current.reservedQuantity,
+              after: updated[0].quantity - current.reservedQuantity,
+              threshold: current.safetyStockThreshold,
+            };
+          }
+        }
         if (updated.length === 0) {
           throw new ConflictException({
             code: 'INSUFFICIENT_STOCK',
@@ -565,11 +717,13 @@ export class InventoryController {
           vendorId,
           branchId,
           offerVariantId,
-          quantityDelta: dto.quantity_delta,
+          quantityDelta: delta,
           resultingQuantity,
-          reason: dto.reason,
+          reason,
           reasonNote: dto.reason_note,
           actorId: user.id,
+          // 2026-11-22: the actor's store role at this moment (the stock log)
+          actorRole: req.vendorMembership?.role ?? null,
         },
       });
 
@@ -582,6 +736,10 @@ export class InventoryController {
           alertType: 'BACK_IN_STOCK',
           offerVariantId,
           payload: { vendor_id: vendorId, offer_variant_id: offerVariantId },
+        });
+        await enqueueVariantAvailabilityNotifications(tx, this.outbox, {
+          vendorId,
+          offerVariantId,
         });
       }
 
@@ -606,7 +764,9 @@ export class InventoryController {
       // as the movement itself, the same durable-outbox pattern this
       // codebase already established (ADR-006, see OutboxEventService's
       // own comment) for every not-yet-integrated notification channel.
-      if (dto.reason !== 'SALE') {
+      // 2026-11-22: a receipt of goods needs no separate owner notice; a
+      // count difference, damage, loss and internal use do.
+      if (reason !== 'RECEIVE') {
         // Sprint 19 (review-round): the recipient is snapshotted HERE,
         // inside this same transaction - one outbox row per CURRENT
         // owner - never resolved later at relay/dispatch time. Same
@@ -624,14 +784,15 @@ export class InventoryController {
           await this.outbox.enqueue(
             {
               eventType: 'stock_movement.owner_notification',
+              audience: 'STORE',
               payload: {
                 vendor_id: vendorId,
                 branch_id: branchId,
                 offer_variant_id: offerVariantId,
                 stock_movement_id: movement.id,
-                quantity_delta: dto.quantity_delta,
+                quantity_delta: delta,
                 resulting_quantity: resultingQuantity,
-                reason: dto.reason,
+                reason,
                 reason_note: dto.reason_note,
                 actor_id: user.id,
                 recipient_user_id: owner.userId,
@@ -646,10 +807,25 @@ export class InventoryController {
       // the result of an actual physical recount - the one movement
       // reason that counts as a real human-at-the-shelf confirmation,
       // same as the dedicated confirm-count endpoint below.
-      if (dto.reason === 'COUNT_CORRECTION') {
+      if (reason === 'COUNT_CORRECTION') {
         await tx.branchStock.update({
           where: { branchId_offerVariantId: { branchId, offerVariantId } },
           data: { lastPhysicalCountAt: new Date() },
+        });
+      }
+
+      // 2026-11-22: the store's low-stock alert when this damage / loss /
+      // internal use takes the line to or below its threshold (once - not
+      // again while it stays there; 1-3 only while no threshold is set)
+      if (
+        lowStock &&
+        crossesIntoLowStock(lowStock.before, lowStock.after, lowStock.threshold)
+      ) {
+        await enqueueLowStockAlert(tx, this.outbox, {
+          vendorId,
+          branchId,
+          offerVariantId,
+          remainingQuantity: lowStock.after,
         });
       }
 

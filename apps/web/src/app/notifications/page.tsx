@@ -1,26 +1,25 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { EmptyState, ErrorBanner } from "@/components/States";
 import { apiFetch, ApiError } from "@/lib/api";
+import { apiErrorMessage } from "@/lib/apiErrors";
 import {
-  NOTIFICATION_TYPE_LABEL,
   NotificationDto,
   NotificationPageDto,
+  formatNotificationTime,
   notificationDetail,
   notificationHref,
+  notificationLabel,
 } from "@/lib/notifications";
 import { clearSession } from "@/lib/session";
-import { useHydrated, useSessionToken } from "@/lib/useSession";
-
-function formatDateTime(iso: string): string {
-  return new Date(iso).toLocaleString("ar", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-}
+import { useLang, useT } from "@/lib/useLang";
+import { useHydrated, useSessionToken, useWorkspaces } from "@/lib/useSession";
+import { notificationsApiBase, workspaceOfPage } from "@/lib/workspaceSession";
+import "@/lib/workspaceText";
+import { loginRedirectHref, useLoginRedirectHref, useLoginWhenSessionLost } from "@/lib/loginRedirect";
 
 // Sprint 19 (§9 plan): the one inbox for every role (customer, branch
 // employee, owner) - the API is already scoped to the signed-in user,
@@ -28,25 +27,46 @@ function formatDateTime(iso: string): string {
 // item's own type decides where tapping it goes (lib/notifications.ts);
 // marking read is fire-and-forget (idempotent server-side either way)
 // so navigation never waits on it.
+// TB-26: the same page serves each context - /notifications (the shopping
+// bell: CUSTOMER), /vendor/<id>/notifications (that store's workspace) and
+// /admin/notifications (the platform workspace). The page's own path picks
+// the API, so a list, its count and "mark read" never cross contexts.
 export default function NotificationsPage() {
+  const loginLink = useLoginRedirectHref();
   const router = useRouter();
+  const pathname = usePathname();
+  const apiBase = notificationsApiBase(pathname);
+  const context = workspaceOfPage(pathname);
   const hydrated = useHydrated();
   const token = useSessionToken();
+  // the reader's role in a store - where its store notifications lead (owner / employee)
+  const workspaces = useWorkspaces(token);
+  const storeRoleOf = (vendorId: string | null | undefined) => {
+    const m = workspaces?.find((w) => w.type === "vendor" && w.vendor_id === vendorId);
+    return m && m.type === "vendor" ? (m.role as "OWNER" | "BRANCH_EMPLOYEE") : null;
+  };
+  // TB-34: a session lost to a 401 goes to sign-in (with `next` = this page) rather than showing the sign-in button.
+  useLoginWhenSessionLost(hydrated, token);
+  const lang = useLang();
+  const t = useT();
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [items, setItems] = useState<NotificationDto[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // TB-16.1/16.3: the failure itself and the key of its fallback words;
+  // the words are chosen when rendering, in the current language (never
+  // the API's own message).
+  const [error, setError] = useState<{ err: unknown; fallbackKey: string } | null>(null);
 
   const fetchPage = useCallback(
     (after: string | null) => {
       const qs = new URLSearchParams({ limit: "20" });
       if (unreadOnly) qs.set("unread_only", "true");
       if (after) qs.set("cursor", after);
-      return apiFetch<NotificationPageDto>(`/me/notifications?${qs.toString()}`);
+      return apiFetch<NotificationPageDto>(`${apiBase}?${qs.toString()}`);
     },
-    [unreadOnly],
+    [unreadOnly, apiBase],
   );
 
   useEffect(() => {
@@ -63,16 +83,16 @@ export default function NotificationsPage() {
         if (cancelled) return;
         if (err instanceof ApiError && err.status === 401) {
           clearSession();
-          router.replace("/login?next=/notifications");
+          router.replace(loginRedirectHref());
           return;
         }
-        setError(err instanceof ApiError ? err.message : "تعذّر تحميل الإشعارات");
+        setError({ err, fallbackKey: "notif.page.load_failed" });
         setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [token, fetchPage, router]);
+  }, [token, fetchPage, router, pathname]);
 
   function selectFilter(next: boolean) {
     if (next === unreadOnly) return;
@@ -91,7 +111,7 @@ export default function NotificationsPage() {
       setItems((prev) => [...prev, ...page.items]);
       setCursor(page.next_cursor);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "تعذّر تحميل المزيد");
+      setError({ err, fallbackKey: "notif.page.load_more_failed" });
     } finally {
       setLoadingMore(false);
     }
@@ -106,16 +126,16 @@ export default function NotificationsPage() {
   function openNotification(n: NotificationDto) {
     if (!n.read_at) {
       markReadLocally(n.id);
-      apiFetch(`/me/notifications/${n.id}/read`, { method: "POST" }).catch(() => {
+      apiFetch(`${apiBase}/${n.id}/read`, { method: "POST" }).catch(() => {
         // Idempotent and non-critical - a failed mark-as-read never blocks navigation.
       });
     }
-    router.push(notificationHref(n));
+    router.push(notificationHref(n, { storeRole: storeRoleOf(n.vendor_id) }));
   }
 
   if (!hydrated) {
     return (
-      <div className="page-shell">
+      <div className="notifications-page page-shell">
         <div className="skeleton" style={{ height: 96, width: "100%", maxWidth: 720 }} />
       </div>
     );
@@ -123,21 +143,23 @@ export default function NotificationsPage() {
 
   if (!token) {
     return (
-      <div className="page-shell">
+      <div className="notifications-page page-shell">
         <EmptyState
-          title="سجّلي الدخول لرؤية إشعاراتك"
-          actionHref="/login?next=/notifications"
-          actionLabel="تسجيل الدخول"
+          title={t("notif.page.sign_in_title")}
+          actionHref={loginLink}
+          actionLabel={t("notif.page.sign_in")}
         />
       </div>
     );
   }
 
   return (
-    <div className="page-shell">
-      <div style={{ maxWidth: 720, width: "100%" }}>
+    <div className="notifications-page page-shell">
+      <div className="notifications-content">
         <div className="top-bar">
-          <h1 className="page-title" style={{ margin: 0 }}>الإشعارات</h1>
+          <h1 className="page-title" style={{ margin: 0 }} data-testid="notifications-title">
+            {context ? t(context.type === "platform" ? "ws.notifications.title.platform" : "ws.notifications.title.vendor") : t("notif.page.title")}
+          </h1>
         </div>
 
         <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
@@ -145,20 +167,20 @@ export default function NotificationsPage() {
             className={unreadOnly ? "button-link" : "button"}
             onClick={() => selectFilter(false)}
           >
-            الكل
+            {t("notif.page.all")}
           </button>
           <button
             className={unreadOnly ? "button" : "button-link"}
             onClick={() => selectFilter(true)}
           >
-            غير المقروءة فقط
+            {t("notif.page.unread_only")}
           </button>
         </div>
 
-        {error && <ErrorBanner message={error} />}
+        {error && <ErrorBanner message={error.err instanceof ApiError ? apiErrorMessage(error.err, lang) : t(error.fallbackKey)} />}
 
         {loading && (
-          <div aria-busy="true" aria-label="جارٍ التحميل">
+          <div aria-busy="true" aria-label={t("notif.page.loading")}>
             <div className="skeleton" style={{ height: 72, width: "100%", marginBottom: 8 }} />
             <div className="skeleton" style={{ height: 72, width: "100%", marginBottom: 8 }} />
             <div className="skeleton" style={{ height: 72, width: "100%" }} />
@@ -167,14 +189,14 @@ export default function NotificationsPage() {
 
         {!loading && !error && items.length === 0 && (
           <EmptyState
-            title={unreadOnly ? "لا توجد إشعارات غير مقروءة" : "لا توجد إشعارات بعد"}
+            title={unreadOnly ? t("notif.page.empty_unread") : t("notif.page.empty")}
           />
         )}
 
         {!loading && items.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {items.map((n) => {
-              const detail = notificationDetail(n);
+              const detail = notificationDetail(n, lang);
               return (
                 <button
                   key={n.id}
@@ -191,12 +213,12 @@ export default function NotificationsPage() {
                   }}
                 >
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                    <strong>{NOTIFICATION_TYPE_LABEL[n.type] ?? n.type}</strong>
-                    {!n.read_at && <span className="badge badge-active">جديد</span>}
+                    <strong>{notificationLabel(n.type, lang)}</strong>
+                    {!n.read_at && <span className="badge badge-active">{t("notif.page.new")}</span>}
                   </div>
                   {detail && <div className="muted">{detail}</div>}
                   <div className="muted" style={{ marginTop: 4, fontSize: 13 }}>
-                    {formatDateTime(n.created_at)}
+                    {formatNotificationTime(n.created_at, lang)}
                   </div>
                 </button>
               );
@@ -207,13 +229,13 @@ export default function NotificationsPage() {
         {cursor && (
           <div style={{ marginTop: 14 }}>
             <button className="button-link" disabled={loadingMore} onClick={loadMore}>
-              {loadingMore ? "جارٍ التحميل..." : "تحميل المزيد"}
+              {loadingMore ? t("notif.page.loading_more") : t("notif.page.load_more")}
             </button>
           </div>
         )}
 
         <div style={{ marginTop: 20 }}>
-          <Link href="/account" className="button-link">حسابي</Link>
+          <Link href="/account" className="button-link">{t("notif.page.account")}</Link>
         </div>
       </div>
     </div>

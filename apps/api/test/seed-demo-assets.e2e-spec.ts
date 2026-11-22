@@ -14,8 +14,12 @@ function runAssets(databaseUrl: string): { ok: boolean; output: string } {
   }
   try {
     const out = execFileSync(
-      'npx',
-      ['ts-node', '--transpile-only', 'scripts/seed-demo-assets.ts'],
+      process.execPath,
+      [
+        require.resolve('ts-node/dist/bin.js'),
+        '--transpile-only',
+        'scripts/seed-demo-assets.ts',
+      ],
       {
         cwd: API_ROOT,
         env: { ...process.env, DATABASE_URL: databaseUrl },
@@ -109,8 +113,12 @@ describe('Sprint 13 demo assets script', () => {
     let refused = false;
     try {
       execFileSync(
-        'npx',
-        ['ts-node', '--transpile-only', 'scripts/seed-demo-assets.ts'],
+        process.execPath,
+        [
+          require.resolve('ts-node/dist/bin.js'),
+          '--transpile-only',
+          'scripts/seed-demo-assets.ts',
+        ],
         {
           cwd: API_ROOT,
           env: {

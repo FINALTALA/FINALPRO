@@ -1,4 +1,5 @@
 import * as request from 'supertest';
+import { TEST_CLASSIFICATION } from './helpers/taxonomy-offers';
 import { randomUUID } from 'crypto';
 import { SUSPENDED_DENY_ROUTES } from './../src/auth/vendor-route-classification';
 import { SUSPENDED_ALLOW_ROUTES } from './../src/auth/vendor-route-classification';
@@ -246,6 +247,7 @@ describe('Sprint 16 - vendor suspension and reactivation (e2e)', () => {
       // regression - see admin-vendors.controller.ts's own comment on
       // both call sites.
       expect(Object.keys(sEvents[0].payload as object).sort()).toEqual([
+        'audience', // TB-26: set by the sender
         'occurred_at',
         'reason_code',
         'recipient_user_id',
@@ -253,6 +255,7 @@ describe('Sprint 16 - vendor suspension and reactivation (e2e)', () => {
         'vendor_id',
       ]);
       expect(Object.keys(rEvents[0].payload as object).sort()).toEqual([
+        'audience', // TB-26: set by the sender
         'occurred_at',
         'recipient_user_id',
         'suspension_id',
@@ -626,7 +629,11 @@ describe('Sprint 16 - vendor suspension and reactivation (e2e)', () => {
           .post(`/api/v1/vendors/${vendorId}/offers`)
           .set('Authorization', `Bearer ${owner}`)
           .set('Idempotency-Key', f.unique('offer'))
-          .send({ title_ar: 'م', title_en: 'Blocked while suspended' });
+          .send({
+            title_ar: 'م',
+            title_en: 'Blocked while suspended',
+            ...TEST_CLASSIFICATION,
+          });
       await create().expect(201);
       await f.suspend(admin.token, vendorId).expect(201);
       const blocked = await create().expect(403);

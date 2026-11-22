@@ -7,6 +7,9 @@ services:
       POSTGRES_PASSWORD: finalpro_dev_only
       POSTGRES_DB: finalpro
     ports:
+      # Windows host port 5432 is already used by another local PostgreSQL
+      # instance. Keep PostgreSQL's container port standard, but expose this
+      # project's database to desktop tools (pgAdmin) on host port 5433.
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data

@@ -32,6 +32,11 @@ import { PickupHandoverDto } from './dto/pickup-handover.dto';
 import { StaffCancelBranchOrderDto } from './dto/staff-cancel-branch-order.dto';
 import { UpdateInternalOrderNoteDto } from './dto/update-internal-order-note.dto';
 import { FulfilmentReconciliationService } from './fulfilment-reconciliation.service';
+import { OrderActorContextInterceptor } from './order-actor-context.interceptor';
+import {
+  assertNotOwnBranchOrder,
+  auditSelfFulfilment,
+} from '../common/self-decision.util';
 
 interface BranchOrderRow {
   id: string;
@@ -41,7 +46,6 @@ interface BranchOrderRow {
   total: unknown;
   deliveryFee: unknown;
   createdAt: Date;
-  pickupCode: string | null;
   deliveredAt: Date | null;
   notReceivedReportedAt: Date | null;
   notReceivedReason: string | null;
@@ -77,7 +81,9 @@ function ownerOrderDto(o: BranchOrderRow) {
     created_at: o.createdAt.toISOString(),
     customer_name: o.customerOrder.customer.displayName,
     customer_phone: o.customerOrder.customer.user.phone,
-    pickup_code: o.fulfilmentMethod === 'PICKUP' ? o.pickupCode : null,
+    // 2026-11-22 (approved policy): the raw pickup code is never sent to the
+    // store - owner or employee. Only the order's own shopper sees it
+    // (checkout / customers/me/orders); the staff hand-over checks it.
     delivered_at: o.deliveredAt?.toISOString() ?? null,
     not_received_reported_at: o.notReceivedReportedAt?.toISOString() ?? null,
     not_received_reason: o.notReceivedReason,
@@ -155,7 +161,7 @@ function employeeOrderDto(o: BranchOrderRow) {
     payment_method: o.paymentMethod,
     customer_name: o.customerOrder.customer.displayName,
     customer_phone: o.customerOrder.customer.user.phone,
-    pickup_code: o.fulfilmentMethod === 'PICKUP' ? o.pickupCode : null,
+    // 2026-11-22: no raw pickup code for the store (see ownerOrderDto)
     has_open_not_received_report: o.notReceivedReportedAt !== null,
     amount_due:
       o.paymentMethod === 'COD'
@@ -206,6 +212,9 @@ const ORDER_INCLUDE = {
 // route params, must still 404).
 @Controller('vendors/:vendorId')
 @UseGuards(SessionAuthGuard, VendorMembershipGuard)
+// 2026-11-22: every branch-order audit row these actions write also keeps
+// the actor's role, branch and name at that moment (the order's timeline).
+@UseInterceptors(OrderActorContextInterceptor)
 export class BranchOrdersStaffController {
   constructor(
     private readonly prisma: PrismaService,
@@ -329,15 +338,24 @@ export class BranchOrdersStaffController {
       branchId,
       branchOrderId,
     );
-    const updated = await this.prisma.$transaction((tx) =>
-      this.branchOrderService.transition(
+    const updated = await this.prisma.$transaction(async (tx) => {
+      // TB-28: fulfilling one's own order is allowed, but recorded.
+      await auditSelfFulfilment(
+        tx,
+        this.auditLog,
+        id,
+        user.id,
+        'START_PREPARATION',
+        req.correlationId,
+      );
+      return this.branchOrderService.transition(
         tx,
         id,
         'PREPARING',
         user.id,
         req.correlationId,
-      ),
-    );
+      );
+    });
     return { id: updated.id, status: updated.status };
   }
 
@@ -358,15 +376,24 @@ export class BranchOrdersStaffController {
       branchId,
       branchOrderId,
     );
-    const updated = await this.prisma.$transaction((tx) =>
-      this.branchOrderService.transition(
+    const updated = await this.prisma.$transaction(async (tx) => {
+      // TB-28: fulfilling one's own order is allowed, but recorded.
+      await auditSelfFulfilment(
+        tx,
+        this.auditLog,
+        id,
+        user.id,
+        'MARK_SENT',
+        req.correlationId,
+      );
+      return this.branchOrderService.transition(
         tx,
         id,
         'SENT',
         user.id,
         req.correlationId,
-      ),
-    );
+      );
+    });
     return { id: updated.id, status: updated.status };
   }
 
@@ -431,6 +458,15 @@ export class BranchOrdersStaffController {
     );
     const deliveredAt = new Date();
     const updated = await this.prisma.$transaction(async (tx) => {
+      // TB-28: fulfilling one's own order is allowed, but recorded.
+      await auditSelfFulfilment(
+        tx,
+        this.auditLog,
+        id,
+        user.id,
+        'MARK_DELIVERED',
+        req.correlationId,
+      );
       const codData = await this.computeCodCollectionExtraData(tx, id);
       const result = await this.branchOrderService.transition(
         tx,
@@ -451,6 +487,7 @@ export class BranchOrdersStaffController {
       await this.outbox.enqueue(
         {
           eventType: 'branch_order.delivered_confirm_requested',
+          audience: 'CUSTOMER',
           payload: {
             branch_order_id: id,
             vendor_id: vendorId,
@@ -491,6 +528,15 @@ export class BranchOrdersStaffController {
       branchOrderId,
     );
     const updated = await this.prisma.$transaction(async (tx) => {
+      // TB-28: fulfilling one's own order is allowed, but recorded.
+      await auditSelfFulfilment(
+        tx,
+        this.auditLog,
+        id,
+        user.id,
+        'PICKUP_HANDOVER',
+        req.correlationId,
+      );
       const order = await tx.branchOrder.findUniqueOrThrow({ where: { id } });
       if (order.fulfilmentMethod !== 'PICKUP') {
         throw new ConflictException({
@@ -546,6 +592,15 @@ export class BranchOrdersStaffController {
       branchOrderId,
     );
     return this.prisma.$transaction(async (tx) => {
+      // TB-28: fulfilling one's own order is allowed, but recorded.
+      await auditSelfFulfilment(
+        tx,
+        this.auditLog,
+        id,
+        user.id,
+        'RE_REQUEST_CONFIRMATION',
+        req.correlationId,
+      );
       const rows = await tx.$queryRaw<
         {
           id: string;
@@ -599,6 +654,7 @@ export class BranchOrdersStaffController {
       await this.outbox.enqueue(
         {
           eventType: 'branch_order.confirm_rerequested',
+          audience: 'CUSTOMER',
           payload: {
             branch_order_id: id,
             vendor_id: vendorId,
@@ -631,6 +687,7 @@ export class BranchOrdersStaffController {
     await this.outbox.enqueue(
       {
         eventType,
+        audience: 'CUSTOMER',
         payload: {
           ...payload,
           recipient_user_id: order.customerOrder.customer.userId,
@@ -692,6 +749,9 @@ export class BranchOrdersStaffController {
         branchOrderId,
         ['PLACED', 'PREPARING'],
       );
+      // TB-28: a staff cancellation (it refunds an online payment) is
+      // never made on one's own order.
+      await assertNotOwnBranchOrder(tx, branchOrderId, user.id);
       this.requireReasonIfPreparing(order.status, dto.reason);
       const r = await this.cancellation.cancelWholeOrder(
         tx,
@@ -738,6 +798,8 @@ export class BranchOrdersStaffController {
         branchOrderId,
         ['PLACED', 'PREPARING'],
       );
+      // TB-28: see cancelOrder.
+      await assertNotOwnBranchOrder(tx, branchOrderId, user.id);
       this.requireReasonIfPreparing(order.status, dto.reason);
       const r = await this.cancellation.cancelSingleItem(
         tx,
@@ -804,6 +866,15 @@ export class BranchOrdersStaffController {
         branchId,
         branchOrderId,
         ['SENT'],
+      );
+      // TB-28: fulfilling one's own order is allowed, but recorded.
+      await auditSelfFulfilment(
+        tx,
+        this.auditLog,
+        branchOrderId,
+        user.id,
+        'MARK_DELIVERY_FAILED',
+        req.correlationId,
       );
       if (order.fulfilmentMethod !== 'DELIVERY') {
         throw new ConflictException({
@@ -883,6 +954,8 @@ export class BranchOrdersStaffController {
         branchOrderId,
         ['REFUND_REQUESTED'],
       );
+      // TB-28: never approving a refund of one's own order.
+      await assertNotOwnBranchOrder(tx, branchOrderId, user.id);
       const r = await this.cancellation.approveRequestedRefund(
         tx,
         order,
