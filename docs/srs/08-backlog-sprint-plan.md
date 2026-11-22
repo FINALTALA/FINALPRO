@@ -8,6 +8,8 @@ Builds directly on the FYP Delivery Increment (Part 1, D.4 — proposed, tracked
 
 **Backlog conventions:** each **Epic** carries the fields that are genuinely epic-level once — Phase, business value, common Definition of Done, and relevant risks (cited by `RISK-*` ID from Part 7) — and its child backlog items inherit them, adding what varies per item: ID, title/user story, FR/BR coverage, dependencies, acceptance criteria, priority, estimate, and its own **Phase/Release** tag (since an item's actual build phase can differ from its epic's overall phase — e.g., a Must item built in the FYP Increment sitting in an epic that's otherwise mostly deferred). This is a representative decomposition sufficient to plan and estimate against, not an exhaustive task breakdown. Priority uses MoSCoW **against the FYP Delivery Increment**; a `Should`/`Could`/`Won't` item is still fully specified in Parts 1–7, just not committed inside the 3-month window unless time allows. Estimates are T-shirt sizes calibrated to the 2-person team's 1-week sprints (S ≈ 1 day = 0.2 person-weeks, M ≈ 2.5 days = 0.5 person-weeks, L ≈ 1 week = 1.0 person-week).
 
+> **Supplemental product-detail backlog:** [Part 10](10-product-detail-enhancement-roadmap.md) decomposes follow-on work into PD-1 through PD-5. PD-1/PD-2 are migration-free candidates for the next approved sprint; PD-3–PD-5 require separate migration and release gates.
+
 ---
 
 ## Q.0 Capacity reality check (read before the backlog)
