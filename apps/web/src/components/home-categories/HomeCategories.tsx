@@ -38,9 +38,8 @@ registerTranslations({
 
 /**
  * One panel per category, in reading order (Arabic: women on the right).
- * Routes are the site's own: the Women page, and the catalogue on the men /
- * kids segments (as the header and footer link them - there are no separate
- * pages). Framing is per photo: `focus` is the object-position; `zoom` (kids
+ * Routes are the site's own department pages - /women, /men and /kids, as
+ * the header links them. Framing is per photo: `focus` is the object-position; `zoom` (kids
  * only) brings in a subject who stands low in a tall, mostly empty frame.
  * `wide` is the framing once a panel expands (wider than tall): it keeps
  * the face in view where the resting crop would cut it.
@@ -59,7 +58,7 @@ const CATEGORIES = [
   },
   {
     key: "men",
-    href: "/discovery?segment=men",
+    href: "/men",
     image: { src: "/images/men.png", width: 1024, height: 1536 },
     // He spans ~7.5% (hair) to ~92.5% (sandals) of the photo's height:
     // centred framing keeps head and feet in the card.
@@ -71,7 +70,7 @@ const CATEGORIES = [
   },
   {
     key: "kids",
-    href: "/discovery?segment=kids",
+    href: "/kids",
     image: { src: "/images/kids.png", width: 1199, height: 1596 },
     // She stands from ~25% to ~96% down, slightly right of centre.
     focus: { desktop: "52% 78%", mobile: "54% 64%", wide: "52% 36%" },
