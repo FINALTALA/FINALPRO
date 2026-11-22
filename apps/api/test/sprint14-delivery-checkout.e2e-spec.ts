@@ -65,7 +65,7 @@ describe('Sprint 14 - delivery checkout completeness (e2e)', () => {
     string,
     { phone: string; token: string; userId: string; customerId: string }
   > = {};
-  async function getUser(key: 'a' | 'b') {
+  async function getUser(key: 'a' | 'b' | 'c' | 'owner' | 'employee') {
     if (!cached[key]) {
       const phone = uniquePhone();
       await request(app.getHttpServer())
@@ -418,7 +418,7 @@ describe('Sprint 14 - delivery checkout completeness (e2e)', () => {
       return res.body.find((l: { id: string }) => l.id === id);
     }
 
-    it('reports the bucket and the maximum quantity currently available', async () => {
+    it('reports the bucket and the purchase limit; no maximum while the quantity is fine (TB-1)', async () => {
       const a = await getUser('a');
       const { vendor, branch } = await makeStore();
       const plenty = await makeOffer(vendor.id, branch.id, { stock: 10 });
@@ -430,16 +430,17 @@ describe('Sprint 14 - delivery checkout completeness (e2e)', () => {
 
       expect(await cartLine(a.token, i1)).toMatchObject({
         availability: 'available',
-        max_quantity: 10,
+        max_quantity: null,
+        purchase_limit: 10,
         purchasable: true,
       });
       expect(await cartLine(a.token, i2)).toMatchObject({
         availability: 'low_stock',
-        max_quantity: 2,
+        max_quantity: null,
       });
       expect(await cartLine(a.token, i3)).toMatchObject({
         availability: 'sold_out',
-        max_quantity: 0,
+        max_quantity: null,
       });
     });
 
@@ -448,7 +449,8 @@ describe('Sprint 14 - delivery checkout completeness (e2e)', () => {
       const b = await getUser('b');
       const { vendor, branch } = await makeStore();
       const { variant } = await makeOffer(vendor.id, branch.id, { stock: 2 });
-      const aLine = await addToCart(a.token, vendor.id, variant.id);
+      // A asks for both units, so the maximum is reported once B holds one.
+      const aLine = await addToCart(a.token, vendor.id, variant.id, 2);
       const bLine = await addToCart(b.token, vendor.id, variant.id);
 
       const reservationId = await reservePickup(
@@ -466,7 +468,7 @@ describe('Sprint 14 - delivery checkout completeness (e2e)', () => {
         .set(auth(b.token))
         .expect(201);
       expect(await cartLine(a.token, aLine)).toMatchObject({
-        max_quantity: 2,
+        max_quantity: null,
       });
     });
 
@@ -505,7 +507,7 @@ describe('Sprint 14 - delivery checkout completeness (e2e)', () => {
         expect(await cartLine(a.token, id)).toMatchObject({
           purchasable: false,
           availability: 'sold_out',
-          max_quantity: 0,
+          max_quantity: null,
         });
       }
     });
@@ -542,7 +544,7 @@ describe('Sprint 14 - delivery checkout completeness (e2e)', () => {
       const line = await addToCart(a.token, vendor.id, variant.id, 5);
 
       expect(await cartLine(a.token, line)).toMatchObject({
-        max_quantity: 5,
+        max_quantity: null,
         purchasable: true,
       });
 
@@ -590,15 +592,17 @@ describe('Sprint 14 - delivery checkout completeness (e2e)', () => {
       const { vendor, branch } = await makeStore();
       const { variant } = await makeOffer(vendor.id, branch.id, { stock: 5 });
       const second = await addSecondBranchWithStock(vendor.id, variant.id, 5);
-      const aLine = await addToCart(a.token, vendor.id, variant.id, 1);
+      const aLine = await addToCart(a.token, vendor.id, variant.id, 3);
 
-      // Another customer holds 3 at the first branch and all 5 at the
+      // Other customers hold 3 at the first branch and all 5 at the
       // second: 5-3=2 and 5-5=0, so the best single branch offers 2.
+      // (Two different customers - TB-5: one customer holds one live
+      // reservation, a second reserve would replace the first.)
+      const c = await getUser('c');
       const bLine1 = await addToCart(b.token, vendor.id, variant.id, 3);
       await reservePickup(b.token, branch.id, [bLine1], 'COD');
-      await prisma.cartItem.delete({ where: { id: bLine1 } });
-      const bLine2 = await addToCart(b.token, vendor.id, variant.id, 5);
-      await reservePickup(b.token, second.id, [bLine2], 'COD');
+      const cLine = await addToCart(c.token, vendor.id, variant.id, 5);
+      await reservePickup(c.token, second.id, [cLine], 'COD');
 
       expect(await cartLine(a.token, aLine)).toMatchObject({
         max_quantity: 2,
@@ -612,6 +616,295 @@ describe('Sprint 14 - delivery checkout completeness (e2e)', () => {
       const { variant } = await makeOffer(vendor.id, branch.id, { stock: 5 });
       const line = await addToCart(a.token, vendor.id, variant.id);
       expect(await cartLine(b.token, line)).toBeUndefined();
+    });
+  });
+
+  describe('TB-1: the cart never reveals stock above the public purchase limit', () => {
+    async function cartBody(token: string) {
+      return (
+        await request(app.getHttpServer())
+          .get('/api/v1/cart')
+          .set(auth(token))
+          .expect(200)
+      ).body as Record<string, unknown>[];
+    }
+    /** Every number anywhere in a response body. */
+    function numbersIn(value: unknown, out: number[] = []): number[] {
+      if (typeof value === 'number') out.push(value);
+      else if (Array.isArray(value)) value.forEach((v) => numbersIn(v, out));
+      else if (value && typeof value === 'object') {
+        Object.values(value).forEach((v) => numbersIn(v, out));
+      }
+      return out;
+    }
+    const put = (token: string, id: string, quantity: number) =>
+      request(app.getHttpServer())
+        .put(`/api/v1/cart/items/${id}`)
+        .set(auth(token))
+        .send({ quantity });
+    const add = (
+      token: string,
+      vendorId: string,
+      variantId: string,
+      quantity: number,
+    ) =>
+      request(app.getHttpServer())
+        .post('/api/v1/cart/items')
+        .set(auth(token))
+        .set('Idempotency-Key', unique('cart'))
+        .send({ vendor_id: vendorId, offer_variant_id: variantId, quantity });
+    const reserveBody = (cartItemId: string, branchId: string) => ({
+      terms_accepted: true,
+      terms_version: '2026-10-v1',
+      groups: [
+        {
+          cart_item_ids: [cartItemId],
+          branch_id: branchId,
+          fulfilment_method: 'PICKUP',
+          payment_method: 'COD',
+        },
+      ],
+    });
+    /** A customer, or the owner/employee of another store browsing as a shopper. */
+    async function shopper(key: 'a' | 'owner' | 'employee') {
+      const u = await getUser(key);
+      if (
+        key !== 'a' &&
+        !(await prisma.vendorUser.findFirst({ where: { userId: u.userId } }))
+      ) {
+        const own = await makeStore();
+        await prisma.vendorUser.create({
+          data: {
+            userId: u.userId,
+            vendorId: own.vendor.id,
+            role: key === 'owner' ? 'OWNER' : 'BRANCH_EMPLOYEE',
+            branchId: key === 'owner' ? null : own.branch.id,
+          },
+        });
+      }
+      await prisma.cartItem.deleteMany({ where: { customerId: u.customerId } });
+      return u;
+    }
+
+    for (const who of ['a', 'owner', 'employee'] as const) {
+      it(`stock 47 is never in the cart, the limit refusal, the quote or a reserve refusal - at 1 or 999 (${who})`, async () => {
+        const u = await shopper(who);
+        const { vendor, branch } = await makeStore();
+        const { variant } = await makeOffer(vendor.id, branch.id, {
+          stock: 47,
+        });
+        const line = await addToCart(u.token, vendor.id, variant.id, 1);
+        let cart = await cartBody(u.token);
+        expect(cart.find((l) => l.id === line)).toMatchObject({
+          availability: 'available',
+          max_quantity: null,
+          purchase_limit: 10,
+        });
+        expect(numbersIn(cart)).not.toContain(47);
+
+        // 999: refused by the public limit - only { limit: 10 }.
+        for (const res of [
+          await put(u.token, line, 999),
+          await add(u.token, vendor.id, variant.id, 999),
+        ]) {
+          expect(res.status).toBe(422);
+          expect(res.body.error.code).toBe('CART_LINE_LIMIT_EXCEEDED');
+          expect(res.body.error.details).toEqual([{ limit: 10 }]);
+          expect(numbersIn(res.body)).not.toContain(47);
+          expect(res.body.error.message).not.toMatch(/47/);
+        }
+        cart = await cartBody(u.token);
+        expect(cart.find((l) => l.id === line)).toMatchObject({ quantity: 1 });
+
+        // At the limit: quotable, and nothing reveals 47.
+        await put(u.token, line, 10).expect(200);
+        const quote = await request(app.getHttpServer())
+          .post('/api/v1/checkout/quote')
+          .set(auth(u.token))
+          .send({ cart_item_ids: [line] })
+          .expect(201);
+        expect(quote.body.groups).toHaveLength(1);
+        expect(numbersIn(quote.body)).not.toContain(47);
+        expect(numbersIn(await cartBody(u.token))).not.toContain(47);
+
+        // Stock drops below the line after the quote: reserve still
+        // refuses under its lock, without naming the branch's quantity.
+        await prisma.branchStock.updateMany({
+          where: { branchId: branch.id, offerVariantId: variant.id },
+          data: { quantity: 4 },
+        });
+        const refused = await request(app.getHttpServer())
+          .post('/api/v1/checkout/reserve')
+          .set(auth(u.token))
+          .set('Idempotency-Key', unique('reserve'))
+          .send(reserveBody(line, branch.id))
+          .expect(409);
+        expect(refused.body.error.code).toBe('INSUFFICIENT_STOCK');
+        expect(refused.body.error.message).not.toMatch(/\d/);
+        expect(numbersIn(refused.body)).toEqual([]);
+      });
+    }
+
+    it('stock 7, asking 9: the cart reports 7 only once the quantity fails; a line over the limit reports the limit, is refused by quote and reserve, and can be lowered', async () => {
+      const a = await shopper('a');
+      const { vendor, branch } = await makeStore();
+      const seven = await makeOffer(vendor.id, branch.id, { stock: 7 });
+      const many = await makeOffer(vendor.id, branch.id, { stock: 47 });
+      const line = await addToCart(a.token, vendor.id, seven.variant.id, 7);
+      let cart = await cartBody(a.token);
+      expect(cart.find((l) => l.id === line)).toMatchObject({
+        max_quantity: null,
+      });
+      await put(a.token, line, 9).expect(200);
+      cart = await cartBody(a.token);
+      expect(cart.find((l) => l.id === line)).toMatchObject({
+        quantity: 9,
+        max_quantity: 7,
+        purchase_limit: 10,
+      });
+
+      // A line above the limit from before TB-1.
+      const old = await addToCart(a.token, vendor.id, many.variant.id, 1);
+      await prisma.cartItem.update({
+        where: { id: old },
+        data: { quantity: 15 },
+      });
+      cart = await cartBody(a.token);
+      expect(cart.find((l) => l.id === old)).toMatchObject({
+        quantity: 15,
+        max_quantity: 10,
+      });
+      expect(numbersIn(cart)).not.toContain(47);
+      const quote = await request(app.getHttpServer())
+        .post('/api/v1/checkout/quote')
+        .set(auth(a.token))
+        .send({ cart_item_ids: [old] })
+        .expect(422);
+      expect(quote.body.error.code).toBe('CART_LINE_LIMIT_EXCEEDED');
+      const reserve = await request(app.getHttpServer())
+        .post('/api/v1/checkout/reserve')
+        .set(auth(a.token))
+        .set('Idempotency-Key', unique('reserve'))
+        .send(reserveBody(old, branch.id))
+        .expect(422);
+      expect(reserve.body.error.code).toBe('CART_LINE_LIMIT_EXCEEDED');
+      await put(a.token, old, 8).expect(200);
+      cart = await cartBody(a.token);
+      expect(cart.find((l) => l.id === old)).toMatchObject({
+        quantity: 8,
+        max_quantity: null,
+      });
+    });
+
+    it('the limit is per offer variant: 10 black/S and 10 white/M of one offer are fine; an 11th of the same variant is refused', async () => {
+      const a = await shopper('a');
+      const { vendor, branch } = await makeStore();
+      const { offer, variant: blackS } = await makeOffer(vendor.id, branch.id, {
+        stock: 47,
+      });
+      await prisma.offerVariant.update({
+        where: { id: blackS.id },
+        data: { colour: 'أسود', size: 'S' },
+      });
+      // A second variant of the SAME offer.
+      const whiteM = await prisma.offerVariant.create({
+        data: {
+          vendorId: vendor.id,
+          vendorOfferId: offer.id,
+          sellerSku: unique('sku'),
+          basePrice: 20,
+          storeInventoryBarcode: unique('barcode'),
+          colour: 'أبيض',
+          size: 'M',
+        },
+      });
+      await prisma.branchStock.create({
+        data: {
+          vendorId: vendor.id,
+          branchId: branch.id,
+          offerVariantId: whiteM.id,
+          quantity: 47,
+        },
+      });
+
+      const black = await add(a.token, vendor.id, blackS.id, 10);
+      const white = await add(a.token, vendor.id, whiteM.id, 10);
+      expect([black.status, white.status]).toEqual([201, 201]);
+      const lines = await prisma.cartItem.findMany({
+        where: { customerId: a.customerId },
+        include: { offerVariant: { select: { vendorOfferId: true } } },
+      });
+      const ofOffer = lines.filter(
+        (l) => l.offerVariant.vendorOfferId === offer.id,
+      );
+      expect(ofOffer.map((l) => l.quantity).sort()).toEqual([10, 10]);
+
+      // Both lines together (20 of one offer) are quotable: 10 per variant.
+      const quote = await request(app.getHttpServer())
+        .post('/api/v1/checkout/quote')
+        .set(auth(a.token))
+        .send({ cart_item_ids: [black.body.id, white.body.id] })
+        .expect(201);
+      expect(quote.body.groups).toHaveLength(1);
+
+      // An 11th of the same variant: refused by add and by update.
+      const more = await add(a.token, vendor.id, blackS.id, 1);
+      expect(more.status).toBe(422);
+      expect(more.body.error.code).toBe('CART_LINE_LIMIT_EXCEEDED');
+      const eleven = await put(a.token, black.body.id, 11);
+      expect(eleven.status).toBe(422);
+      expect(eleven.body.error.code).toBe('CART_LINE_LIMIT_EXCEEDED');
+      const after = await prisma.cartItem.findUniqueOrThrow({
+        where: { id: black.body.id },
+      });
+      expect(after.quantity).toBe(10);
+    });
+
+    it('concurrent adds and updates of one variant never total more than 10, and never make a second line', async () => {
+      const a = await shopper('a');
+      const { vendor, branch } = await makeStore();
+      const { variant } = await makeOffer(vendor.id, branch.id, { stock: 47 });
+      const lines = () =>
+        prisma.cartItem.findMany({
+          where: { customerId: a.customerId, offerVariantId: variant.id },
+        });
+
+      const adds = await Promise.all([
+        add(a.token, vendor.id, variant.id, 6),
+        add(a.token, vendor.id, variant.id, 6),
+        add(a.token, vendor.id, variant.id, 6),
+      ]);
+      expect(adds.map((r) => r.status).sort()).toEqual([201, 422, 422]);
+      expect(await lines()).toHaveLength(1);
+      const [line] = await lines();
+      expect(line.quantity).toBe(6);
+
+      // An add of 4 racing an update to 9: never both (9 + 4 > 10).
+      const [added, updated] = await Promise.all([
+        add(a.token, vendor.id, variant.id, 4),
+        put(a.token, line.id, 9),
+      ]);
+      const after = await lines();
+      expect(after).toHaveLength(1);
+      expect(after[0].quantity).toBeLessThanOrEqual(10);
+      if (added.status === 201 && updated.status === 200) {
+        // add first (6+4=10), then the update set 9.
+        expect(after[0].quantity).toBe(9);
+      } else {
+        expect([added.status, updated.status]).toContain(422);
+      }
+
+      // A second line for the same variant can't exist at all.
+      await expect(
+        prisma.cartItem.create({
+          data: {
+            customerId: a.customerId,
+            vendorId: vendor.id,
+            offerVariantId: variant.id,
+            quantity: 1,
+          },
+        }),
+      ).rejects.toThrow();
     });
   });
 

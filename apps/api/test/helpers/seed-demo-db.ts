@@ -2,6 +2,10 @@ import { execFileSync } from 'child_process';
 import * as path from 'path';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../../generated/prisma/client';
+import {
+  createDisposableDatabase,
+  dropDisposableDatabase,
+} from './test-databases';
 
 export const API_ROOT = path.resolve(__dirname, '..', '..');
 
@@ -28,8 +32,12 @@ export function runSeedOn(databaseUrl: string): {
   }
   try {
     const out = execFileSync(
-      'npx',
-      ['ts-node', '--transpile-only', 'scripts/seed-demo.ts'],
+      process.execPath,
+      [
+        require.resolve('ts-node/dist/bin.js'),
+        '--transpile-only',
+        'scripts/seed-demo.ts',
+      ],
       {
         cwd: API_ROOT,
         env: { ...process.env, DATABASE_URL: databaseUrl },
@@ -55,7 +63,7 @@ export function runSeedOn(databaseUrl: string): {
  * never seeded or modified.
  */
 export class SeedTestDatabases {
-  private admin!: PrismaClient;
+  private adminUrl = '';
   private readonly baseDb: string;
   private readonly created: string[] = [];
 
@@ -67,16 +75,19 @@ export class SeedTestDatabases {
   }
 
   async setUp(): Promise<void> {
-    this.admin = new PrismaClient({
-      adapter: new PrismaPg(process.env.DATABASE_URL as string),
-    });
-    await this.admin.$executeRawUnsafe(
-      `DROP DATABASE IF EXISTS "${this.baseDb}"`,
-    );
-    await this.admin.$executeRawUnsafe(`CREATE DATABASE "${this.baseDb}"`);
+    // TB-13: every database here is created marked and dropped only after
+    // its own marker is checked (helpers/test-databases).
+    this.adminUrl = process.env.DATABASE_URL as string;
+    await createDisposableDatabase(this.adminUrl, this.baseDb);
     execFileSync(
-      'npx',
-      ['prisma', 'migrate', 'deploy', '--config', 'prisma7.config.ts'],
+      process.execPath,
+      [
+        require.resolve('prisma/build/index.js'),
+        'migrate',
+        'deploy',
+        '--config',
+        'prisma7.config.ts',
+      ],
       {
         cwd: API_ROOT,
         env: { ...process.env, DATABASE_URL: urlForDb(this.baseDb) },
@@ -88,10 +99,9 @@ export class SeedTestDatabases {
 
   async clone(name: string): Promise<{ url: string; prisma: PrismaClient }> {
     const dbName = `${this.prefix}_${name}`;
-    await this.admin.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${dbName}"`);
-    await this.admin.$executeRawUnsafe(
-      `CREATE DATABASE "${dbName}" TEMPLATE "${this.baseDb}"`,
-    );
+    await createDisposableDatabase(this.adminUrl, dbName, {
+      template: this.baseDb,
+    });
     this.created.push(dbName);
     const url = urlForDb(dbName);
     return { url, prisma: new PrismaClient({ adapter: new PrismaPg(url) }) };
@@ -100,8 +110,7 @@ export class SeedTestDatabases {
   /** Call only after every scenario PrismaClient has been disconnected. */
   async tearDown(): Promise<void> {
     for (const db of [...this.created, this.baseDb]) {
-      await this.admin.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${db}"`);
+      await dropDisposableDatabase(this.adminUrl, db);
     }
-    await this.admin.$disconnect();
   }
 }

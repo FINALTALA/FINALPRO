@@ -1,3 +1,4 @@
+import { execFileSync } from 'child_process';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ThrottlerStorage } from '@nestjs/throttler';
@@ -6,11 +7,18 @@ import * as request from 'supertest';
 import { AppModule } from './../src/app.module';
 import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
+import { NotificationChannelService } from './../src/outbox/notification-channel.service';
 import { OutboxRelayService } from './../src/outbox/outbox-relay.service';
 import { FulfilmentSweepService } from './../src/orders/fulfilment-sweep.service';
 import { DiscountActivationSweepService } from './../src/offers/discount-activation-sweep.service';
 import { PrismaService } from './../src/prisma/prisma.service';
 import { createUniquePhone } from './helpers/e2e-phone-lanes';
+import { API_ROOT } from './helpers/seed-demo-db';
+import {
+  createDisposableDatabase,
+  dropDisposableDatabase,
+} from './helpers/test-databases';
+import { sweepUntil } from './helpers/sweep-until';
 
 class FakeSmsService {
   sent: { phone: string; code: string; expiresAt: Date }[] = [];
@@ -233,7 +241,27 @@ describe('Sprint 19 - notification relay, sweeps, API (e2e)', () => {
   // flaky under that load, not a sign anything is actually broken.
   async function drainRelay(maxIterations = 2000): Promise<number> {
     let n = 0;
-    while (n < maxIterations && (await relay.dispatchOnce())) n += 1;
+    let waits = 0;
+    while (n < maxIterations) {
+      if (await relay.dispatchOnce()) {
+        n += 1;
+        continue;
+      }
+      // Nothing claimable right now - but the app's own background relay
+      // (its periodic tick runs inside this same test app) may be
+      // half-way through a row it claimed, or a follower fan-out may
+      // have yielded its row for a couple of seconds between batches.
+      // Returning now would race that work, so wait (bounded) until no
+      // row is in flight.
+      const [{ busy }] = await prisma.$queryRaw<{ busy: number }[]>`
+        SELECT count(*)::int AS busy FROM outbox_events
+        WHERE (status = 'PROCESSING' AND "lockedAt" >= now() - interval '120 seconds')
+           OR (status = 'PENDING' AND "availableAt" <= now() + interval '3 seconds')
+      `;
+      if (busy === 0 || waits >= 100) break;
+      waits += 1;
+      await new Promise((r) => setTimeout(r, 100));
+    }
     return n;
   }
 
@@ -314,7 +342,10 @@ describe('Sprint 19 - notification relay, sweeps, API (e2e)', () => {
         const row = await prisma.outboxEvent.findUniqueOrThrow({
           where: { id: outboxRow.id },
         });
-        return row.status !== 'PROCESSING' || row.lockToken !== 'zombie-token';
+        // Not just "reclaimed" (a new lockToken): the reclaiming relay -
+        // this test's, this app's own timer, or another file's - holds
+        // the row in PROCESSING until it has finished. Wait for that.
+        return row.status !== 'PROCESSING';
       });
 
       const after = await prisma.outboxEvent.findUniqueOrThrow({
@@ -403,11 +434,16 @@ describe('Sprint 19 - notification relay, sweeps, API (e2e)', () => {
 
       for (let attempt = 1; attempt <= 5; attempt++) {
         await prisma.$executeRaw`UPDATE outbox_events SET "availableAt" = now() WHERE id = ${outboxRow.id}`;
+        // attemptCount rises at CLAIM time, before the claiming relay has
+        // written the attempt's outcome - and the claimer may be this
+        // app's own timer or another file's relay (a parallel run), not
+        // this test's dispatchOnce(). So wait for the attempt to be
+        // finished, never just counted.
         await dispatchUntil(async () => {
           const row = await prisma.outboxEvent.findUniqueOrThrow({
             where: { id: outboxRow.id },
           });
-          return row.attemptCount >= attempt;
+          return row.attemptCount >= attempt && row.status !== 'PROCESSING';
         });
         const row = await prisma.outboxEvent.findUniqueOrThrow({
           where: { id: outboxRow.id },
@@ -420,6 +456,112 @@ describe('Sprint 19 - notification relay, sweeps, API (e2e)', () => {
           expect(row.status).toBe('DEAD_LETTER');
         }
       }
+    });
+
+    // TB-17 follow-up: several relays at once - each with its own
+    // connection pool, as separate API processes would have - plus this
+    // app's own timer and, in a parallel run, every other file's. No
+    // event may be lost or delivered twice, and one that always fails
+    // reaches DEAD_LETTER after exactly MAX_ATTEMPTS claims, never more.
+    it('several relays at once: every event published exactly once with one Notification; an always-failing one is DEAD_LETTER after exactly 5 attempts', async () => {
+      const recipient = await prisma.user.create({
+        data: {
+          phone: uniquePhone(),
+          passwordHash: 'x',
+          phoneVerifiedAt: new Date(),
+        },
+      });
+      const enqueue = (payload: Record<string, string>) =>
+        prisma.outboxEvent.create({
+          data: {
+            eventType: 'vendor.reactivated',
+            payload: { ...payload, audience: 'STORE' },
+          },
+        });
+      const good: string[] = [];
+      for (let i = 0; i < 60; i++) {
+        good.push(
+          (
+            await enqueue({
+              vendor_id: unique('v'),
+              recipient_user_id: recipient.id,
+            })
+          ).id,
+        );
+      }
+      // No recipient: dispatch throws every time, deterministically.
+      const bad: string[] = [];
+      for (let i = 0; i < 4; i++) {
+        bad.push((await enqueue({ vendor_id: unique('bad') })).id);
+      }
+      const mine = [...good, ...bad];
+
+      const clients = Array.from({ length: 4 }, () => new PrismaService());
+      const channel = app!.get(NotificationChannelService);
+      const relays = [
+        relay,
+        ...clients.map((c) => new OutboxRelayService(c, channel)),
+      ];
+      const inFlight = () =>
+        prisma.outboxEvent.count({
+          where: {
+            id: { in: mine },
+            OR: [
+              { status: { in: ['PENDING', 'PROCESSING'] } },
+              { status: 'FAILED', availableAt: { lte: new Date() } },
+            ],
+          },
+        });
+      try {
+        for (let round = 0; round < 10; round++) {
+          // Make every failed one due again at once, as a retry would be.
+          await prisma.outboxEvent.updateMany({
+            where: { id: { in: bad }, status: 'FAILED' },
+            data: { availableAt: new Date() },
+          });
+          for (let wait = 0; wait < 200 && (await inFlight()) > 0; wait++) {
+            await Promise.all(
+              relays.map(async (r) => {
+                while (await r.dispatchOnce()) {
+                  /* drain */
+                }
+              }),
+            );
+            await new Promise((r) => setTimeout(r, 50));
+          }
+          const dead = await prisma.outboxEvent.count({
+            where: { id: { in: bad }, status: 'DEAD_LETTER' },
+          });
+          if (dead === bad.length) break;
+        }
+      } finally {
+        await Promise.all(clients.map((c) => c.$disconnect()));
+      }
+
+      const goodRows = await prisma.outboxEvent.findMany({
+        where: { id: { in: good } },
+      });
+      expect(goodRows.every((r) => r.status === 'PUBLISHED')).toBe(true);
+      expect(goodRows.every((r) => r.attemptCount === 1)).toBe(true);
+      const perEvent = await prisma.notification.groupBy({
+        by: ['outboxEventId'],
+        where: { outboxEventId: { in: good } },
+        _count: true,
+      });
+      expect(perEvent).toHaveLength(good.length);
+      expect(perEvent.every((g) => g._count === 1)).toBe(true);
+
+      const badRows = await prisma.outboxEvent.findMany({
+        where: { id: { in: bad } },
+      });
+      expect(badRows.map((r) => [r.status, r.attemptCount])).toEqual(
+        bad.map(() => ['DEAD_LETTER', 5]),
+      );
+      expect(
+        await prisma.notification.count({
+          where: { outboxEventId: { in: bad } },
+        }),
+      ).toBe(0);
     });
 
     it('a DEAD_LETTER row is visible to a PLATFORM_ADMIN via the dead-letter endpoint and hidden from a non-admin', async () => {
@@ -500,7 +642,10 @@ describe('Sprint 19 - notification relay, sweeps, API (e2e)', () => {
         const row = await prisma.outboxEvent.findUniqueOrThrow({
           where: { id: outboxRow.id },
         });
-        return row.status !== 'PROCESSING' || row.lockToken !== 'retry-token';
+        // Not just "reclaimed" (a new lockToken): the reclaiming relay -
+        // this test's, this app's own timer, or another file's - holds
+        // the row in PROCESSING until it has finished. Wait for that.
+        return row.status !== 'PROCESSING';
       });
       const after = await prisma.notification.count({
         where: { outboxEventId: outboxRow.id },
@@ -618,6 +763,8 @@ describe('Sprint 19 - notification relay, sweeps, API (e2e)', () => {
           payload: {
             branch_order_id: 'bo-1',
             vendor_id: 'v-1',
+            branch_id: 'b-1',
+            audience: 'STORE',
             recipient_user_id: user.id,
             reason: 'very sensitive free text the customer wrote',
           },
@@ -629,13 +776,22 @@ describe('Sprint 19 - notification relay, sweeps, API (e2e)', () => {
           payload: {
             offer_variant_id: 'ov-1',
             vendor_id: 'v-1',
+            branch_id: 'b-1',
+            audience: 'STORE',
             recipient_user_id: user.id,
             reason: 'DAMAGE',
             reason_note: 'another very sensitive free text note',
           },
         },
       });
-      await drainRelay();
+      // The app's own background relay may claim these rows first, so
+      // wait for both notifications rather than for an empty queue.
+      await dispatchUntil(
+        async () =>
+          (await prisma.notification.count({
+            where: { outboxEventId: { in: [ev1.id, ev2.id] } },
+          })) === 2,
+      );
 
       const n1 = await prisma.notification.findUniqueOrThrow({
         where: {
@@ -849,23 +1005,34 @@ describe('Sprint 19 - notification relay, sweeps, API (e2e)', () => {
       const customerOrder = await prisma.customerOrder.create({
         data: { customerId: customer.id },
       });
+      // TB-9: a DELIVERY order - only delivery reaches DELIVERED (this
+      // fixture used to be a PICKUP order in DELIVERED, a state the order
+      // state machine never produces).
       const branchOrder = await prisma.branchOrder.create({
         data: {
           customerOrderId: customerOrder.id,
           vendorId,
           branchId,
-          fulfilmentMethod: 'PICKUP',
+          fulfilmentMethod: 'DELIVERY',
           paymentMethod: 'COD',
           subtotal: 10,
           total: 10,
           status: 'DELIVERED',
           deliveredAt: new Date(Date.now() - 50 * 60 * 60 * 1000),
-          pickupCode: '123456',
         },
       });
 
       const swept = await fulfilmentSweep.sweepOnce();
       expect(swept).toBeGreaterThanOrEqual(1);
+      await sweepUntil(
+        () => fulfilmentSweep.sweepOnce(),
+        async () =>
+          (
+            await prisma.branchOrder.findUniqueOrThrow({
+              where: { id: branchOrder.id },
+            })
+          ).confirmReminderSentAt !== null,
+      );
 
       const row = await prisma.branchOrder.findUniqueOrThrow({
         where: { id: branchOrder.id },
@@ -875,6 +1042,15 @@ describe('Sprint 19 - notification relay, sweeps, API (e2e)', () => {
         where: { eventType: 'branch_order.confirm_reminder_48h' },
       });
       expect(outboxRows).toBeGreaterThanOrEqual(1);
+      // This order's own reminder, exactly one.
+      expect(
+        await prisma.outboxEvent.count({
+          where: {
+            eventType: 'branch_order.confirm_reminder_48h',
+            payload: { path: ['branch_order_id'], equals: branchOrder.id },
+          },
+        }),
+      ).toBe(1);
     });
   });
 
@@ -1067,10 +1243,20 @@ describe('Sprint 19 - notification relay, sweeps, API (e2e)', () => {
           reason: 'Policy violation reported by customers',
         })
         .expect(201);
-      await drainRelay();
       const ownerRow = await prisma.vendorUser.findFirstOrThrow({
         where: { vendorId, role: 'OWNER' },
       });
+      // The app's own background relay may claim the row first - wait
+      // for the notification itself rather than for an empty queue.
+      await dispatchUntil(
+        async () =>
+          (await prisma.notification.count({
+            where: {
+              recipientUserId: ownerRow.userId,
+              type: 'VENDOR_SUSPENDED',
+            },
+          })) === 1,
+      );
       const ownerUser = await prisma.user.findUniqueOrThrow({
         where: { id: ownerRow.userId },
       });
@@ -1080,33 +1266,53 @@ describe('Sprint 19 - notification relay, sweeps, API (e2e)', () => {
         .expect(200);
       const ownerToken = ownerLogin.body.session_token as string;
 
-      const unreadBefore = await request(app.getHttpServer())
+      // TB-26: VENDOR_SUSPENDED is a STORE notification - read in the
+      // store workspace's inbox, never in the shopping bell (not listed,
+      // not counted, not markable there by its id).
+      const storeInbox = `/api/v1/vendors/${vendorId}/notifications`;
+      const bellBefore = await request(app.getHttpServer())
         .get('/api/v1/me/notifications/unread-count')
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .expect(200);
+      expect(bellBefore.body.unread_count).toBe(0);
+      const bellList = await request(app.getHttpServer())
+        .get('/api/v1/me/notifications')
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .expect(200);
+      expect(bellList.body.items).toHaveLength(0);
+
+      const unreadBefore = await request(app.getHttpServer())
+        .get(`${storeInbox}/unread-count`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .expect(200);
       expect(unreadBefore.body.unread_count).toBe(1);
 
       const list = await request(app.getHttpServer())
-        .get('/api/v1/me/notifications')
+        .get(storeInbox)
         .set('Authorization', `Bearer ${ownerToken}`)
         .expect(200);
       expect(list.body.items).toHaveLength(1);
       expect(list.body.items[0].type).toBe('VENDOR_SUSPENDED');
+      expect(list.body.items[0].audience).toBe('STORE');
       expect(list.body.items[0].read_at).toBeNull();
 
       const notificationId = list.body.items[0].id as string;
       await request(app.getHttpServer())
         .post(`/api/v1/me/notifications/${notificationId}/read`)
         .set('Authorization', `Bearer ${ownerToken}`)
+        .expect(404);
+      await request(app.getHttpServer())
+        .post(`${storeInbox}/${notificationId}/read`)
+        .set('Authorization', `Bearer ${ownerToken}`)
         .expect(200);
       // Idempotent second call.
       await request(app.getHttpServer())
-        .post(`/api/v1/me/notifications/${notificationId}/read`)
+        .post(`${storeInbox}/${notificationId}/read`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .expect(200);
 
       const unreadAfter = await request(app.getHttpServer())
-        .get('/api/v1/me/notifications/unread-count')
+        .get(`${storeInbox}/unread-count`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .expect(200);
       expect(unreadAfter.body.unread_count).toBe(0);
@@ -1118,7 +1324,54 @@ describe('Sprint 19 - notification relay, sweeps, API (e2e)', () => {
   // fan-out must not monopolize the relay against a normal event.
   // ============================================================
   describe('follower fan-out fairness', () => {
+    // TB-24: this test reads a moment in the relay's state (the normal
+    // event still PENDING right after the fan-out's first batch). On the
+    // shared test database every other file's app runs its own relay
+    // every 3 s and may publish that event first - so this describe runs
+    // on a database of its own (created marked, dropped only after its
+    // marker is read again - TB-13's helpers), and the test stops its own
+    // app's relay timer: the only relay left is the one it drives itself.
+    // DATABASE_URL is put back in afterAll, and at once if setup fails.
+    const sharedUrl = process.env.DATABASE_URL!;
+    const isolatedName = `finalpro_tb24fanout_test_${process.pid}`;
+    let isolatedCreated = false;
+
+    beforeAll(async () => {
+      try {
+        const url = await createDisposableDatabase(sharedUrl, isolatedName);
+        isolatedCreated = true;
+        execFileSync(
+          process.execPath,
+          [
+            require.resolve('prisma/build/index.js'),
+            'migrate',
+            'deploy',
+            '--config',
+            'prisma7.config.ts',
+          ],
+          {
+            cwd: API_ROOT,
+            env: { ...process.env, DATABASE_URL: url },
+            stdio: 'pipe',
+          },
+        );
+        process.env.DATABASE_URL = url;
+      } catch (err) {
+        process.env.DATABASE_URL = sharedUrl;
+        throw err;
+      }
+    });
+
+    afterAll(async () => {
+      process.env.DATABASE_URL = sharedUrl;
+      if (isolatedCreated) {
+        await dropDisposableDatabase(sharedUrl, isolatedName);
+      }
+    });
+
     it('a normal event enqueued after a huge follower fan-out is delivered before the fan-out finishes draining every batch', async () => {
+      // TB-24: this app's own relay timer off - the test drives the relay.
+      relay.onModuleDestroy();
       const { owner, vendorId, branchId } = await setupActiveVendor();
       const admin = await signupWithPlatformRole('PLATFORM_ADMIN');
 
@@ -1211,10 +1464,9 @@ describe('Sprint 19 - notification relay, sweeps, API (e2e)', () => {
 
       // Drive the relay until exactly the first FOLLOWER_BATCH_SIZE
       // (200) targets are processed - the fan-out's own first and only
-      // batch before it must yield (250 > 200). This file's own
-      // database is shared with every other parallel e2e spec file, so
-      // this cannot assume any particular dispatchOnce() call landed
-      // on this row - only that it eventually does.
+      // batch before it must yield (250 > 200). TB-24: this describe has
+      // a database of its own and the app's timer is off, so the only
+      // relay touching these rows is this dispatchUntil.
       await dispatchUntil(async () => (await processedTargetCount()) === 200);
       const afterFirstBatch = await prisma.outboxEvent.findUniqueOrThrow({
         where: { id: followerEvent.id },

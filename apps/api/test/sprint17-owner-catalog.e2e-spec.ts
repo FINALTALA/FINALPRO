@@ -1,6 +1,10 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
+import {
+  TEST_CLASSIFICATION,
+  postCombination,
+} from './helpers/taxonomy-offers';
 import { AppModule } from './../src/app.module';
 import { AuditLogService } from './../src/audit/audit-log.service';
 import { SmsService } from './../src/auth/sms.service';
@@ -232,18 +236,55 @@ describe('Sprint 17 - owner catalog (pricing, PDR-036 templates, brand, media, i
       .send({
         title_ar: unique('عنوان'),
         title_en: unique('Title'),
+        ...TEST_CLASSIFICATION,
         ...overrides,
       })
       .expect(201);
     return res.body.id as string;
   }
 
+  /**
+   * Sprint 27: a pre-taxonomy (legacy) product, as already exists in a
+   * live database - unclassified, requiresTaxonomy=false. POST /offers
+   * can no longer create one, so it is inserted directly; its variants
+   * still go through the legacy POST .../variants path, which stays
+   * supported for exactly these products.
+   */
+  async function createLegacyOffer(
+    _owner: string,
+    vendorId: string,
+  ): Promise<string> {
+    const offer = await prisma.vendorOffer.create({
+      data: {
+        vendorId,
+        titleAr: unique('عنوان'),
+        titleEn: unique('Title'),
+      },
+    });
+    return offer.id;
+  }
+
+  /** A combination on a classified offer, a legacy variant otherwise. */
   async function createVariant(
     owner: string,
     vendorId: string,
     offerId: string,
     overrides: Record<string, unknown> = {},
   ) {
+    const offer = await prisma.vendorOffer.findUniqueOrThrow({
+      where: { id: offerId },
+    });
+    if (offer.taxonomyVersion !== null) {
+      const res = await postCombination(
+        app.getHttpServer(),
+        owner,
+        vendorId,
+        offerId,
+        { seller_sku: unique('sku'), base_price: 100, ...overrides },
+      );
+      expect(res.status).toBe(201);
+      return res.body;
+    }
     const res = await request(app.getHttpServer())
       .post(`/api/v1/vendors/${vendorId}/offers/${offerId}/variants`)
       .set('Authorization', `Bearer ${owner}`)
@@ -442,6 +483,7 @@ describe('Sprint 17 - owner catalog (pricing, PDR-036 templates, brand, media, i
             length: 'Midi',
             sleeve_type: 'Short',
           },
+          ...TEST_CLASSIFICATION,
         })
         .expect(201);
       expect(res.body.category_template).toBe('DRESSES');
@@ -450,19 +492,27 @@ describe('Sprint 17 - owner catalog (pricing, PDR-036 templates, brand, media, i
       });
     });
 
-    it('refuses template_attributes missing a required key for the chosen template', async () => {
+    // Product decision 2026-11-16: specifications are optional - a value
+    // the seller does not know is left out (never "N/A"). Only an unknown
+    // key or a blank value is refused.
+    it('accepts template_attributes with only the known values; refuses an unknown key or a blank value', async () => {
       const { owner, vendorId } = await setupOwnerVendor();
-      const res = await request(app.getHttpServer())
-        .post(`/api/v1/vendors/${vendorId}/offers`)
-        .set('Authorization', `Bearer ${owner}`)
-        .set('Idempotency-Key', unique('offer'))
-        .send({
-          title_ar: 'فستان',
-          title_en: 'Dress',
-          category_template: 'DRESSES',
-          template_attributes: { material: 'Cotton' },
-        });
-      expect(res.status).toBe(400);
+      const send = (template_attributes: Record<string, string>) =>
+        request(app.getHttpServer())
+          .post(`/api/v1/vendors/${vendorId}/offers`)
+          .set('Authorization', `Bearer ${owner}`)
+          .set('Idempotency-Key', unique('offer'))
+          .send({
+            title_ar: 'فستان',
+            title_en: 'Dress',
+            category_template: 'DRESSES',
+            template_attributes,
+            ...TEST_CLASSIFICATION,
+          });
+      const partial = await send({ material: 'Cotton' });
+      expect(partial.status).toBe(201);
+      expect((await send({ material: 'Cotton', colour_hint: 'x' })).status).toBe(400);
+      expect((await send({ material: '   ' })).status).toBe(400);
     });
 
     it('refuses category_template without template_attributes, and vice versa (both-or-neither)', async () => {
@@ -496,7 +546,12 @@ describe('Sprint 17 - owner catalog (pricing, PDR-036 templates, brand, media, i
         .post(`/api/v1/vendors/${vendorId}/offers`)
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('offer'))
-        .send({ title_ar: 'ت', title_en: 'T', brand_id: NO_BRAND_SENTINEL_ID })
+        .send({
+          title_ar: 'ت',
+          title_en: 'T',
+          brand_id: NO_BRAND_SENTINEL_ID,
+          ...TEST_CLASSIFICATION,
+        })
         .expect(201);
       expect(res.body.brand_id).toBe(NO_BRAND_SENTINEL_ID);
     });
@@ -507,7 +562,7 @@ describe('Sprint 17 - owner catalog (pricing, PDR-036 templates, brand, media, i
         .post(`/api/v1/vendors/${vendorId}/offers`)
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('offer'))
-        .send({ title_ar: 'ت', title_en: 'T' })
+        .send({ title_ar: 'ت', title_en: 'T', ...TEST_CLASSIFICATION })
         .expect(201);
       expect(res.body.status).toBe('DRAFT');
       expect(res.body.category_template).toBeNull();
@@ -525,6 +580,12 @@ describe('Sprint 17 - owner catalog (pricing, PDR-036 templates, brand, media, i
   });
 
   describe('Pricing (blocker 1): effective price, mutual exclusivity, PriceHistory', () => {
+    // Sprint 27: this block is about the PER-VARIANT price path (create +
+    // PUT .../variants/:id), which only legacy products still have - a
+    // classified product's one price is set offer-level (PUT .../price,
+    // covered by sprint27-product-taxonomy.e2e-spec.ts). So every test
+    // here runs on a legacy offer.
+    const createOffer = createLegacyOffer;
     it('review-round fix: rounds with exact decimal arithmetic, never native floating point - base_price=2.30, discount_percent=5.00 => effective_price=2.19 (not 2.18)', async () => {
       // 2.30 * 0.95 = 2.185 exactly - round-half-up to 2dp is 2.19.
       // Native `Math.round(2.30 * (1 - 5/100) * 100) / 100` computes
@@ -926,7 +987,7 @@ describe('Sprint 17 - owner catalog (pricing, PDR-036 templates, brand, media, i
       expect(res.body.error.code).toBe('CONFIRMED_MATCH_IDENTITY_LOCKED');
     });
 
-    it('refuses PATCHing identifier_type/identifier_value on a CONFIRMED variant, but allows colour', async () => {
+    it('refuses PATCHing identifier_type/identifier_value on a CONFIRMED variant, but allows a non-identity field (specs)', async () => {
       const { owner, vendorId } = await setupOwnerVendor();
       const { offerId, variantId } = await setupConfirmedMatch(owner, vendorId);
 
@@ -944,9 +1005,11 @@ describe('Sprint 17 - owner catalog (pricing, PDR-036 templates, brand, media, i
           `/api/v1/vendors/${vendorId}/offers/${offerId}/variants/${variantId}`,
         )
         .set('Authorization', `Bearer ${owner}`)
-        .send({ colour: 'Green' })
+        // Sprint 27: this is a combination, whose colour is fixed
+        // (USE_COMBINATION_ENDPOINT) - specs stay freely editable.
+        .send({ specs_text_en: 'Green trim' })
         .expect(200);
-      expect(allowed.body.colour).toBe('Green');
+      expect(allowed.body.specs_text_en).toBe('Green trim');
     });
   });
 
@@ -960,8 +1023,13 @@ describe('Sprint 17 - owner catalog (pricing, PDR-036 templates, brand, media, i
       // the text-similarity half alone (Jaccard over token SETS) is
       // diluted by unique()'s own timestamp/counter tokens in the
       // brand name and can otherwise land just under threshold.
-      const colour = 'PurpleRerunTestColour';
-      const variant = await createVariant(owner, vendorId, offerId, { colour });
+      // Sprint 27: a combination's colour is the taxonomy's label for its
+      // code (LILAC = 'ليلكي/زهري'), which is what the canonical
+      // variant's structural colour must overlap with.
+      const colour = 'ليلكي/زهري';
+      const variant = await createVariant(owner, vendorId, offerId, {
+        color_code: 'LILAC',
+      });
 
       const before = await prisma.matchReviewCandidate.count({
         where: { offerVariantId: variant.id },
@@ -1188,18 +1256,19 @@ describe('Sprint 17 - owner catalog (pricing, PDR-036 templates, brand, media, i
       expect(res.body.error.details).toContain('brand');
     });
 
-    it('refuses ACTIVE with an incomplete template_attributes pair - missing includes "template_attributes"', async () => {
+    it('refuses ACTIVE with an invalid template_attributes pair - missing includes "template_attributes"', async () => {
       const { owner, vendorId, branchAId } = await setupOwnerVendor();
       const offerId = await createOffer(owner, vendorId, {
         brand_id: NO_BRAND_SENTINEL_ID,
       });
-      // Directly write an incomplete template (bypassing the create/PUT
-      // validation) to isolate the GATE's own re-check.
+      // Directly write an invalid template (an unknown key - bypassing the
+      // create/PUT validation) to isolate the GATE's own re-check. (A
+      // template with values left out is valid since 2026-11-16.)
       await prisma.vendorOffer.update({
         where: { id: offerId },
         data: {
           categoryTemplate: 'DRESSES',
-          templateAttributes: { material: 'Cotton' },
+          templateAttributes: { material: 'Cotton', colour_hint: 'x' },
         },
       });
       const variant = await createVariant(owner, vendorId, offerId);

@@ -1,6 +1,10 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
+import {
+  TEST_CLASSIFICATION,
+  postCombination,
+} from './helpers/taxonomy-offers';
 import { AppModule } from './../src/app.module';
 import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
@@ -228,14 +232,16 @@ describe('Sprint 18a - inventory: safety stock, physical count, SALE movements, 
       .post(`/api/v1/vendors/${vendorId}/offers`)
       .set('Authorization', `Bearer ${ownerToken}`)
       .set('Idempotency-Key', unique('offer'))
-      .send({ title_ar: 'منتج', title_en: 'Product' })
+      .send({ title_ar: 'منتج', title_en: 'Product', ...TEST_CLASSIFICATION })
       .expect(201);
-    const variantRes = await request(app.getHttpServer())
-      .post(`/api/v1/vendors/${vendorId}/offers/${offerRes.body.id}/variants`)
-      .set('Authorization', `Bearer ${ownerToken}`)
-      .set('Idempotency-Key', unique('variant'))
-      .send({ seller_sku: unique('sku'), base_price: 10, ...extra })
-      .expect(201);
+    const variantRes = await postCombination(
+      app.getHttpServer(),
+      ownerToken,
+      vendorId,
+      offerRes.body.id,
+      { seller_sku: unique('sku'), base_price: 10, ...extra },
+    );
+    expect(variantRes.status).toBe(201);
     return { offerId: offerRes.body.id, variantId: variantRes.body.id };
   }
 
@@ -262,8 +268,8 @@ describe('Sprint 18a - inventory: safety stock, physical count, SALE movements, 
         vendorId,
         branchAId,
         {
-          colour: 'أحمر',
-          size: 'L',
+          color_code: 'RED', // أحمر
+          size_code: 'L',
         },
       );
       const variant = await prisma.offerVariant.findUniqueOrThrow({
@@ -321,8 +327,12 @@ describe('Sprint 18a - inventory: safety stock, physical count, SALE movements, 
     });
   });
 
-  describe('SALE movements (RB-INV-004/PDR-020) - a plain stock movement, nothing else', () => {
-    it('records StockMovement + AuditLog, decrements stock, but creates no Outbox owner-notification and does not touch lastPhysicalCountAt', async () => {
+  // «إدارة مخزون الفرع v1» (2026-11-22, approved decision): a manual SALE is
+  // refused by the server (a sale is the cashier's alone); taking units out
+  // without a sale is INTERNAL_USE - it notifies the owner like damage/loss
+  // and, like them, never counts as a physical count.
+  describe('manual SALE refused; INTERNAL_USE (taken out, not a sale)', () => {
+    it('a manual SALE is refused and changes nothing; INTERNAL_USE records StockMovement + AuditLog + the owner notice, decrements stock, and does not touch lastPhysicalCountAt', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
       const { variantId } = await createOfferVariant(
@@ -347,20 +357,51 @@ describe('Sprint 18a - inventory: safety stock, physical count, SALE movements, 
         where: { eventType: 'stock_movement.owner_notification' },
       });
 
-      const res = await request(app.getHttpServer())
+      const refused = await request(app.getHttpServer())
         .post(
           `/api/v1/vendors/${vendorId}/branches/${branchAId}/stock/${variantId}/movements`,
         )
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('mv'))
         .send({ reason: 'SALE', quantity_delta: -3, reason_note: 'بيع نقدي' })
+        .expect(400);
+      expect(refused.body.error.code).toBe('MANUAL_SALE_NOT_ALLOWED');
+      expect(
+        (
+          await prisma.branchStock.findUniqueOrThrow({
+            where: {
+              branchId_offerVariantId: {
+                branchId: branchAId,
+                offerVariantId: variantId,
+              },
+            },
+          })
+        ).quantity,
+      ).toBe(10);
+      expect(
+        await prisma.outboxEvent.count({
+          where: { eventType: 'stock_movement.owner_notification' },
+        }),
+      ).toBe(outboxBefore);
+
+      const res = await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/branches/${branchAId}/stock/${variantId}/movements`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('mv'))
+        .send({
+          reason: 'INTERNAL_USE',
+          quantity_delta: -3,
+          reason_note: 'عيّنة للعرض',
+        })
         .expect(201);
       expect(res.body.resulting_quantity).toBe(7);
 
       const outboxAfter = await prisma.outboxEvent.count({
         where: { eventType: 'stock_movement.owner_notification' },
       });
-      expect(outboxAfter).toBe(outboxBefore); // SALE enqueued nothing new
+      expect(outboxAfter).toBe(outboxBefore + 1); // the owner is told
 
       const stock = await prisma.branchStock.findUniqueOrThrow({
         where: {
@@ -373,14 +414,18 @@ describe('Sprint 18a - inventory: safety stock, physical count, SALE movements, 
       expect(stock.lastPhysicalCountAt).not.toBeNull(); // still set from the earlier COUNT_CORRECTION
       const countedAtAfterCountCorrection = stock.lastPhysicalCountAt;
 
-      // A second SALE shortly after must not move lastPhysicalCountAt at all.
+      // A second INTERNAL_USE shortly after must not move lastPhysicalCountAt at all.
       await request(app.getHttpServer())
         .post(
           `/api/v1/vendors/${vendorId}/branches/${branchAId}/stock/${variantId}/movements`,
         )
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('mv'))
-        .send({ reason: 'SALE', quantity_delta: -1, reason_note: 'بيع آخر' })
+        .send({
+          reason: 'INTERNAL_USE',
+          quantity_delta: -1,
+          reason_note: 'هدية',
+        })
         .expect(201);
       const stockAfter = await prisma.branchStock.findUniqueOrThrow({
         where: {
@@ -397,10 +442,10 @@ describe('Sprint 18a - inventory: safety stock, physical count, SALE movements, 
       const auditRows = await prisma.auditLog.findMany({
         where: { entityType: 'StockMovement' },
       });
-      expect(auditRows.length).toBeGreaterThan(0); // AuditLog still written for SALE
+      expect(auditRows.length).toBeGreaterThan(0); // AuditLog written for INTERNAL_USE
     });
 
-    it('rejects a positive quantity_delta for SALE, same as DAMAGE/LOSS', async () => {
+    it('rejects a positive quantity_delta for INTERNAL_USE, same as DAMAGE/LOSS; a SALE is refused whatever its sign', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
       const { variantId } = await createOfferVariant(
@@ -414,12 +459,25 @@ describe('Sprint 18a - inventory: safety stock, physical count, SALE movements, 
         )
         .set('Authorization', `Bearer ${owner}`)
         .set('Idempotency-Key', unique('mv'))
-        .send({ reason: 'SALE', quantity_delta: 3, reason_note: 'لا معنى' })
+        .send({
+          reason: 'INTERNAL_USE',
+          quantity_delta: 3,
+          reason_note: 'لا معنى',
+        })
         .expect(409);
       expect(res.body.error.code).toBe('INVALID_MOVEMENT_DIRECTION');
+      const sale = await request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/branches/${branchAId}/stock/${variantId}/movements`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .set('Idempotency-Key', unique('mv'))
+        .send({ reason: 'SALE', quantity_delta: 3, reason_note: 'لا معنى' })
+        .expect(400);
+      expect(sale.body.error.code).toBe('MANUAL_SALE_NOT_ALLOWED');
     });
 
-    it('under two concurrent SALE scans for the last unit, exactly one succeeds', async () => {
+    it('under two concurrent INTERNAL_USE movements for the last unit, exactly one succeeds', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
       const { variantId } = await createOfferVariant(
@@ -448,9 +506,9 @@ describe('Sprint 18a - inventory: safety stock, physical count, SALE movements, 
           .set('Authorization', `Bearer ${owner}`)
           .set('Idempotency-Key', unique('mv'))
           .send({
-            reason: 'SALE',
+            reason: 'INTERNAL_USE',
             quantity_delta: -1,
-            reason_note: 'بيع متزامن',
+            reason_note: 'إخراج متزامن',
           });
 
       const [a, b] = await Promise.all([attempt(), attempt()]);
@@ -1090,16 +1148,20 @@ describe('Sprint 18a - inventory: safety stock, physical count, SALE movements, 
           .post(`/api/v1/vendors/${vendorId}/offers`)
           .set('Authorization', `Bearer ${owner}`)
           .set('Idempotency-Key', unique('offer'))
-          .send({ title_ar: 'منتج', title_en: 'Product' })
+          .send({
+            title_ar: 'منتج',
+            title_en: 'Product',
+            ...TEST_CLASSIFICATION,
+          })
           .expect(201);
-        const variantRes = await request(app.getHttpServer())
-          .post(
-            `/api/v1/vendors/${vendorId}/offers/${offerRes.body.id}/variants`,
-          )
-          .set('Authorization', `Bearer ${owner}`)
-          .set('Idempotency-Key', unique('variant'))
-          .send({ seller_sku: unique('sku'), base_price: 10 })
-          .expect(201);
+        const variantRes = await postCombination(
+          app.getHttpServer(),
+          owner,
+          vendorId,
+          offerRes.body.id,
+          { seller_sku: unique('sku'), base_price: 10 },
+        );
+        expect(variantRes.status).toBe(201);
         variantIds.push(variantRes.body.id);
       }
       for (const variantId of variantIds) {

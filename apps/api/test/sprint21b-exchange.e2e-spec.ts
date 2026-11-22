@@ -13,6 +13,7 @@ import { HttpExceptionFilter } from './../src/common/filters/http-exception.filt
 import { PrismaService } from './../src/prisma/prisma.service';
 import { ReturnSweepService } from './../src/returns/return-sweep.service';
 import { createUniquePhone } from './helpers/e2e-phone-lanes';
+import { sweepUntil } from './helpers/sweep-until';
 
 type Res = { status: number; body: any };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -1116,7 +1117,15 @@ describe('Sprint 21b - exchange within a real branch (e2e)', () => {
         where: { id: submitted.body.id },
         data: { codeExpiresAt: new Date(Date.now() - 1000) },
       });
-      await sweep.sweepOnce();
+      await sweepUntil(
+        () => sweep.sweepOnce(),
+        async () =>
+          (
+            await prisma.return.findUniqueOrThrow({
+              where: { id: submitted.body.id },
+            })
+          ).status !== 'APPROVED_AWAITING_DROPOFF',
+      );
 
       const expired = await prisma.return.findUniqueOrThrow({
         where: { id: submitted.body.id },
@@ -1824,6 +1833,11 @@ describe('Sprint 21b - exchange within a real branch (e2e)', () => {
         branchId,
         originalVariantId,
       );
+      // TB-1: a distinctive stock figure that must never come back.
+      await prisma.branchStock.updateMany({
+        where: { branchId, offerVariantId: replacementVariantId },
+        data: { quantity: 47 },
+      });
 
       const res = await request(app.getHttpServer())
         .get(
@@ -1831,6 +1845,7 @@ describe('Sprint 21b - exchange within a real branch (e2e)', () => {
         )
         .set('Authorization', `Bearer ${customer}`)
         .expect(200);
+      expect(JSON.stringify(res.body)).not.toMatch(/[^0-9a-f-]47[^0-9a-f-]/i);
 
       const variantIds = res.body.variants.map((v: { id: string }) => v.id);
       expect(variantIds).toContain(replacementVariantId);
@@ -1846,6 +1861,15 @@ describe('Sprint 21b - exchange within a real branch (e2e)', () => {
         );
       expect(branchIdsForReplacement).toContain(branchId);
       expect(branchIdsForReplacement).not.toContain(archivedBranch);
+      // TB-1: which branches have it - never how many.
+      expect(JSON.stringify(res.body)).not.toMatch(/quantity/i);
+      for (const v of res.body.variants as {
+        available_at_branches: Record<string, unknown>[];
+      }[]) {
+        for (const b of v.available_at_branches) {
+          expect(Object.keys(b)).toEqual(['branch_id']);
+        }
+      }
 
       const returnedBranchIds = res.body.branches.map(
         (b: { id: string }) => b.id,

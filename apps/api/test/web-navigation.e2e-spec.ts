@@ -25,6 +25,7 @@ function pageFileFor(href: string, ids: Record<string, string>): string {
 describe('Sprint 13 - web navigation model', () => {
   const VENDOR = 'v-123';
   const BRANCH = 'b-456';
+  const STORE_SLUG = 'demo-store';
 
   it('mobile bottom navigation is exactly: home, discover, cart, orders, account', () => {
     expect(mobileTabs(true).map((t) => t.key)).toEqual([
@@ -57,8 +58,10 @@ describe('Sprint 13 - web navigation model', () => {
       '/',
       '/discovery',
       '/cart',
-      '/orders',
-      '/following',
+      // «طلباتي» lives inside the cart page's orders tab (the old
+      // standalone /orders page redirects there).
+      '/cart?tab=orders',
+      '/profile?tab=following',
     ]);
     expect(desktopLinks().find((l) => l.key === 'following')?.label).toBe(
       'أتابعه',
@@ -78,29 +81,32 @@ describe('Sprint 13 - web navigation model', () => {
   });
 
   describe('workspace switcher', () => {
-    const owner: WorkspaceInfo = {
+    type VendorWorkspace = Extract<WorkspaceInfo, { type: 'vendor' }>;
+    const owner: VendorWorkspace = {
       type: 'vendor',
       vendor_id: VENDOR,
       vendor_legal_name: 'متجر',
+      storefront_slug: STORE_SLUG,
       role: 'OWNER',
       branch_id: null,
       branch_name: null,
       status: 'ACTIVE',
     };
-    const employee: WorkspaceInfo = {
+    const employee: VendorWorkspace = {
       type: 'vendor',
       vendor_id: VENDOR,
       vendor_legal_name: 'متجر',
+      storefront_slug: STORE_SLUG,
       role: 'BRANCH_EMPLOYEE',
       branch_id: BRANCH,
       branch_name: 'الفرع الرئيسي',
       status: 'ACTIVE',
     };
 
-    it('customer shops; owner lands on the store dashboard; employee lands on their own branch orders only', () => {
+    it("customer opens their shopping profile; owner lands on the store dashboard; employee lands on their store's public storefront", () => {
       expect(workspaceEntry({ type: 'customer' })).toMatchObject({
         kind: 'customer',
-        href: '/',
+        href: '/profile',
       });
       expect(workspaceEntry(owner)).toMatchObject({
         kind: 'owner',
@@ -108,13 +114,14 @@ describe('Sprint 13 - web navigation model', () => {
       });
       expect(workspaceEntry(employee)).toMatchObject({
         kind: 'employee',
-        href: `/vendor/${VENDOR}/branches/${BRANCH}/orders`,
+        href: `/store/${STORE_SLUG}`,
       });
     });
 
     it('an employee entry never points at an owner-only page', () => {
       const href = workspaceEntry(employee).href;
       expect(href).not.toBe(`/vendor/${VENDOR}`);
+      expect(href.startsWith('/vendor/')).toBe(false);
       for (const tile of ownerHubTiles(VENDOR)) {
         if (tile.href.endsWith('/orders') && tile.href.includes('/branches/')) {
           continue;
@@ -123,10 +130,27 @@ describe('Sprint 13 - web navigation model', () => {
       }
     });
 
-    it('an employee without an assigned branch is sent to the account page, not an owner page', () => {
-      expect(workspaceEntry({ ...employee, branch_id: null }).href).toBe(
-        '/account',
+    it('an employee without an assigned branch still lands on the storefront, never an owner page', () => {
+      expect(
+        workspaceEntry({ ...employee, branch_id: null, branch_name: null }),
+      ).toMatchObject({ kind: 'employee', href: `/store/${STORE_SLUG}` });
+    });
+
+    it('a suspended employee gets a disabled entry pointing at the account page', () => {
+      expect(
+        workspaceEntry({ ...employee, status: 'SUSPENDED' }),
+      ).toMatchObject({ kind: 'employee', href: '/account', disabled: true });
+    });
+
+    it('every workspace destination is a real page', () => {
+      const hrefs = [{ type: 'customer' } as const, owner, employee].map(
+        (w) => workspaceEntry(w).href,
       );
+      for (const href of hrefs) {
+        expect(
+          existsSync(pageFileFor(href, { vendorId: VENDOR, slug: STORE_SLUG })),
+        ).toBe(true);
+      }
     });
   });
 
@@ -145,6 +169,12 @@ describe('Sprint 13 - web navigation model', () => {
         `/vendor/${VENDOR}/verification`,
         `/vendor/${VENDOR}/return-policy`,
         `/vendor/${VENDOR}/returns/redeem`,
+        // PD-3: the owner's read-only reviews page.
+        `/vendor/${VENDOR}/reviews`,
+        // Sprint 25 performance, back as a management card.
+        `/vendor/${VENDOR}/performance`,
+        // PD-5.3: the owner's own sales page.
+        `/vendor/${VENDOR}/sales`,
       ]);
     });
 
@@ -192,6 +222,7 @@ describe('Sprint 13 - web navigation model', () => {
       // Sprint 23: one more - the review-report queue.
       // Sprint 25: three more - audit logs, feature flags, vendor
       // performance (all PLATFORM_ADMIN only).
+      // PD-4: one more - size guides (PLATFORM_ADMIN only).
       expect(adminTiles('PLATFORM_ADMIN').map((t) => t.href)).toEqual([
         '/admin/verification',
         '/admin/vendors',
@@ -205,6 +236,11 @@ describe('Sprint 13 - web navigation model', () => {
         '/admin/audit-logs',
         '/admin/feature-flags',
         '/admin/vendors/performance',
+        '/admin/size-guides',
+        // PD-5b: platform collections.
+        '/admin/collections',
+        // TB-12.3: platform alert recipients (PLATFORM_ADMIN only).
+        '/admin/alert-recipients',
       ]);
     });
 

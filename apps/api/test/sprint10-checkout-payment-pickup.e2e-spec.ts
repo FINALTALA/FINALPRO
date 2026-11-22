@@ -1434,7 +1434,11 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${accepted.session_token}`)
         .expect(200);
       expect(list.body).toHaveLength(1);
-      expect(list.body[0].pickup_code).toBe(orderA.pickupCode);
+      // 2026-11-22 (approved policy): the store never receives the raw
+      // pickup code - only the order's own shopper (checkout /
+      // customers/me/orders). The hand-over still checks it server-side.
+      expect(list.body[0]).not.toHaveProperty('pickup_code');
+      expect(JSON.stringify(list.body)).not.toContain(orderA.pickupCode);
       expect(list.body[0].customer_phone).toBeTruthy();
       expect(list.body[0]).not.toHaveProperty('address');
       expect(list.body[0]).not.toHaveProperty('customer_address');
@@ -1475,7 +1479,6 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
           'payment_method',
           'customer_name',
           'customer_phone',
-          'pickup_code',
           'has_open_not_received_report',
           'amount_due',
           'cod_collected_amount',
@@ -1521,7 +1524,7 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
       expect(res.status).toBe(403);
     });
 
-    it('pickup_code is null for a DELIVERY order in the staff list', async () => {
+    it('the staff list carries no pickup_code at all (here a DELIVERY order)', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
       const variantId = await createOfferWithStock(vendorId, branchAId, 10, 5);
@@ -1571,7 +1574,8 @@ describe('Sprint 10 - checkout, sandbox payment, pay-at-pickup (e2e)', () => {
         .set('Authorization', `Bearer ${owner}`)
         .expect(200);
       expect(list.body[0].fulfilment_method).toBe('DELIVERY');
-      expect(list.body[0].pickup_code).toBeNull();
+      // 2026-11-22: no store DTO has the field any more (was null here)
+      expect(list.body[0]).not.toHaveProperty('pickup_code');
     });
   });
 

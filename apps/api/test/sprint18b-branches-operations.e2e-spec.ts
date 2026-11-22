@@ -1,6 +1,10 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
+import {
+  TEST_CLASSIFICATION,
+  postCombination,
+} from './helpers/taxonomy-offers';
 import { AppModule } from './../src/app.module';
 import { AuditLogService } from './../src/audit/audit-log.service';
 import { SmsService } from './../src/auth/sms.service';
@@ -198,14 +202,16 @@ describe('Sprint 18b - branch add/activate/archive, hours, closures, staff (e2e)
       .post(`/api/v1/vendors/${vendorId}/offers`)
       .set('Authorization', `Bearer ${ownerToken}`)
       .set('Idempotency-Key', unique('offer'))
-      .send({ title_ar: 'منتج', title_en: 'Product' })
+      .send({ title_ar: 'منتج', title_en: 'Product', ...TEST_CLASSIFICATION })
       .expect(201);
-    const variantRes = await request(app.getHttpServer())
-      .post(`/api/v1/vendors/${vendorId}/offers/${offerRes.body.id}/variants`)
-      .set('Authorization', `Bearer ${ownerToken}`)
-      .set('Idempotency-Key', unique('variant'))
-      .send({ seller_sku: unique('sku'), base_price: 10 })
-      .expect(201);
+    const variantRes = await postCombination(
+      app.getHttpServer(),
+      ownerToken,
+      vendorId,
+      offerRes.body.id,
+      { seller_sku: unique('sku'), base_price: 10 },
+    );
+    expect(variantRes.status).toBe(201);
     // Direct Prisma write, not the real publish-gate endpoint - these
     // tests are about branch-level eligibility (verificationStatus/
     // archivedAt/closures), not the publish gate's own completeness
@@ -1396,7 +1402,9 @@ describe('Sprint 18b - branch add/activate/archive, hours, closures, staff (e2e)
         )
         .set('Authorization', `Bearer ${employeeToken}`)
         .set('Idempotency-Key', unique('mv'))
-        .send({ reason: 'SALE', quantity_delta: -1, reason_note: 'بيع' })
+        // 2026-11-22: a manual SALE is refused (the cashier's alone) - the same
+        // decrement by an employee is an internal use
+        .send({ reason: 'INTERNAL_USE', quantity_delta: -1, reason_note: 'إخراج' })
         .expect(201);
 
       await request(app.getHttpServer())
@@ -1412,7 +1420,7 @@ describe('Sprint 18b - branch add/activate/archive, hours, closures, staff (e2e)
         )
         .set('Authorization', `Bearer ${employeeToken}`)
         .set('Idempotency-Key', unique('mv'))
-        .send({ reason: 'SALE', quantity_delta: -1, reason_note: 'بيع آخر' })
+        .send({ reason: 'INTERNAL_USE', quantity_delta: -1, reason_note: 'إخراج آخر' })
         .expect(403);
       expect(after.body.error.code).toBe('STAFF_SUSPENDED');
     });

@@ -1051,7 +1051,7 @@ describe('Sprint 11 - Orders UI, fulfilment loop, notification dispatch (e2e)', 
           'payment_method',
           'customer_name',
           'customer_phone',
-          'pickup_code',
+          // 2026-11-22: no raw pickup code for the store (approved policy)
           'has_open_not_received_report',
           'amount_due',
           'cod_collected_amount',

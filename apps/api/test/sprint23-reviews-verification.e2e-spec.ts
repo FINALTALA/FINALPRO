@@ -340,7 +340,10 @@ describe('Sprint 23 - reviews and the verification badge (e2e)', () => {
       .patch(`/api/v1/admin/reviews/${reviewId}/decision`)
       .set('Authorization', `Bearer ${token}`)
       .set('Idempotency-Key', idemKey)
-      .send({ decision });
+      // PD-3: an uphold must carry the administrator's reason.
+      .send(
+        decision === 'uphold' ? { decision, reason: 'مخالف' } : { decision },
+      );
 
   // ------------------------------------------------------------
   // Eligibility
@@ -1165,6 +1168,9 @@ describe('Sprint 23 - reviews and the verification badge (e2e)', () => {
           target_type: 'STORE',
           rating: 5,
           body: 'باسم ظاهر',
+          // PD-3 (decision 4): the name is shown only when the author
+          // chooses "first name + initial"; the default is anonymous.
+          author_display: 'FIRST_NAME_INITIAL',
         }),
       );
       expect(created.status).toBe(201);

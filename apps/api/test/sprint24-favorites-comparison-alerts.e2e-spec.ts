@@ -1,6 +1,10 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
+import {
+  TEST_CLASSIFICATION,
+  postCombination,
+} from './helpers/taxonomy-offers';
 import { AppModule } from './../src/app.module';
 import { SmsService } from './../src/auth/sms.service';
 import { lockOffersWideForRestock } from './../src/checkout/stock-lock.util';
@@ -12,6 +16,7 @@ import { DiscountActivationSweepService } from './../src/offers/discount-activat
 import { OutboxRelayService } from './../src/outbox/outbox-relay.service';
 import { PrismaService } from './../src/prisma/prisma.service';
 import { createUniquePhone } from './helpers/e2e-phone-lanes';
+import { sweepUntil } from './helpers/sweep-until';
 
 type Res = { status: number; body: any };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -260,20 +265,26 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
         title_ar: unique('عنوان'),
         title_en: unique('Title'),
         brand_id: NO_BRAND_SENTINEL_ID,
+        ...TEST_CLASSIFICATION,
       })
       .expect(201);
-    const variantRes = await request(http())
-      .post(`/api/v1/vendors/${vendorId}/offers/${offerRes.body.id}/variants`)
-      .set('Authorization', `Bearer ${ownerToken}`)
-      .set('Idempotency-Key', unique('variant'))
-      .send({
+    // Sprint 27: a combination carrying the identifier goes through the
+    // same exact-match proposal + match-confirmation path as before.
+    const variantRes = await postCombination(
+      http(),
+      ownerToken,
+      vendorId,
+      offerRes.body.id,
+      {
         seller_sku: unique('sku'),
         base_price: basePrice,
         sale_price: salePrice,
         identifier_type: 'GTIN',
         identifier_value: identifierValue,
-      })
-      .expect(201);
+      },
+    );
+    expect(variantRes.status).toBe(201);
+    expect(variantRes.body.match_proposal_status).toBe('PENDING');
     await request(http())
       .post(
         `/api/v1/vendors/${vendorId}/offers/${offerRes.body.id}/variants/${variantRes.body.id}/match-confirmation`,
@@ -1210,6 +1221,60 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
       expect(notifications[0].targetId).toBe(variantId);
     });
 
+    it('an exact colour × size availability subscription is independent of favourites, is consumed once, and creates a CUSTOMER notification only after restock', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const variantId = await createOfferWithStock(vendorId, branchId, 50, 0);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+
+      await request(http())
+        .post(`/api/v1/customers/me/availability-subscriptions/${variantId}`)
+        .set('Authorization', `Bearer ${customer}`)
+        .expect(201)
+        .expect({ subscribed: true });
+      // Idempotent duplicate: exactly one durable request.
+      await request(http())
+        .post(`/api/v1/customers/me/availability-subscriptions/${variantId}`)
+        .set('Authorization', `Bearer ${customer}`)
+        .expect(201);
+      expect(
+        await prisma.variantAvailabilitySubscription.count({
+          where: { offerVariantId: variantId },
+        }),
+      ).toBe(1);
+
+      await addStock(owner, vendorId, branchId, variantId, 5);
+      const userId = await userIdForToken(customer);
+      await expectNotificationEventually(
+        {
+          recipientUserId: userId,
+          type: 'VARIANT_BACK_IN_STOCK',
+          audience: 'CUSTOMER',
+        },
+        1,
+      );
+      expect(await prisma.favorite.count({ where: { userId } })).toBe(0);
+      expect(
+        await prisma.variantAvailabilitySubscription.count({
+          where: { userId, offerVariantId: variantId, active: true },
+        }),
+      ).toBe(0);
+    });
+
+    it('rejects an availability subscription when that exact option is already in stock', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const variantId = await createOfferWithStock(vendorId, branchId, 50, 3);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      await request(http())
+        .post(`/api/v1/customers/me/availability-subscriptions/${variantId}`)
+        .set('Authorization', `Bearer ${customer}`)
+        .expect(409)
+        .expect((response) =>
+          expect(response.body.error.code).toBe('VARIANT_AVAILABLE'),
+        );
+    });
+
     it('restocking branch A while branch B of the SAME offer already has stock never fires (no offer-wide 0 -> positive crossing)', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId, branchId: branchA } =
@@ -1268,6 +1333,84 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
           where: { recipientUserId: userId, type: 'FAVORITE_BACK_IN_STOCK' },
         }),
       ).toBe(0);
+    });
+
+    describe('back in stock only for a product shoppers can buy now (ACTIVE)', () => {
+      /** A favourited version at 0, its product moved to `status`, then restocked 0 -> 5. */
+      async function restockAs(
+        status: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED',
+        optOut = false,
+      ) {
+        const owner = await signup(uniquePhone(), 'a-strong-password');
+        const { vendorId, branchId } = await createVendorWithBranch(owner);
+        const variantId = await createOfferWithStock(vendorId, branchId, 50, 0);
+        const customer = await signup(uniquePhone(), 'a-strong-password');
+        await request(http())
+          .post('/api/v1/favorites')
+          .set('Authorization', `Bearer ${customer}`)
+          .send({ target_type: 'OFFER', offer_variant_id: variantId })
+          .expect(201);
+        if (optOut) {
+          await request(http())
+            .patch('/api/v1/customers/me/notification-preferences')
+            .set('Authorization', `Bearer ${customer}`)
+            .send({ alert_type: 'BACK_IN_STOCK', enabled: false })
+            .expect(200);
+        }
+        const offerId = (
+          await prisma.offerVariant.findUniqueOrThrow({
+            where: { id: variantId },
+          })
+        ).vendorOfferId;
+        if (status === 'INACTIVE') {
+          await request(http())
+            .patch(`/api/v1/vendors/${vendorId}/offers/${offerId}/status`)
+            .set('Authorization', `Bearer ${owner}`)
+            .send({ status: 'INACTIVE' })
+            .expect(200);
+        } else if (status === 'ARCHIVED') {
+          await request(http())
+            .post(`/api/v1/vendors/${vendorId}/offers/${offerId}/archive`)
+            .set('Authorization', `Bearer ${owner}`)
+            .expect(200);
+        }
+        expect(
+          (
+            await prisma.vendorOffer.findUniqueOrThrow({
+              where: { id: offerId },
+            })
+          ).status,
+        ).toBe(status);
+        await addStock(owner, vendorId, branchId, variantId, 5);
+        await drainOutbox();
+        const userId = await userIdForToken(customer);
+        const events = await prisma.outboxEvent.count({
+          where: {
+            eventType: 'favorite.back_in_stock',
+            payload: { path: ['offer_variant_id'], equals: variantId },
+          },
+        });
+        const notes = await prisma.notification.count({
+          where: { recipientUserId: userId, type: 'FAVORITE_BACK_IN_STOCK' },
+        });
+        return { events, notes };
+      }
+
+      it('ACTIVE: one outbox event and one notification, as before', async () => {
+        expect(await restockAs('ACTIVE')).toEqual({ events: 1, notes: 1 });
+      });
+      it('INACTIVE: no outbox event and no notification', async () => {
+        expect(await restockAs('INACTIVE')).toEqual({ events: 0, notes: 0 });
+      });
+      it('ARCHIVED: no outbox event and no notification', async () => {
+        expect(await restockAs('ARCHIVED')).toEqual({ events: 0, notes: 0 });
+      });
+      it('ACTIVE with the alert turned off: the event exists, the opted-out customer gets nothing (preference unchanged)', async () => {
+        expect(await restockAs('ACTIVE', true)).toEqual({
+          events: 1,
+          notes: 0,
+        });
+      });
     });
 
     it('NO PHANTOM ROWS: a restock with sibling branches read for BEFORE/AFTER never creates a branch_stock row in a sibling that never sold this offer', async () => {
@@ -1725,8 +1868,13 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
       expect(soldOutStock.quantity).toBe(1);
       expect(availableStock.quantity).toBe(10);
 
-      await drainOutbox();
       const userId = await userIdForToken(customer);
+      // The relay's own background poll may be mid-tick (see
+      // expectNotificationEventually) - wait for it like every other alert test here.
+      await expectNotificationEventually(
+        { recipientUserId: userId, type: 'FAVORITE_BACK_IN_STOCK' },
+        1,
+      );
       const alerts = await prisma.notification.findMany({
         where: { recipientUserId: userId, type: 'FAVORITE_BACK_IN_STOCK' },
       });
@@ -2026,11 +2174,12 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
         .expect(201);
 
       await request(http())
-        .put(
-          `/api/v1/vendors/${vendorId}/offers/${eligible.offerId}/variants/${eligible.offerVariantId}`,
-        )
+        .put(`/api/v1/vendors/${vendorId}/offers/${eligible.offerId}/price`)
         .set('Authorization', `Bearer ${owner}`)
-        .send({ sale_price: 70 })
+        .send({
+          base_price: 100,
+          sale_price: 70,
+        })
         .expect(200);
 
       const userId = await userIdForToken(customer);
@@ -2071,11 +2220,10 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
       // Scheduled for the FUTURE at PUT time - the controller's own
       // immediate check sees "not active yet" and must NOT fire here.
       await request(http())
-        .put(
-          `/api/v1/vendors/${vendorId}/offers/${eligible.offerId}/variants/${eligible.offerVariantId}`,
-        )
+        .put(`/api/v1/vendors/${vendorId}/offers/${eligible.offerId}/price`)
         .set('Authorization', `Bearer ${owner}`)
         .send({
+          base_price: 100,
           discount_percent: 20,
           discount_start_at: new Date(
             Date.now() + 60 * 60 * 1000,
@@ -2100,7 +2248,13 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
         where: { id: eligible.offerVariantId },
         data: { discountStartAt: new Date(Date.now() - 60 * 1000) },
       });
-      await sweep.sweepOnce();
+      await sweepUntil(
+        () => sweep.sweepOnce(),
+        async () =>
+          (await prisma.discountActivationNotice.count({
+            where: { offerVariantId: eligible.offerVariantId },
+          })) > 0,
+      );
 
       await expectNotificationEventually(
         { recipientUserId: userId, type: 'FAVORITE_PRICE_DROP' },
@@ -2142,11 +2296,12 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
         .expect(200);
 
       await request(http())
-        .put(
-          `/api/v1/vendors/${vendorId}/offers/${eligible.offerId}/variants/${eligible.offerVariantId}`,
-        )
+        .put(`/api/v1/vendors/${vendorId}/offers/${eligible.offerId}/price`)
         .set('Authorization', `Bearer ${owner}`)
-        .send({ sale_price: 70 })
+        .send({
+          base_price: 100,
+          sale_price: 70,
+        })
         .expect(200);
       await drainOutbox();
 
