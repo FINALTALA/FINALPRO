@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Fragment, ReactNode, useEffect, useState } from "react";
+import { ElementType, Fragment, ReactNode, useEffect, useState } from "react";
+import Reveal from "@/components/Reveal";
 import { ExpandIcon, HeartIcon, StarIcon, WhatsAppIcon } from "@/components/Icons";
 import ProductCard from "@/components/ProductCard";
 import ProductReviews from "@/components/ProductReviews";
@@ -243,6 +244,8 @@ interface DraftPreviewDto {
 
 export default function ProductDetailView({ source }: { source: ProductDetailSource }) {
   const live = source.mode === "live";
+  // The gallery's scroll-in reveal is for the shopper's page only.
+  const GalleryWrap: ElementType = live ? Reveal : "div";
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -651,7 +654,9 @@ export default function ProductDetailView({ source }: { source: ProductDetailSou
         <div className="pdp-layout">
           {/* Gallery + reviews (the wide column). */}
           <div className="pdp-main">
-            <div className="pdp-gallery">
+            {/* Only the gallery reveals (live page only - the owner's preview stays still);
+                the cart and the details beside it never move. */}
+            <GalleryWrap className="pdp-gallery">
               {images.length > 1 && (
                 <div className="pdp-thumbs" role="tablist" aria-label={t("pdp.images")}>
                   {images.map((src, i) => (
@@ -670,7 +675,7 @@ export default function ProductDetailView({ source }: { source: ProductDetailSou
                 {discountPercent !== null && <span className="pdp-image-badge" dir="ltr">-{discountPercent}%</span>}
                 {representative && <span className="pdp-image-note">{t("pdp.representative")}</span>}
               </button>
-            </div>
+            </GalleryWrap>
 
             {live && canonicalId && (
               <ProductReviews canonicalId={canonicalId} storeSlug={slug ?? ""} onAggregate={setRating} />

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import BackToOrigin from "@/components/BackToOrigin";
+import Reveal from "@/components/Reveal";
 import SafeImage from "@/components/SafeImage";
 import StoreCircle from "@/components/StoreCircle";
 import { BagIcon, ClipboardIcon, HeartIcon, ManagementTileIcon, StarIcon, StoreManageIcon } from "@/components/Icons";
@@ -557,7 +558,7 @@ export default function ComparisonPage() {
             <button type="button" className="button-link" onClick={() => setFilters(NO_FILTERS)}>{t("cmp.clear_filters")}</button>
           </div>
         ) : (
-          <div className={`compare-grid${current ? "" : " is-stale"}`} aria-busy={!current}>
+          <Reveal className={`compare-grid${current ? "" : " is-stale"}`} aria-busy={!current}>
             {data.stores.map((s) => {
               const href = `/store/${s.vendor_slug}/products/${s.offer_id}`;
               const storeSizes = s.sizes.map((size) => ({ code: size, label: sizeLabel.get(size) ?? size }));
@@ -613,7 +614,7 @@ export default function ComparisonPage() {
                 </div>
               );
             })}
-          </div>
+          </Reveal>
         )}
           </section>
         </div>

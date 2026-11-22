@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import ProductCard from "@/components/ProductCard";
+import Reveal from "@/components/Reveal";
 import SafeImage from "@/components/SafeImage";
 import { EmptyState, ErrorBanner, SkeletonGrid } from "@/components/States";
 import { useFetch } from "@/lib/useFetch";
@@ -115,7 +116,7 @@ function DiscoveryInner() {
         <CollectionLinks />
 
         {q && stores.data && stores.data.items.length > 0 && (
-          <>
+          <Reveal>
             <div className="section-heading">
               <h2>{t("disc.stores")}</h2>
             </div>
@@ -133,7 +134,7 @@ function DiscoveryInner() {
                 </Link>
               ))}
             </div>
-          </>
+          </Reveal>
         )}
 
         {q && (
@@ -156,11 +157,11 @@ function DiscoveryInner() {
 
         {products.data && products.data.items.length > 0 && (
           <>
-            <div className="product-grid">
+            <Reveal className="product-grid">
               {products.data.items.map((card) => (
                 <ProductCard key={card.canonical_product_id} card={card} />
               ))}
-            </div>
+            </Reveal>
 
             {totalPages > 1 && (
               <div style={{ display: "flex", gap: 8, justifyContent: "center", alignItems: "center", marginTop: 24 }}>

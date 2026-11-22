@@ -944,6 +944,38 @@
 }
 .women-product-card-cart:hover { border-color: var(--women-wine); color: var(--women-wine); }
 .women-product-card-cart svg { width: 15px; height: 15px; }
+/* Optional "watch it in a reel" action (ProductCard reelAction): a quiet
+   text link in the action row - one text line, so the row (and the card)
+   keeps its height. */
+.women-product-card-reel {
+  display: inline-flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 4px;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: #2B2526;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: color .18s ease;
+}
+.women-product-card-reel span {
+  overflow: hidden;
+  text-decoration: underline;
+  text-decoration-color: rgba(43, 37, 38, .28);
+  text-underline-offset: 3px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.women-product-card-reel svg { width: 10px; height: 10px; flex: 0 0 auto; fill: currentColor; }
+.women-product-card-reel:hover { color: var(--women-wine); }
+.women-product-card-reel:hover span { text-decoration-color: currentColor; }
+.women-product-card-reel:focus-visible { outline: 2px solid #2B2526; outline-offset: 2px; border-radius: 4px; }
 .women-category-sidebar {
   position: sticky;
   top: 16px;

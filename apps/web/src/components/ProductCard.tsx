@@ -57,6 +57,14 @@ interface ProductCardProps {
   href?: string;
   /** Extra badges drawn over the image (women presentation). */
   overlay?: ReactNode;
+  /** Women presentation: a piece with no VIA product behind it yet. The
+   *  card links nowhere and shows this label where the cart control goes -
+   *  nothing on it pretends to be shoppable. */
+  unavailableLabel?: string;
+  /** Optional, off by default (women presentation): a small "watch it in a
+   *  reel" action in the card's action row, for a product that has its own
+   *  reel. It only calls `onOpen` - it never follows the card's links. */
+  reelAction?: { label: string; onOpen: () => void };
 }
 
 export default function ProductCard({
@@ -69,6 +77,8 @@ export default function ProductCard({
   navigationMode = "compare",
   href,
   overlay,
+  unavailableLabel,
+  reelAction,
 }: ProductCardProps) {
   const lang = useLang();
   const t = (key: string) => translate(lang, key);
@@ -94,18 +104,27 @@ export default function ProductCard({
     n: discountStores,
     stores: t(card.discounted_store_count === 1 ? "shop.store_word_one" : "shop.store_word_many"),
   });
+  // The card's own links - plain text for a piece that is not in VIA yet.
+  const linkOrSpan = (className: string, children: ReactNode, label?: string) =>
+    unavailableLabel ? (
+      <span className={className}>{children}</span>
+    ) : (
+      <Link href={openHref} className={className} aria-label={label}>{children}</Link>
+    );
 
   if (presentation === "women") {
     return (
       <article className="product-card women-product-card" data-testid="product-card" data-product-id={card.canonical_product_id}>
         <div className="product-card-media women-product-card-media">
-          <Link href={openHref} className="women-product-card-image" aria-label={name}>
-            {card.image_url ? (
+          {linkOrSpan(
+            "women-product-card-image",
+            card.image_url ? (
               <SafeImage src={card.image_url} alt={name} loading="lazy" />
             ) : (
               <span className="product-card-noimage">{t("shop.no_image")}</span>
-            )}
-          </Link>
+            ),
+            name,
+          )}
           {card.bestseller && <BestsellerBadge mark={card.bestseller} />}
 
           {card.store_count > 0 && <Link
@@ -127,18 +146,18 @@ export default function ProductCard({
             </svg>
           </span>
 
-          <button
+          {onToggleFavorite && <button
             className={`women-product-card-favorite${favorited ? " is-favorited" : ""}`}
             type="button"
             aria-label={favorited ? t("shop.fav_remove") : t("shop.fav_add")}
             aria-pressed={favorited}
             disabled={favoritePending}
-            onClick={() => onToggleFavorite?.(card)}
+            onClick={() => onToggleFavorite(card)}
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M20.8 4.7a5.5 5.5 0 0 0-7.8 0L12 5.8l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8l1.1 1.1L12 21l7.8-7.4 1.1-1.1a5.5 5.5 0 0 0-.1-7.8Z" />
             </svg>
-          </button>
+          </button>}
 
           {card.has_discount && (
             <span className="women-product-card-discount" title={discountTitle}>
@@ -173,9 +192,7 @@ export default function ProductCard({
         </div>
 
         <div className="product-card-body women-product-card-body">
-          <Link href={openHref} className="product-card-name women-product-card-name">
-            {name}
-          </Link>
+          {linkOrSpan("product-card-name women-product-card-name", name)}
           <div className="women-product-card-price-row">
             {card.lowest_price ? <span className="product-card-price women-product-card-price">₪ {displayPrice}</span> : <span />}
             <span
@@ -196,18 +213,37 @@ export default function ProductCard({
               {card.sizes.slice(0, 5).join(" · ")}
               {card.sizes.length > 5 ? ` +${card.sizes.length - 5}` : ""}
             </span>
-            <Link
-              href={openHref}
-              className="women-product-card-cart"
-              aria-label={t("shop.pick_size_add")}
-              title={t("shop.pick_size_add")}
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 4h2.5l2 11h10l2-8H6.5" />
-                <circle cx="9.5" cy="19" r="1.4" />
-                <circle cx="16.5" cy="19" r="1.4" />
-              </svg>
-            </Link>
+            {reelAction && (
+              <button
+                type="button"
+                className="women-product-card-reel"
+                dir="auto"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  reelAction.onOpen();
+                }}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z" /></svg>
+                <span>{reelAction.label}</span>
+              </button>
+            )}
+            {unavailableLabel ? (
+              <span className="women-product-card-unavailable">{unavailableLabel}</span>
+            ) : (
+              <Link
+                href={openHref}
+                className="women-product-card-cart"
+                aria-label={t("shop.pick_size_add")}
+                title={t("shop.pick_size_add")}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 4h2.5l2 11h10l2-8H6.5" />
+                  <circle cx="9.5" cy="19" r="1.4" />
+                  <circle cx="16.5" cy="19" r="1.4" />
+                </svg>
+              </Link>
+            )}
           </div>
         </div>
       </article>

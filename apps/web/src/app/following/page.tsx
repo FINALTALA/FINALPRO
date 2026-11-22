@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import ProductCard from "@/components/ProductCard";
+import Reveal from "@/components/Reveal";
 import SafeImage from "@/components/SafeImage";
 import { EmptyState, ErrorBanner, SkeletonGrid } from "@/components/States";
 import { clearSession } from "@/lib/session";
@@ -105,11 +106,11 @@ export default function FollowingPage() {
               />
             )}
             {feed.data && feed.data.items.length > 0 && (
-              <div className="product-grid">
+              <Reveal className="product-grid">
                 {feed.data.items.map((card) => (
                   <ProductCard key={card.canonical_product_id} card={card} />
                 ))}
-              </div>
+              </Reveal>
             )}
           </>
         )}
