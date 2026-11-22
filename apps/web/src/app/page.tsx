@@ -2,15 +2,17 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import ProductCard from "@/components/ProductCard";
 import StoreCircle from "@/components/StoreCircle";
 import Footer from "@/components/Footer";
+import HomeHero from "@/components/home-hero/HomeHero";
+import HomeCategories from "@/components/home-categories/HomeCategories";
+import HomeProducts from "@/components/home-products/HomeProducts";
 import { EmptyState, ErrorBanner, SkeletonGrid } from "@/components/States";
 import { useFetch } from "@/lib/useFetch";
-import { CardsPageDto, StoreSummaryDto } from "@/lib/types";
+import { StoreSummaryDto } from "@/lib/types";
 import { BagIcon, CompassIcon, UserIcon } from "@/components/Icons";
-import styles from "./home-via.module.css";
 import CollectionShowcase from "@/components/CollectionShowcase";
+import styles from "./home-page.module.css";
 
 const INFO_BLOCKS = [
   {
@@ -30,21 +32,7 @@ const INFO_BLOCKS = [
   },
 ];
 
-const FEATURED_CATEGORIES = [
-  { key: "women", label: "نساء", image: "/images/home-category-women.webp" },
-  { key: "men", label: "رجال", image: "/images/home-category-men.webp" },
-  { key: "kids", label: "أطفال", image: "/images/home-category-kids.webp" },
-  { key: "accessories", label: "إكسسوارات", image: "/images/category-accessories.png" },
-  { key: "watches", label: "ساعات", image: "/images/category-watches.png" },
-  { key: "shoes", label: "أحذية", image: "/images/category-shoes.png" },
-] as const;
-
-function segmentHref(key: string): string {
-  return key === "women" ? "/women" : `/discovery?segment=${key}`;
-}
-
 export default function Home() {
-  const products = useFetch<CardsPageDto>("/discovery/all?page_size=4");
   const stores = useFetch<{ items: StoreSummaryDto[] }> ("/discovery/stores?limit=12");
   const featuredStores = stores.data?.items.slice(0, 3) ?? [];
 
@@ -59,61 +47,12 @@ export default function Home() {
           </Link>
         ))}
       </nav>*/}  {/*this was a nav in the top for women and men we thought we dont want it but may change our mindes later */}
-      <section className={styles.hero} aria-labelledby="home-hero-title">
-        {/* TODO: replace this existing local image with the approved VIA family
-            campaign asset once it is added to public/images. Product cards
-            below continue to come from the live API. */}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img className={styles.heroImage} src="/images/via-hero.png" alt="" fetchPriority="high" width={1248} height={848} />
-        <Image
-          className={styles.heroWordmark}
-          src="/images/Via_transparent.svg"
-          alt=""
-          width={800}
-          height={379}
-          priority
-        />
-        <div className={styles.heroContent}>
-          <div className={styles.heroText}>
-            <p className={styles.heroKicker}>✧&nbsp; تسوّق محلي، بخيارات أوضح &nbsp;✧</p>
-            <h1 id="home-hero-title" className={styles.heroTitle}>
-              <span className={styles.heroTitleLine}>قارني، اختاري،</span><br />
-              <span className={styles.heroTitleLine}>واطلبي بثقة.</span>
-            </h1>
-            <p className={styles.heroCopy}>
-              اكتشفي أزياء المتاجر المحلية في مكان واحد، وقارني الأسعار والتفاصيل بسهولة.
-            </p>
-          </div>
-          <div className={styles.heroActions}>
-            <Link href="/discovery" className={styles.heroPrimary}>
-              ابدئي المقارنة
-            </Link>
-            <a href="#how-to-compare" className={styles.heroSecondary}>كيف تعمل المقارنة؟</a>
-          </div>
-        </div>
-      </section>
+      <HomeHero />
 
-      <div className={`wide-shell ${styles.categoryIntro}`}>
-        <div className={`section-heading ${styles.categoryHeading}`}>
-          <div><h2>لكل ذوق، عالمه</h2><p>ستة فئات رئيسية، تجربة شراء واحدة ومتنوعة.</p></div>
-        </div>
-        <section className={styles.categoryCarousel} aria-label="تسوّقي حسب الفئة">
-          <div className={styles.categoryTrack}>
-            {FEATURED_CATEGORIES.map((category) => (
-              <Link
-                key={category.key}
-                href={segmentHref(category.key)}
-                className={styles.categoryCircle}
-                aria-label={`استكشفي ${category.label}`}
-              >
-                <span className={styles.categoryImage}>
-                  <Image src={category.image} alt="" fill sizes="(max-width: 760px) 26vw, 150px" />
-                </span>
-                <span className={styles.categoryLabel}>{category.label}</span>
-              </Link>
-            ))}
-          </div>
-        </section>
+      {/* id: the hero CTA's scroll target. */}
+      <div id="shop-by-category" className={`wide-shell ${styles.categoryIntro}`}>
+        <HomeCategories />
+        <HomeProducts />
 
         {/* Static promo banner - placeholder pending a real CMS (FR-CMS-001, Phase 2). */}
         <div className={`${styles.promoFrame} ${styles.trendingPromoFrame}`}>
@@ -144,30 +83,8 @@ export default function Home() {
           </Link>
         </div>
 
-        {/* PD-5b.4: the platform's live editorial collections (none -> nothing). */}
+        {/* PD-5b: the platform's live home collections, right after the banners. */}
         <CollectionShowcase placement="HOME" />
-
-        <div className="section-heading">
-          <div><h2>وصل حديثاً</h2><p>مختارات من المتاجر، مع أقل سعر متاح لكل منتج.</p></div>
-          <Link href="/discovery" className="button-link">
-            عرض الكل
-          </Link>
-        </div>
-        {products.error && <><ErrorBanner message={products.error} /><button className="button button-secondary" onClick={() => window.location.reload()}>إعادة المحاولة</button></>}
-        {products.loading && <SkeletonGrid count={4} />}
-        {products.data && products.data.items.length === 0 && (
-          <EmptyState
-            title="لا توجد منتجات متاحة للمقارنة بعد"
-            message="ستظهر هنا المنتجات فور نشر المتاجر لعروضها."
-          />
-        )}
-        {products.data && products.data.items.length > 0 && (
-          <div className="product-grid">
-            {products.data.items.map((card) => (
-              <ProductCard key={card.canonical_product_id} card={card} editorial />
-            ))}
-          </div>
-        )}
 
         <div className="info-row">
           {INFO_BLOCKS.map((b) => (

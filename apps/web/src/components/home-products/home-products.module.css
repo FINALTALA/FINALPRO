@@ -1,0 +1,231 @@
+/* =========================================================================
+   Homepage - Discover products. Full width (inside the page gutters): a
+   heading, one single-line filter bar in the VIA Advertising style (plain
+   text tabs, a fine underline for the active one, one divider), then a grid
+   of the Women page's ProductCard.
+   Font families need !important only to win over `.home *`.
+   ========================================================================= */
+
+.root {
+  --hp-ink: #1c1917;            /* VIA Advertising's stone palette */
+  --hp-muted: #57534e;
+  --hp-quiet: #a8a29e;
+  --hp-line: rgba(231, 229, 228, .9);
+  --hp-gutter: clamp(16px, 3vw, 48px);
+  /* Break out of the homepage's centred column to the page gutters
+     (.home clips the horizontal overflow). */
+  width: 100vw;
+  margin-inline: calc(50% - 50vw);
+  /* Little top space: Shop by Category above already ends with its own. */
+  padding: clamp(4px, 1vw, 16px) var(--hp-gutter) clamp(36px, 4vw, 64px);
+  color: var(--hp-ink);
+}
+.root.root * { font-family: inherit !important; }
+.root[data-lang="ar"] { font-family: "Finalpro Noto", "Segoe UI", sans-serif; }
+.root[data-lang="en"] { font-family: var(--hp-en-text), "Inter", sans-serif; }
+
+.head {
+  margin: 0 0 clamp(18px, 2vw, 28px);
+  text-align: center;
+}
+.root .title {
+  margin: 0;
+  color: var(--hp-ink);
+  font-weight: 400;
+}
+.root[data-lang="ar"] .title {
+  font-family: var(--hp-ar-display), "Noto Naskh Arabic", serif !important;
+  font-size: clamp(28px, 2.6vw, 42px);
+  line-height: 1.45;
+}
+.root[data-lang="en"] .title {
+  font-family: var(--hp-en-display), "Cormorant Garamond", Georgia, serif !important;
+  font-size: clamp(32px, 3vw, 48px);
+  font-weight: 500;
+  line-height: 1.08;
+}
+.root .subtitle {
+  margin: 8px 0 0;
+  color: var(--hp-muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* ---------------------------------------------------------- filter bar */
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: clamp(16px, 2vw, 28px);
+  margin: 0 0 clamp(20px, 2vw, 28px);
+  padding: 0 0 12px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--hp-line);
+  white-space: nowrap;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.bar::-webkit-scrollbar { display: none; }
+
+.group {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: clamp(14px, 1.6vw, 24px);
+}
+.sep {
+  flex: none;
+  width: 1px;
+  height: 14px;
+  background: rgba(214, 211, 209, .9);
+}
+
+.tab {
+  position: relative;
+  flex: none;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--hp-muted);
+  font-size: 14px;
+  font-weight: 400;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: color .2s ease;
+}
+/* The underline: drawn in from the centre on hover, held when active. */
+.tab::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 2px;
+  left: 0;
+  height: 1px;
+  background: currentColor;
+  transform: scaleX(0);
+  transition: transform .25s cubic-bezier(.22, 1, .36, 1);
+}
+.tab:hover { color: var(--hp-ink); }
+.tab:hover::after { transform: scaleX(1); }
+.tab[aria-pressed="true"] { color: var(--hp-ink); font-weight: 500; }
+.tab[aria-pressed="true"]::after { height: 2px; transform: scaleX(1); }
+.tab:focus-visible { outline: 1px solid var(--hp-ink); outline-offset: 3px; }
+
+.fallback {
+  margin: -8px 0 18px;
+  color: var(--hp-quiet);
+  font-size: 12.5px;
+}
+
+/* -------------------------------------------------------------- the grid */
+
+/* The Women page wrapper supplies the card's styles; its own dark page
+   background and width are not wanted here. */
+.cards.cards { width: auto; background: transparent; }
+
+/* Column tiers: keep in step with COLUMN_TIERS in HomeProducts.tsx, which
+   sizes each "Discover More" batch to complete rows of these columns. */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 22px 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+@media (min-width: 600px) { .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 26px 16px; } }
+@media (min-width: 900px) { .grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (min-width: 1200px) { .grid { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 30px 18px; } }
+@media (min-width: 1600px) { .grid { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+
+/* Discover and Following - one shopping grid: smaller cards, 5 from 1100px,
+   6 from 1400px (as SHOP_COLUMN_TIERS in HomeProducts.tsx); a touch more
+   air between rows than columns so the denser grid still reads as calm. */
+@media (min-width: 1100px) { .grid[data-view="shop"] { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 30px 16px; } }
+@media (min-width: 1400px) { .grid[data-view="shop"] { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 32px 16px; } }
+
+.item { min-width: 0; }
+
+/* Curated photos are shown whole in the card's frame, letterboxed in their
+   own background colour - no product detail is cropped. */
+.item[data-fit="contain"] :global(.women-product-card-media) { background: var(--media-bg); }
+.item[data-fit="contain"] :global(.women-product-card-image img) { object-fit: contain; object-position: center; }
+
+/* The quiet label in place of a cart control (ProductCard unavailableLabel). */
+.item :global(.women-product-card-unavailable) {
+  color: var(--hp-quiet);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.note {
+  margin: 24px 0;
+  color: var(--hp-muted);
+  font-size: 14px;
+  text-align: center;
+}
+.note a,
+.textButton {
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid currentColor;
+  background: none;
+  color: var(--hp-ink);
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+/* ------------------------------------------------------- discover more */
+
+.moreRow { display: flex; justify-content: center; margin-top: clamp(24px, 3vw, 40px); }
+.more {
+  position: relative;
+  min-height: 40px;
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: var(--hp-ink);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.more::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 8px;
+  left: 0;
+  height: 1px;
+  background: currentColor;
+  transform-origin: center;
+  transition: transform .25s cubic-bezier(.22, 1, .36, 1);
+}
+.more:hover::after { transform: scaleX(.6); }
+.more:disabled { color: var(--hp-quiet); cursor: default; }
+
+@media (max-width: 599px) {
+  .tab { font-size: 13.5px; min-height: 40px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab::after,
+  .more::after { transition: none; }
+}
+
+/* "Demo preview" line above the Following demo feed (/?yourvia=demo). */
+.demoNote { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.demoBadge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  padding: 2px 10px;
+  border: 1px solid #b8925a;
+  border-radius: 999px;
+  background: rgba(184, 146, 90, .1);
+  color: #8a6634;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.6;
+}

@@ -1,0 +1,986 @@
+/* =========================================================================
+   Homepage hero - editorial scene 01.
+   The photograph starts at the very top of the page: the fixed, transparent
+   header (AppShell, ink variant on the homepage) sits over its plain wall.
+   Wide screens: the text sits in the photo's negative space, below the
+   header. Below 900px: a compact image frame, then the text on the photo's
+   own warm ivory.
+   Font families need !important only to win over `.home *` (home-via.module.css),
+   which forces the site faces with !important; they stay scoped here.
+   ========================================================================= */
+
+.hero {
+  /* Bottom of the fixed site header at rest (home-via.module.css header:
+     top offset + 72px row + 1px border; 67px / 61px rows below 1000/768px). */
+  --hero-head: calc(clamp(8px, 1.2vw, 20px) + 73px);
+  /* Total height, header area included; capped so the next section always
+     shows below the fold. */
+  /* ~605px at 1440px, 620px at most: the next section shows sooner. */
+  --hero-h: clamp(560px, min(42vw, 100svh - 140px), 620px);
+  --hero-ease: cubic-bezier(.22, .7, .24, 1);
+  position: relative;
+  isolation: isolate;
+  width: 100%;
+  background: var(--hero-backdrop);
+  color: var(--hero-ink);
+}
+
+/* `.home *` sets a family on every element (spans included), which would
+   override inheritance inside the headline masks, label and CTA. Inside
+   the hero, families come only from the rules below. */
+.hero.hero * { font-family: inherit !important; }
+
+.media {
+  position: relative;
+  height: var(--hero-h);
+  overflow: hidden;
+  background: var(--hero-backdrop);
+}
+
+.media picture { display: contents; }
+
+.image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: var(--hero-focus-x) var(--hero-focus-y);
+}
+.imageFirst { animation: hero-image-in 1000ms var(--hero-ease) both; }
+
+/* Pause / play / replay for the scene sequence: small and quiet. */
+.control {
+  position: absolute;
+  z-index: 3;
+  right: clamp(16px, 2.4vw, 36px);
+  bottom: clamp(14px, 1.8vw, 24px);
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--hero-ink) 22%, transparent);
+  border-radius: 50%;
+  background: rgba(255, 250, 242, .16);
+  color: var(--hero-ink);
+  cursor: pointer;
+  opacity: .6;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  transition: opacity .25s ease, border-color .25s ease, background-color .25s ease;
+}
+.control:hover,
+.control:focus-visible {
+  opacity: 1;
+  border-color: color-mix(in srgb, var(--hero-ink) 45%, transparent);
+  background: rgba(255, 250, 242, .34);
+}
+.control:focus-visible { outline: 1px solid var(--hero-ink); outline-offset: 3px; }
+.control svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ------------------------------------------------------------- the text */
+
+/* Wide screens: each scene's text is placed over its own photograph. */
+.copies { display: contents; }
+
+.copy {
+  position: absolute;
+  z-index: 2;
+  top: var(--hero-head);
+  bottom: var(--hero-copy-bottom, 0);
+  width: clamp(330px, 34vw, 540px);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  text-align: start;
+}
+.copy[data-side="left"] { left: var(--hero-text-inset); }
+.copy[data-side="right"] { right: var(--hero-text-inset); }
+.copy[data-side="center"] {
+  left: 50%;
+  width: min(720px, 78vw);
+  padding-top: clamp(18px, 2.6vw, 40px);
+  align-items: center;
+  text-align: center;
+  transform: translateX(-50%);
+}
+
+/* A scene's text is only animated while it is the active scene; leaving, it
+   fades as a whole, and until its turn it is not shown at all. */
+.copy[data-state="leaving"] {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 500ms ease;
+}
+.copy[data-state="hidden"] {
+  opacity: 0;
+  visibility: hidden;
+}
+
+/* Compact scenes (02) follow the previous text's fade straight away, in a
+   tighter rhythm: label, the two headline lines 150ms apart, description,
+   then the line and index. */
+.copy[data-compact] {
+  --d-label: 60ms;
+  --d-title: 160ms;
+  --d-stagger: 150ms;
+  --d-desc: 560ms;
+  --d-index: 760ms;
+}
+.copy[data-compact] .label { margin-bottom: 14px; }
+.copy[data-compact] .description { margin-top: 12px; }
+.copy[data-compact] .indexRow { margin-top: 18px; }
+/* Tighter, connected headline lines; the masks' padding keeps Naskh's
+   marks clear while lines move. */
+.hero[data-lang="ar"] .copy[data-compact] .title { line-height: 1.32; }
+.hero[data-lang="en"] .copy[data-compact] .title { line-height: 1.02; }
+
+.hero .label {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 0 0 clamp(18px, 1.7vw, 26px);
+  color: color-mix(in srgb, var(--hero-ink) 72%, transparent);
+  font-family: var(--hero-en-text), "Segoe UI", sans-serif !important;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: .26em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.copy[data-side="center"] .label { justify-content: center; }
+.copy[data-state="active"] .label { animation: hero-fade-up 700ms var(--hero-ease) var(--d-label, 380ms) both; }
+
+.rule {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 1px;
+  background: currentColor;
+  opacity: .6;
+  transform-origin: var(--hero-rule-origin, left);
+}
+.copy[dir="rtl"] .rule { --hero-rule-origin: right; }
+.copy[data-side="center"] .rule { --hero-rule-origin: center; }
+.copy[data-state="active"] .label .rule { animation: hero-rule-in 650ms var(--hero-ease) 300ms both; }
+
+/* Closing line + scene index ("02 / 04"). */
+.hero .indexRow {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: clamp(22px, 2.2vw, 32px) 0 0;
+  color: color-mix(in srgb, var(--hero-ink) 62%, transparent);
+  font-family: var(--hero-en-text), "Segoe UI", sans-serif !important;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: .22em;
+  line-height: 1;
+}
+.copy[data-side="center"] .indexRow { justify-content: center; }
+.copy[data-state="active"] .indexRow { animation: hero-fade-up 800ms var(--hero-ease) var(--d-index, 1100ms) both; }
+.copy[data-state="active"] .indexRow .rule { animation: hero-rule-in 800ms var(--hero-ease) var(--d-index, 1100ms) both; }
+
+.title {
+  margin: 0;
+  color: var(--hero-ink);
+  text-wrap: balance;
+}
+/* Weights live on these (more specific) rules: the homepage wrapper's
+   `.home-editorial h1` (globals.css) would otherwise force 700, a weight
+   this hero does not load. */
+.hero[data-lang="ar"] .title {
+  font-family: var(--hero-ar-display), "Noto Naskh Arabic", serif !important;
+  font-weight: 400;
+  font-size: clamp(34px, 3.15vw, 52px);
+  line-height: 1.34;
+  letter-spacing: 0;
+}
+.hero[data-lang="en"] .title {
+  font-family: var(--hero-en-display), "Cormorant Garamond", Georgia, serif !important;
+  font-weight: 500;
+  font-size: clamp(38px, 3.9vw, 64px);
+  line-height: 1.06;
+  letter-spacing: -.012em;
+}
+
+/* Each headline line rises out of its own mask. The mask is padded (and
+   pulled back by the same amount) so Arabic ascenders and marks are never
+   clipped while the line is moving. */
+.titleMask {
+  display: block;
+  overflow: hidden;
+  padding-block: .14em;
+  margin-block: -.14em;
+}
+.titleLine { display: block; }
+.copy[data-state="active"] .titleLine {
+  animation: hero-line-in 950ms var(--hero-ease) calc(var(--d-title, 520ms) + var(--line) * var(--d-stagger, 130ms)) both;
+}
+
+.description {
+  max-width: 36ch;
+  margin: clamp(12px, 1.1vw, 16px) 0 0;
+  color: color-mix(in srgb, var(--hero-ink) 86%, transparent);
+  font-weight: 400;
+}
+.copy[data-side="center"] .description { margin-inline: auto; }
+.copy[data-state="active"] .description { animation: hero-fade-up 800ms var(--hero-ease) var(--d-desc, 980ms) both; }
+.hero[data-lang="ar"] .description {
+  font-family: var(--hero-ar-text), "IBM Plex Sans Arabic", sans-serif !important;
+  font-size: clamp(15px, 1.1vw, 17px);
+  line-height: 1.8;
+}
+.hero[data-lang="en"] .description {
+  font-family: var(--hero-en-text), "Inter", sans-serif !important;
+  font-size: clamp(14.5px, 1.05vw, 16px);
+  line-height: 1.7;
+}
+
+/* One quiet primary action: a fine-edged ink button with a warm gold
+   edge; on hover it lifts a touch and warms. */
+.cta {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 12px;
+  min-height: 46px;
+  margin-top: clamp(20px, 1.8vw, 26px);
+  padding: 0 28px;
+  border: 1px solid color-mix(in srgb, #b8925a 55%, var(--hero-ink));
+  border-radius: 3px;
+  background: var(--hero-ink);
+  color: #f7efe2;
+  font-weight: 500;
+  text-decoration: none;
+  box-shadow: 0 6px 18px -10px rgba(42, 30, 20, .55);
+  transition: background-color .3s ease, color .3s ease, transform .3s var(--hero-ease), box-shadow .3s ease, border-color .3s ease;
+}
+.copy[data-state="active"] .cta { animation: hero-fade-up 800ms var(--hero-ease) var(--d-cta, 1160ms) both; }
+.hero[data-lang="ar"] .cta {
+  font-family: var(--hero-ar-text), "IBM Plex Sans Arabic", sans-serif !important;
+  font-size: 15px;
+}
+.hero[data-lang="en"] .cta {
+  font-family: var(--hero-en-text), "Inter", sans-serif !important;
+  font-size: 14px;
+  letter-spacing: .04em;
+}
+.cta:hover,
+.cta:focus-visible {
+  border-color: #b8925a;
+  background: color-mix(in srgb, #5a4330 70%, var(--hero-ink));
+  color: #fbf4e6;
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px -12px rgba(42, 30, 20, .6);
+}
+.cta:focus-visible {
+  outline: 1px solid var(--hero-ink);
+  outline-offset: 4px;
+}
+
+.ctaArrow {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform .3s var(--hero-ease);
+}
+/* The arrow points the way the line reads. */
+.copy[dir="rtl"] .ctaArrow { transform: scaleX(-1); }
+.cta:hover .ctaArrow,
+.cta:focus-visible .ctaArrow { transform: translateX(3px); }
+.copy[dir="rtl"] .cta:hover .ctaArrow,
+.copy[dir="rtl"] .cta:focus-visible .ctaArrow { transform: scaleX(-1) translateX(3px); }
+
+/* ------------------------------------------------- scene 03: shop the look
+   Separate layers over the photo: the woman-free background, one glass
+   frame, the still model at the centre and the garments floating around
+   him (two each side). Revealed in that order once the scene is active. */
+
+.shop {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  visibility: hidden;
+  --shop-glass: rgba(255, 249, 238, .62);
+  --shop-ease: cubic-bezier(.22, .7, .24, 1);
+  /* Bottom up: the scene dots, the toolbar, a 16px gap, the frame's lower
+     edge, then the model's shoes just inside it. */
+  --shop-toolbar-bottom: 50px;
+  --shop-toolbar-h: 46px;
+  --shop-frame-bottom: calc(var(--shop-toolbar-bottom) + var(--shop-toolbar-h) + 16px);
+  --shop-feet: calc(var(--shop-frame-bottom) + 14px);
+  /* One shared line for every garment's lower edge, ring and label. */
+  --shop-baseline: 65%;
+}
+.shop[data-on] { visibility: visible; }
+
+/* The woman-free set behind scenes 03-04: one layer, so moving between them
+   changes nothing behind the content. In the closing shot it drifts in very
+   slowly (a camera move, no distortion). */
+.setLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  opacity: 0;
+  transition: opacity 900ms ease;
+}
+.setLayer[data-on] { opacity: 1; }
+.setLayer .image { transition: transform 1200ms ease; }
+.setLayer[data-closing] .image {
+  transform: scale(1.03) translate3d(0, -.5%, 0);
+  transition: transform 16s cubic-bezier(.2, .6, .2, 1);
+}
+
+/* The hero's lower edge dissolving into the page background (globals.css
+   --color-bg). Eased stops: no visible band, no fog. Shared by every scene,
+   so it never changes during a transition; it ignores the pointer. */
+.bottomFade {
+  --fade-to: var(--color-bg, #f6f1e8);
+  position: absolute;
+  z-index: 1;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: clamp(44px, 4.2vw, 72px);
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--fade-to) 0%, transparent) 0%,
+    color-mix(in srgb, var(--fade-to) 9%, transparent) 22%,
+    color-mix(in srgb, var(--fade-to) 27%, transparent) 44%,
+    color-mix(in srgb, var(--fade-to) 54%, transparent) 64%,
+    color-mix(in srgb, var(--fade-to) 82%, transparent) 84%,
+    var(--fade-to) 100%
+  );
+}
+
+/* Wide screens: a faint, unboxed warm light on the text side (the copy sits
+   on the photo's left), lifting the dark ink off the silk. Hidden while
+   the set scenes play, and on stacked layouts (text sits below the photo). */
+.textScrim {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 46% 62% at 22% 52%, rgba(246, 236, 220, .42), rgba(246, 236, 220, .16) 55%, rgba(246, 236, 220, 0) 78%);
+  transition: opacity 900ms ease;
+}
+.textScrim[data-side="right"] {
+  background:
+    radial-gradient(ellipse 46% 62% at 78% 52%, rgba(246, 236, 220, .42), rgba(246, 236, 220, .16) 55%, rgba(246, 236, 220, 0) 78%);
+}
+/* The centred closing shot: a softer glow behind logo, line and button. */
+.textScrim[data-side="center"] {
+  background:
+    radial-gradient(ellipse 40% 58% at 50% 54%, rgba(246, 236, 220, .34), rgba(246, 236, 220, .12) 58%, rgba(246, 236, 220, 0) 80%);
+}
+
+.shopUi {
+  position: absolute;
+  inset: 0;
+  transition: opacity 650ms ease;
+}
+.shop[data-leaving] .shopUi { opacity: 0; }
+
+.shopFrame {
+  position: absolute;
+  top: calc(var(--hero-head) + 8px);
+  right: 8.5%;
+  bottom: var(--shop-frame-bottom);
+  left: 8.5%;
+  border: 1px solid var(--shop-glass);
+  border-radius: 30px;
+  background: linear-gradient(rgba(255, 250, 242, .09), rgba(255, 250, 242, .03));
+  opacity: 0;
+}
+.shop[data-on] .shopFrame { animation: shop-in 900ms ease 750ms both; }
+
+.shopStage {
+  position: absolute;
+  inset: 0;
+  touch-action: pan-y;
+}
+
+/* Still, centred, whole figure; above the garments that pass behind him. */
+.shopModel {
+  position: absolute;
+  z-index: 2;
+  bottom: var(--shop-feet);
+  left: 50%;
+  width: auto;
+  /* Head ~16px under the header, shoes inside the frame above the toolbar. */
+  height: calc(100% - var(--hero-head) - 16px - var(--shop-feet));
+  transform: translateX(-50%);
+  pointer-events: none;
+  user-select: none;
+  opacity: 0;
+}
+.shop[data-on] .shopModel { animation: shop-rise 900ms var(--shop-ease) 450ms both; }
+
+.garment {
+  --scale: 1;
+  --y: var(--shop-baseline);
+  position: absolute;
+  z-index: 1;
+  top: var(--y);
+  left: var(--x);
+  /* Sized for a 1440px screen, scaled down below it. */
+  width: min(var(--w), var(--w-vw));
+  /* Anchored by the garment's visible lower edge (not its transparent
+     canvas): every piece's edge sits on the shared --y baseline. */
+  transform: translate(-50%, calc(-100% + var(--lift))) translateX(var(--shift));
+  transition: transform 900ms var(--shop-ease), opacity 600ms ease;
+  opacity: 0;
+}
+.garment[data-slot="0"] { --x: 21.5%; }
+.garment[data-slot="1"] { --x: 34.5%; }
+.garment[data-slot="2"] { --x: 64.5%; }
+.garment[data-slot="3"] { --x: 79%; }
+.shop[data-on] .garment { animation: shop-rise 800ms var(--shop-ease) calc(1050ms + var(--i) * 140ms) both; opacity: 1; }
+.garment[data-selected] { --scale: 1.07; z-index: 2; }
+.shop[data-focused] .garment:not([data-selected]) { --scale: .96; opacity: .8; }
+
+.garmentPick {
+  position: relative;
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  /* The selection scale grows the piece from its own baseline point, so
+     its ring and label never leave the shared line. */
+  transform: scale(var(--scale));
+  transform-origin: 50% calc(100% - var(--lift));
+  transition: transform 900ms var(--shop-ease);
+}
+.garmentPick:focus-visible { outline: 1px solid var(--hero-ink); outline-offset: 6px; border-radius: 14px; }
+
+.garmentFloat { display: block; }
+.shop[data-on] .garmentFloat { animation: garment-float 6s ease-in-out calc(var(--i) * -1.5s) infinite alternate; }
+
+.garmentImage {
+  display: block;
+  width: 100%;
+  height: auto;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* The oval the piece hovers over: centred on, and a little wider than,
+   the visible garment, at its lower edge. */
+.garmentRing {
+  position: absolute;
+  z-index: -1;
+  bottom: calc(var(--lift) - 15px);
+  left: 50%;
+  width: calc(var(--cw) * 1.3);
+  height: 30px;
+  border: 1px solid rgba(255, 249, 238, .7);
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, rgba(255, 250, 240, .3), rgba(255, 250, 240, 0) 70%);
+  transform: translateX(-50%);
+}
+
+/* A compact label the same distance under the baseline for every piece. */
+.capsule {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px 4px 4px 14px;
+  border: 1px solid rgba(255, 252, 246, .7);
+  border-radius: 999px;
+  background: rgba(255, 250, 242, .58);
+  color: var(--hero-ink);
+  font-size: 12.5px;
+  line-height: 1.2;
+  white-space: nowrap;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.hero[data-lang="ar"] .capsule,
+.hero[data-lang="ar"] .toolbarItem { font-family: var(--hero-ar-text), "IBM Plex Sans Arabic", sans-serif !important; }
+.hero[data-lang="en"] .capsule,
+.hero[data-lang="en"] .toolbarItem { font-family: var(--hero-en-text), "Inter", sans-serif !important; }
+.hero[data-lang="ar"] .capsule { padding: 4px 14px 4px 4px; }
+/* No exact product to open: no action, an even pill. */
+.capsule[data-unavailable] { padding: 4px 14px; }
+
+/* Name over price (or "not available yet"): a narrow, two-line label. */
+.capsuleText {
+  display: grid;
+  gap: 1px;
+  text-align: start;
+}
+.capsuleName { font-size: 12.5px; }
+.capsuleMeta { color: color-mix(in srgb, var(--hero-ink) 62%, transparent); font-size: 10.5px; }
+
+/* Under each piece: the same offset from the shared baseline. */
+.capsuleDesktop {
+  position: absolute;
+  top: calc(100% - var(--lift) + 28px);
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.capsuleAction {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--hero-ink) 58%, transparent);
+  color: #fbf6ee;
+  transition: background-color .25s ease;
+}
+.capsuleAction:hover,
+.capsuleAction:focus-visible { background: var(--hero-ink); }
+.capsuleAction svg,
+.shopArrow svg,
+.toolbarItem svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.shopArrow {
+  position: absolute;
+  z-index: 3;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  padding: 0;
+  border: 1px solid var(--shop-glass);
+  border-radius: 50%;
+  background: rgba(255, 250, 242, .14);
+  color: var(--hero-ink);
+  cursor: pointer;
+  transform: translateY(-50%);
+  opacity: 0;
+  transition: background-color .25s ease;
+}
+.shopArrow svg { width: 20px; height: 20px; }
+.shopArrow:hover,
+.shopArrow:focus-visible { background: rgba(255, 250, 242, .4); }
+.shopArrowLeft { left: calc(8.5% - 27px); }
+.shopArrowRight { right: calc(8.5% - 27px); }
+
+.toolbar {
+  display: flex;
+  gap: 4px;
+  height: var(--shop-toolbar-h, 50px);
+  padding: 5px;
+  border: 1px solid var(--shop-glass, rgba(255, 249, 238, .62));
+  border-radius: 999px;
+  background: rgba(255, 250, 242, .22);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+/* Wide screens: centred below the frame, clear of its edge. */
+.toolbarDesktop {
+  position: absolute;
+  z-index: 3;
+  bottom: var(--shop-toolbar-bottom);
+  left: 50%;
+  transform: translateX(-50%);
+  opacity: 0;
+}
+.toolbarMobile,
+.shopMobileSlot { display: none; }
+.toolbarItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  height: 100%;
+  padding: 0 17px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: color-mix(in srgb, var(--hero-ink) 78%, transparent);
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color .25s ease, color .25s ease;
+}
+.toolbarItem svg { width: 18px; height: 18px; }
+.toolbarItem:hover,
+.toolbarItem:focus-visible { color: var(--hero-ink); }
+.toolbarItem[aria-pressed="true"] { background: rgba(255, 250, 242, .6); color: var(--hero-ink); }
+.shop[data-on] .shopArrow,
+.shop[data-on] .toolbarDesktop { animation: shop-in 700ms ease 1550ms both; }
+
+/* Scene 03's text sits in the frame's title row: label, headline and line
+   at the reading start, the index at the other end. */
+.copy[data-layout="shop"] {
+  top: calc(var(--hero-head) + 32px);
+  right: calc(8.5% + 34px);
+  bottom: auto;
+  left: calc(8.5% + 34px);
+  width: auto;
+  justify-content: flex-start;
+  pointer-events: none;
+}
+/* One tight group: label, headline, description. */
+.copy[data-layout="shop"] .label { margin-bottom: 8px; }
+.hero[data-lang="ar"] .copy[data-layout="shop"] .title { font-size: clamp(28px, 2.4vw, 38px); line-height: 1.22; }
+.hero[data-lang="en"] .copy[data-layout="shop"] .title { font-size: clamp(32px, 2.8vw, 44px); line-height: 1.02; }
+.copy[data-layout="shop"] .description { max-width: none; margin-top: 4px; }
+.hero[data-lang="ar"] .copy[data-layout="shop"] .description { line-height: 1.6; }
+.hero[data-lang="en"] .copy[data-layout="shop"] .description { line-height: 1.5; }
+.copy[data-layout="shop"] .indexRow {
+  position: absolute;
+  top: 0;
+  inset-inline-end: 0;
+  margin: 0;
+}
+
+/* -------------------------------------------- scene 04: the closing shot
+   Centred on the set: the logo, a fine line, the headline, the line under
+   it and one invitation - revealed in that order once the set has settled. */
+.copy[data-layout="closing"] {
+  --d-logo: 350ms;
+  --d-closing-rule: 800ms;
+  --d-title: 1000ms;
+  --d-stagger: 150ms;
+  --d-desc: 1400ms;
+  --d-cta: 1700ms;
+  /* Sized for the shorter hero: logo, line, headline, line and button fit
+     between the header and the dots with room to breathe. */
+  top: calc(var(--hero-head) + 12px);
+  bottom: 52px;
+  padding-top: 0;
+}
+.closingLogo {
+  display: block;
+  width: auto;
+  height: clamp(72px, 7.6vw, 116px);
+  margin: 0 auto 14px;
+}
+.closingRule {
+  display: block;
+  width: 40px;
+  height: 1px;
+  margin: 0 auto 16px;
+  background: color-mix(in srgb, var(--hero-ink) 45%, transparent);
+}
+.copy[data-state="active"] .closingLogo { animation: hero-fade-up 1000ms var(--hero-ease) var(--d-logo) both; }
+.copy[data-state="active"] .closingRule { animation: hero-rule-in 800ms var(--hero-ease) var(--d-closing-rule) both; }
+.hero[data-lang="ar"] .copy[data-layout="closing"] .title { font-size: clamp(30px, 2.8vw, 46px); line-height: 1.32; }
+.hero[data-lang="en"] .copy[data-layout="closing"] .title { font-size: clamp(34px, 3.2vw, 52px); line-height: 1.05; }
+.copy[data-layout="closing"] .description { max-width: 40ch; margin-top: 10px; }
+.copy[data-layout="closing"] .cta { align-self: center; margin-top: clamp(18px, 1.6vw, 24px); }
+
+/* ------------------------------------------------------------ scene dots
+   One button per scene, centred at the hero's foot: dots, the current one
+   a pill that fills as its scene plays. Each has a 28px touch target. */
+.dots {
+  position: absolute;
+  z-index: 4;
+  bottom: 12px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  transform: translateX(-50%);
+}
+.dot {
+  display: grid;
+  place-items: center;
+  min-width: 22px;
+  height: 28px;
+  padding: 0 3px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.dotMark {
+  position: relative;
+  display: block;
+  width: 5px;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(94, 72, 56, .26);
+  transition: width 360ms cubic-bezier(.4, 0, .2, 1), background-color 360ms ease;
+}
+.dot:hover .dotMark { background: rgba(94, 72, 56, .48); }
+.dot[data-current] .dotMark { width: 24px; height: 3px; background: rgba(94, 72, 56, .2); }
+/* No fill running (last scene, reduced motion, mid-transition): solid. */
+.dot[data-current] .dotMark:not(:has(.dotFill)) { background: rgba(94, 72, 56, .62); }
+.dotFill {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: rgba(94, 72, 56, .62);
+  transform: scaleX(0);
+  transform-origin: left center;
+  animation: dot-fill var(--fill-ms) linear forwards;
+}
+.dot:focus-visible { outline: none; }
+.dot:focus-visible .dotMark { outline: 1px solid var(--hero-ink); outline-offset: 3px; }
+
+/* ------------------------------------------------ stacked (below 900px) */
+
+/* Wide screens: the text group sits a little above the optical middle, clear
+   of the dots and the fade at the hero's foot. */
+@media (min-width: 900px) {
+  .copy:not([data-layout]) { padding-bottom: clamp(18px, 2.4vw, 40px); }
+}
+
+/* Small laptops / landscape tablets: a narrower text column, and the photo
+   eased a little towards the start so the model keeps clear of the text. */
+@media (min-width: 900px) and (max-width: 1199px) {
+  .copy:not([data-layout]):not([data-side="center"]) { width: clamp(300px, 34vw, 400px); }
+  .image { object-position: calc(var(--hero-focus-x) - 6%) var(--hero-focus-y); }
+  .hero[data-lang="ar"] .title { font-size: clamp(32px, 3.4vw, 40px); }
+}
+
+@media (max-width: 999px) {
+  .hero { --hero-head: 67px; }
+}
+
+@media (max-width: 899px) {
+  .media {
+    /* A compact frame (header area included): wide enough to keep the model
+       whole, short enough that the text and the next section follow quickly. */
+    height: clamp(330px, calc(60vw + 125px), 500px);
+  }
+  .image { object-position: var(--hero-focus-mx) var(--hero-focus-my); }
+  /* The photograph settles into the ivory text area instead of ending on
+     a hard edge. */
+  .media::after {
+    content: "";
+    position: absolute;
+    z-index: 2;
+    inset: auto 0 0;
+    height: 64px;
+    background: linear-gradient(to bottom, transparent, var(--hero-backdrop));
+    pointer-events: none;
+  }
+
+  /* All scenes' text shares one cell, so the hero keeps the height of the
+     tallest and never shifts between scenes. */
+  /* Room under the text for the scene dots. */
+  .copies { display: grid; padding-bottom: 30px; }
+  /* Phones: the photo already settles into the ivory text area (.media
+     ::after); it is that area's foot, with the dots, that meets the page -
+     so the ivory itself dissolves into the page background there. */
+  .bottomFade,
+  .textScrim { display: none; }
+  .hero {
+    overflow-x: clip;
+    background: linear-gradient(
+      to bottom,
+      var(--hero-backdrop) calc(100% - 60px),
+      color-mix(in srgb, var(--color-bg, #f6f1e8) 30%, var(--hero-backdrop)) calc(100% - 38px),
+      color-mix(in srgb, var(--color-bg, #f6f1e8) 70%, var(--hero-backdrop)) calc(100% - 18px),
+      var(--color-bg, #f6f1e8) 100%
+    );
+  }
+  .dots { bottom: 10px; }
+  .copy[data-layout="closing"] { justify-content: center; }
+  .closingLogo { height: clamp(52px, 14vw, 64px); margin-bottom: 10px; }
+  .closingRule { margin-bottom: 12px; }
+  .hero[data-lang="ar"] .copy[data-layout="closing"] .title { font-size: clamp(26px, 7vw, 34px); }
+  .copy[data-layout="closing"] .cta { margin-top: 16px; }
+  .copy,
+  .copy[data-side="center"] {
+    position: static;
+    grid-area: 1 / 1;
+    width: auto;
+    padding: 20px clamp(20px, 6vw, 48px) 30px;
+    transform: none;
+  }
+  /* The shared cell is as tall as the tallest scene: shorter text sits in
+     its middle rather than leaving an empty band below. */
+  .copy[data-side="center"],
+  .copy[data-compact] { justify-content: center; }
+  .hero .indexRow { margin-top: 18px; }
+
+  /* Scene 03 on phones: the model fills the frame's height; the four
+     garments float two per side (tap one to single it out, or swipe);
+     its text joins the other scenes' below the photo. */
+  .shopFrame { top: calc(var(--hero-head) + 4px); right: 10px; bottom: 10px; left: 10px; border-radius: 22px; }
+  /* The toolbar lives below the photo on phones: the shoes stop just
+     inside the frame's edge. */
+  .shop { --shop-feet: 18px; }
+  .garment { width: clamp(62px, 19vw, 104px); --shift: 0px !important; }
+  /* Two shared baselines: the upper pair beside his chest, the lower pair
+     by his legs - each pair's rings on one line. */
+  .garment[data-slot="0"],
+  .garment[data-slot="3"] { --y: 48%; }
+  .garment[data-slot="1"],
+  .garment[data-slot="2"] { --y: 87%; }
+  .garment[data-slot="0"],
+  .garment[data-slot="1"] { --x: 17%; }
+  .garment[data-slot="2"],
+  .garment[data-slot="3"] { --x: 83%; }
+  .garmentRing { bottom: calc(var(--lift) - 9px); height: 20px; }
+  .capsuleDesktop,
+  .shopArrow,
+  .toolbarDesktop { display: none; }
+  .copy[data-layout="shop"] { pointer-events: auto; }
+  .copy[data-layout="shop"] .indexRow { position: static; margin-top: 16px; }
+
+  /* Under the photo, outside the frame: the selected piece's label between
+     the arrows, then the categories (scrolling sideways in the bar only). */
+  .shopMobileSlot { display: block; margin: -6px 0 18px; }
+  .shopMobileBar { display: grid; gap: 10px; }
+  /* Arrows follow the garments' physical order (left = previous) in both
+     languages; the label inside keeps its own reading direction. */
+  .shopMobileCapsuleRow {
+    direction: ltr;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 40px;
+  }
+  .shopMobileArrow {
+    display: grid;
+    flex: 0 0 auto;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border: 1px solid rgba(42, 36, 32, .22);
+    border-radius: 50%;
+    background: rgba(255, 250, 242, .4);
+    color: var(--hero-ink);
+    cursor: pointer;
+  }
+  .shopMobileArrow svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .capsuleMobile { min-width: 0; border-color: rgba(42, 36, 32, .14); }
+  .hero[data-lang="ar"] .capsuleMobile { direction: rtl; }
+  .toolbarMobile {
+    display: flex;
+    max-width: 100%;
+    height: 46px;
+    overflow-x: auto;
+    border-color: rgba(42, 36, 32, .16);
+    background: rgba(255, 250, 242, .45);
+    scrollbar-width: none;
+  }
+  .toolbarMobile::-webkit-scrollbar { display: none; }
+  .toolbarMobile .toolbarItem { flex: 0 0 auto; gap: 7px; padding: 0 13px; font-size: 12.5px; }
+  .toolbarMobile .toolbarItem svg { width: 16px; height: 16px; }
+  .hero .label { margin-bottom: 12px; letter-spacing: .2em; }
+  .hero[data-lang="ar"] .title { font-size: clamp(28px, 7.4vw, 38px); line-height: 1.34; }
+  .hero[data-lang="en"] .title { font-size: clamp(34px, 9vw, 46px); }
+  .description { max-width: 38ch; margin-top: 8px; }
+  .hero[data-lang="ar"] .description { font-size: clamp(14.5px, 3.9vw, 16px); line-height: 1.75; }
+  .cta { min-height: 44px; margin-top: 16px; padding: 0 24px; }
+  .control { width: 30px; height: 30px; }
+}
+
+/* Narrow phones: a touch more room for the text. */
+@media (max-width: 420px) {
+  .copy,
+  .copy[data-side="center"] { padding-inline: 18px; }
+}
+
+@media (max-width: 767px) {
+  .hero { --hero-head: 61px; }
+}
+
+/* ------------------------------------------------------------- motion */
+
+@keyframes hero-image-in {
+  from { opacity: 0; transform: scale(1.025); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes hero-fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes hero-line-in {
+  from { transform: translateY(108%); }
+  to { transform: none; }
+}
+@keyframes hero-rule-in {
+  from { transform: scaleX(0); }
+  to { transform: none; }
+}
+@keyframes shop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+/* `translate` (not `transform`) so it composes with each layer's own
+   positioning transform. */
+@keyframes shop-rise {
+  from { opacity: 0; translate: 0 14px; }
+  to { opacity: 1; translate: 0 0; }
+}
+@keyframes dot-fill {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+@keyframes garment-float {
+  from { translate: 0 -5px; }
+  to { translate: 0 5px; }
+}
+
+/* Paused: whatever is mid-entrance holds still. */
+.hero[data-paused] * { animation-play-state: paused !important; }
+
+/* Everything starts in its final state; with reduced motion the scene is
+   simply there (and the sequence does not play - HomeHero.tsx). */
+@media (prefers-reduced-motion: reduce) {
+  .imageFirst,
+  .copy .label,
+  .copy .rule,
+  .copy .titleLine,
+  .copy .description,
+  .copy .cta,
+  .copy .indexRow,
+  .shop .shopFrame,
+  .shop .shopModel,
+  .shop .garment,
+  .shop .garmentFloat,
+  .shop .shopArrow,
+  .shop .toolbar { animation: none !important; }
+  .shop[data-on] :is(.shopFrame, .shopModel, .garment, .shopArrow, .toolbarDesktop) { opacity: 1; }
+  .copy .closingLogo,
+  .copy .closingRule,
+  .dotFill { animation: none !important; }
+  .setLayer,
+  .setLayer .image,
+  .setLayer[data-closing] .image,
+  .shopUi,
+  .dotMark { transition: none; }
+  .setLayer[data-closing] .image { transform: none; }
+  .garment { transition: none; }
+  .copy[data-state="leaving"],
+  .cta,
+  .ctaArrow { transition: none; }
+}

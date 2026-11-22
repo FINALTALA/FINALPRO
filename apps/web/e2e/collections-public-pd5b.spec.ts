@@ -104,11 +104,16 @@ test.describe("PD-5b.4: public platform collections", () => {
     await expect(sections.nth(0).getByRole("link", { name: "عرض الكل" })).toHaveAttribute("href", `/collections/${slug("home-a")}`);
     // Draft, scheduled, a third one and one with only 3 buyable products: not on home.
     for (const hidden of ["home-c", "draft", "later", "three"]) await expect(page.getByText(title(hidden))).toHaveCount(0);
-    // It sits after the banners and before «وصل حديثاً».
+    // It sits right after the banners (the Via home has no «وصل حديثاً» heading
+    // any more - that is a tab of the products section) and before the info row.
     const order = await page.evaluate(() => {
       const showcase = document.querySelector(".collection-showcase")!;
-      const newIn = [...document.querySelectorAll("h2")].find((h) => h.textContent?.includes("وصل حديثاً"))!;
-      return !!(showcase.compareDocumentPosition(newIn) & Node.DOCUMENT_POSITION_FOLLOWING);
+      const lastBanner = document.querySelector('a[href="/sales"]')!;
+      const infoRow = document.querySelector(".info-row")!;
+      return (
+        !!(lastBanner.compareDocumentPosition(showcase) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+        !!(showcase.compareDocumentPosition(infoRow) & Node.DOCUMENT_POSITION_FOLLOWING)
+      );
     });
     expect(order).toBe(true);
   });

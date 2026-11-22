@@ -1,0 +1,64 @@
+/* Product reel viewer: one video, centred, at its own proportions. */
+
+.backdrop {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(20, 16, 14, .82);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  animation: reel-in .2s ease;
+}
+@keyframes reel-in { from { opacity: 0; } }
+
+/* As large as the screen allows, never stretched: height-led for tall
+   videos, width-led when the screen is narrow (aspect-ratio set inline). */
+.frame {
+  position: relative;
+  height: min(88vh, 860px);
+  max-width: calc(100vw - 32px);
+  overflow: hidden;
+  border-radius: 14px;
+  background: #000;
+  box-shadow: 0 24px 60px -24px rgba(0, 0, 0, .6);
+}
+@supports not (aspect-ratio: 1) { .frame { width: min(420px, calc(100vw - 32px)); } }
+
+.video { display: block; width: 100%; height: 100%; object-fit: contain; background: #000; }
+
+.close {
+  position: absolute;
+  top: 10px;
+  inset-inline-end: 10px;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, .5);
+  color: #fff;
+  cursor: pointer;
+  transition: background-color .2s ease;
+}
+.close:hover { background: rgba(0, 0, 0, .72); }
+.close:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.close svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+
+.error {
+  position: absolute;
+  inset: auto 0 50% 0;
+  margin: 0;
+  color: #fff;
+  font-size: 14px;
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .backdrop { animation: none; }
+}

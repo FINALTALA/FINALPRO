@@ -1,0 +1,160 @@
+/* =========================================================================
+   Shop by category - the first section after the hero.
+   Wide screens: three tall photographs side by side; the hovered (or
+   focused) one widens, the other two give way, revealing more of the
+   photograph rather than stretching it. Phones: an editorial mosaic - the
+   first category as one tall panel, the other two stacked beside it.
+   Font families need !important only to win over `.home *`
+   (home-via.module.css), which forces the site faces with !important.
+   ========================================================================= */
+
+.root {
+  --cat-ink: #2a2420;
+  --cat-ease: cubic-bezier(.22, 1, .36, 1);
+  --cat-radius: 10px;
+  margin: 0 auto;
+  padding: 0 0 clamp(36px, 4vw, 64px);
+  color: var(--cat-ink);
+  /* Any jump to this section (anchor, focus) lands with the eyebrow and
+     heading clear of the fixed homepage header (~93px tall at most). */
+  scroll-margin-top: calc(clamp(8px, 1.2vw, 20px) + 73px + 28px);
+}
+.root.root * { font-family: inherit !important; }
+
+/* One centred heading; ~28-34px to the cards. */
+.head {
+  margin: 0 0 clamp(28px, 2.4vw, 34px);
+  /* Breathing room under the hero's fade (on top of the wrapper's own gap). */
+  padding-top: clamp(30px, 2.6vw, 38px);
+  text-align: center;
+  scroll-margin-top: calc(clamp(8px, 1.2vw, 20px) + 73px + 28px);
+}
+
+/* Higher than `.home :is(h1...)` and `.home-editorial h2` (globals.css). */
+.root .title {
+  margin: 0;
+  color: var(--cat-ink);
+  font-weight: 400;
+  text-wrap: balance;
+}
+.root[data-lang="ar"] .title {
+  font-family: var(--cat-ar-display), "Noto Naskh Arabic", serif !important;
+  font-size: clamp(28px, 2.6vw, 42px);
+  line-height: 1.45;
+}
+.root[data-lang="en"] .title {
+  font-family: var(--cat-en-display), "Cormorant Garamond", Georgia, serif !important;
+  font-size: clamp(32px, 3vw, 48px);
+  font-weight: 500;
+  line-height: 1.08;
+  letter-spacing: -.01em;
+}
+
+/* ------------------------------------------------------------ the gallery */
+
+.gallery {
+  display: flex;
+  gap: clamp(10px, 1.1vw, 16px);
+  /* ~560px at 1440px: tall enough for the men's full figure (head to
+     sandals) in its portrait photo; the others keep their own --focus. */
+  height: clamp(460px, 39vw, 580px);
+}
+
+.panel {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: var(--cat-radius);
+  background: #ecebe8;
+  color: var(--cat-ink);
+  text-decoration: none;
+  isolation: isolate;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* The framing (--focus) never changes; only a slight push-in on hover. */
+.image {
+  object-fit: cover;
+  object-position: var(--focus);
+  transform: scale(var(--zoom));
+  transform-origin: var(--zoom-origin);
+  transition: transform 650ms cubic-bezier(.22, 1, .36, 1);
+}
+
+/* The name sits on the photograph's light studio floor, at the reading
+   start - well below every face. */
+.caption {
+  position: absolute;
+  z-index: 1;
+  bottom: clamp(18px, 2vw, 28px);
+  inset-inline-start: clamp(18px, 2vw, 28px);
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+.root[data-lang="ar"] .name {
+  font-family: var(--cat-ar-display), "Noto Naskh Arabic", serif !important;
+  font-size: clamp(24px, 2vw, 32px);
+  line-height: 1.3;
+}
+.root[data-lang="en"] .name {
+  font-family: var(--cat-en-display), "Cormorant Garamond", Georgia, serif !important;
+  font-size: clamp(26px, 2.2vw, 36px);
+  font-weight: 500;
+  line-height: 1;
+}
+
+.arrow {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 650ms cubic-bezier(.22, 1, .36, 1);
+}
+/* Points the way the line reads. */
+.root[dir="rtl"] .arrow { transform: scaleX(-1); }
+
+.panel:focus-visible { outline: 1px solid var(--cat-ink); outline-offset: 4px; }
+
+/* One interaction: the photo pushes in very slightly inside its fixed card,
+   and the arrow steps 3px the way the line reads. Cards never resize; the
+   label stays put. Hover only for a fine pointer (touch keeps the resting
+   look); keyboard focus gets the same. */
+.panel:focus-visible .image { transform: scale(calc(var(--zoom) * 1.025)); }
+.panel:focus-visible .arrow { transform: translateX(3px); }
+.root[dir="rtl"] .panel:focus-visible .arrow { transform: scaleX(-1) translateX(3px); }
+@media (hover: hover) and (pointer: fine) {
+  .panel:hover .image { transform: scale(calc(var(--zoom) * 1.025)); }
+  .panel:hover .arrow { transform: translateX(3px); }
+  .root[dir="rtl"] .panel:hover .arrow { transform: scaleX(-1) translateX(3px); }
+}
+
+/* ---------------------------------------------------------------- phones */
+
+@media (max-width: 899px) {
+  .root { padding-bottom: 32px; }
+  .head { margin-bottom: 20px; padding: 30px 16px 0; }
+  .root[data-lang="ar"] .title { font-size: clamp(26px, 7vw, 32px); line-height: 1.4; }
+  .gallery {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 10px;
+    height: clamp(380px, 112vw, 560px);
+  }
+  .panel[data-key="women"] { grid-row: 1 / 3; }
+  .image { object-position: var(--focus-m); }
+  .caption { bottom: 14px; inset-inline-start: 14px; gap: 8px; }
+  .root[data-lang="ar"] .name { font-size: 21px; }
+  .root[data-lang="en"] .name { font-size: 24px; }
+  .arrow { width: 15px; height: 15px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .image,
+  .arrow { transition: none; }
+}
