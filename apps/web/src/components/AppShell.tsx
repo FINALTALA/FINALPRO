@@ -1,9 +1,11 @@
 "use client";
 
+import "@/lib/branchesText";
+
 import Link from "next/link";
 import Image from "next/image";
-import { usePathname, useRouter } from "next/navigation";
-import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { FormEvent, ReactNode, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   BagIcon,
   BellIcon,
@@ -22,18 +24,38 @@ import {
   workspaceEntry,
 } from "@/lib/nav";
 import { logout } from "@/lib/auth";
-import { setActiveWorkspace } from "@/lib/session";
+import { recordRoute } from "@/lib/navTrail";
+import { reportFrameState, startManageFrame } from "@/lib/manageFrame";
+import "@/lib/storePosText";
+import "@/lib/offerWizardText";
+import "@/lib/collectionsText";
+import "@/lib/storeHomeText";
 import {
-  useActiveWorkspace,
   useCartCount,
+  useHydrated,
   useSessionToken,
   useUnreadNotificationCount,
   useWorkspaces,
 } from "@/lib/useSession";
+import {
+  WORKSPACE_EVENT,
+  WORKSPACE_REQUIRED_EVENT,
+  forgetWorkspace,
+  hasWorkspace,
+  notificationsPagePath,
+  workspaceEntryHref,
+  workspaceOfPage,
+  workspaceSnapshot,
+  type WorkspaceRef,
+} from "@/lib/workspaceSession";
+import "@/lib/workspaceText";
+import { enterWorkspaceNow } from "@/lib/workspaceActions";
 import { newIdempotencyKey, apiFetch } from "@/lib/api";
 import { Lang, setLang } from "@/lib/i18n";
 import { useLang, useSyncServerLanguagePref, useT } from "@/lib/useLang";
 import LangEffect from "./LangEffect";
+import Toaster from "./Toaster";
+import NotificationsPanel from "./NotificationsPanel";
 import homeStyles from "@/app/home-via.module.css";
 
 const TAB_ICONS: Record<NavLink["key"], ReactNode> = {
@@ -66,17 +88,114 @@ const AUTH_PAGE_PATHS = new Set(["/login", "/register", "/reset-password", "/rea
 // and a bottom navigation on mobile. Pure presentation: it only reads
 // the session to decide what to SHOW; backend authorization is the
 // real protection for every route it links to.
+// `?embed=management|account` (the owner's management modal and the
+// account modal load pages in an iframe). Read from the browser's own
+// URL, not useSearchParams(), so the shell never forces every static
+// page out of prerendering: the server (and hydration) render the
+// normal shell, the client then switches. Until hydration, the inline
+// EMBED_BOOT_SCRIPT (root layout) has already marked <html data-embed>
+// and CSS hides the shell chrome, so the iframe never flashes a header.
+// The value never changes without a full load (it is fixed per iframe).
+const subscribeToLocation = (onChange: () => void) => {
+  window.addEventListener("popstate", onChange);
+  return () => window.removeEventListener("popstate", onChange);
+};
+const readEmbedMode = () => new URLSearchParams(window.location.search).get("embed");
+function useEmbedMode(): string | null {
+  return useSyncExternalStore(subscribeToLocation, readEmbedMode, () => null);
+}
+
+/**
+ * The tab's route trail (lib/navTrail.ts): what "back to where you came
+ * from" arrows (e.g. on /compare/:id) return to. The one part of the
+ * shell that needs the live query string - isolated here, inside its
+ * own invisible Suspense boundary, so useSearchParams() never makes the
+ * whole shell (and with it every static page) client-only.
+ */
+function RouteTrailRecorder() {
+  const pathname = usePathname();
+  const routeQuery = useSearchParams().toString();
+  useEffect(() => {
+    recordRoute(routeQuery ? `${pathname}?${routeQuery}` : pathname);
+  }, [pathname, routeQuery]);
+  return null;
+}
+
+function subscribeWorkspaces(onChange: () => void): () => void {
+  window.addEventListener(WORKSPACE_EVENT, onChange);
+  return () => window.removeEventListener(WORKSPACE_EVENT, onChange);
+}
+
+function currentUrl(): string {
+  return `${window.location.pathname}${window.location.search}`;
+}
+
 export default function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const embedMode = useEmbedMode();
+  const isManagementEmbed = embedMode === "management";
+  const isAccountEmbed = embedMode === "account";
   const isHomePage = pathname === "/";
-  const isViaExperience = pathname === "/" || pathname === "/women";
+  const isViaExperience = pathname === "/" || pathname === "/women" || pathname === "/kids" || pathname === "/men";
+  const isShoppingProfilePage = pathname === "/profile";
+  const isNotificationsPage = pathname === "/notifications";
+  const isCartPage = pathname === "/cart";
+  // The shopping profile belongs to the Via browsing experience, so it uses
+  // the same refined public header rather than the legacy platform bar.
+  const usesViaHeader = isViaExperience || isShoppingProfilePage || isNotificationsPage || isCartPage;
   // Store pages carry their own identity bar (logo, name, icon), so the
   // platform header is not rendered on top of them.
   const isStorePage = pathname.startsWith("/store/");
+  const isComparisonPage = pathname.startsWith("/compare/");
+  const isAccountPage = pathname === "/account";
+  const isFavoritesPage = pathname === "/account/favorites";
+  // Branch operation pages already have their focused, role-scoped tools.
+  // They intentionally omit the customer-facing global navigation bar.
+  const isEmployeeWorkspacePage = /^\/vendor\/[^/]+\/branches\/[^/]+(?:\/|$)/.test(pathname);
+  const isWomenPage = pathname === "/women";
+  const isKidsPage = pathname === "/kids";
+  const isMenPage = pathname === "/men";
   const router = useRouter();
+  const tFrame = useT();
+  // Inside the store's management frame: the frame's header shows each screen's title and «رجوع» (lib/manageFrame.ts).
+  useEffect(() => {
+    startManageFrame((path) => {
+      if (/^\/vendor\/[^/]+\/offers\/new\/?$/.test(path)) return tFrame("wz.start.drafts");
+      if (/^\/vendor\/[^/]+\/offers\/import\/?$/.test(path)) return tFrame("panel.import");
+      if (/^\/vendor\/[^/]+\/offers\/[^/]+\/details\/?$/.test(path)) return tFrame("panel.details");
+      if (/^\/vendor\/[^/]+\/notifications\/?$/.test(path)) return tFrame("store.inbox");
+      if (/^\/vendor\/[^/]+\/branches\/?$/.test(path)) return tFrame("br.title");
+      if (/^\/vendor\/[^/]+\/branches\/new\/?$/.test(path)) return tFrame("br.add");
+      // a branch and each of its tabs: one screen, «إدارة الفروع» (the branch header says which branch and tab)
+      if (/^\/vendor\/[^/]+\/branches\/[^/]+(?:\/[a-z-]+)?\/?$/.test(path)) return tFrame("br.title");
+      if (/^\/vendor\/[^/]+\/cashier\/?$/.test(path)) return tFrame("pos.title");
+      if (/^\/vendor\/[^/]+\/store-sales\/?$/.test(path)) return tFrame("pos.sales.title");
+      if (/^\/vendor\/[^/]+\/labels\/?$/.test(path)) return tFrame("pos.labels.title");
+      if (/^\/vendor\/[^/]+\/storefront\/home\/?$/.test(path)) return tFrame("home.title");
+      return null;
+    }, (href) => router.push(href), (a, b) => {
+      // «إدارة الفروع»: the branches, each branch and its tabs are views of one screen - no «رجوع» between them
+      const view = /^(\/vendor\/[^/]+\/branches)(?:\/(?!new\/?$)[^/]+(?:\/[a-z-]+)?)?\/?$/;
+      const x = view.exec(a);
+      const y = view.exec(b);
+      return Boolean(x && y && x[1] === y[1]);
+    });
+    reportFrameState();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname]);
   const token = useSessionToken();
   const workspaces = useWorkspaces(token);
-  const active = useActiveWorkspace();
+  const hydrated = useHydrated();
+  // TB-26: the workspace this PAGE belongs to (a /vendor/<id> or /admin
+  // page), and whether this tab has entered it. Signing in is shopping
+  // only: a workspace page without an entered workspace goes to the entry
+  // confirmation - never entered on its own.
+  const pageWorkspace = workspaceOfPage(pathname);
+  const pageWorkspaceKey = pageWorkspace
+    ? pageWorkspace.type === "platform" ? "platform" : `vendor:${pageWorkspace.vendor_id}`
+    : "";
+  const wsSnapshot = useSyncExternalStore(subscribeWorkspaces, workspaceSnapshot, () => "");
+  const inPageWorkspace = Boolean(pageWorkspace && hydrated && wsSnapshot && hasWorkspace(pageWorkspace));
   const cartCount = useCartCount(token, pathname);
   const unreadCount = useUnreadNotificationCount(token, pathname);
   const lang = useLang();
@@ -85,20 +204,38 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [query, setQuery] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [homeSearchOpen, setHomeSearchOpen] = useState(false);
+  const [accountModalOpen, setAccountModalOpen] = useState(false);
+  const [notificationsPanelOpen, setNotificationsPanelOpen] = useState(false);
+  // TB-4: a stable callback - the panel's fetch effect depends on it, so a
+  // new function on every shell render would re-send its request.
+  const closeNotificationsPanel = useCallback(() => setNotificationsPanelOpen(false), []);
   const menuRef = useRef<HTMLDivElement>(null);
+  /** Visual pass: the workspace's own small menu in the header (no strip over every page). */
+  const [wsMenuOpen, setWsMenuOpen] = useState(false);
+  const wsMenuRef = useRef<HTMLDivElement>(null);
   const homeSearchInputRef = useRef<HTMLInputElement>(null);
   const homeHeaderRef = useRef<HTMLElement>(null);
 
-  // The campaign header belongs to the first screen only. As the visitor
-  // leaves that screen, it glides upward and fades instead of staying over
-  // the catalogue content below.
+  // The Via header belongs to the first screen only. As the visitor leaves
+  // that screen, it glides upward and fades instead of staying over content.
   useEffect(() => {
-    if (!isHomePage) return;
+    if (!isViaExperience && !isShoppingProfilePage) {
+      const header = homeHeaderRef.current;
+      header?.style.setProperty("--via-home-header-scroll", "0");
+      if (header) header.style.pointerEvents = "";
+      return;
+    }
 
     let frame = 0;
     const updateHeader = () => {
       frame = 0;
-      const hero = document.querySelector<HTMLElement>(`.${homeStyles.hero}`);
+      const hero = document.querySelector<HTMLElement>(
+        isShoppingProfilePage
+          ? ".shopping-profile-hero"
+          : (isWomenPage || isKidsPage || isMenPage)
+            ? (isKidsPage ? ".kids-hero" : isMenPage ? ".men-hero" : ".women-hero")
+            : `.${homeStyles.hero}`,
+      );
       // The campaign fades into the category area before the hero element's
       // literal bottom. Begin the header exit at that visual fade, not after
       // the full element has already scrolled away.
@@ -124,7 +261,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
       window.removeEventListener("resize", onScroll);
       if (frame) window.cancelAnimationFrame(frame);
     };
-  }, [isHomePage]);
+  }, [isViaExperience, isShoppingProfilePage, isWomenPage, isKidsPage, isMenPage]);
 
   useEffect(() => {
     if (!homeSearchOpen) return;
@@ -150,26 +287,127 @@ export default function AppShell({ children }: { children: ReactNode }) {
     };
   }, [menuOpen]);
 
+  useEffect(() => {
+    if (!wsMenuOpen) return;
+    function onClick(e: MouseEvent) {
+      if (wsMenuRef.current && !wsMenuRef.current.contains(e.target as Node)) setWsMenuOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        setWsMenuOpen(false);
+        (wsMenuRef.current?.querySelector("button") as HTMLButtonElement | null)?.focus();
+      }
+    }
+    document.addEventListener("mousedown", onClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [wsMenuOpen]);
+
+  // Account details stay in context: open them above the current page
+  // instead of taking the customer away from wherever they were browsing.
+  useEffect(() => {
+    if (!accountModalOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setAccountModalOpen(false);
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [accountModalOpen]);
+
+  useEffect(() => {
+    const onAccountOverlayMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      if (event.data?.type === "close-account-overlay") setAccountModalOpen(false);
+    };
+    window.addEventListener("message", onAccountOverlayMessage);
+    return () => window.removeEventListener("message", onAccountOverlayMessage);
+  }, []);
+
+  useEffect(() => {
+    const openAccountOverlay = () => setAccountModalOpen(true);
+    window.addEventListener("open-account-overlay", openAccountOverlay);
+    return () => window.removeEventListener("open-account-overlay", openAccountOverlay);
+  }, []);
+
   function onSearch(e: FormEvent) {
     e.preventDefault();
     const q = query.trim();
     router.push(q ? `/discovery?q=${encodeURIComponent(q)}` : "/discovery");
   }
 
-  function switchTo(index: number) {
+  // TB-26: choosing a workspace in the account menu IS the explicit step -
+  // it enters at once and opens the workspace's home (if entering fails,
+  // the entry page shows why). Shopping simply goes home.
+  async function switchTo(index: number) {
     if (!workspaces) return;
     const w = workspaces[index];
     const entry = workspaceEntry(w);
     if (entry.disabled) return;
-    setActiveWorkspace(
-      w.type === "customer"
-        ? { type: "customer" }
-        : w.type === "platform"
-          ? { type: "platform" }
-          : { type: "vendor", vendor_id: w.vendor_id, branch_id: w.branch_id },
-    );
     setMenuOpen(false);
-    router.push(entry.href);
+    if (w.type === "customer") {
+      router.push("/");
+      return;
+    }
+    const ref = w.type === "platform" ? ({ type: "platform" } as const) : ({ type: "vendor", vendor_id: w.vendor_id } as const);
+    try {
+      await enterWorkspaceNow(ref);
+      router.push(entry.href);
+    } catch {
+      router.push(workspaceEntryHref(ref, entry.href));
+    }
+  }
+
+  // Set while leaving, so the gate below does not send the page being
+  // left to the entry confirmation before the navigation home lands.
+  const leavingRef = useRef(false);
+  // The session is checked FIRST: the entry confirmation is only for a
+  // still-valid session, so the gate waits until the workspaces read has
+  // answered (`workspaces` stays null while it is in flight). A 401 there
+  // clears the session instead (useWorkspacesResult), the token goes and
+  // the page itself sends to sign-in with `next` = this very page - never
+  // to sign-in by way of the confirmation, whichever answer comes first.
+  // Any other failure (429, 5xx) is not a lost session: the entry page
+  // says so in its own words.
+  const sessionChecked = workspaces !== null;
+  useEffect(() => {
+    if (!pageWorkspace) leavingRef.current = false;
+    if (!hydrated || !token || !sessionChecked || !pageWorkspace || inPageWorkspace || leavingRef.current) return;
+    router.replace(workspaceEntryHref(pageWorkspace, currentUrl()));
+    // pageWorkspaceKey stands for pageWorkspace (a new object each render).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated, token, sessionChecked, pageWorkspaceKey, inPageWorkspace, router]);
+
+  useEffect(() => {
+    const onRequired = (event: Event) => {
+      const ref = (event as CustomEvent<WorkspaceRef>).detail;
+      // A late answer from the page just left must not replace the
+      // confirmation (and its `next`) with a confirmation of itself.
+      if (!ref || window.location.pathname.startsWith("/workspaces/")) return;
+      router.replace(workspaceEntryHref(ref, currentUrl()));
+    };
+    window.addEventListener(WORKSPACE_REQUIRED_EVENT, onRequired);
+    return () => window.removeEventListener(WORKSPACE_REQUIRED_EVENT, onRequired);
+  }, [router]);
+
+  async function leaveWorkspace() {
+    if (!pageWorkspace) return;
+    const ref = pageWorkspace;
+    leavingRef.current = true;
+    try {
+      await apiFetch("/me/workspace-sessions/current", { method: "DELETE", workspace: ref });
+    } catch {
+      // Leaving locally is what matters; the token also expires by itself.
+    }
+    forgetWorkspace(ref);
+    router.push("/");
   }
 
   async function signOut() {
@@ -194,17 +432,78 @@ export default function AppShell({ children }: { children: ReactNode }) {
     }
   }
 
+  // TB-26: the active context is the page's own (per tab), not a stored choice.
   const isActiveWorkspace = (i: number) => {
-    if (!workspaces || !active) return i === 0 && !active;
+    if (!workspaces) return false;
     const w = workspaces[i];
-    if (w.type === "customer") return active.type === "customer";
-    if (w.type === "platform") return active.type === "platform";
-    return active.type === "vendor" && active.vendor_id === w.vendor_id;
+    if (w.type === "customer") return !pageWorkspace;
+    if (w.type === "platform") return pageWorkspace?.type === "platform";
+    return pageWorkspace?.type === "vendor" && pageWorkspace.vendor_id === w.vendor_id;
   };
+
+  // TB-26: a workspace page is not rendered at all - none of its code,
+  // none of its API calls - until this tab has entered that workspace (the
+  // gate above sends it to the confirmation). Signed-out visitors still
+  // get the page itself, which sends them to sign in.
+  const pageContent =
+    pageWorkspace && (!hydrated || (token && !inPageWorkspace)) ? (
+      <div className="page-shell" aria-busy="true">
+        <div className="skeleton" style={{ height: 96, width: "100%", maxWidth: 720 }} />
+      </div>
+    ) : (
+      children
+    );
+
+  // Visual pass: the workspace is shown by one compact button in the header
+  // (its name), whose menu holds «خروج من مساحة العمل» and the workspace's
+  // notifications - no strip over every page's content. Same leaveWorkspace,
+  // same notifications path; nothing about the workspace itself changes.
+  const workspaceLabel = pageWorkspace ? t(pageWorkspace.type === "platform" ? "ws.bar.platform" : "ws.bar.vendor") : "";
+  const workspaceName =
+    pageWorkspace?.type === "vendor" && workspaces
+      ? (() => {
+          const m = workspaces.find((w) => w.type === "vendor" && w.vendor_id === pageWorkspace.vendor_id);
+          return m && m.type === "vendor" ? m.vendor_legal_name : "";
+        })()
+      : "";
+  const workspaceMenu =
+    pageWorkspace && inPageWorkspace && !isManagementEmbed && !isAccountEmbed ? (
+      <div className="workspace-menu" ref={wsMenuRef} data-testid="workspace-bar">
+        <button
+          type="button"
+          className="workspace-menu-button"
+          aria-haspopup="true"
+          aria-expanded={wsMenuOpen}
+          aria-controls="workspace-menu-panel"
+          aria-label={t("ws.menu.aria").replace("{name}", workspaceName || workspaceLabel)}
+          title={workspaceName ? `${workspaceLabel} - ${workspaceName}` : workspaceLabel}
+          onClick={() => setWsMenuOpen((v) => !v)}
+          data-testid="workspace-menu-button"
+        >
+          <WorkspaceIcon />
+          <span className="workspace-menu-name">{workspaceName || workspaceLabel}</span>
+          <span className="workspace-menu-caret" aria-hidden="true">▾</span>
+        </button>
+        <div className="workspace-menu-panel" id="workspace-menu-panel" hidden={!wsMenuOpen}>
+          <div className="workspace-menu-title">
+            {workspaceLabel}
+            {workspaceName && <strong>{workspaceName}</strong>}
+          </div>
+          <Link href={notificationsPagePath(pathname)} className="workspace-menu-item" onClick={() => setWsMenuOpen(false)} data-testid="workspace-bar-notifications">
+            <BellIcon />
+            <span>{t("appshell.notifications_aria")}</span>
+            {unreadCount > 0 && <span className="badge-count">{unreadCount}</span>}
+          </Link>
+          <button type="button" className="workspace-menu-item workspace-menu-leave" onClick={() => void leaveWorkspace()} aria-label={t("ws.leave.aria")} data-testid="workspace-leave">
+            <LeaveIcon />
+            <span>{t("ws.leave")}</span>
+          </button>
+        </div>
+      </div>
+    ) : null;
 
   const links = desktopLinks();
   const tabs = mobileTabs(Boolean(token));
-
   // These are standalone, pre-session pages with their own full-bleed
   // design (background photo, glass card) - no header/search/account
   // menu or bottom tab bar belongs on top of them. LangEffect still
@@ -218,7 +517,27 @@ export default function AppShell({ children }: { children: ReactNode }) {
     return (
       <>
         <LangEffect />
+        <Toaster />
+        <Suspense fallback={null}>
+          <RouteTrailRecorder />
+        </Suspense>
         <main>{children}</main>
+      </>
+    );
+  }
+
+  // Management pages rendered inside the store-owner modal use their
+  // existing routes and authorization, but deliberately omit the global
+  // shell so only the page content appears in the modal frame.
+  if (isManagementEmbed || isAccountEmbed) {
+    return (
+      <>
+        <LangEffect />
+        <Toaster />
+        <Suspense fallback={null}>
+          <RouteTrailRecorder />
+        </Suspense>
+        <main className={isManagementEmbed ? "management-embedded-page" : "account-embedded-page"}>{pageContent}</main>
       </>
     );
   }
@@ -226,8 +545,17 @@ export default function AppShell({ children }: { children: ReactNode }) {
   return (
     <>
       <LangEffect />
-      {isHomePage ? (
-        <header ref={homeHeaderRef} className={homeStyles.homeHeader}>
+        <Toaster />
+      <Suspense fallback={null}>
+        <RouteTrailRecorder />
+      </Suspense>
+      {usesViaHeader ? (
+        <>
+        <header
+          key={pathname}
+          ref={homeHeaderRef}
+          className={`${homeStyles.homeHeader}${(isShoppingProfilePage || isCartPage) ? ` ${homeStyles.profileLightHeader}` : ""}${(isShoppingProfilePage || isCartPage) ? ` ${homeStyles.cartGlassHeader}` : ""}`}
+        >
           <div className={homeStyles.headerInner}>
             <Link href="/" className={homeStyles.brand} aria-label="VIA - الرئيسية">
               <Image className={homeStyles.brandLogo} src="/images/via-logo.svg" alt="" width={70} height={56} priority />
@@ -235,10 +563,29 @@ export default function AppShell({ children }: { children: ReactNode }) {
             </Link>
 
             <nav className={homeStyles.homeNav} aria-label="التنقل الرئيسي">
-              <Link href="/" className={`${homeStyles.navLink} ${homeStyles.navCurrent}`} aria-current="page">
+              <Link
+                href="/"
+                className={`${homeStyles.navLink}${isHomePage ? ` ${homeStyles.navCurrent}` : ""}`}
+                aria-current={isHomePage ? "page" : undefined}
+              >
                 الرئيسية
               </Link>
-              <Link href="/following" className={homeStyles.navLink}>أتابعه</Link>
+              <Link href="/men" className={`${homeStyles.navLink}${isMenPage ? ` ${homeStyles.navCurrent}` : ""}`} aria-current={isMenPage ? "page" : undefined}>رجال</Link>
+              <Link
+                href="/women"
+                className={`${homeStyles.navLink}${isWomenPage ? ` ${homeStyles.navCurrent}` : ""}`}
+                aria-current={isWomenPage ? "page" : undefined}
+              >
+                نساء
+              </Link>
+              <Link
+                href="/kids"
+                className={`${homeStyles.navLink}${isKidsPage ? ` ${homeStyles.navCurrent}` : ""}`}
+                aria-current={isKidsPage ? "page" : undefined}
+              >
+                أطفال
+              </Link>
+              <Link href="/profile?tab=following" className={homeStyles.navLink}>أتابعه</Link>
               <Link href="/trending" className={homeStyles.navLink}>الترند</Link>
               <Link href="/ads" className={homeStyles.navLink}>الإعلانات</Link>
               <span className={homeStyles.navPending} aria-disabled="true">عن VIA</span>
@@ -272,10 +619,28 @@ export default function AppShell({ children }: { children: ReactNode }) {
                   <SearchIcon />
                 </button>
               </form>
-              <Link href="/account" className={homeStyles.toolLink} aria-label={NAV_LABELS[lang].account}>
+              <Link
+                href="/account"
+                className={homeStyles.toolLink}
+                aria-label={NAV_LABELS[lang].account}
+                onClick={(event) => {
+                  event.preventDefault();
+                  setAccountModalOpen(true);
+                }}
+              >
                 <UserIcon />
               </Link>
-              <Link href="/account/favorites" className={homeStyles.toolLink} aria-label="المفضلة">
+              <button
+                type="button"
+                className={homeStyles.toolLink}
+                aria-label={t("appshell.bell_aria")}
+                title={t("appshell.bell_aria")}
+                onClick={() => setNotificationsPanelOpen(true)}
+              >
+                <BellIcon />
+                {unreadCount > 0 && <span className="badge-count">{unreadCount}</span>}
+              </button>
+              <Link href="/profile?tab=favorites" className={homeStyles.toolLink} aria-label="أحببته">
                 <HeartIcon />
               </Link>
               <Link href="/cart" className={homeStyles.toolLink} aria-label={NAV_LABELS[lang].cart}>
@@ -285,8 +650,78 @@ export default function AppShell({ children }: { children: ReactNode }) {
             </div>
           </div>
         </header>
-      ) : isStorePage ? null : (
-      <header className={`app-header${isViaExperience ? " home-header" : ""}`}>
+        <NotificationsPanel open={notificationsPanelOpen} onClose={closeNotificationsPanel} />
+        </>
+      ) : isStorePage || isComparisonPage || isAccountPage || isFavoritesPage || isEmployeeWorkspacePage ? null : (
+      <header className={`app-header${isWomenPage ? " women-header" : ""}`}>
+        {isWomenPage ? (
+          <div className="women-header-inner">
+            <div className="women-header-actions" aria-label="روابط سريعة">
+              <Link href="/cart" className="women-header-icon" aria-label="سلتي">
+                <CartIcon />
+                {cartCount > 0 && <span className="badge-count">{cartCount}</span>}
+              </Link>
+              <Link href="/profile?tab=following" className="women-header-icon" aria-label="أتابعه">
+                <HeartIcon />
+              </Link>
+              <Link
+                href="/account"
+                className="women-header-icon"
+                aria-label="حسابي"
+                onClick={(event) => {
+                  event.preventDefault();
+                  setAccountModalOpen(true);
+                }}
+              >
+                <UserIcon />
+              </Link>
+              <Link href="/discovery" className="women-header-icon" aria-label="البحث">
+                <SearchIcon />
+              </Link>
+            </div>
+           <div className="women-header-nav">
+  <form
+    className="women-search-bar"
+    role="search"
+    onSubmit={(e) => {
+      e.preventDefault();
+
+      const formData = new FormData(e.currentTarget);
+      const query = String(formData.get("q") ?? "").trim();
+
+      if (query) {
+        router.push(`/discovery?q=${encodeURIComponent(query)}`);
+      }
+    }}
+  >
+    <input
+      type="search"
+      name="q"
+      placeholder="ابحثي عن منتجات، ماركات أو متاجر..."
+      aria-label="البحث في Via"
+    />
+
+    <button type="submit" aria-label="بحث">
+      <svg
+        width="21"
+        height="21"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      >
+        <circle cx="11" cy="11" r="7" />
+        <path d="m20 20-4-4" />
+      </svg>
+    </button>
+  </form>
+</div>
+
+            <Link href="/" className="women-header-brand" aria-label="Via - الصفحة الرئيسية">
+  <Image src="/images/via-brand-mark.png" alt="" width={512} height={346} priority unoptimized />
+            </Link>
+          </div>
+        ) : (
         <div className="app-header-inner">
           <Link href="/" className="app-logo" aria-label={`${isViaExperience ? "Via" : "FINALPRO"} - ${t("nav.home")}`}>
             <span className="app-logo-mark" aria-hidden="true">
@@ -325,15 +760,16 @@ export default function AppShell({ children }: { children: ReactNode }) {
           </form>
 
           <div className="app-header-actions">
+            {workspaceMenu}
             {token && (
-              <Link href="/notifications" className="icon-button" aria-label={t("appshell.notifications_aria")}>
+              <Link href={notificationsPagePath(pathname)} className="icon-button" aria-label={t("appshell.notifications_aria")}>
                 <BellIcon />
                 {unreadCount > 0 && <span className="badge-count">{unreadCount}</span>}
               </Link>
             )}
 
             <Link
-              href="/following"
+              href="/profile?tab=following"
               className="icon-button mobile-only"
               aria-label={NAV_LABELS[lang].following}
             >
@@ -344,10 +780,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
               <div className="account-menu" ref={menuRef}>
                 <button
                   className="icon-button desktop-only"
-                  aria-haspopup="menu"
-                  aria-expanded={menuOpen}
+                  aria-haspopup="dialog"
+                  aria-expanded={accountModalOpen}
                   aria-label={t("appshell.account_menu_aria")}
-                  onClick={() => setMenuOpen((v) => !v)}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setAccountModalOpen(true);
+                  }}
                 >
                   <UserIcon />
                 </button>
@@ -366,7 +805,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
                           className={`menu-item${isActiveWorkspace(i) ? " active" : ""}`}
                           disabled={entry.disabled}
                           style={entry.disabled ? { opacity: 0.6, cursor: "not-allowed" } : undefined}
-                          onClick={() => switchTo(i)}
+                          onClick={() => void switchTo(i)}
                         >
                           <span>
                             <strong>{entry.label}</strong>
@@ -386,7 +825,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
                       href="/account"
                       role="menuitem"
                       className="menu-item"
-                      onClick={() => setMenuOpen(false)}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        setMenuOpen(false);
+                        setAccountModalOpen(true);
+                      }}
                     >
                       {NAV_LABELS[lang].account}
                     </Link>
@@ -401,12 +844,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
             )}
           </div>
         </div>
+        )}
       </header>
       )}
 
-      <main className={`app-main${isViaExperience ? " home-main" : ""}`}>{children}</main>
+      <main className={`app-main${usesViaHeader ? " home-main" : ""}${isWomenPage ? " women-main" : ""}${isKidsPage ? " kids-main" : ""}${isMenPage ? " men-main" : ""}${isAccountPage ? " account-main" : ""}`}>{pageContent}</main>
 
-      <nav className={`bottom-nav${isViaExperience ? " home-bottom-nav" : ""}`} aria-label={t("appshell.nav.bottom_aria")}>
+      <nav className={`bottom-nav${usesViaHeader ? " home-bottom-nav" : ""}`} aria-label={t("appshell.nav.bottom_aria")}>
         {tabs.map((tab) => {
           const activeTab =
             tab.key === "account"
@@ -420,6 +864,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
               href={tab.href}
               className={activeTab ? "active" : ""}
               aria-current={activeTab ? "page" : undefined}
+              onClick={tab.key === "account" ? (event) => {
+                event.preventDefault();
+                setAccountModalOpen(true);
+              } : undefined}
             >
               {TAB_ICONS[tab.key]}
               <span>{NAV_LABELS[lang][tab.key]}</span>
@@ -441,6 +889,39 @@ export default function AppShell({ children }: { children: ReactNode }) {
     {lang === "ar" ? "EN" : "AR"}
   </button>
 </footer>
+      {accountModalOpen && (
+        <div
+          className="account-modal-overlay"
+          role="presentation"
+          onMouseDown={() => setAccountModalOpen(false)}
+        >
+          <section
+            className="account-modal-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label={NAV_LABELS[lang].account}
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <iframe className="account-modal-frame" src="/account?embed=account" title={NAV_LABELS[lang].account} />
+          </section>
+        </div>
+      )}
  </>
 );
+}
+
+/** Visual pass: the workspace menu's icons (same line style as the header's). */
+function WorkspaceIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 9.5 5.5 4h13L20 9.5M4 9.5a2.7 2.7 0 0 0 5.3 0 2.7 2.7 0 0 0 5.4 0 2.7 2.7 0 0 0 5.3 0M5.5 12v8h13v-8M10 20v-5h4v5" />
+    </svg>
+  );
+}
+function LeaveIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="icon-flip-rtl">
+      <path d="M15 4h3a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-3M10 8l-4 4 4 4M6 12h10" />
+    </svg>
+  );
 }
