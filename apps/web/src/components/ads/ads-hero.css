@@ -1,0 +1,237 @@
+/* Advertising hero (AI Studio AdvertisingHero). Ported from Tailwind. */
+
+.ads .ah {
+  position: relative;
+  width: 100%;
+  /* ~650 px on desktop, responsive to the screen height. */
+  height: clamp(560px, 90vh, 650px);
+  overflow: hidden;
+  background: #E8E5DF;
+  user-select: none;
+  touch-action: pan-y;
+}
+@media (max-width: 767px) { .ads .ah { height: clamp(560px, 86svh, 660px); } }
+
+.ah-slide { position: absolute; inset: 0; z-index: 0; opacity: 0; pointer-events: none; transition: opacity 0.7s ease-in-out; }
+.ah-slide[data-on] { z-index: 10; opacity: 1; pointer-events: auto; }
+.ah-media { position: absolute; inset: 0; overflow: hidden; }
+.ah-media img { width: 100%; height: 100%; object-fit: cover; object-position: var(--pos, center); will-change: transform; }
+@media (max-width: 767px) { .ah-media img { object-position: var(--pos-m, var(--pos, center)); } }
+.ah-media img.is-zoom { animation: ah-zoom 3.2s cubic-bezier(0.25, 1, 0.5, 1) forwards; }
+@keyframes ah-zoom { from { transform: scale(1); } to { transform: scale(1.035); } }
+.ah-vignette {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, rgba(28, 25, 23, 0.15), transparent 50%, rgba(28, 25, 23, 0.1));
+  pointer-events: none;
+}
+
+/* Text block: placed per slide (left/top/maxWidth set inline). */
+.ah-text { position: absolute; z-index: 20; top: var(--t); left: var(--l); max-width: var(--mw); padding: 0 24px; }
+@media (max-width: 767px) {
+  .ah-text.has-m { top: var(--t-m); left: var(--l-m); width: 100%; max-width: var(--mw-m); }
+}
+@media (min-width: 640px) { .ah-text { padding: 0 32px; } }
+.ah-text.is-center { transform: translateX(-50%); width: 100%; }
+.ah-text .is-ar { text-align: right; }
+.ah-text .is-en { text-align: left; }
+.ah-title {
+  margin: 0;
+  color: var(--stone-900);
+  font-size: 30px;
+  font-weight: 300;
+  line-height: 1.12;
+  letter-spacing: -0.025em;
+}
+@media (min-width: 640px) { .ah-title { font-size: 36px; } }
+@media (min-width: 768px) { .ah-title { font-size: 48px; } }
+@media (min-width: 1024px) { .ah-title { font-size: 60px; } }
+/* Arabic: Amiri regular - elegant, not heavy; tall line height for its
+   ascenders, balanced wrapping so a line never breaks lopsided. */
+.ah-title { text-wrap: balance; }
+.ah-text .is-ar .ah-title { font-family: var(--ads-ar-serif); font-size: 30px; font-weight: 400; line-height: 1.4; letter-spacing: 0; }
+@media (min-width: 640px) { .ah-text .is-ar .ah-title { font-size: 38px; } }
+@media (min-width: 768px) { .ah-text .is-ar .ah-title { font-size: 46px; } }
+@media (min-width: 1024px) { .ah-text .is-ar .ah-title { font-size: 54px; } }
+.ah-text .is-en .ah-title { font-family: var(--ads-serif); font-weight: 400; }
+
+/* "[store] presents": a small spaced line above the title (as on the
+   brand references). */
+.ah-eyebrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 10px; color: var(--stone-800); font-size: 13px; font-weight: 500; }
+.ah-text .is-en .ah-eyebrow { font-family: var(--ads-ui); font-size: 11px; font-weight: 600; letter-spacing: 0.28em; text-transform: uppercase; }
+.ah-text .is-ar .ah-eyebrow { font-family: var(--ads-ar); letter-spacing: 0; }
+.ah-text.is-center .ah-eyebrow { justify-content: inherit; }
+.ah-cta {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  margin-top: 16px;
+  padding: 0 20px;
+  border: 1px solid rgba(28, 25, 23, 0.85);
+  border-radius: 999px;
+  color: var(--stone-900) !important;
+  font-size: 13px;
+  font-weight: 600;
+  transition: background-color 0.25s, color 0.25s;
+}
+.ah-text .is-en .ah-cta { font-family: var(--ads-ui); letter-spacing: 0.06em; }
+a.ah-cta:hover { background: var(--stone-900); color: #fff !important; }
+.ah-sub { max-width: 448px; margin: 10px 0 0; color: var(--stone-800); font-size: 16px; font-weight: 400; }
+@media (min-width: 640px) { .ah-sub { margin-top: 12px; font-size: 18px; } }
+@media (min-width: 768px) { .ah-sub { font-size: 20px; } }
+.ah-text .is-ar .ah-sub { font-family: var(--ads-ar); line-height: 1.625; }
+.ah-text .is-en .ah-sub { font-family: var(--ads-ui); letter-spacing: 0.025em; }
+
+/* Store block (bottom right): no box - type straight on the image, with a
+   soft light wash behind it only, so it reads on every slide. */
+.ah-store { position: absolute; z-index: 30; right: 16px; bottom: 76px; width: min(300px, calc(100% - 32px)); }
+@media (min-width: 640px) { .ah-store { right: 32px; bottom: 64px; } }
+@media (min-width: 768px) { .ah-store { right: 48px; } }
+.ah-store-wash {
+  position: absolute;
+  z-index: -1;
+  inset: -40px -48px -36px -56px;
+  background: radial-gradient(closest-side, rgba(250, 248, 245, 0.6), rgba(250, 248, 245, 0.28) 60%, rgba(250, 248, 245, 0));
+  pointer-events: none;
+}
+.ah-store-in { display: flex; flex-direction: column; gap: 12px; animation: ads-fade 0.3s ease; }
+.ah-store-head { display: flex; align-items: center; gap: 12px; }
+.ah-store-logo {
+  display: flex;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(28, 25, 23, 0.18);
+  border-radius: 50%;
+  background: var(--stone-900);
+  color: var(--stone-100);
+  font-family: var(--ads-ui);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.ah-store-logo.is-darker { background: var(--stone-800); }
+.ah-store-logo.is-warm { color: #FFFBEB; }
+.ah-store-id { min-width: 0; flex: 1; }
+.ah-store-name-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.ah-store-name { margin: 0; color: var(--stone-900); font-family: var(--ads-serif); font-size: 18px; font-weight: 500; line-height: 1.2; letter-spacing: 0.01em; }
+.ads[lang="ar"] .ah-store-name { font-family: var(--ads-ar-serif); font-size: 19px; font-weight: 700; letter-spacing: 0; }
+.ah-store-line { margin: 3px 0 0; color: var(--stone-700); font-size: 12px; line-height: 1.45; }
+.ah-store-btn {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 0 2px;
+  border-bottom: 1px solid var(--stone-900);
+  color: var(--stone-900) !important;
+  font-size: 13px;
+  font-weight: 600;
+}
+.ah-store-btn svg { width: 14px; height: 14px; transition: transform 0.2s; }
+a.ah-store-btn:hover svg { transform: translate(2px, -2px); }
+.ads[dir="rtl"] a.ah-store-btn:hover svg { transform: translate(-2px, -2px); }
+.ah-store-btn.is-unavailable { border-bottom-style: dashed; border-color: var(--stone-600); color: var(--stone-800) !important; }
+
+/* Controls (bottom-left): counter, bars, arrows. */
+/* Follows the page direction, as in the design (RTL flips the row). */
+.ah-controls { position: absolute; z-index: 30; left: 16px; bottom: 24px; display: flex; align-items: center; gap: 16px; }
+@media (min-width: 640px) { .ah-controls { left: 32px; bottom: 32px; gap: 24px; } }
+@media (min-width: 768px) { .ah-controls { left: 48px; } }
+.ah-count {
+  padding: 4px 10px;
+  border: 1px solid rgba(231, 229, 228, 0.5);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.6);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+  color: rgba(41, 37, 36, 0.8);
+  font-family: var(--ads-ui);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+}
+@media (min-width: 640px) { .ah-count { font-size: 14px; } }
+.ah-count b { color: var(--stone-900); font-weight: 600; }
+.ah-count i { margin: 0 4px; color: var(--stone-400); font-style: normal; }
+.ah-count span { color: var(--stone-500); }
+.ah-bars { display: flex; align-items: center; gap: 8px; }
+.ah-bar {
+  position: relative;
+  width: 16px;
+  height: 6px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  transition: width 0.3s;
+}
+.ah-bar[aria-current] { width: 36px; }
+/* Larger hit area without changing the drawn bar. */
+.ah-bar::after { content: ""; position: absolute; inset: -10px -4px; }
+.ah-bar-fill { position: absolute; inset: 0; overflow: hidden; border-radius: 999px; background: var(--stone-900); transform: scaleX(0); transform-origin: left; }
+.ads[dir="rtl"] .ah-bar-fill { transform-origin: right; }
+.ah-bar-fill[data-run] { animation: ah-fill var(--ah-time) linear forwards; }
+.ah[data-paused] .ah-bar-fill[data-run] { animation-play-state: paused; }
+@keyframes ah-fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+.ah-arrows { display: flex; align-items: center; gap: 6px; margin-inline-start: 4px; }
+.ah-arrow {
+  display: flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid rgba(231, 229, 228, 0.5);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--stone-800);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  cursor: pointer;
+  transition: background-color 0.2s, transform 0.2s;
+}
+.ah-arrow:hover { background: #fff; transform: scale(1.05); }
+.ah-arrow:active { transform: scale(0.95); }
+.ah-arrow svg { width: 16px; height: 16px; }
+@media (pointer: coarse) { .ah-arrow { width: 40px; height: 40px; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .ah-slide { transition: none; }
+  .ah-media img.is-zoom { animation: none; }
+}
+
+/* ------------------------------------------- light copy (per slide) */
+/* For a slide whose copy sits on a dark part of its image: light type over
+   a soft shade local to the copy (never across the whole image). */
+.ah-text.is-light::before { content: ""; position: absolute; z-index: -1; inset: -36px -40px; background: radial-gradient(closest-side, rgba(20, 17, 14, 0.5), rgba(20, 17, 14, 0.22) 65%, rgba(20, 17, 14, 0)); pointer-events: none; }
+.ah-text.is-light .ah-title { color: #FBF8F3; filter: none; text-shadow: 0 1px 12px rgba(0, 0, 0, 0.25); }
+.ah-text.is-light :is(.ah-eyebrow, .ah-sub) { color: rgba(251, 248, 243, 0.92); }
+.ah-text.is-light .ah-cta { border-color: rgba(251, 248, 243, 0.9); color: #FBF8F3 !important; }
+.ah-text.is-light .ads-demo { border-color: rgba(251, 248, 243, 0.7); color: #FBF8F3; }
+@media (max-width: 767px) {
+  .ah-text.is-light-m::before { content: ""; position: absolute; z-index: -1; inset: -28px 0; background: radial-gradient(closest-side, rgba(20, 17, 14, 0.5), rgba(20, 17, 14, 0.22) 65%, rgba(20, 17, 14, 0)); pointer-events: none; }
+  .ah-text.is-light-m .ah-title { color: #FBF8F3; filter: none; text-shadow: 0 1px 12px rgba(0, 0, 0, 0.25); }
+  .ah-text.is-light-m :is(.ah-eyebrow, .ah-sub) { color: rgba(251, 248, 243, 0.92); }
+  .ah-text.is-light-m .ah-cta { border-color: rgba(251, 248, 243, 0.9); color: #FBF8F3 !important; }
+  .ah-text.is-light-m .ads-demo { border-color: rgba(251, 248, 243, 0.7); color: #FBF8F3; }
+}
+
+/* Store block on a dark corner: light type, a faint dark wash. */
+.ah-store.is-light .ah-store-wash { background: radial-gradient(closest-side, rgba(20, 17, 14, 0.36), rgba(20, 17, 14, 0.14) 60%, rgba(20, 17, 14, 0)); }
+.ah-store.is-light :is(.ah-store-name, .ah-store-btn, .ah-store-btn.is-unavailable) { color: #FBF8F3 !important; border-color: rgba(251, 248, 243, 0.85); }
+.ah-store.is-light .ah-store-line { color: rgba(251, 248, 243, 0.85); }
+.ah-store.is-light .ah-store-logo { border-color: rgba(251, 248, 243, 0.5); }
+.ah-store.is-light .ads-demo { border-color: rgba(251, 248, 243, 0.7); color: #FBF8F3; }
+@media (max-width: 767px) {
+  /* On phones each slide sets its own tone (is-light-m), whatever desktop uses. */
+  .ah-store.is-light:not(.is-light-m) .ah-store-wash { background: radial-gradient(closest-side, rgba(250, 248, 245, 0.6), rgba(250, 248, 245, 0.28) 60%, rgba(250, 248, 245, 0)); }
+  .ah-store.is-light:not(.is-light-m) :is(.ah-store-name, .ah-store-btn) { color: var(--stone-900) !important; border-color: var(--stone-900); }
+  .ah-store.is-light:not(.is-light-m) .ah-store-btn.is-unavailable { color: var(--stone-800) !important; border-color: var(--stone-600); }
+  .ah-store.is-light:not(.is-light-m) .ah-store-line { color: var(--stone-700); }
+  .ah-store.is-light:not(.is-light-m) .ah-store-logo { border-color: rgba(28, 25, 23, 0.18); }
+  .ah-store.is-light:not(.is-light-m) .ads-demo { border-color: rgba(120, 113, 108, 0.7); color: var(--stone-500); }
+}

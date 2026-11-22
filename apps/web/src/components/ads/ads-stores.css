@@ -1,0 +1,67 @@
+/* DISCOVER STORES (AI Studio FeaturedStoresSection). */
+
+.fs-title {
+  margin: 0;
+  color: var(--stone-900);
+  font-family: var(--ads-serif);
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.025em;
+  text-transform: uppercase;
+}
+.ads[lang="ar"] .fs-title { font-family: var(--ads-ar); }
+@media (min-width: 640px) { .fs-title { font-size: 30px; } }
+@media (min-width: 1024px) { .fs-title { font-size: 34px; } }
+.fs .ads-cats { overflow-x: auto; padding: 4px 0; scrollbar-width: none; }
+.fs-viewall { flex: none; padding-bottom: 1px; border-bottom: 1px solid var(--stone-800); color: var(--stone-800); font-size: 12px; font-weight: 600; }
+.fs .ads-strip-track { gap: 16px; padding-bottom: 16px; }
+@media (min-width: 640px) { .fs .ads-strip-track { gap: 18px; } }
+
+.fs-card {
+  display: flex;
+  width: 230px;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-start;
+  cursor: pointer;
+  scroll-snap-align: start;
+}
+.fs-card.is-static { cursor: default; }
+@media (min-width: 640px) { .fs-card { width: 240px; } }
+@media (min-width: 768px) { .fs-card { width: 250px; } }
+.fs-cover {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 5 / 3;
+  overflow: hidden;
+  border: 1px solid rgba(231, 229, 228, 0.8);
+  border-radius: 16px;
+  background: var(--stone-200);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: transform 0.3s, box-shadow 0.3s;
+}
+.fs-card:hover .fs-cover { transform: translateY(-4px); box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
+.fs-cover img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.5s ease-out; will-change: transform; }
+.fs-card:hover .fs-cover img { transform: scale(1.03); }
+.fs-shade { position: absolute; inset: 0; background: linear-gradient(to top, rgba(12, 10, 9, 0.25), transparent 50%); pointer-events: none; }
+.fs-badge { position: absolute; z-index: 10; top: 10px; inset-inline-end: 10px; pointer-events: none; }
+.ads[dir="ltr"] .fs-badge { right: 10px; }
+.fs-id { display: block; width: 100%; margin-top: 12px; padding: 0 4px; }
+.fs-name-row { display: flex; align-items: center; gap: 10px; }
+.fs-card:hover .ads-mono { transform: scale(1.05); }
+.fs-name { min-width: 0; flex: 1 1 auto; overflow: hidden; margin: 0; color: var(--stone-900); font-size: 14px; font-weight: 600; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; transition: color 0.2s; }
+.fs-card:hover .fs-name { color: var(--stone-700); }
+.fs-cats { display: block; overflow: hidden; margin-top: 4px; color: var(--stone-500); font-size: 11px; font-weight: 300; text-overflow: ellipsis; white-space: nowrap; }
+.fs-browse { display: flex; align-items: center; gap: 4px; margin-top: 8px; color: var(--stone-700); font-size: 12px; font-weight: 500; transition: color 0.2s; }
+.ads[lang="ar"] .fs-browse { font-size: 11px; }
+.fs-browse span { padding-bottom: 1px; border-bottom: 1px solid transparent; }
+.fs-card:hover .fs-browse:not(.is-unavailable) { color: var(--stone-950); }
+.fs-card:hover .fs-browse:not(.is-unavailable) span { border-color: var(--stone-900); }
+.fs-browse svg { width: 14px; height: 14px; transition: transform 0.2s; }
+.fs-browse.is-unavailable { cursor: default !important; }
+
+/* DISCOVER STORES: the same editorial heading as the other sections. */
+.ads-intro.fs-intro { padding-bottom: 14px; border-bottom: 0; }
+.fs-bar { padding-top: 14px; border-top: 1px solid rgba(231, 229, 228, 0.6); }

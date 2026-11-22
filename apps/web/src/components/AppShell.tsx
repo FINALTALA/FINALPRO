@@ -136,7 +136,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const isManagementEmbed = embedMode === "management";
   const isAccountEmbed = embedMode === "account";
   const isHomePage = pathname === "/";
-  const isViaExperience = pathname === "/" || pathname === "/women" || pathname === "/kids" || pathname === "/men";
+  // The trend page uses the same campaign header as the homepage.
+  const isTrendPage = pathname === "/trending";
+  // The ads page shows the homepage header as it is on the homepage (over
+  // its full-bleed campaign hero).
+  const isAdsPage = pathname === "/ads";
+  const usesTrendChrome = isTrendPage;
+  const isViaExperience = pathname === "/" || pathname === "/women" || pathname === "/kids" || pathname === "/men" || isTrendPage || isAdsPage;
   const isShoppingProfilePage = pathname === "/profile";
   const isNotificationsPage = pathname === "/notifications";
   const isCartPage = pathname === "/cart";
@@ -554,7 +560,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         <header
           key={pathname}
           ref={homeHeaderRef}
-          className={`${homeStyles.homeHeader}${(isShoppingProfilePage || isCartPage) ? ` ${homeStyles.profileLightHeader}` : ""}${(isShoppingProfilePage || isCartPage) ? ` ${homeStyles.cartGlassHeader}` : ""}`}
+          className={`${homeStyles.homeHeader}${(isShoppingProfilePage || isCartPage) ? ` ${homeStyles.profileLightHeader}` : ""}${(isShoppingProfilePage || isCartPage) ? ` ${homeStyles.cartGlassHeader}` : ""}${usesTrendChrome ? " trend-page-header" : ""}`}
         >
           <div className={homeStyles.headerInner}>
             <Link href="/" className={homeStyles.brand} aria-label="VIA - الرئيسية">
@@ -586,12 +592,25 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 أطفال
               </Link>
               <Link href="/profile?tab=following" className={homeStyles.navLink}>أتابعه</Link>
-              <Link href="/trending" className={homeStyles.navLink}>الترند</Link>
-              <Link href="/ads" className={homeStyles.navLink}>الإعلانات</Link>
+              <Link
+                href="/trending"
+                className={`${homeStyles.navLink}${isTrendPage ? ` ${homeStyles.navCurrent}` : ""}`}
+                aria-current={isTrendPage ? "page" : undefined}
+              >
+                الترند
+              </Link>
+              <Link
+                href="/ads"
+                className={`${homeStyles.navLink}${isAdsPage ? ` ${homeStyles.navCurrent}` : ""}`}
+                aria-current={isAdsPage ? "page" : undefined}
+              >
+                الإعلانات
+              </Link>
               <span className={homeStyles.navPending} aria-disabled="true">عن VIA</span>
             </nav>
 
-            <div className={homeStyles.headerTools}>
+            {/* via-header-tools: stable hook for page-scoped styling (trend page). */}
+            <div className={`${homeStyles.headerTools} via-header-tools`}>
               <form
                 className={`${homeStyles.homeSearch}${homeSearchOpen ? ` ${homeStyles.homeSearchOpen}` : ""}`}
                 role="search"
@@ -848,7 +867,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
       </header>
       )}
 
-      <main className={`app-main${usesViaHeader ? " home-main" : ""}${isWomenPage ? " women-main" : ""}${isKidsPage ? " kids-main" : ""}${isMenPage ? " men-main" : ""}${isAccountPage ? " account-main" : ""}`}>{pageContent}</main>
+      <main className={`app-main${usesViaHeader ? " home-main" : ""}${isWomenPage ? " women-main" : ""}${isKidsPage ? " kids-main" : ""}${isMenPage ? " men-main" : ""}${isAccountPage ? " account-main" : ""}${usesTrendChrome ? " trend-main" : ""}`}>{pageContent}</main>
 
       <nav className={`bottom-nav${usesViaHeader ? " home-bottom-nav" : ""}`} aria-label={t("appshell.nav.bottom_aria")}>
         {tabs.map((tab) => {

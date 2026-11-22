@@ -1,0 +1,48 @@
+/* =========================================================================
+   Page-scoped site chrome for the pages that show the campaign header on a
+   light page (/trending): dark header icons and the floating language
+   switch. AppShell adds .trend-page-header / .trend-main on those pages only,
+   so these never match elsewhere. Imported by TrendStage.
+   ========================================================================= */
+.app-main.trend-main { min-height: 0; padding-bottom: 0; }
+.app-main.trend-main ~ .app-footer {
+  position: fixed;
+  z-index: 45;
+  top: 12px;
+  left: 10px;
+  margin: 0;
+  padding: 0;
+  background: none;
+}
+@media (min-width: 768px) and (max-width: 1099px) {
+  /* Tablet: the header row is full; float the switch above the hero bar. */
+  .app-main.trend-main ~ .app-footer { top: auto; bottom: calc(var(--bottom-nav-h, 64px) + 72px); left: 12px; }
+}
+@media (min-width: 900px) and (max-width: 1099px) {
+  .app-main.trend-main ~ .app-footer { bottom: 72px; }
+}
+@media (max-width: 767px) {
+  .app-main.trend-main ~ .app-footer { top: 22px; right: 100px; left: auto; }
+}
+.trend-page-header { direction: rtl; }
+.trend-page-header .via-header-tools a,
+.trend-page-header .via-header-tools button { color: #292929; }
+.trend-page-header .via-header-tools a:hover,
+.trend-page-header .via-header-tools a:focus-visible,
+.trend-page-header .via-header-tools button:hover,
+.trend-page-header .via-header-tools button:focus-visible {
+  background: rgba(0, 0, 0, 0.05);
+  color: #111111;
+}
+.trend-page-header .via-header-tools .badge-count { background: #292929; color: #fff; }
+.trend-page-header .via-header-tools input { color: #292929; }
+.trend-page-header .via-header-tools input::placeholder { color: rgba(41, 41, 41, 0.55); }
+.trend-page-header .via-header-tools form:focus-within {
+  border-color: rgba(41, 41, 41, 0.22);
+  background: rgba(255, 255, 255, 0.7);
+}
+.trend-page-header nav::after { display: none; }
+.trend-page-header nav::before {
+  filter: blur(1.5px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.1);
+}

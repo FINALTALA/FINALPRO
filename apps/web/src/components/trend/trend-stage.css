@@ -1,0 +1,280 @@
+/* =========================================================================
+   /trending hero - camera track after the Jordan reference (REF/).
+   Positions are the reference layout, measured from its frames and
+   mirrored for RTL. ts- prefixed classes; variables scoped to .ts-hero.
+   Figures and panels move with transforms only (set from JS).
+   ========================================================================= */
+
+.ts-hero {
+  --ts-ink: #141313;
+  --ts-muted: #6B6762;
+  --ts-line: rgba(20, 19, 19, 0.16);
+  --ts-wine: #5B2333;
+  --ts-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ts-bar-h: 58px;
+  --ts-ar: var(--ts-font-ar), "IBM Plex Sans Arabic", "Segoe UI", Tahoma, sans-serif;
+  --ts-latin: var(--ts-font-latin), "Syne", "Arial Black", sans-serif;
+  position: relative;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  isolation: isolate;
+  direction: rtl;
+  background: #FFFFFF;
+  color: var(--ts-ink);
+  font-family: var(--ts-ar);
+  touch-action: pan-y;
+  -webkit-font-smoothing: antialiased;
+}
+:where(.ts-hero) *, :where(.ts-hero) *::before, :where(.ts-hero) *::after { box-sizing: border-box; }
+:where(.ts-hero) svg { display: block; }
+.ts-hero :focus-visible { outline: 2px solid var(--ts-ink); outline-offset: 3px; border-radius: 4px; }
+.ts-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Until the first scene is decoded the track stays hidden (no half-loaded
+   frame); every box is already sized, so nothing shifts when it appears. */
+.ts-stage, .ts-word, .ts-panels { transition: opacity 0.5s var(--ts-ease); }
+.ts-hero:not([data-ready]) :is(.ts-stage, .ts-word, .ts-panels) { opacity: 0; }
+
+/* ------------------------------------------------- background word */
+.ts-word {
+  position: absolute;
+  z-index: 0;
+  top: 27%;
+  left: 0;
+  display: flex;
+  color: #F3F3F2;
+  font-family: var(--ts-latin);
+  font-size: 13vw;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+  direction: ltr;
+  pointer-events: none;
+  user-select: none;
+  will-change: transform;
+}
+.ts-word-unit { flex: none; }
+
+/* ------------------------------------------------------- the track */
+.ts-stage { position: absolute; z-index: 1; inset: 0; pointer-events: none; }
+.ts-figure { position: absolute; top: 0; left: 0; transform-origin: 0 0; will-change: transform; }
+.ts-figure img { display: block; width: 100%; height: 100%; user-select: none; -webkit-user-drag: none; }
+
+/* ---------------------------------------------------------- panels */
+.ts-panels { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
+.ts-panel { position: absolute; pointer-events: auto; will-change: transform; }
+.ts-panel[aria-hidden="true"] { pointer-events: none; }
+
+/* Scene 1 - notes column between the two figures (reference: REVIEWS). */
+.ts-panel-notes { top: max(19%, 140px); left: 30vw; width: 24vw; }
+.ts-heading { display: flex; align-items: center; gap: 12px; margin: 0; font-size: clamp(22px, 1.9vw, 34px); font-weight: 700; line-height: 1.2; }
+.ts-heading span { width: 4px; height: 1.05em; background: var(--ts-ink); }
+.ts-notes { display: grid; gap: clamp(12px, 2.2vh, 22px); margin: clamp(16px, 3vh, 28px) 0 0; padding: 0; list-style: none; }
+.ts-notes li { display: grid; gap: 4px; }
+.ts-notes b { font-size: 15px; font-weight: 700; }
+.ts-notes span { color: #3A3734; font-size: 14px; line-height: 1.7; }
+.ts-count { display: block; margin-top: clamp(14px, 2.6vh, 24px); color: var(--ts-muted); font-family: var(--ts-latin); font-size: 13px; font-weight: 700; letter-spacing: 0.06em; direction: ltr; text-align: left; }
+
+/* Scene 2 - look panel on the left (reference: name, sizes, colours, add
+   to cart). No product record exists for this set, so no sizes are shown:
+   eyebrow, name, pieces, three crops of the look, a real collection link.
+   Organised with spacing and hairlines only - no card frame or shadow. */
+.ts-panel-details {
+  top: max(19%, 150px);
+  left: 4vw;
+  width: clamp(340px, 22vw, 400px);
+  max-height: calc(100% - max(19%, 150px) - var(--ts-bar-h) - 28px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.ts-eyebrow { display: block; color: var(--ts-muted); font-size: 13px; font-weight: 600; letter-spacing: 0.02em; }
+.ts-details-title { margin: 6px 0 0; font-size: clamp(26px, 2vw, 36px); font-weight: 700; line-height: 1.2; }
+.ts-details-text { margin: 8px 0 0; color: #3A3734; font-size: 15px; line-height: 1.7; }
+.ts-thumbs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-top: clamp(16px, 2.6vh, 24px);
+  padding-top: clamp(16px, 2.6vh, 24px);
+  border-top: 1px solid var(--ts-line);
+}
+.ts-thumb {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  padding: 0;
+  border: 1px solid var(--ts-line);
+  background-color: #F6F5F3;
+  background-repeat: no-repeat;
+  cursor: zoom-in;
+  transition: border-color 0.25s var(--ts-ease);
+}
+.ts-thumb:hover { border-color: rgba(20, 19, 19, 0.4); }
+.ts-thumb[aria-pressed="true"] { border: 1.5px solid var(--ts-wine); }
+.ts-thumb-label { display: block; margin-top: 6px; color: var(--ts-muted); font-size: 12px; text-align: center; }
+.ts-wide-cta {
+  display: grid;
+  min-height: 52px;
+  place-items: center;
+  margin-top: clamp(18px, 3vh, 28px);
+  background: var(--ts-ink);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background-color 0.3s var(--ts-ease);
+}
+.ts-wide-cta:hover { background: #2B2A28; }
+
+/* Viewer for a selected crop (native modal dialog). Shown no larger than
+   the source pixels allow. */
+.ts-viewer {
+  max-width: 92vw;
+  max-height: 92vh;
+  padding: 0;
+  border: 0;
+  background: #fff;
+  color: var(--ts-ink);
+  font-family: var(--ts-ar);
+  direction: rtl;
+}
+.ts-viewer::backdrop { background: rgba(250, 249, 247, 0.94); }
+.ts-viewer-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 12px 10px 16px; }
+.ts-viewer-head b { font-size: 15px; font-weight: 600; }
+.ts-viewer-close { display: grid; width: 44px; height: 44px; place-items: center; padding: 0; border: 0; background: transparent; color: var(--ts-ink); cursor: pointer; }
+.ts-viewer-close svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.ts-viewer-img {
+  height: min(80vh, var(--h));
+  max-width: 92vw;
+  aspect-ratio: var(--ar);
+  margin: 0 auto;
+  background-repeat: no-repeat;
+}
+
+/* Scene 3 - closing shot: copy in the free space on the far left. */
+.ts-panel-title { left: 4vw; bottom: calc(var(--ts-bar-h) + max(9vh, 64px)); width: min(26vw, 460px); }
+.ts-title { margin: 0; color: #2A2826; font-size: clamp(38px, 3.4vw, 64px); font-weight: 700; line-height: 1.12; }
+.ts-title span { display: block; }
+.ts-sub { margin: 12px 0 0; color: #4A4643; font-size: clamp(15px, 1vw, 18px); }
+.ts-collection-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  margin-top: clamp(18px, 3vh, 26px);
+  padding: 0 22px;
+  background: var(--ts-ink);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: gap 0.3s var(--ts-ease), background-color 0.3s var(--ts-ease);
+}
+.ts-collection-cta svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.ts-collection-cta:hover { gap: 14px; background: #2B2A28; }
+
+/* ------------------------------------------------------ bottom bar */
+/* Minimal light bar (matches the editorial header below): hairline on top,
+   neutral type, a thin ink progress line. Same controls as before. */
+.ts-bar {
+  position: absolute;
+  z-index: 4;
+  right: 5vw;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  width: 53vw;
+  height: var(--ts-bar-h);
+  padding: 0 4px;
+  border-top: 1px solid #D8D8D5;
+  background: #F7F7F5;
+  color: #242424;
+  font-size: 13px;
+}
+.ts-bar-label { white-space: nowrap; color: #777777; letter-spacing: 0.01em; }
+.ts-bar-label b { color: #242424; font-weight: 600; }
+.ts-bar-track { position: relative; flex: 1; height: 1px; overflow: hidden; background: #D8D8D5; }
+.ts-bar-fill { position: absolute; inset: -0.5px 0; background: #242424; transform: scaleX(0); transform-origin: right; }
+.ts-play {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: #242424;
+  font: 600 12px/1 var(--ts-ar);
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+.ts-play svg { width: 14px; height: 14px; fill: currentColor; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.ts-play:hover { color: #000; }
+.ts-play:focus-visible { outline-color: #242424; }
+
+.ts-arrows { position: absolute; z-index: 4; left: 4vw; bottom: 8px; display: flex; gap: 14px; direction: ltr; }
+.ts-arrow {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ts-ink);
+  cursor: pointer;
+  transition: background-color 0.3s var(--ts-ease), box-shadow 0.3s var(--ts-ease);
+}
+.ts-arrow svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+/* Reference: the arrows turn into white discs under the pointer. */
+.ts-arrow:hover, .ts-arrow:focus-visible { background: #fff; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16); }
+
+/* --------------------------------- tablet & phone: track band + panel */
+@media (max-width: 1099px) {
+  .ts-hero { --ts-head: calc(clamp(14px, 2vw, 30px) + 82px); --ts-band: calc((100% - var(--ts-head) - var(--ts-bar-h)) * 0.6); }
+  .ts-stage { inset: auto 0 auto; top: var(--ts-head); height: var(--ts-band); overflow: hidden; }
+  .ts-word { top: calc(var(--ts-head) + 6%); font-size: 22vw; }
+  .ts-panel-notes, .ts-panel-details, .ts-panel-title {
+    top: calc(var(--ts-head) + var(--ts-band) + 16px);
+    right: 20px;
+    bottom: auto;
+    left: 20px;
+    width: auto;
+  }
+  /* Panels sit under the image band and scroll inside if they run long. */
+  .ts-panel-details, .ts-panel-title { bottom: calc(var(--ts-bar-h) + 14px); max-height: none; overflow-y: auto; }
+  .ts-title { font-size: clamp(30px, 6vw, 48px); }
+  .ts-thumbs { grid-template-columns: repeat(3, minmax(0, 120px)); }
+  .ts-wide-cta { min-height: 48px; }
+  .ts-bar { right: 0; left: 0; width: auto; padding: 0 12px 0 116px; gap: 12px; }
+  .ts-arrows { left: 8px; bottom: 7px; gap: 6px; z-index: 5; }
+  .ts-arrow { background: #fff; box-shadow: inset 0 0 0 1px #D8D8D5; }
+}
+@media (max-width: 767px) {
+  .ts-hero { --ts-head: 136px; --ts-band: calc((100% - var(--ts-head) - var(--ts-bar-h)) * 0.52); }
+  .ts-notes li:nth-child(n + 2), .ts-count, .ts-bar-label { display: none; }
+  .ts-notes { margin-top: 10px; }
+  .ts-heading { font-size: 21px; }
+  .ts-details-title { font-size: 24px; margin-top: 2px; }
+  .ts-details-text { margin-top: 4px; font-size: 14px; }
+  .ts-thumbs { grid-template-columns: repeat(3, 72px); margin-top: 12px; padding-top: 12px; }
+  .ts-thumb-label { display: none; }
+  .ts-wide-cta { margin-top: 14px; }
+  .ts-title { font-size: 30px; }
+  .ts-sub { margin-top: 6px; }
+  .ts-collection-cta { margin-top: 14px; }
+}
+/* The site's fixed bottom tab bar shows below 900px. */
+@media (max-width: 899px) {
+  .ts-hero {
+    height: calc(100vh - var(--bottom-nav-h, 64px));
+    height: calc(100dvh - var(--bottom-nav-h, 64px) - env(safe-area-inset-bottom, 0px));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ts-stage, .ts-word, .ts-panels, .ts-thumb, .ts-wide-cta, .ts-collection-cta, .ts-arrow { transition: none; }
+}

@@ -14,7 +14,8 @@ registerTranslations({
 // Home-page footer: every link is a real route that already exists
 // elsewhere in the app (discovery segments, following, account). No
 // external/social links are invented - the platform has none today.
-export default function Footer() {
+/** brand: the name shown in the footer (the trend and ads pages show VIA). */
+export default function Footer({ brand = "FINALPRO" }: { brand?: string }) {
   const lang = useLang();
   const t = (key: string) => translate(lang, key);
   const segments = SEGMENTS.filter((s) => s.key !== "all");
@@ -23,7 +24,7 @@ export default function Footer() {
       <div className="footer-grid">
         <div className="footer-col footer-brand">
           <span className="app-logo-mark">
-            FINALPRO
+            {brand}
           </span>
           <p>{t("foot.about")}</p>
         </div>
@@ -45,7 +46,7 @@ export default function Footer() {
         </div>
       </div>
       <div className="footer-bottom">
-        <span>{t("foot.rights")}</span>
+        <span>{t("foot.rights").replace("FINALPRO", brand)}</span>
       </div>
     </footer>
   );

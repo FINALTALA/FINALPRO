@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import type { ReactNode } from "react";
 import SafeImage from "./SafeImage";
 import StoreCircle from "./StoreCircle";
 import { ComparisonCardDto } from "@/lib/types";
@@ -51,6 +52,11 @@ interface ProductCardProps {
    * inside one store's own page.
    */
   navigationMode?: "compare" | "offer";
+  /** Link for the image, name and cart button instead of the place
+   *  navigationMode picks (a card for a piece that has no Via offer yet). */
+  href?: string;
+  /** Extra badges drawn over the image (women presentation). */
+  overlay?: ReactNode;
 }
 
 export default function ProductCard({
@@ -61,6 +67,8 @@ export default function ProductCard({
   favoritePending = false,
   onToggleFavorite,
   navigationMode = "compare",
+  href,
+  overlay,
 }: ProductCardProps) {
   const lang = useLang();
   const t = (key: string) => translate(lang, key);
@@ -71,9 +79,10 @@ export default function ProductCard({
   // The image, the name and the cart icon all open the same place; the
   // heart and the small store logos keep their own behaviour.
   const openHref =
-    navigationMode === "offer"
+    href ??
+    (navigationMode === "offer"
       ? `/store/${card.cheapest_offer.vendor_slug}/products/${card.cheapest_offer.offer_id}`
-      : compareHref;
+      : compareHref);
   const options = [...colors.map((c) => c.label), ...card.sizes];
   const category = card.category_name ? pickText(lang, card.category_name_en, card.category_name) : null;
   const meta = [card.brand_name, category].filter(Boolean).join(" · ");
@@ -99,7 +108,7 @@ export default function ProductCard({
           </Link>
           {card.bestseller && <BestsellerBadge mark={card.bestseller} />}
 
-          <Link
+          {card.store_count > 0 && <Link
             href={compareHref}
             className="women-product-card-stores"
             aria-label={fmt(t("shop.compare_between"), { stores: storeCountLabel(lang, card.store_count) })}
@@ -109,7 +118,7 @@ export default function ProductCard({
             {visibleStores.map((logo) => (
               <StoreCircle key={logo.vendor_id} name={logo.display_name} logoUrl={logo.logo_url} size={22} />
             ))}
-          </Link>
+          </Link>}
 
           <span className="women-product-card-ai" title={t("shop.style_look")} role="img" aria-label={t("shop.style_look")}>
             <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -160,6 +169,7 @@ export default function ProductCard({
               )}
             </div>
           )}
+          {overlay}
         </div>
 
         <div className="product-card-body women-product-card-body">
@@ -167,7 +177,7 @@ export default function ProductCard({
             {name}
           </Link>
           <div className="women-product-card-price-row">
-            <span className="product-card-price women-product-card-price">₪ {displayPrice}</span>
+            {card.lowest_price ? <span className="product-card-price women-product-card-price">₪ {displayPrice}</span> : <span />}
             <span
               className="women-product-card-rating"
               aria-label={typeof card.rating !== "number" ? t("shop.no_rating") : fmt(t("shop.rating_of"), { r: card.rating.toFixed(1) })}
