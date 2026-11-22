@@ -1,7 +1,7 @@
 "use client";
 
 import { Amiri, Cairo, Inter_Tight, Playfair_Display, Plus_Jakarta_Sans } from "next/font/google";
-import { useEffect, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { useAdsLang } from "./adsCopy";
 import "./ads.css";
 
@@ -25,39 +25,8 @@ const ADS_FONT_VARS = [cairo.variable, amiri.variable, playfair.variable, jakart
 export default function AdsPageShell({ children }: { children: ReactNode }) {
   const { lang, dir } = useAdsLang();
 
-  // The site header is fixed over the hero. Past the hero it glides up and
-  // fades, the way it does on the home and trend pages (same CSS variable),
-  // so it never sits on the sections below. Page-scoped; undone on leave.
-  useEffect(() => {
-    const header = document.querySelector<HTMLElement>("header");
-    const hero = document.querySelector<HTMLElement>(".ads .ah");
-    if (!header || !hero) return;
-    let frame = 0;
-    const update = () => {
-      frame = 0;
-      const end = hero.getBoundingClientRect().top + window.scrollY + hero.offsetHeight;
-      const start = end - Math.min(340, hero.offsetHeight * 0.34);
-      const p = Math.min(Math.max((window.scrollY - start) / 230, 0), 1);
-      header.style.setProperty("--via-home-header-scroll", String(p));
-      header.style.pointerEvents = p >= 1 ? "none" : "";
-      header.style.visibility = p >= 1 ? "hidden" : "";
-    };
-    const onScroll = () => {
-      if (!frame) frame = requestAnimationFrame(update);
-    };
-    update();
-    window.addEventListener("scroll", onScroll, { passive: true });
-    window.addEventListener("resize", onScroll);
-    return () => {
-      window.removeEventListener("scroll", onScroll);
-      window.removeEventListener("resize", onScroll);
-      cancelAnimationFrame(frame);
-      header.style.removeProperty("--via-home-header-scroll");
-      header.style.removeProperty("pointer-events");
-      header.style.removeProperty("visibility");
-    };
-  }, []);
-
+  // The site header (AppShell) stays fixed over the hero and turns into a
+  // light sticky bar on scroll - nothing page-specific to do here.
   return (
     <div className={`ads ${ADS_FONT_VARS}`} lang={lang} dir={dir}>
       {children}

@@ -235,7 +235,8 @@
 
 /* --------------------------------- tablet & phone: track band + panel */
 @media (max-width: 1099px) {
-  .ts-hero { --ts-head: calc(clamp(14px, 2vw, 30px) + 82px); --ts-band: calc((100% - var(--ts-head) - var(--ts-bar-h)) * 0.6); }
+  /* --ts-head: bottom of the fixed site header (home-via.module.css). */
+  .ts-hero { --ts-head: calc(clamp(8px, 1.2vw, 20px) + 73px); --ts-band: calc((100% - var(--ts-head) - var(--ts-bar-h)) * 0.6); }
   .ts-stage { inset: auto 0 auto; top: var(--ts-head); height: var(--ts-band); overflow: hidden; }
   .ts-word { top: calc(var(--ts-head) + 6%); font-size: 22vw; }
   .ts-panel-notes, .ts-panel-details, .ts-panel-title {
@@ -255,7 +256,7 @@
   .ts-arrow { background: #fff; box-shadow: inset 0 0 0 1px #D8D8D5; }
 }
 @media (max-width: 767px) {
-  .ts-hero { --ts-head: 136px; --ts-band: calc((100% - var(--ts-head) - var(--ts-bar-h)) * 0.52); }
+  .ts-hero { --ts-head: 74px; --ts-band: calc((100% - var(--ts-head) - var(--ts-bar-h)) * 0.52); }
   .ts-notes li:nth-child(n + 2), .ts-count, .ts-bar-label { display: none; }
   .ts-notes { margin-top: 10px; }
   .ts-heading { font-size: 21px; }

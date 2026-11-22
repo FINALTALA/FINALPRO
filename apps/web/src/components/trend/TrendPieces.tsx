@@ -238,12 +238,10 @@ export default function TrendPieces() {
     return () => io.disconnect();
   }, []);
 
-  // The page header and the floating language switch are fixed over the
-  // hero. Now that the page scrolls on into this grid, they leave the way
-  // they do on the home page (glide up and fade as the hero ends), driven by
-  // the same --via-home-header-scroll variable, so they never sit on cards.
+  // The floating language switch is fixed over the hero. Now that the page
+  // scrolls on into this grid, it fades out as the hero ends so it never
+  // sits on cards. (The site header itself stays, as a light sticky bar.)
   useEffect(() => {
-    const header = document.querySelector<HTMLElement>(".trend-page-header");
     const lang = document.querySelector<HTMLElement>(".app-main.trend-main ~ .app-footer");
     const hero = document.querySelector<HTMLElement>(".ts-hero");
     let frame = 0;
@@ -252,13 +250,10 @@ export default function TrendPieces() {
       const heroEnd = hero ? hero.getBoundingClientRect().top + window.scrollY + hero.offsetHeight : window.innerHeight;
       const fadeStart = heroEnd - Math.min(340, hero ? hero.offsetHeight * 0.34 : 340);
       const progress = Math.min(Math.max((window.scrollY - fadeStart) / 230, 0), 1);
-      for (const node of [header, lang]) {
-        if (!node) continue;
-        node.style.pointerEvents = progress >= 1 ? "none" : "";
-        node.style.visibility = progress >= 1 ? "hidden" : "";
-      }
-      header?.style.setProperty("--via-home-header-scroll", String(progress));
-      if (lang) lang.style.opacity = String(1 - progress);
+      if (!lang) return;
+      lang.style.pointerEvents = progress >= 1 ? "none" : "";
+      lang.style.visibility = progress >= 1 ? "hidden" : "";
+      lang.style.opacity = String(1 - progress);
     };
     const onScroll = () => {
       if (!frame) frame = requestAnimationFrame(update);
@@ -270,9 +265,8 @@ export default function TrendPieces() {
       window.removeEventListener("scroll", onScroll);
       window.removeEventListener("resize", onScroll);
       cancelAnimationFrame(frame);
-      for (const node of [header, lang]) node?.style.removeProperty("pointer-events");
-      for (const node of [header, lang]) node?.style.removeProperty("visibility");
-      header?.style.removeProperty("--via-home-header-scroll");
+      lang?.style.removeProperty("pointer-events");
+      lang?.style.removeProperty("visibility");
       lang?.style.removeProperty("opacity");
     };
   }, []);
