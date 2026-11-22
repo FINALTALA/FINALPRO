@@ -10,10 +10,13 @@ import {
   BagIcon,
   BellIcon,
   CartIcon,
+  CloseIcon,
   CompassIcon,
   HeartIcon,
   HomeIcon,
+  MenuIcon,
   SearchIcon,
+  SupportIcon,
   UserIcon,
 } from "./Icons";
 import {
@@ -56,7 +59,7 @@ import { useLang, useSyncServerLanguagePref, useT } from "@/lib/useLang";
 import LangEffect from "./LangEffect";
 import Toaster from "./Toaster";
 import NotificationsPanel from "./NotificationsPanel";
-import homeStyles from "@/app/home-via.module.css";
+import homeStyles from "./via-header.module.css";
 
 const TAB_ICONS: Record<NavLink["key"], ReactNode> = {
   home: <HomeIcon />,
@@ -82,6 +85,25 @@ const NAV_LABELS: Record<Lang, Record<NavLink["key"], string>> = {
 // no navigation of their own - AppShell renders bare on them, see the
 // pathname check below.
 const AUTH_PAGE_PATHS = new Set(["/login", "/register", "/reset-password", "/reactivate"]);
+
+// The Via header's main links, in RTL reading order. A null href is a
+// section that is not built yet - it is shown, but not clickable.
+const VIA_NAV: { label: string; href: string | null }[] = [
+  { label: "الرئيسية", href: "/" },
+  { label: "نساء", href: "/women" },
+  { label: "رجال", href: "/men" },
+  { label: "أطفال", href: "/kids" },
+  { label: "الترند", href: "/trending" },
+  { label: "الإعلانات", href: "/ads" },
+  { label: "عن VIA", href: null },
+];
+
+// The header settles into a light, sticky bar once the page moves.
+const subscribeToScroll = (onChange: () => void) => {
+  window.addEventListener("scroll", onChange, { passive: true });
+  return () => window.removeEventListener("scroll", onChange);
+};
+const readHeaderScrolled = () => window.scrollY > 24;
 
 // Sprint 13: the one app shell every page renders inside - a sticky
 // header on desktop (logo, search, main links, account/workspace menu)
@@ -142,7 +164,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   // its full-bleed campaign hero).
   const isAdsPage = pathname === "/ads";
   const usesTrendChrome = isTrendPage;
-  const isViaExperience = pathname === "/" || pathname === "/women" || pathname === "/kids" || pathname === "/men" || isTrendPage || isAdsPage;
+  const isViaExperience = isHomePage || pathname === "/women" || pathname === "/kids" || pathname === "/men" || isTrendPage || isAdsPage;
   const isShoppingProfilePage = pathname === "/profile";
   const isNotificationsPage = pathname === "/notifications";
   const isCartPage = pathname === "/cart";
@@ -221,53 +243,29 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const wsMenuRef = useRef<HTMLDivElement>(null);
   const homeSearchInputRef = useRef<HTMLInputElement>(null);
   const homeHeaderRef = useRef<HTMLElement>(null);
+  // The Via header: its collapsed (tablet/phone) link menu, and whether the
+  // page has moved (the header then settles into a light, sticky bar).
+  const [homeNavOpen, setHomeNavOpen] = useState(false);
+  const headerScrolled = useSyncExternalStore(subscribeToScroll, readHeaderScrolled, () => false);
 
-  // The Via header belongs to the first screen only. As the visitor leaves
-  // that screen, it glides upward and fades instead of staying over content.
+  // The collapsed navigation menu closes on an outside tap or Escape.
   useEffect(() => {
-    if (!isViaExperience && !isShoppingProfilePage) {
-      const header = homeHeaderRef.current;
-      header?.style.setProperty("--via-home-header-scroll", "0");
-      if (header) header.style.pointerEvents = "";
-      return;
+    if (!homeNavOpen) return;
+    function onPointer(e: PointerEvent) {
+      if (homeHeaderRef.current && !homeHeaderRef.current.contains(e.target as Node)) {
+        setHomeNavOpen(false);
+      }
     }
-
-    let frame = 0;
-    const updateHeader = () => {
-      frame = 0;
-      const hero = document.querySelector<HTMLElement>(
-        isShoppingProfilePage
-          ? ".shopping-profile-hero"
-          : (isWomenPage || isKidsPage || isMenPage)
-            ? (isKidsPage ? ".kids-hero" : isMenPage ? ".men-hero" : ".women-hero")
-            : `.${homeStyles.hero}`,
-      );
-      // The campaign fades into the category area before the hero element's
-      // literal bottom. Begin the header exit at that visual fade, not after
-      // the full element has already scrolled away.
-      const heroEnd = hero
-        ? hero.getBoundingClientRect().top + window.scrollY + hero.offsetHeight
-        : window.innerHeight;
-      const fadeStart = heroEnd - Math.min(340, hero?.offsetHeight ? hero.offsetHeight * .34 : 340);
-      const progress = Math.min(Math.max((window.scrollY - fadeStart) / 230, 0), 1);
-      const header = homeHeaderRef.current;
-      if (!header) return;
-      header.style.setProperty("--via-home-header-scroll", String(progress));
-      header.style.pointerEvents = progress >= 1 ? "none" : "";
-    };
-    const onScroll = () => {
-      if (!frame) frame = window.requestAnimationFrame(updateHeader);
-    };
-
-    updateHeader();
-    window.addEventListener("scroll", onScroll, { passive: true });
-    window.addEventListener("resize", onScroll);
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setHomeNavOpen(false);
+    }
+    document.addEventListener("pointerdown", onPointer);
+    document.addEventListener("keydown", onKey);
     return () => {
-      window.removeEventListener("scroll", onScroll);
-      window.removeEventListener("resize", onScroll);
-      if (frame) window.cancelAnimationFrame(frame);
+      document.removeEventListener("pointerdown", onPointer);
+      document.removeEventListener("keydown", onKey);
     };
-  }, [isViaExperience, isShoppingProfilePage, isWomenPage, isKidsPage, isMenPage]);
+  }, [homeNavOpen]);
 
   useEffect(() => {
     if (!homeSearchOpen) return;
@@ -347,6 +345,42 @@ export default function AppShell({ children }: { children: ReactNode }) {
     e.preventDefault();
     const q = query.trim();
     router.push(q ? `/discovery?q=${encodeURIComponent(q)}` : "/discovery");
+  }
+
+  // The search icon focuses (or, on small screens, opens) the field; with
+  // text in it, it searches.
+  function onHomeSearchButton() {
+    if (query.trim()) {
+      homeSearchInputRef.current?.form?.requestSubmit();
+      return;
+    }
+    setHomeNavOpen(false);
+    setHomeSearchOpen(true);
+    homeSearchInputRef.current?.focus();
+  }
+
+  function renderViaNav(className: string) {
+    return VIA_NAV.map(({ label, href }) => {
+      if (!href) {
+        return (
+          <span key={label} className={`${className} ${homeStyles.navPending}`} aria-disabled="true" title={t("appshell.soon")}>
+            {label}
+          </span>
+        );
+      }
+      const current = pathname === href;
+      return (
+        <Link
+          key={label}
+          href={href}
+          className={`${className}${current ? ` ${homeStyles.navCurrent}` : ""}`}
+          aria-current={current ? "page" : undefined}
+          onClick={() => setHomeNavOpen(false)}
+        >
+          {label}
+        </Link>
+      );
+    });
   }
 
   // TB-26: choosing a workspace in the account menu IS the explicit step -
@@ -560,62 +594,61 @@ export default function AppShell({ children }: { children: ReactNode }) {
         <header
           key={pathname}
           ref={homeHeaderRef}
-          className={`${homeStyles.homeHeader}${(isShoppingProfilePage || isCartPage) ? ` ${homeStyles.profileLightHeader}` : ""}${(isShoppingProfilePage || isCartPage) ? ` ${homeStyles.cartGlassHeader}` : ""}${usesTrendChrome ? " trend-page-header" : ""}`}
+          className={[
+            homeStyles.homeHeader,
+            // Light pages get the header's dark-ink variant: /trending, and the
+            // shopping profile and cart canvases.
+            usesTrendChrome ? `${homeStyles.headerInk} trend-page-header` : (isShoppingProfilePage || isCartPage) ? homeStyles.headerInk : "",
+            headerScrolled || homeNavOpen ? homeStyles.headerScrolled : "",
+          ].filter(Boolean).join(" ")}
         >
           <div className={homeStyles.headerInner}>
-            <Link href="/" className={homeStyles.brand} aria-label="VIA - الرئيسية">
-              <Image className={homeStyles.brandLogo} src="/images/via-logo.svg" alt="" width={70} height={56} priority />
-              <span className={homeStyles.brandName}>ViA</span>
-            </Link>
+            <button
+              type="button"
+              className={homeStyles.menuToggle}
+              aria-label={homeNavOpen ? t("appshell.menu_close") : t("appshell.menu_open")}
+              aria-expanded={homeNavOpen}
+              aria-controls="via-header-menu"
+              onClick={() => {
+                setHomeSearchOpen(false);
+                setHomeNavOpen((v) => !v);
+              }}
+            >
+              {homeNavOpen ? <CloseIcon /> : <MenuIcon />}
+            </button>
+
+            <div className={homeStyles.brandArea}>
+              <Link href="/" className={homeStyles.brand} aria-label="VIA - الرئيسية" onClick={() => setHomeNavOpen(false)}>
+                <Image className={homeStyles.brandLogo} src="/images/via-logo.svg" alt="" width={70} height={56} priority />
+                <span className={homeStyles.brandName}>ViA</span>
+              </Link>
+              {/* The header row stays RTL; the tagline itself follows the site language. */}
+              <span className={homeStyles.brandTagline} lang={lang} dir={lang === "ar" ? "rtl" : "ltr"}>
+                {t("appshell.tagline")}
+              </span>
+            </div>
 
             <nav className={homeStyles.homeNav} aria-label="التنقل الرئيسي">
-              <Link
-                href="/"
-                className={`${homeStyles.navLink}${isHomePage ? ` ${homeStyles.navCurrent}` : ""}`}
-                aria-current={isHomePage ? "page" : undefined}
-              >
-                الرئيسية
-              </Link>
-              <Link href="/men" className={`${homeStyles.navLink}${isMenPage ? ` ${homeStyles.navCurrent}` : ""}`} aria-current={isMenPage ? "page" : undefined}>رجال</Link>
-              <Link
-                href="/women"
-                className={`${homeStyles.navLink}${isWomenPage ? ` ${homeStyles.navCurrent}` : ""}`}
-                aria-current={isWomenPage ? "page" : undefined}
-              >
-                نساء
-              </Link>
-              <Link
-                href="/kids"
-                className={`${homeStyles.navLink}${isKidsPage ? ` ${homeStyles.navCurrent}` : ""}`}
-                aria-current={isKidsPage ? "page" : undefined}
-              >
-                أطفال
-              </Link>
-              <Link href="/profile?tab=following" className={homeStyles.navLink}>أتابعه</Link>
-              <Link
-                href="/trending"
-                className={`${homeStyles.navLink}${isTrendPage ? ` ${homeStyles.navCurrent}` : ""}`}
-                aria-current={isTrendPage ? "page" : undefined}
-              >
-                الترند
-              </Link>
-              <Link
-                href="/ads"
-                className={`${homeStyles.navLink}${isAdsPage ? ` ${homeStyles.navCurrent}` : ""}`}
-                aria-current={isAdsPage ? "page" : undefined}
-              >
-                الإعلانات
-              </Link>
-              <span className={homeStyles.navPending} aria-disabled="true">عن VIA</span>
+              {renderViaNav(homeStyles.navLink)}
             </nav>
 
-            {/* via-header-tools: stable hook for page-scoped styling (trend page). */}
+            {/* via-header-tools: stable hook for page-scoped styling (trend page).
+                Order (RTL, right to left): search, favourites, account, notifications, cart, support. */}
             <div className={`${homeStyles.headerTools} via-header-tools`}>
               <form
                 className={`${homeStyles.homeSearch}${homeSearchOpen ? ` ${homeStyles.homeSearchOpen}` : ""}`}
                 role="search"
                 onSubmit={onSearch}
               >
+                <button
+                  type="button"
+                  className={homeStyles.searchToggle}
+                  aria-label={t("appshell.search.submit_aria")}
+                  aria-expanded={homeSearchOpen}
+                  onClick={onHomeSearchButton}
+                >
+                  <SearchIcon />
+                </button>
                 <input
                   ref={homeSearchInputRef}
                   className={homeStyles.homeSearchInput}
@@ -624,20 +657,26 @@ export default function AppShell({ children }: { children: ReactNode }) {
                   placeholder={t("appshell.search.placeholder")}
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
+                  onFocus={() => setHomeSearchOpen(true)}
                   onKeyDown={(e) => {
-                    if (e.key === "Escape") setHomeSearchOpen(false);
+                    if (e.key === "Escape") {
+                      setHomeSearchOpen(false);
+                      e.currentTarget.blur();
+                    }
                   }}
                 />
                 <button
                   type="button"
-                  className={homeStyles.searchToggle}
-                  aria-label={t("appshell.search.submit_aria")}
-                  aria-expanded={homeSearchOpen}
-                  onClick={() => setHomeSearchOpen(true)}
+                  className={homeStyles.searchClose}
+                  aria-label={t("appshell.search.close")}
+                  onClick={() => setHomeSearchOpen(false)}
                 >
-                  <SearchIcon />
+                  <CloseIcon />
                 </button>
               </form>
+              <Link href="/profile?tab=favorites" className={homeStyles.toolLink} aria-label="أحببته">
+                <HeartIcon />
+              </Link>
               <Link
                 href="/account"
                 className={homeStyles.toolLink}
@@ -659,15 +698,28 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 <BellIcon />
                 {unreadCount > 0 && <span className="badge-count">{unreadCount}</span>}
               </button>
-              <Link href="/profile?tab=favorites" className={homeStyles.toolLink} aria-label="أحببته">
-                <HeartIcon />
-              </Link>
               <Link href="/cart" className={homeStyles.toolLink} aria-label={NAV_LABELS[lang].cart}>
                 <CartIcon />
                 {cartCount > 0 && <span className="badge-count">{cartCount}</span>}
               </Link>
+              {/* No help centre exists yet: the entry point is in place, inactive. */}
+              <button
+                type="button"
+                className={`${homeStyles.toolLink} ${homeStyles.toolPending}`}
+                aria-label={t("appshell.support_soon")}
+                title={t("appshell.support_soon")}
+                aria-disabled="true"
+              >
+                <SupportIcon />
+              </button>
             </div>
           </div>
+
+          {homeNavOpen && (
+            <nav id="via-header-menu" className={homeStyles.headerMenu} aria-label="التنقل الرئيسي">
+              {renderViaNav(homeStyles.headerMenuLink)}
+            </nav>
+          )}
         </header>
         <NotificationsPanel open={notificationsPanelOpen} onClose={closeNotificationsPanel} />
         </>

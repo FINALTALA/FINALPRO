@@ -182,3 +182,15 @@ export const TagIcon = () => (
     <circle cx="8" cy="8" r="1.4" />
   </Icon>
 );
+export const SupportIcon = () => (
+  <Icon>
+    <path d="M4.5 13.5v-1.8a7.5 7.5 0 0 1 15 0v1.8" />
+    <path d="M4.5 13.5a1.5 1.5 0 0 1 1.5-1.5h1v5H6a1.5 1.5 0 0 1-1.5-1.5v-2ZM19.5 13.5A1.5 1.5 0 0 0 18 12h-1v5h1a1.5 1.5 0 0 0 1.5-1.5v-2Z" />
+    <path d="M18 17v.5a2.5 2.5 0 0 1-2.5 2.5H13" />
+  </Icon>
+);
+export const CloseIcon = () => (
+  <Icon>
+    <path d="m6 6 12 12M18 6 6 18" />
+  </Icon>
+);

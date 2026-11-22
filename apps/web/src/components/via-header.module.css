@@ -1,0 +1,476 @@
+/* The Via header (AppShell) - the approved design, scoped to the header.
+   Taken from the header part of app/home-via.module.css as approved
+   (fonts, the header's own variables, its rules and breakpoints); the
+   homepage's own styles stay in home-via.module.css. The light-page
+   variant (.headerInk) also covers the shopping profile and the cart. */
+
+@font-face {
+  font-family: "Via Birds of Paradise";
+  src: url("/fonts/birds-of-paradise.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Via Arslan Wessam";
+  src: url("/fonts/(A) Arslan Wessam B (A) Arslan Wessam B.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Via Far Vosta";
+  src: url("/fonts/Far.Vosta Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Via Baloo";
+  src: url("/fonts/BalooBhaijaan2-SemiBold.ttf") format("truetype");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+:global(:root) {
+  /* Reusable identity token: use this variable wherever the VIA wordmark is
+     needed, without changing the Arabic UI font. */
+  --via-logo-font: "Via Birds of Paradise", Georgia, "Times New Roman", serif;
+}
+
+.homeHeader {
+  --via-brand-font: var(--via-logo-font);
+  --via-ink: #241b20;
+  --via-cream: #f7f2ea;
+  --via-wine: #4a1626;
+  --via-gold: #cda55e;
+  font-family: "Finalpro Noto", "Segoe UI", sans-serif;
+}
+
+/* Keep ordinary interface copy highly readable; display and action faces are
+   assigned below to create a deliberate hierarchy. */
+.homeHeader * {
+  font-family: "Finalpro Noto", "Segoe UI", sans-serif !important;
+}
+
+/* ------------------------------------------------------------------ header
+   One row, RTL: logo | main links | search capsule + utility icons.
+   Transparent over the campaign photo; a light sticky bar once the page
+   scrolls (.headerScrolled) or on light pages (.headerInk, trend). Below
+   1000px the links fold into a menu and search opens as a full-width bar. */
+.homeHeader {
+  --via-header-fg: #fffaf4;
+  --via-header-fg-soft: rgba(255, 250, 244, .8);
+  --via-header-line: rgba(255, 250, 244, .42);
+  --via-header-hover: rgba(255, 250, 244, .12);
+  --via-header-shadow: 0 1px 12px rgba(0, 0, 0, .34);
+  position: fixed;
+  top: clamp(8px, 1.2vw, 20px);
+  right: 0;
+  left: 0;
+  z-index: 40;
+  direction: rtl;
+  color: var(--via-header-fg);
+  background: transparent;
+  border-bottom: 1px solid transparent;
+  transition: top .28s ease, background-color .28s ease, border-color .28s ease, box-shadow .28s ease;
+}
+
+/* A faint top scrim keeps the light links legible on any campaign photo. */
+.homeHeader::before {
+  content: "";
+  position: absolute;
+  inset: calc(-1 * clamp(8px, 1.2vw, 20px)) 0 -36px;
+  z-index: -1;
+  background: linear-gradient(180deg, rgba(14, 9, 11, .34), rgba(14, 9, 11, 0));
+  pointer-events: none;
+  transition: opacity .28s ease;
+}
+
+.headerInk,
+.headerScrolled {
+  --via-header-fg: #241b20;
+  --via-header-fg-soft: rgba(36, 27, 32, .72);
+  --via-header-line: rgba(36, 27, 32, .18);
+  --via-header-hover: rgba(36, 27, 32, .06);
+  --via-header-shadow: none;
+}
+.headerInk::before,
+.headerScrolled::before { opacity: 0; }
+
+.headerScrolled {
+  top: 0;
+  background: rgba(250, 247, 242, .88);
+  border-bottom-color: rgba(36, 27, 32, .07);
+  box-shadow: 0 6px 20px rgba(36, 27, 32, .04);
+  backdrop-filter: saturate(1.3) blur(14px);
+  -webkit-backdrop-filter: saturate(1.3) blur(14px);
+}
+
+.headerInner {
+  display: grid;
+  /* Equal outer tracks centre the links on the page; a track that needs
+     more room than its share simply takes it (fr tracks never go below
+     their content), so nothing overlaps. */
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  column-gap: clamp(16px, 2vw, 36px);
+  width: min(100%, 1600px);
+  min-height: 72px;
+  margin: 0 auto;
+  padding: 6px clamp(18px, 3.2vw, 56px);
+  transition: min-height .28s ease;
+}
+.headerScrolled .headerInner { min-height: 64px; }
+
+/* Logo + tagline, side by side; the logo stays the dominant mark. */
+.brandArea {
+  grid-column: 1;
+  justify-self: start;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+/* Physical right: the header row is always RTL (logo on the right), while
+   the tagline's own dir follows the site language. */
+.brandTagline {
+  padding-block: 3px;
+  padding-right: 14px;
+  border-right: 1px solid var(--via-header-line);
+  color: var(--via-header-fg-soft);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: .01em;
+  white-space: nowrap;
+  text-shadow: var(--via-header-shadow);
+}
+.brandTagline:lang(en) {
+  font-size: 11px;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+}
+
+.brand {
+  display: inline-flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: center;
+  width: 56px;
+  gap: 1px;
+  color: var(--via-header-fg);
+  text-decoration: none;
+}
+
+.brandLogo {
+  display: block;
+  width: 56px;
+  height: 44px;
+  object-fit: contain;
+  object-position: center;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, .22));
+}
+.headerInk .brandLogo,
+.headerScrolled .brandLogo { filter: none; }
+
+.brandName {
+  display: block;
+  width: 100%;
+  text-align: center;
+  font-family: var(--via-brand-font);
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: .08em;
+  line-height: 1;
+}
+
+.homeNav {
+  grid-column: 2;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: clamp(18px, 2.05vw, 40px);
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.navLink,
+.navPending,
+.headerMenuLink {
+  position: relative;
+  color: var(--via-header-fg-soft);
+  background: transparent;
+  font: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color .18s ease;
+}
+
+.navLink,
+.homeNav .navPending {
+  padding: 10px 0;
+  font-size: clamp(14.5px, 1.02vw, 16px);
+  font-weight: 600;
+  letter-spacing: .005em;
+  text-shadow: var(--via-header-shadow);
+}
+
+.navLink::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 4px;
+  left: 0;
+  height: 1px;
+  background: var(--via-gold);
+  transform: scaleX(0);
+  transform-origin: center;
+  transition: transform .2s ease;
+}
+
+.navLink:hover,
+.navLink:focus-visible,
+.navCurrent { color: var(--via-header-fg); }
+.navLink:hover::after,
+.navLink:focus-visible::after,
+.navCurrent::after { transform: scaleX(1); }
+
+.navPending {
+  cursor: default;
+  opacity: .55;
+}
+
+.headerTools {
+  grid-column: 3;
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.toolLink,
+.searchToggle,
+.searchClose,
+.menuToggle {
+  position: relative;
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--via-header-fg);
+  cursor: pointer;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: color .18s ease, background-color .18s ease;
+}
+
+/* Thin, even outline icons across the whole row. */
+.homeHeader svg {
+  width: 21px;
+  height: 21px;
+  stroke-width: 1.5;
+  filter: drop-shadow(var(--via-header-shadow));
+}
+.headerInk svg,
+.headerScrolled svg { filter: none; }
+
+.toolLink :global(.badge-count) {
+  top: 1px;
+  inset-inline-start: 1px;
+  background: var(--via-gold);
+  color: #241b20;
+}
+
+.toolLink:hover,
+.toolLink:focus-visible,
+.searchClose:hover,
+.searchClose:focus-visible,
+.menuToggle:hover,
+.menuToggle:focus-visible {
+  background: var(--via-header-hover);
+}
+
+.toolPending {
+  cursor: default;
+  opacity: .5;
+}
+.toolPending:hover,
+.toolPending:focus-visible { background: transparent; }
+
+/* Desktop: an always-open search capsule, its icon on the reading side. */
+.homeSearch {
+  display: flex;
+  align-items: center;
+  width: clamp(168px, 14vw, 240px);
+  height: 38px;
+  margin-inline-end: 8px;
+  padding-inline-end: 12px;
+  border: 1px solid var(--via-header-line);
+  border-radius: 999px;
+  transition: border-color .2s ease, background-color .2s ease;
+}
+.homeSearch:focus-within {
+  border-color: rgba(205, 165, 94, .75);
+  background: var(--via-header-hover);
+}
+.homeSearch .searchToggle {
+  width: 36px;
+  height: 36px;
+}
+
+/* Scoped under .homeSearch to win over the global input[type="search"]
+   field style (border, surface, min-height, focus ring); the capsule's own
+   border carries the focus state. */
+.homeSearch .homeSearchInput {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--via-header-fg);
+  font: inherit;
+  font-size: 14px;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.homeSearchInput::placeholder { color: var(--via-header-fg-soft); opacity: 1; }
+.homeSearchInput::-webkit-search-cancel-button { display: none; }
+
+.searchClose,
+.menuToggle,
+.headerMenu { display: none; }
+
+@media (max-width: 999px) {
+  .homeHeader { top: 0; }
+  .headerInner {
+    grid-template-columns: auto auto 1fr;
+    column-gap: 4px;
+    min-height: 60px;
+    padding: 4px 10px;
+  }
+  .headerScrolled .headerInner { min-height: 60px; }
+  .homeNav { display: none; }
+  .menuToggle { display: inline-grid; grid-column: 1; width: 42px; height: 42px; }
+  .brandArea { grid-column: 2; gap: 10px; }
+  .brandTagline { padding-right: 10px; }
+  .brand { width: 48px; }
+  .brandLogo { width: 48px; height: 38px; }
+  .brandName { display: none; }
+  .headerTools { grid-column: 3; gap: 0; }
+  .toolLink { width: 40px; height: 40px; }
+
+  /* The capsule folds to its icon; tapping it opens a full-width bar. */
+  .homeSearch {
+    width: auto;
+    height: auto;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+  .homeSearch:focus-within { background: transparent; }
+  .homeSearch .homeSearchInput,
+  .homeSearch .searchClose { display: none; }
+  .homeSearch .searchToggle { width: 40px; height: 40px; }
+
+  .homeSearchOpen,
+  .homeSearchOpen:focus-within {
+    --via-header-fg: #241b20;
+    --via-header-fg-soft: rgba(36, 27, 32, .6);
+    --via-header-hover: rgba(36, 27, 32, .06);
+    position: fixed;
+    top: 8px;
+    right: 10px;
+    left: 10px;
+    z-index: 50;
+    height: 46px;
+    padding: 0 4px;
+    border: 1px solid rgba(36, 27, 32, .1);
+    border-radius: 999px;
+    background: #fbf8f3;
+    box-shadow: 0 12px 30px rgba(20, 12, 16, .16);
+  }
+  .homeSearchOpen svg { filter: none; }
+  .homeSearch.homeSearchOpen .homeSearchInput { display: block; font-size: 16px; }
+  .homeSearch.homeSearchOpen .searchClose { display: inline-grid; }
+
+  .headerMenu {
+    display: grid;
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 10px;
+    left: 10px;
+    padding: 6px 8px;
+    border: 1px solid rgba(36, 27, 32, .08);
+    border-radius: 18px;
+    background: rgba(251, 248, 243, .98);
+    box-shadow: 0 18px 40px rgba(20, 12, 16, .14);
+    max-height: calc(100dvh - 90px);
+    overflow-y: auto;
+  }
+  .headerMenuLink {
+    display: flex;
+    align-items: center;
+    min-height: 50px;
+    padding: 0 12px;
+    border-bottom: 1px solid rgba(36, 27, 32, .06);
+    color: #3a3034;
+    font-size: 16px;
+    font-weight: 600;
+  }
+  .headerMenuLink:last-child { border-bottom: 0; }
+  .headerMenuLink.navCurrent { color: #241b20; }
+  .headerMenuLink.navCurrent::before {
+    content: "";
+    width: 5px;
+    height: 5px;
+    margin-inline-end: 10px;
+    border-radius: 50%;
+    background: var(--via-gold);
+  }
+}
+
+/* Narrow desktops: the full link row leaves room for the Arabic tagline,
+   not the wider English one (measured: ~104-180px free vs ~158px needed). */
+@media (min-width: 1000px) and (max-width: 1099px) {
+  .brandTagline:lang(en) { display: none; }
+}
+
+/* Narrow phones: no room for the tagline beside the icons - logo only. */
+@media (max-width: 559px) {
+  .brandTagline { display: none; }
+}
+
+@media (min-width: 768px) and (max-width: 999px) {
+  .headerInner { min-height: 66px; padding-inline: clamp(16px, 3vw, 32px); }
+  .headerScrolled .headerInner { min-height: 66px; }
+  .headerTools { gap: 4px; }
+  .headerMenu {
+    right: clamp(16px, 3vw, 32px);
+    left: auto;
+    width: min(360px, calc(100% - 32px));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .homeHeader *, .homeHeader *::before, .homeHeader *::after {
+    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
+  }
+}
