@@ -1107,7 +1107,16 @@ describe('Sprint 21 - returns: policy, request, code, receipt, refund (e2e)', ()
       );
       expect(approved.status).toBe(200);
       expect(approved.body.status).toBe('APPROVED_AWAITING_DROPOFF');
-      expect(approved.body.code).toMatch(/^\d{6}$/);
+      // IX-P1: the store's approve answer never carries the raw code; it
+      // exists (6 digits) and only the shopper's own routes return it.
+      expect(approved.body).not.toHaveProperty('code');
+      expect(
+        (
+          await prisma.return.findUniqueOrThrow({
+            where: { id: submitted.body.id },
+          })
+        ).code,
+      ).toMatch(/^\d{6}$/);
 
       const refundCount = await prisma.branchOrderRefund.count({
         where: { branchOrderItemId: itemId },
@@ -1494,7 +1503,9 @@ describe('Sprint 21 - returns: policy, request, code, receipt, refund (e2e)', ()
       expect(res.body.error.details[0].reason_code).toBe('NO_POLICY_SNAPSHOT');
     });
 
-    it('BOLA: an employee of branch A can redeem to branch B of the SAME vendor; an employee of a DIFFERENT vendor cannot', async () => {
+    // IX-P1 (2026-11-23): cross-branch receipt is the OWNER's (an employee only
+    // at her own branch - see the IX-P1 block below); this test always used the owner.
+    it('BOLA: the owner can redeem to branch B of the SAME vendor; another vendor cannot', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId, branchId: branchAId } =
         await createVendorWithBranch(owner);
@@ -1541,7 +1552,7 @@ describe('Sprint 21 - returns: policy, request, code, receipt, refund (e2e)', ()
       expect([403, 409]).toContain(crossVendor.status);
     });
 
-    it('privacy: redeem by an employee of a DIFFERENT branch of the same vendor succeeds (PDR-031) but never receives reason_note/photo_urls/rejection_reason/code in the response', async () => {
+    it('privacy: a cross-branch redeem (by the owner, PDR-031 + IX-P1) never receives reason_note/photo_urls/rejection_reason/code in the response', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const { vendorId, branchId: branchAId } =
         await createVendorWithBranch(owner);
@@ -1657,6 +1668,316 @@ describe('Sprint 21 - returns: policy, request, code, receipt, refund (e2e)', ()
   // ============================================================
   // Privacy: no reason/photos/rejection text in any Outbox payload.
   // ============================================================
+  // ------------------------------------------------------------
+  // IX-P1 (2026-11-23): returns security - the raw drop-off code only for
+  // the shopper who asked; the receiving branch of an employee decided by
+  // the server.
+  // ------------------------------------------------------------
+  describe('IX-P1: the return code and the receiving branch', () => {
+    async function employeeOf(
+      vendorId: string,
+      branchId: string,
+    ): Promise<string> {
+      const phone = uniquePhone();
+      const token = await signup(phone, 'a-strong-password');
+      const user = await prisma.user.findUniqueOrThrow({ where: { phone } });
+      await prisma.vendorUser.create({
+        data: { userId: user.id, vendorId, role: 'BRANCH_EMPLOYEE', branchId },
+      });
+      return token;
+    }
+    const get = (token: string, path: string) =>
+      run(
+        request(app.getHttpServer())
+          .get(`/api/v1/${path}`)
+          .set('Authorization', `Bearer ${token}`),
+      );
+    /** The raw value as a JSON string value anywhere in the answer. */
+    const carries = (body: unknown, code: string) =>
+      JSON.stringify(body).includes(`"${code}"`);
+
+    it('only the shopper who asked sees her code: never another shopper, the owner, the employee or platform staff - in no answer, audit row, outbox payload or stored idempotent answer', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const variantId = await createOfferWithStock(vendorId, branchId, 100, 5);
+      const employee = await employeeOf(vendorId, branchId);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const otherCustomer = await signup(uniquePhone(), 'a-strong-password');
+      const { branchOrderId, itemId } = await placeAndPickUpOrder(
+        owner,
+        customer,
+        vendorId,
+        branchId,
+        variantId,
+      );
+      const submitted = await submitReturn(customer, branchOrderId, itemId);
+      expect(submitted.status).toBe(201);
+      const returnId = submitted.body.id as string;
+
+      // the decision answer (approve issues the code)
+      const approved = await decideReturn(owner, vendorId, branchId, returnId, {
+        decision: 'approve',
+      });
+      expect(approved.status).toBe(200);
+      expect(approved.body.status).toBe('APPROVED_AWAITING_DROPOFF');
+      expect(approved.body).not.toHaveProperty('code');
+      const code = (
+        await prisma.return.findUniqueOrThrow({ where: { id: returnId } })
+      ).code!;
+      expect(code).toMatch(/^\d{6}$/);
+      expect(carries(approved.body, code)).toBe(false);
+
+      // the shopper who asked: her detail and her list
+      const mine = await get(customer, `customers/me/returns/${returnId}`);
+      expect(mine.status).toBe(200);
+      expect(mine.body.code).toBe(code);
+      const myList = await get(customer, 'customers/me/returns');
+      expect(
+        (myList.body as { id: string; code: string }[]).find(
+          (x) => x.id === returnId,
+        )?.code,
+      ).toBe(code);
+
+      // another shopper: not found, and not in her list
+      expect(
+        (await get(otherCustomer, `customers/me/returns/${returnId}`)).status,
+      ).toBe(404);
+      const otherList = await get(otherCustomer, 'customers/me/returns');
+      expect(otherList.status).toBe(200);
+      expect(carries(otherList.body, code)).toBe(false);
+
+      // every store read: the owner and the branch's employee
+      for (const token of [owner, employee]) {
+        const list = await get(
+          token,
+          `vendors/${vendorId}/branches/${branchId}/returns`,
+        );
+        expect(list.status).toBe(200);
+        const row = (list.body as Record<string, unknown>[]).find(
+          (x) => x.id === returnId,
+        );
+        expect(row).toBeDefined();
+        expect(row).not.toHaveProperty('code');
+        expect(row!.status).toBe('APPROVED_AWAITING_DROPOFF');
+        expect(carries(list.body, code)).toBe(false);
+      }
+
+      // platform staff: the escalation list and its decision answer
+      const admin = await platformAdmin();
+      await prisma.return.update({
+        where: { id: returnId },
+        data: { status: 'ESCALATED', escalatedAt: new Date() },
+      });
+      const escalated = await get(admin, 'admin/returns');
+      expect(escalated.status).toBe(200);
+      const escRow = (escalated.body as Record<string, unknown>[]).find(
+        (x) => x.id === returnId,
+      );
+      expect(escRow).toBeDefined();
+      expect(escRow).not.toHaveProperty('code');
+      expect(carries(escalated.body, code)).toBe(false);
+      const resolved = await run(
+        request(app.getHttpServer())
+          .patch(`/api/v1/admin/returns/${returnId}/escalation-decision`)
+          .set('Authorization', `Bearer ${admin}`)
+          .set('Idempotency-Key', unique('esc'))
+          .send({ decision: 'approve' }),
+      );
+      expect(resolved.status).toBe(200);
+      expect(resolved.body).not.toHaveProperty('code');
+      const reissued = (
+        await prisma.return.findUniqueOrThrow({ where: { id: returnId } })
+      ).code!;
+      expect(reissued).toMatch(/^\d{6}$/);
+      expect(carries(resolved.body, reissued)).toBe(false);
+      expect(
+        (await get(customer, `customers/me/returns/${returnId}`)).body.code,
+      ).toBe(reissued);
+
+      // nothing recorded keeps either raw code
+      const audits = await prisma.auditLog.findMany({
+        where: { entityId: returnId },
+      });
+      expect(audits.length).toBeGreaterThan(0);
+      const events = await prisma.outboxEvent.findMany();
+      const stored = await prisma.idempotencyKey.findMany({
+        where: { requestPath: { contains: returnId } },
+      });
+      expect(stored.length).toBeGreaterThan(0);
+      for (const c of [code, reissued]) {
+        for (const a of audits) {
+          expect(carries([a.beforeState, a.afterState], c)).toBe(false);
+        }
+        for (const e of events) expect(carries(e.payload, c)).toBe(false);
+        for (const k of stored) expect(carries(k.responseBody, c)).toBe(false);
+      }
+    });
+
+    it('an employee of branch A cannot receive at branch B: 403, and no status, stock, refund, stock line or audit change; at her own branch it works', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId: branchA } =
+        await createVendorWithBranch(owner);
+      // a store must be eligible before it can add a branch (as the tests above)
+      await makeVendorEligible(vendorId);
+      const branchB = await addBranch(owner, vendorId, 'Branch B');
+      const variantId = await createOfferWithStock(vendorId, branchA, 100, 5);
+      await prisma.branchStock.create({
+        data: {
+          vendorId,
+          branchId: branchB,
+          offerVariantId: variantId,
+          quantity: 3,
+        },
+      });
+      const employeeA = await employeeOf(vendorId, branchA);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const { branchOrderId, itemId } = await placeAndPickUpOrder(
+        owner,
+        customer,
+        vendorId,
+        branchA,
+        variantId,
+      );
+      const submitted = await submitReturn(customer, branchOrderId, itemId);
+      const returnId = submitted.body.id as string;
+      await decideReturn(owner, vendorId, branchA, returnId, {
+        decision: 'approve',
+      }).expect(200);
+      const code = (
+        await prisma.return.findUniqueOrThrow({ where: { id: returnId } })
+      ).code!;
+      const stockOf = async (branchId: string) =>
+        (
+          await prisma.branchStock.findFirstOrThrow({
+            where: { branchId, offerVariantId: variantId },
+          })
+        ).quantity;
+      const before = { a: await stockOf(branchA), b: await stockOf(branchB) };
+
+      const refused = await run(
+        redeemReturn(employeeA, vendorId, {
+          code,
+          receiving_branch_id: branchB,
+          item_condition: 'RESELLABLE',
+        }),
+      );
+      expect(refused.status).toBe(403);
+      expect(refused.body.error.code).toBe('RECEIVING_BRANCH_NOT_ASSIGNED');
+      expect(carries(refused.body, code)).toBe(false);
+      const still = await prisma.return.findUniqueOrThrow({
+        where: { id: returnId },
+      });
+      expect(still.status).toBe('APPROVED_AWAITING_DROPOFF');
+      expect(still.receivingBranchId).toBeNull();
+      expect(still.receivedAt).toBeNull();
+      expect(await stockOf(branchA)).toBe(before.a);
+      expect(await stockOf(branchB)).toBe(before.b);
+      expect(
+        await prisma.branchOrderRefund.count({ where: { returnId } }),
+      ).toBe(0);
+      expect(await prisma.stockMovement.count({ where: { returnId } })).toBe(0);
+      expect(
+        await prisma.auditLog.count({
+          where: {
+            entityId: returnId,
+            action: { in: ['return.received', 'return.refund_processed'] },
+          },
+        }),
+      ).toBe(0);
+
+      // a wrong code at the other branch: the same refusal (says nothing about the code)
+      const wrongCode = code === '000000' ? '000001' : '000000';
+      const refusedWrong = await run(
+        redeemReturn(employeeA, vendorId, {
+          code: wrongCode,
+          receiving_branch_id: branchB,
+          item_condition: 'RESELLABLE',
+        }),
+      );
+      expect(refusedWrong.status).toBe(403);
+      expect(refusedWrong.body.error.code).toBe(
+        'RECEIVING_BRANCH_NOT_ASSIGNED',
+      );
+
+      // at her own branch: received, restocked there, refunded once
+      const ok = await run(
+        redeemReturn(employeeA, vendorId, {
+          code,
+          receiving_branch_id: branchA,
+          item_condition: 'RESELLABLE',
+        }),
+      );
+      expect(ok.status).toBe(201);
+      expect(ok.body.status).toBe('REFUNDED');
+      expect(ok.body.receiving_branch_id).toBe(branchA);
+      expect(await stockOf(branchA)).toBe(before.a + 1);
+      expect(await stockOf(branchB)).toBe(before.b);
+      expect(
+        await prisma.branchOrderRefund.count({ where: { returnId } }),
+      ).toBe(1);
+    });
+
+    it('the owner may receive at any legitimate branch of her store (here branch B), restocked there', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId: branchA } =
+        await createVendorWithBranch(owner);
+      // a store must be eligible before it can add a branch (as the tests above)
+      await makeVendorEligible(vendorId);
+      const branchB = await addBranch(owner, vendorId, 'Branch B');
+      const variantId = await createOfferWithStock(vendorId, branchA, 100, 5);
+      await prisma.branchStock.create({
+        data: {
+          vendorId,
+          branchId: branchB,
+          offerVariantId: variantId,
+          quantity: 3,
+        },
+      });
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const { branchOrderId, itemId } = await placeAndPickUpOrder(
+        owner,
+        customer,
+        vendorId,
+        branchA,
+        variantId,
+      );
+      const submitted = await submitReturn(customer, branchOrderId, itemId);
+      const returnId = submitted.body.id as string;
+      await decideReturn(owner, vendorId, branchA, returnId, {
+        decision: 'approve',
+      }).expect(200);
+      const code = (
+        await prisma.return.findUniqueOrThrow({ where: { id: returnId } })
+      ).code!;
+      const bBefore = (
+        await prisma.branchStock.findFirstOrThrow({
+          where: { branchId: branchB, offerVariantId: variantId },
+        })
+      ).quantity;
+
+      const ok = await run(
+        redeemReturn(owner, vendorId, {
+          code,
+          receiving_branch_id: branchB,
+          item_condition: 'RESELLABLE',
+        }),
+      );
+      expect(ok.status).toBe(201);
+      expect(ok.body.status).toBe('REFUNDED');
+      expect(ok.body.receiving_branch_id).toBe(branchB);
+      expect(
+        (
+          await prisma.branchStock.findFirstOrThrow({
+            where: { branchId: branchB, offerVariantId: variantId },
+          })
+        ).quantity,
+      ).toBe(bBefore + 1);
+      expect(
+        await prisma.branchOrderRefund.count({ where: { returnId } }),
+      ).toBe(1);
+    });
+  });
+
   describe('Outbox privacy', () => {
     it('reason_note, rejection_reason, and photo_urls never appear in any Outbox payload', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');

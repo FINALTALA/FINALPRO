@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { randomInt } from 'crypto';
 import { Prisma } from '../../generated/prisma/client';
 import { AuditLogService } from '../audit/audit-log.service';
 import { lockBranchOperationalStatus } from '../common/branch-operational-lock.util';
@@ -64,10 +65,17 @@ const RESUBMISSION_ALLOWED_STATUSES = [
   'CANCELLED_BY_CUSTOMER',
 ] as const;
 
-function generateReturnCode(): string {
-  return Math.floor(Math.random() * 1_000_000)
-    .toString()
-    .padStart(6, '0');
+/**
+ * IX-P1 (2026-11-23): the drop-off code is a credential - whoever holds it
+ * can make a store record a receipt and a refund - so it comes from the
+ * CSPRNG (`crypto.randomInt`, uniform over 000000-999999), never from
+ * `Math.random`. Same 6-digit format as before. Uniqueness among the
+ * store's OPEN codes is the partial unique index `returns_active_code_key`
+ * (vendorId, code) WHERE status = 'APPROVED_AWAITING_DROPOFF'; a collision
+ * is retried by createCodeWithRetry() (RETURN_CODE_MAX_ATTEMPTS).
+ */
+export function generateReturnCode(): string {
+  return randomInt(0, 1_000_000).toString().padStart(6, '0');
 }
 
 function isUniqueViolation(err: unknown): boolean {
@@ -155,6 +163,22 @@ function returnDto(r: {
 }
 
 /** PD-4: a return for review, with the size-guide version its item was bought under. */
+/**
+ * IX-P1 (2026-11-23, same policy as the pickup code): the raw return code
+ * is ONLY for the shopper who asked for the return, through her own
+ * customer-scoped routes (submit / list / get / cancel / dispute). Every
+ * other reader - the originating branch's owner or employees, and
+ * platform staff resolving an escalation - gets the same DTO WITHOUT the
+ * `code` key (code_expires_at stays: a date, not a credential). The code
+ * is the proof the shopper is at the counter with the item; a store user
+ * who could read it could record a receipt and a refund alone.
+ */
+function withoutCode<T extends { code: unknown }>(dto: T): Omit<T, 'code'> {
+  const copy: Partial<T> = { ...dto };
+  delete copy.code;
+  return copy as Omit<T, 'code'>;
+}
+
 function withSizeGuide(
   r: Parameters<typeof returnDto>[0] & {
     branchOrderItem: {
@@ -774,7 +798,7 @@ export class ReturnsService {
         },
       },
     });
-    return rows.map(withSizeGuide);
+    return rows.map((r) => withoutCode(withSizeGuide(r)));
   }
 
   // ============================================================
@@ -795,7 +819,7 @@ export class ReturnsService {
         },
       },
     });
-    return rows.map(withSizeGuide);
+    return rows.map((r) => withoutCode(withSizeGuide(r)));
   }
 
   async decide(
@@ -867,7 +891,7 @@ export class ReturnsService {
         returnId,
         dto.decision === 'approve' ? 'return.approved' : 'return.rejected',
       );
-      return returnDto(updated);
+      return withoutCode(returnDto(updated));
     });
   }
 
@@ -997,6 +1021,32 @@ export class ReturnsService {
     },
   ) {
     return this.prisma.$transaction(async (tx) => {
+      // IX-P1 (2026-11-23): who may receive WHERE - read fresh from the
+      // membership, never from the request. An employee receives only at
+      // her own assigned branch; the owner at any branch of her store (the
+      // existing same-vendor check below). Checked FIRST - before the code
+      // is even looked up - so a refusal writes nothing (no status, no
+      // stock, no refund) and says nothing about whether the code exists.
+      const actor = await tx.vendorUser.findFirst({
+        where: { userId: actorUserId, vendorId, status: 'ACTIVE' },
+        select: { role: true, branchId: true },
+      });
+      if (!actor) {
+        throw new ForbiddenException({
+          code: 'NOT_VENDOR_MEMBER',
+          message: 'Only an active member of this store can receive a return',
+        });
+      }
+      if (
+        actor.role === 'BRANCH_EMPLOYEE' &&
+        actor.branchId !== dto.receiving_branch_id
+      ) {
+        throw new ForbiddenException({
+          code: 'RECEIVING_BRANCH_NOT_ASSIGNED',
+          message:
+            'A branch employee can receive a return only at her own branch',
+        });
+      }
       const candidate = await tx.return.findFirst({
         where: {
           vendorId,
@@ -1514,7 +1564,7 @@ export class ReturnsService {
           ? 'return.platform_approved_for_store'
           : 'return.platform_rejected_for_store',
       );
-      return returnDto(updated);
+      return withoutCode(returnDto(updated));
     });
   }
 
