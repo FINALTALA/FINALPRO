@@ -82,7 +82,8 @@ test.describe("Branch management", () => {
     await expect(frame.locator(".br-start-link")).toHaveCount(3);
     for (const k of ["orders", "stock", "hours"]) await expect(frame.getByTestId(`br-link-${k}`)).toBeVisible();
     await expect(frame.locator(".hub-tile")).toHaveCount(0);
-    for (const k of ["overview", "orders", "stock", "delivery-windows", "hours", "returns"]) {
+    // 2026-11-23: «الموظفون» is the owner's tab too
+    for (const k of ["overview", "orders", "stock", "delivery-windows", "hours", "returns", "staff"]) {
       await expect(frame.getByTestId(`br-tab-${k}`)).toBeVisible();
       await expect(frame.getByTestId(`br-tab-${k}`).locator("svg")).toHaveCount(1);
     }
@@ -180,6 +181,8 @@ test.describe("Branch management", () => {
     // «نوافذ التوصيل v1» + «ساعات العمل والإغلاقات v1»: the employee also reads the branch's delivery board and hours
     await expect(page.locator(".br-tool")).toHaveCount(6);
     for (const k of ["orders", "stock", "delivery-windows", "hours", "returns"]) await expect(page.getByTestId(`br-tab-${k}`)).toBeVisible();
+    // never «الموظفون» for an employee
+    await expect(page.getByTestId("br-tab-staff")).toHaveCount(0);
     await page.getByTestId("br-tab-stock").click();
     await expect(page).toHaveURL(new RegExp(`/branches/${ramallah}/stock`));
     await expect(page.getByTestId("br-fixed")).toHaveText("فرع رام الله");

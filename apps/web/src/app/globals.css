@@ -3983,6 +3983,49 @@ html[data-embed="management"] .pf-title { display: none; }
   .pf-table td { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border: 0; }
   .pf-table td::before { content: attr(data-label); color: var(--wz-muted, #6e625b); font-size: 0.85rem; }
 }
+/* «حالة المتجر» inside «صفحتي» (2026-11-23): one quiet section above the form */
+.mystatus { display: grid; gap: 10px; inline-size: 100%; max-inline-size: 560px; box-sizing: border-box; margin: 0 0 14px; padding: 14px 16px; border-radius: 14px; border: 1px solid #e7ddd6; background: #fffdf9; }
+.storefront-settings-embed .mystatus { max-inline-size: none; }
+.mystatus-title { margin: 0; font-size: 1.02rem; }
+.mystatus-facts { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 16px; }
+.mystatus-facts dt { font-size: 0.8rem; color: #6e625b; }
+.mystatus-facts dd { margin: 2px 0 0; font-weight: 700; }
+.mystatus-facts dd.is-ok { color: #2f6b49; }
+.mystatus-facts dd.is-warn { color: #8a2a1a; }
+.mystatus-actions { padding: 8px 12px; border-radius: 10px; background: #fbeee0; color: #6b3f10; }
+.mystatus-actions ul { margin: 4px 0 0; padding-inline-start: 18px; }
+.mystatus-link { justify-self: start; display: inline-flex; align-items: center; min-block-size: 44px; color: #64283b; font-weight: 700; }
+.mystatus-link:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(100, 40, 59, 0.35); border-radius: 8px; }
+/* «الموظفون» - the owner tab of «إدارة الفروع» */
+.st { display: grid; gap: 12px; min-inline-size: 0; }
+.st-scope { justify-self: start; display: inline-flex; flex-wrap: wrap; margin: 0; padding: 0; border: 1px solid var(--wz-line-strong); border-radius: 12px; overflow: hidden; }
+.st-scope-opt { position: relative; display: inline-flex; align-items: center; min-block-size: 42px; padding: 0 14px; font-weight: 700; color: var(--wz-muted); background: var(--wz-paper); cursor: pointer; }
+.st-scope-opt + .st-scope-opt { border-inline-start: 1px solid var(--wz-line-strong); }
+.st-scope-opt input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.st-scope-opt.is-on { background: var(--wz-wine-soft); color: var(--wz-wine); }
+.st-scope-opt:focus-within { box-shadow: inset var(--wz-ring); }
+.st-count { margin: 0; }
+.st-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 14px; }
+.st-invite-open {
+  display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-block-size: 44px; padding: 8px 16px; border-radius: 12px;
+  border: 1px solid var(--wz-wine); background: var(--wz-wine); color: #fff; font: inherit; font-weight: 700; cursor: pointer;
+}
+.st-invite-to { font-weight: 500; font-size: 0.85rem; opacity: 0.92; }
+.st-invite-open:focus-visible { outline: none; box-shadow: var(--wz-ring); }
+.st-invites { display: grid; gap: 6px; }
+.st-invites-title { margin: 0; font-size: 0.95rem; color: var(--wz-muted); }
+.st-invites-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.st-invite { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 8px 12px; border-radius: 12px; border: 1px dashed var(--wz-line-strong); }
+@media (max-width: 640px) { .st-invite-open { inline-size: 100%; justify-content: center; } }
+.st-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.st-member { display: grid; gap: 10px; min-inline-size: 0; }
+.st-member-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.st-phone { font-variant-numeric: tabular-nums; }
+.st-branch { display: inline-flex; align-items: center; min-block-size: 24px; padding: 0 10px; border-radius: 999px; background: var(--wz-sand-soft); color: var(--wz-sand-ink); font-size: 0.82rem; font-weight: 700; }
+.st-member-head .badge { margin-inline-start: auto; }
+.st-actions { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 10px; }
+.st-field { margin: 0; flex: 1 1 200px; min-inline-size: 0; }
+.st-field select { inline-size: 100%; max-inline-size: 100%; }
 /* «صفحتي» (2026-11-23): one quiet row above the form - «الرئيسية» opens the home designer in the same window */
 .mypage-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; inline-size: 100%; max-inline-size: 560px; margin: 0 0 14px; }
 .storefront-settings-embed .mypage-head { max-inline-size: none; }

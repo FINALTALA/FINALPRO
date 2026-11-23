@@ -147,7 +147,7 @@ export function ownerHubTiles(vendorId: string): HubTile[] {
     // 2026-11-23 «صفحتي»: the store page's identity (name, logo, cover,
     // contact, link, publishing) and - from its «الرئيسية» action - the home
     // page designer, in the same management window. One card for both.
-    { href: `${base}/storefront`, title: "صفحتي", description: "الشعار والغلاف ومعلومات المتجر وتصميم صفحتك الرئيسية" },
+    { href: `${base}/storefront`, title: "صفحتي", description: "الشعار والغلاف ومعلومات المتجر وحالته وتصميم صفحتك الرئيسية" },
     // «مجموعات المتجر» are reached from «المنتجات والعروض» (its toolbar), not a tile of their own.
     { href: `${base}/offers`, title: "المنتجات والعروض", description: "قائمة عروض المتجر وحالتها" },
     // 2026-11-23: «إدارة الفروع» holds each branch's daily tools (orders - with
@@ -155,9 +155,9 @@ export function ownerHubTiles(vendorId: string): HubTile[] {
     // return-code redeem), «إعدادات الفرع» and «إعدادات المتجر» (delivery
     // zones and fees, the return policy). Their old cards are gone; the old
     // addresses redirect there.
-    { href: `${base}/branches`, title: "إدارة الفروع", description: "طلبات الفروع ومخزونها وتوصيلها وساعاتها وإرجاعاتها، وإعدادات المتجر" },
-    { href: `${base}/staff`, title: "الموظفون", description: "قائمة موظفي الفروع، نقلهم وتعليقهم" },
-    { href: `${base}/verification`, title: "حالة التحقق", description: "نتيجة مراجعة المتجر وملاحظات المراجع" },
+    // 2026-11-23: «الموظفون» is a tab of «إدارة الفروع» (owner only) and
+    // «حالة التحقق» is «حالة المتجر» inside «صفحتي» - no cards of their own.
+    { href: `${base}/branches`, title: "إدارة الفروع", description: "طلبات الفروع ومخزونها وتوصيلها وساعاتها وإرجاعاتها وموظفوها، وإعدادات المتجر" },
     // 2026-11-23 «أداء المتجر»: ONE card for the performance indicators,
     // the sales (online in the last 30 days, the shop's sales log), the
     // customers' reviews and the shop's quick tools (labels, the cashier).

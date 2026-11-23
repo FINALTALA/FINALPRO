@@ -85,7 +85,7 @@ const NAV_LABELS: Record<Lang, Record<NavLink["key"], string>> = {
 // These own a full-bleed design (background photo, glass card) with
 // no navigation of their own - AppShell renders bare on them, see the
 // pathname check below.
-const AUTH_PAGE_PATHS = new Set(["/login", "/register", "/reset-password", "/reactivate"]);
+const AUTH_PAGE_PATHS = new Set(["/login", "/register", "/reset-password", "/reactivate", "/join-team"]);
 
 // The Via header's main links, in RTL reading order. A null href is a
 // section that is not built yet - it is shown, but not clickable.
@@ -207,6 +207,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
       if (/^\/vendor\/[^/]+\/storefront\/?$/.test(path)) return tFrame("mypage.title");
       // «أداء المتجر» (labels and the cashier opened from its tools say «رجوع إلى أداء المتجر»)
       if (/^\/vendor\/[^/]+\/performance\/?$/.test(path)) return tFrame("pf.title");
+      // opened from «صفحتي» › «حالة المتجر» (its «رجوع» returns there)
+      if (/^\/vendor\/[^/]+\/verification\/?$/.test(path)) return tFrame("mystatus.verify_title");
       return null;
     }, (href) => router.push(href), (a, b) => {
       // «إدارة الفروع»: the branches, each branch and its tabs are views of one screen - no «رجوع» between them

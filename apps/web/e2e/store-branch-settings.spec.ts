@@ -106,14 +106,14 @@ test.describe("Branch management and store settings", () => {
     for (const k of ["delivery-zones", "delivery-windows", "orders", "return-policy", "returns/redeem"]) {
       await expect(page.getByTestId(`management-tile-${k}`)).toHaveCount(0);
     }
-    for (const k of ["offers", "storefront", "staff", "verification", "performance"]) await expect(page.getByTestId(`management-tile-${k}`)).toBeVisible();
+    for (const k of ["offers", "storefront", "performance"]) await expect(page.getByTestId(`management-tile-${k}`)).toBeVisible();
   });
 
   test("branch settings: a gear beside the picker (no tab) - details, minimum order, archiving; an archived branch only reads", async ({ page }) => {
     await asOwner(page);
     await page.goto(`/vendor/${vendorId}/branches/${branchA}/orders`);
     await expect(page.getByTestId("br-tabs")).toBeVisible({ timeout: 30_000 });
-    await expect(page.locator(".br-tool")).toHaveCount(6);
+    await expect(page.locator(".br-tool")).toHaveCount(7);
     await expect(page.getByTestId("br-tab-settings")).toHaveCount(0);
     const gear = page.getByTestId("br-branch-settings");
     await expect(gear).toHaveAccessibleName("إعدادات الفرع: فرع رام الله");

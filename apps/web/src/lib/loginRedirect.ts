@@ -20,7 +20,7 @@ const SAME_ORIGIN = "http://same.origin.invalid";
 const SENSITIVE_PARAMS = new Set(["token", "session_token", "workspace_token", "otp", "password"]);
 
 /** Sign-in pages: never a place to come back to (it would loop). */
-const AUTH_PATHS = new Set(["/login", "/register", "/reset-password", "/reactivate"]);
+const AUTH_PATHS = new Set(["/login", "/register", "/reset-password", "/reactivate", "/join-team"]);
 
 function unsafeText(s: string): boolean {
   return s.includes("\\") || /[\u0000-\u001f\u007f]/.test(s);

@@ -222,8 +222,6 @@ const MANAGEMENT_TILE_DETAILS: Record<string, { icon: ManagementTileIconName; ba
   offers: { icon: "tag", badge: "store.tile.2.badge", footer: "store.tile.2.footer" },
   "match-review": { icon: "shield", badge: "store.tile.3.badge", footer: "store.tile.3.footer" },
   branches: { icon: "pin", badge: "store.tile.4.badge", footer: "store.tile.4.footer" },
-  staff: { icon: "team", badge: "store.tile.5.badge", footer: "store.tile.5.footer" },
-  verification: { icon: "document", badge: "store.tile.9.badge", footer: "store.tile.9.footer" },
   performance: { icon: "chart", badge: "store.tile.13.badge", footer: "store.tile.13.footer" },
 };
 const tileKey = (href: string) => href.split("/").slice(3).join("/");
@@ -444,8 +442,10 @@ export default function StorefrontPage() {
     const key = href.split("?")[0].split("/").slice(3).join("/");
     const tiles = ownerHubTiles(ownerVendorId);
     // addresses that moved into «إدارة الفروع» (their old pages redirect there) keep its title
-    const moved = /^(orders|delivery-windows|delivery-zones|return-policy|returns\/redeem|settings)$/.test(key)
+    const moved = /^(orders|delivery-windows|delivery-zones|return-policy|returns\/redeem|settings|staff)$/.test(key)
       ? "branches"
+      : key === "verification"
+        ? "storefront"
       : /^(reviews|sales|store-sales|labels|cashier)$/.test(key)
         ? "performance"
         : key;

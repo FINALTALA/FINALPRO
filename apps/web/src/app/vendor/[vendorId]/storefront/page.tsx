@@ -7,6 +7,7 @@ import SafeImage from "@/components/SafeImage";
 import { apiFetch, ApiError, IMAGE_UPLOAD_ACCEPT, newIdempotencyKey, uploadVendorImage } from "@/lib/api";
 import { clearSession, getSessionToken } from "@/lib/session";
 import StoreCoverControls from "@/components/StoreCoverControls";
+import StoreStatusSection from "@/components/owner/StoreStatusSection";
 import { storeHomeApi } from "@/lib/storeHome";
 import "@/lib/storeHomeText";
 import { useT } from "@/lib/useLang";
@@ -345,6 +346,8 @@ export default function StorefrontSettingsPage() {
 
       {error && <div className="error-banner" style={{ maxWidth: 560, width: "100%" }}>{error}</div>}
       {notice && <p className="muted" style={{ maxWidth: 560, width: "100%" }}>{notice}</p>}
+      {/* «حالة المتجر» (replaces the «حالة التحقق» card): publishing, verification, what needs action */}
+      <StoreStatusSection vendorId={params.vendorId} published={dto.is_published} />
 
       <div className="card storefront-settings-form" style={{ maxWidth: 560 }}>
         <section className="storefront-form-section storefront-basics-section">

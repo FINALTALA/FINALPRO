@@ -117,6 +117,10 @@ function LoginForm() {
         <p className={styles.bottomLink}>
           ليس لديك حساب؟ <Link href="/register">إنشاء حساب</Link>
         </p>
+        <p className={styles.bottomLink}>
+          لديك دعوة للعمل في متجر؟{" "}
+          <Link href="/join-team" data-testid="join-team-entry">انضمام إلى فريق متجر</Link>
+        </p>
       </form>
     </div>
   );

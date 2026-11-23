@@ -56,7 +56,7 @@ test.describe("«صفحتي»", () => {
     await expect(page.getByTestId("management-tile-storefront/home")).toHaveCount(0);
     const tile = page.getByTestId("management-tile-storefront");
     await expect(tile).toContainText("صفحتي");
-    await expect(tile).toContainText("الشعار والغلاف ومعلومات المتجر وتصميم صفحتك الرئيسية");
+    await expect(tile).toContainText("الشعار والغلاف ومعلومات المتجر وحالته وتصميم صفحتك الرئيسية");
     await expect(page.locator(".store-management-grid").getByText("صفحة المتجر", { exact: true })).toHaveCount(0);
     await tile.click();
     await expect(title(page)).toHaveText("صفحتي", { timeout: 30_000 });

@@ -171,6 +171,10 @@ export default function RegisterPage() {
         <p className={styles.bottomLink}>
           لديك حساب؟ <Link href="/login">تسجيل الدخول</Link>
         </p>
+        <p className={styles.bottomLink}>
+          لديك دعوة للعمل في متجر؟{" "}
+          <Link href="/join-team" data-testid="join-team-entry">انضمام إلى فريق متجر</Link>
+        </p>
       </div>
     </div>
   );
