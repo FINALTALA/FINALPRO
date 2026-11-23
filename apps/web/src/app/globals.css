@@ -3952,6 +3952,18 @@ body:has(.account-embedded-page) {
     height: min(94vh, 920px);
   }
 }
+/* «صفحتي» (2026-11-23): one quiet row above the form - «الرئيسية» opens the home designer in the same window */
+.mypage-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; inline-size: 100%; max-inline-size: 560px; margin: 0 0 14px; }
+.storefront-settings-embed .mypage-head { max-inline-size: none; }
+.mypage-head-note { margin: 0; font-size: 0.9rem; line-height: 1.6; flex: 1 1 240px; }
+.mypage-home {
+  display: inline-flex; align-items: center; gap: 7px; min-block-size: 44px; padding: 0 16px; border-radius: 12px;
+  border: 1px solid #c9b8ae; background: #fffdf9; color: #64283b; font-weight: 700; text-decoration: none; white-space: nowrap;
+}
+.mypage-home:hover { border-color: #64283b; background: #f7ecef; }
+.mypage-home:focus-visible, .mypage-back:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(100, 40, 59, 0.35); }
+.mypage-back { display: inline-flex; align-items: center; gap: 6px; min-block-size: 40px; margin: 0 0 8px; color: #64283b; font-weight: 700; text-decoration: none; }
+html[data-embed="management"] .mypage-back { display: none; }
 /* The store settings route becomes the content of the management modal.
    In that context it must read as one continuous editor, not cards nested
    inside another card. The normal full-page route keeps its original UI. */

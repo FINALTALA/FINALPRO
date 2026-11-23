@@ -202,6 +202,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
       if (/^\/vendor\/[^/]+\/store-sales\/?$/.test(path)) return tFrame("pos.sales.title");
       if (/^\/vendor\/[^/]+\/labels\/?$/.test(path)) return tFrame("pos.labels.title");
       if (/^\/vendor\/[^/]+\/storefront\/home\/?$/.test(path)) return tFrame("home.title");
+      // «صفحتي» (the store page's identity; «رجوع» from the designer names it)
+      if (/^\/vendor\/[^/]+\/storefront\/?$/.test(path)) return tFrame("mypage.title");
       return null;
     }, (href) => router.push(href), (a, b) => {
       // «إدارة الفروع»: the branches, each branch and its tabs are views of one screen - no «رجوع» between them

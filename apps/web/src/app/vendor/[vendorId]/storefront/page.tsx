@@ -7,6 +7,9 @@ import SafeImage from "@/components/SafeImage";
 import { apiFetch, ApiError, IMAGE_UPLOAD_ACCEPT, newIdempotencyKey, uploadVendorImage } from "@/lib/api";
 import { clearSession, getSessionToken } from "@/lib/session";
 import StoreCoverControls from "@/components/StoreCoverControls";
+import { storeHomeApi } from "@/lib/storeHome";
+import "@/lib/storeHomeText";
+import { useT } from "@/lib/useLang";
 import { loginRedirectHref } from "@/lib/loginRedirect";
 import {
   coverLookBody,
@@ -72,11 +75,40 @@ function toForm(dto: OwnerStorefrontDto): FormState {
 // boundary - a BRANCH_EMPLOYEE reaching this page by URL still gets
 // refused server-side on every request; this page does not attempt
 // its own role check beyond "is there a session at all."
+// 2026-11-23 «صفحتي»: this page is the store's «صفحتي» card; its header
+// carries «الرئيسية» - the home page designer, opened in the same window
+// (a push, so the window's «رجوع» comes back here). ?open=home (an old
+// designer link, routed here by the store page) opens it at once.
 export default function StorefrontSettingsPage() {
   const params = useParams<{ vendorId: string }>();
   const router = useRouter();
+  const t = useT();
   const searchParams = useSearchParams();
   const isManagementEmbed = searchParams.get("embed") === "management";
+  const openHome = searchParams.get("open") === "home";
+  /** the home designer is offered only while the store home flag is on (like its old card) */
+  const [homeEnabled, setHomeEnabled] = useState<boolean | null>(null);
+  const homeHref = `/vendor/${params.vendorId}/storefront/home`;
+
+  useEffect(() => {
+    let alive = true;
+    storeHomeApi.get(params.vendorId).then(
+      (h) => alive && setHomeEnabled(h.enabled),
+      () => alive && setHomeEnabled(false),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [params.vendorId]);
+
+  // an old designer link: «صفحتي» stays under it (the ?open=home step is dropped from history)
+  useEffect(() => {
+    if (!openHome || homeEnabled === null) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("open");
+    window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+    if (homeEnabled) router.push(homeHref);
+  }, [openHome, homeEnabled, homeHref, router]);
   const [dto, setDto] = useState<OwnerStorefrontDto | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
   // The cover's layers (colour, strength, on/off) - the same controls as
@@ -272,14 +304,32 @@ export default function StorefrontSettingsPage() {
     );
   }
 
+  const homeAction = homeEnabled ? (
+    <Link href={homeHref} className="mypage-home" aria-label={t("mypage.home_aria")} data-testid="mypage-open-home">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <rect x="3.5" y="4" width="17" height="6" rx="1.5" />
+        <rect x="3.5" y="13" width="7.5" height="7" rx="1.5" />
+        <rect x="13" y="13" width="7.5" height="7" rx="1.5" />
+      </svg>
+      <span>{t("mypage.home")}</span>
+    </Link>
+  ) : null;
+
   return (
     <div className={`page-shell storefront-settings-page${isManagementEmbed ? " storefront-settings-embed" : ""}`}>
+      {isManagementEmbed && homeAction && (
+        <div className="mypage-head" data-testid="mypage-head">
+          <p className="muted mypage-head-note">{t("mypage.home_note")}</p>
+          {homeAction}
+        </div>
+      )}
       {!isManagementEmbed && (
         <div className="top-bar">
-          <div className="brand" style={{ margin: 0 }}>
-            إعدادات صفحة المتجر
-          </div>
+          <h1 className="brand" style={{ margin: 0 }}>
+            {t("mypage.title")}
+          </h1>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            {homeAction}
             <span className={`badge${dto.is_published ? " badge-active" : ""}`}>
               {dto.is_published ? "منشور" : "غير منشور"}
             </span>

@@ -148,11 +148,14 @@ test.describe("The store's flexible home page", () => {
   async function openDesigner(page: Page): Promise<FrameLocator> {
     await openStore(page, fixtures.ownerToken);
     await page.locator(".store-manage-button").click();
-    const tile = page.getByTestId("management-tile-storefront/home");
-    await expect(tile).toContainText("تصميم الصفحة الرئيسية", { timeout: 30_000 });
+    // 2026-11-23: one card «صفحتي»; the designer is its «الرئيسية» action, in the same window
+    const tile = page.getByTestId("management-tile-storefront");
+    await expect(tile).toContainText("صفحتي", { timeout: 30_000 });
     await tile.click();
-    await expect(page.getByTestId("management-frame-title")).toHaveText("تصميم الصفحة الرئيسية", { timeout: 30_000 });
+    await expect(page.getByTestId("management-frame-title")).toHaveText("صفحتي", { timeout: 30_000 });
     const frame = page.frameLocator(".store-management-detail-frame");
+    await frame.getByTestId("mypage-open-home").click({ timeout: 30_000 });
+    await expect(page.getByTestId("management-frame-title")).toHaveText("تصميم الصفحة الرئيسية", { timeout: 30_000 });
     await expect(frame.getByTestId("home-designer")).toHaveAttribute("data-view", "list", { timeout: 30_000 });
     return frame;
   }
@@ -189,6 +192,11 @@ test.describe("The store's flexible home page", () => {
       await owner.locator(".store-manage-button").click();
       await expect(owner.locator(".store-management-grid")).toBeVisible({ timeout: 30_000 });
       await expect(owner.getByTestId("management-tile-storefront/home")).toHaveCount(0);
+      // «صفحتي» stays; its «الرئيسية» action follows the flag like the old card did
+      await owner.getByTestId("management-tile-storefront").click();
+      const mine = owner.frameLocator(".store-management-detail-frame");
+      await expect(mine.locator(".storefront-settings-form")).toBeVisible({ timeout: 30_000 });
+      await expect(mine.getByTestId("mypage-open-home")).toHaveCount(0);
     } finally {
       await setFlag(true);
       await owner.close();
@@ -198,7 +206,8 @@ test.describe("The store's flexible home page", () => {
   test("the owner designs in the one management window: hero with two slides (size warnings, never refused), picked products, new arrivals (no «فئات المتجر» offered), a text block; order, hide, delete; autosaved draft; preview desktop/phone; nothing public until «نشر»", async ({ page }) => {
     const frame = await openDesigner(page);
     await expect(frame.getByTestId("home-tab-edit")).toHaveAttribute("aria-selected", "true");
-    await expect(page.getByTestId("management-frame-back")).toHaveCount(0);
+    // the designer sits on «صفحتي»: the window's «رجوع» names it
+    await expect(page.getByTestId("management-frame-back")).toHaveAccessibleName(/صفحتي/);
 
     // Hero: the first image is uploaded when the block is added
     await frame.getByTestId("home-add").click();

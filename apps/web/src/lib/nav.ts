@@ -144,10 +144,10 @@ export interface HubTile {
 export function ownerHubTiles(vendorId: string): HubTile[] {
   const base = `/vendor/${vendorId}`;
   return [
-    { href: `${base}/storefront`, title: "صفحة المتجر", description: "الاسم والشعار والغلاف والتواصل والنشر" },
-    // «الصفحة الرئيسية المرنة للمتجر» (2026-11-20): the store page hides this
-    // tile while store_home_blocks_enabled is off.
-    { href: `${base}/storefront/home`, title: "تصميم الصفحة الرئيسية", description: "بانرات ومجموعات ومنتجات مختارة أعلى قائمة المنتجات" },
+    // 2026-11-23 «صفحتي»: the store page's identity (name, logo, cover,
+    // contact, link, publishing) and - from its «الرئيسية» action - the home
+    // page designer, in the same management window. One card for both.
+    { href: `${base}/storefront`, title: "صفحتي", description: "الشعار والغلاف ومعلومات المتجر وتصميم صفحتك الرئيسية" },
     // «مجموعات المتجر» are reached from «المنتجات والعروض» (its toolbar), not a tile of their own.
     { href: `${base}/offers`, title: "المنتجات والعروض", description: "قائمة عروض المتجر وحالتها" },
     // 2026-11-23: «إدارة الفروع» holds each branch's daily tools (orders - with

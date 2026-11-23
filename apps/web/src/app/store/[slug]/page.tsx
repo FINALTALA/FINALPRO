@@ -228,7 +228,6 @@ const MANAGEMENT_TILE_DETAILS: Record<string, { icon: ManagementTileIconName; ba
   performance: { icon: "chart", badge: "store.tile.13.badge", footer: "store.tile.13.footer" },
   "store-sales": { icon: "barcode", badge: "", footer: "pos.tile.sales_hint" },
   labels: { icon: "barcode", badge: "", footer: "pos.tile.labels_hint" },
-  "storefront/home": { icon: "grid", badge: "", footer: "" },
 };
 const tileKey = (href: string) => href.split("/").slice(3).join("/");
 
@@ -431,7 +430,9 @@ export default function StorefrontPage() {
     setInboxVersion((v) => v + 1);
   });
   /** Where a store notification leads - for the owner, inside the management window. */
-  function openFromInbox(href: string) {
+  function openFromInbox(target: string) {
+    // the home designer opens from inside «صفحتي» (its «رجوع» goes back there)
+    const href = /^\/vendor\/[^/?]+\/storefront\/home\/?(\?|$)/.test(target) ? target.replace(/\/storefront\/home\/?/, "/storefront").replace(/\?|$/, (m) => (m ? "?open=home&" : "?open=home")) : target;
     if (!ownerVendorId) {
       router.push(href);
       return;
@@ -1987,7 +1988,6 @@ export default function StorefrontPage() {
             <div className="hub-grid store-management-grid">
               {ownerHubTiles(ownerVendorId)
                 .filter((tile) => cashierEnabled || !(tile.href.endsWith("/store-sales") || tile.href.endsWith("/labels")))
-                .filter((tile) => home?.enabled || !tile.href.endsWith("/storefront/home"))
                 .map((tile) => {
                 // Keep the management panel usable if a new navigation tile is
                 // added before its optional visual metadata is configured.
