@@ -1,4 +1,8 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  loadOpeningStates,
+  type OpeningState,
+} from '../common/branch-opening.util';
 import { DeliveryZoneRegion, Prisma } from '../../generated/prisma/client';
 import {
   AvailabilityBucket,
@@ -14,7 +18,6 @@ import {
   computeAvailableSlots,
   SlotOption,
 } from '../checkout/slot-availability.util';
-import { localDateString } from '../checkout/delivery-calendar.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { SubscriptionGateService } from '../subscriptions/subscription-gate.service';
 
@@ -102,21 +105,26 @@ export interface VariantFulfilment {
       /** PD-5.1: the branch has opening hours set at all (a branch with
        * none says nothing - "not set" is not "closed"). */
       hours_set: boolean;
-      /** PD-5.1: today's opening hours in Palestine; null = closed today
-       * (or no hours set). */
-      hours_today: { open: string; close: string } | null;
+      /** PD-5.1 + «ساعات العمل والإغلاقات v1»: today's periods in
+       * Palestine (several a day); empty = closed today (or no hours set). */
+      hours_today: { open: string; close: string }[];
+      /** v1: open now / until when / next opening (a closure always wins);
+       * informational - pickup is never refused by hours. null = no hours. */
+      opening: OpeningState | null;
     }[];
   };
+}
+
+/** «ساعات العمل والإغلاقات v1»: one pickup branch's hours today + state. */
+export interface BranchHoursToday {
+  periods: { open: string; close: string }[];
+  opening: OpeningState;
 }
 
 /** One branch's bookable delivery windows, earliest first. */
 interface BranchSlots {
   earliest: SlotOption | null;
   latestDate: string | null;
-}
-
-function minutesToTime(minutes: number): string {
-  return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
 }
 
 export interface ZoneChoice {
@@ -381,33 +389,24 @@ export class FulfilmentEligibilityService {
     return result;
   }
 
-  /** Per branch that has opening hours set: today's (Palestine), null =
-   * closed today. A branch with no hours at all is absent from the map. */
+  /** «ساعات العمل والإغلاقات v1»: per branch that has opening hours set -
+   * today's periods (Palestine) and the opening state (closures included,
+   * common/branch-opening.util.ts). A branch with no hours is absent. */
   async hoursToday(
     branchIds: string[],
     now: Date = new Date(),
-  ): Promise<Map<string, { open: string; close: string } | null>> {
-    const ids = [...new Set(branchIds)];
-    const result = new Map<string, { open: string; close: string } | null>();
-    if (ids.length === 0) return result;
-    const dayOfWeek = new Date(
-      `${localDateString(now)}T00:00:00.000Z`,
-    ).getUTCDay();
-    const rows = await this.prisma.branchOperatingHours.findMany({
-      where: { branchId: { in: ids } },
-      select: {
-        branchId: true,
-        dayOfWeek: true,
-        openMinute: true,
-        closeMinute: true,
-      },
-    });
-    for (const r of rows) {
-      if (!result.has(r.branchId)) result.set(r.branchId, null);
-      if (r.dayOfWeek !== dayOfWeek) continue;
-      result.set(r.branchId, {
-        open: minutesToTime(r.openMinute),
-        close: minutesToTime(r.closeMinute),
+  ): Promise<Map<string, BranchHoursToday>> {
+    const states = await loadOpeningStates(this.prisma, branchIds, now);
+    const result = new Map<string, BranchHoursToday>();
+    for (const [id, st] of states) {
+      if (st.open_now === null) continue; // no hours set at all
+      result.set(id, {
+        periods: st.today,
+        opening: {
+          open_now: st.open_now,
+          open_until: st.open_until,
+          next_open_at: st.next_open_at,
+        },
       });
     }
     return result;
@@ -487,7 +486,7 @@ export class FulfilmentEligibilityService {
             .filter((s) => s.available > 0 && s.isPhysical)
             .map((s) => s.branchId),
         )
-      : new Map<string, { open: string; close: string } | null>();
+      : new Map<string, BranchHoursToday>();
     const zoneRow = zone
       ? (zones.find((z) => z.region === zone) ?? null)
       : null;
@@ -564,7 +563,8 @@ export class FulfilmentEligibilityService {
             name: r.branchName,
             minimum_order_value: r.minimumOrderValue,
             hours_set: hours.has(r.branchId),
-            hours_today: hours.get(r.branchId) ?? null,
+            hours_today: hours.get(r.branchId)?.periods ?? [],
+            opening: hours.get(r.branchId)?.opening ?? null,
           })),
         },
       });

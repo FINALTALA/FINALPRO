@@ -20,6 +20,10 @@ import {
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { bucketForStock } from '../common/availability.util';
+import {
+  loadOpeningStates,
+  type OpeningState,
+} from '../common/branch-opening.util';
 import { FulfilmentEligibilityService } from '../fulfilment/fulfilment-eligibility.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { assertItemsPurchasable } from '../checkout/purchase-eligibility.util';
@@ -170,6 +174,7 @@ export class CartController {
     const available = await this.fulfilment.availableByVariant(
       items.map((i) => ({ id: i.offerVariantId, vendorId: i.vendorId })),
     );
+    const pickupOpening = await this.pickupOpenings(items);
     return items.map((item) => {
       const purchasable =
         item.offerVariant.vendorOffer.status === 'ACTIVE' &&
@@ -185,8 +190,73 @@ export class CartController {
         max_quantity:
           purchasable && stock > 0 && item.quantity > canGet ? canGet : null,
         purchasable,
+        pickup_opening: purchasable
+          ? (pickupOpening.get(item.id) ?? null)
+          : null,
       };
     });
+  }
+
+  /**
+   * «ساعات العمل والإغلاقات v1» («أقرب فتح» in the cart): per line, among the
+   * physical sellable branches holding enough stock for it, "open now" (the
+   * first open one) or else the earliest next opening. Informational only -
+   * hours never block buying or pickup. Absent = no such branch has hours.
+   */
+  private async pickupOpenings(
+    items: {
+      id: string;
+      quantity: number;
+      offerVariant: { branchStocks: { branchId: string; quantity: number }[] };
+    }[],
+  ): Promise<Map<string, OpeningState>> {
+    const result = new Map<string, OpeningState>();
+    const candidate = (i: (typeof items)[number]) =>
+      i.offerVariant.branchStocks
+        .filter((st) => st.quantity >= i.quantity)
+        .map((st) => st.branchId);
+    const ids = [...new Set(items.flatMap(candidate))];
+    if (ids.length === 0) return result;
+    const branches = await this.prisma.storeBranch.findMany({
+      where: {
+        id: { in: ids },
+        isPhysical: true,
+        archivedAt: null,
+        verificationStatus: 'APPROVED',
+      },
+      select: { id: true },
+    });
+    const states = await loadOpeningStates(
+      this.prisma,
+      branches.map((b) => b.id),
+    );
+    for (const item of items) {
+      const known = candidate(item)
+        .map((id) => states.get(id))
+        .filter(
+          (st): st is NonNullable<typeof st> => !!st && st.open_now !== null,
+        );
+      if (known.length === 0) continue;
+      const open = known.find((st) => st.open_now);
+      if (open) {
+        result.set(item.id, {
+          open_now: true,
+          open_until: open.open_until,
+          next_open_at: open.next_open_at,
+        });
+        continue;
+      }
+      const next = known
+        .map((st) => st.next_open_at)
+        .filter((x): x is string => !!x)
+        .sort()[0];
+      result.set(item.id, {
+        open_now: false,
+        open_until: null,
+        next_open_at: next ?? null,
+      });
+    }
+    return result;
   }
 
   // Adding an already-present (customer, vendor, variant) line

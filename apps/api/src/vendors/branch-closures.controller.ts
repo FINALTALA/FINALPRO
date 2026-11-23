@@ -4,6 +4,7 @@ import {
   ConflictException,
   Controller,
   Get,
+  HttpCode,
   NotFoundException,
   Param,
   Post,
@@ -24,12 +25,12 @@ import {
 import { VendorMembershipGuard } from '../auth/vendor-membership.guard';
 import { RequireVendorRole } from '../auth/vendor-role.decorator';
 import { lockBranchOperationalStatus } from '../common/branch-operational-lock.util';
-import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import {
   activeOrdersDetails,
   activeOrdersInSpan,
   lockBranchWindowRows,
 } from '../delivery-windows/delivery-window-rules';
+import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import {
   decodeCursor,
@@ -39,6 +40,10 @@ import {
   parseLimit,
 } from '../platform-admin/cursor.util';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  CancelBranchClosureDto,
+  ShortenBranchClosureDto,
+} from './dto/change-branch-closure.dto';
 import { CreateBranchClosureDto } from './dto/create-branch-closure.dto';
 
 function closureDto(closure: {
@@ -61,6 +66,20 @@ function closureDto(closure: {
   };
 }
 
+function closureNotFound() {
+  return new NotFoundException({
+    code: 'BRANCH_CLOSURE_NOT_FOUND',
+    message: 'Closure not found for this branch',
+  });
+}
+
+function closureEnded() {
+  return new ConflictException({
+    code: 'BRANCH_CLOSURE_ENDED',
+    message: 'This closure has ended - past closures are never edited',
+  });
+}
+
 function isExclusionViolation(err: unknown, constraintName: string): boolean {
   return (
     err instanceof Prisma.PrismaClientKnownRequestError &&
@@ -69,9 +88,11 @@ function isExclusionViolation(err: unknown, constraintName: string): boolean {
   );
 }
 
-// Sprint 18b (G-ON-07, FR-VEND-006): a historical record, never
-// edited/deleted - a correction is a new row, not an update, so there
-// is no PUT/DELETE here. [startsAt, endsAt) is genuinely half-open -
+// Sprint 18b (G-ON-07, FR-VEND-006) + «ساعات العمل والإغلاقات v1»: the past
+// is never edited. A FUTURE closure may be cancelled; a closure may be
+// shortened (a started one only from now on - its past effect stays);
+// an ended closure is never touched. Both need a reason and are audited
+// (before/after, actor). There is still no PUT/DELETE. [startsAt, endsAt) is genuinely half-open -
 // see BranchClosure's own schema comment - so two closures that merely
 // touch are not an overlap. No @BlockWhenSuspended - "store
 // configuration... delivery setup" is the established ALLOW category.
@@ -162,6 +183,26 @@ export class BranchClosuresController {
         // leave open (see this lock's own comment).
         await lockBranchOperationalStatus(tx, vendorId, branchId);
 
+        // «نوافذ التوصيل v1»: a planned closure is never placed on top of
+        // active delivery orders (same rule as closing a day). The branch's
+        // window rows are locked first - the locks reserve()/confirm() take
+        // on a slot - so no booking lands in the closure meanwhile.
+        await lockBranchWindowRows(tx, vendorId, branchId);
+        const covered = await activeOrdersInSpan(
+          tx,
+          vendorId,
+          branchId,
+          startsAt,
+          endsAt,
+        );
+        if (covered.length > 0) {
+          throw new ConflictException({
+            code: 'BRANCH_CLOSURE_HAS_ACTIVE_ORDERS',
+            message: `This closure covers ${covered.length} active delivery order(s) - choose other times, or handle the orders first.`,
+            details: [activeOrdersDetails(covered)],
+          });
+        }
+
         const closure = await tx.branchClosure.create({
           data: {
             vendorId,
@@ -183,26 +224,6 @@ export class BranchClosuresController {
           },
           tx,
         );
-        // «نوافذ التوصيل v1»: a planned closure is never placed on top of
-        // active delivery orders (same rule as closing a day). The branch's
-        // window rows are locked first - the locks reserve()/confirm() take
-        // on a slot - so no booking lands in the closure meanwhile.
-        await lockBranchWindowRows(tx, vendorId, branchId);
-        const covered = await activeOrdersInSpan(
-          tx,
-          vendorId,
-          branchId,
-          startsAt,
-          endsAt,
-        );
-        if (covered.length > 0) {
-          throw new ConflictException({
-            code: 'BRANCH_CLOSURE_HAS_ACTIVE_ORDERS',
-            message: `This closure covers ${covered.length} active delivery order(s) - choose other times, or handle the orders first.`,
-            details: [activeOrdersDetails(covered)],
-          });
-        }
-
         const responseBody = closureDto(closure);
         await this.idempotencyCompletion.complete(
           tx,
@@ -222,5 +243,132 @@ export class BranchClosuresController {
       throw err;
     }
     return body;
+  }
+
+  /** Locks the branch, then the closure row; 404 unless it is this branch's. */
+  private async lockClosure(
+    tx: Prisma.TransactionClient,
+    vendorId: string,
+    branchId: string,
+    closureId: string,
+  ) {
+    await lockBranchOperationalStatus(tx, vendorId, branchId);
+    if (!isUuidLike(closureId)) throw closureNotFound();
+    await tx.$queryRaw`SELECT id FROM branch_closures WHERE id = ${closureId} FOR UPDATE`;
+    const closure = await tx.branchClosure.findUnique({
+      where: { id: closureId },
+    });
+    if (
+      !closure ||
+      closure.vendorId !== vendorId ||
+      closure.branchId !== branchId
+    ) {
+      throw closureNotFound();
+    }
+    return closure;
+  }
+
+  /** Cancel a closure that has not started yet (the row goes; the audit keeps it). */
+  @Post(':closureId/cancel')
+  @HttpCode(200)
+  @RequireVendorRole('OWNER')
+  @BlockWhenBranchArchived()
+  async cancelClosure(
+    @Param('vendorId') vendorId: string,
+    @Param('branchId') branchId: string,
+    @Param('closureId') closureId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CancelBranchClosureDto,
+    @Req() req: Request,
+  ) {
+    await this.requireBranch(vendorId, branchId);
+    return this.prisma.$transaction(async (tx) => {
+      const closure = await this.lockClosure(tx, vendorId, branchId, closureId);
+      const now = new Date();
+      if (closure.endsAt <= now) throw closureEnded();
+      if (closure.startsAt <= now) {
+        throw new ConflictException({
+          code: 'BRANCH_CLOSURE_STARTED',
+          message:
+            'This closure has already started - its past cannot be undone; shorten it to end now instead.',
+        });
+      }
+      await tx.branchClosure.delete({ where: { id: closure.id } });
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'store_branch.closure_cancelled',
+          entityType: 'BranchClosure',
+          entityId: closure.id,
+          beforeState: closureDto(closure),
+          afterState: { cancelled: true, change_reason: dto.reason },
+        },
+        tx,
+      );
+      return { ...closureDto(closure), cancelled: true };
+    });
+  }
+
+  /** Shorten a closure: a new, earlier end (never in the past once started). */
+  @Post(':closureId/shorten')
+  @HttpCode(200)
+  @RequireVendorRole('OWNER')
+  @BlockWhenBranchArchived()
+  async shortenClosure(
+    @Param('vendorId') vendorId: string,
+    @Param('branchId') branchId: string,
+    @Param('closureId') closureId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: ShortenBranchClosureDto,
+    @Req() req: Request,
+  ) {
+    await this.requireBranch(vendorId, branchId);
+    const endsAt = new Date(dto.ends_at);
+    return this.prisma.$transaction(async (tx) => {
+      const closure = await this.lockClosure(tx, vendorId, branchId, closureId);
+      const now = new Date();
+      if (closure.endsAt <= now) throw closureEnded();
+      if (endsAt.getTime() <= closure.startsAt.getTime()) {
+        throw new BadRequestException({
+          code: 'INVALID_CLOSURE_RANGE',
+          message:
+            'The new end must be after the start (to remove a future closure, cancel it)',
+        });
+      }
+      if (endsAt.getTime() >= closure.endsAt.getTime()) {
+        throw new BadRequestException({
+          code: 'CLOSURE_NOT_SHORTER',
+          message: 'The new end must be earlier than the current end',
+        });
+      }
+      // a started closure is shortened only from now on - one minute of
+      // slack for the request's own travel time
+      if (endsAt.getTime() < now.getTime() - 60_000) {
+        throw new BadRequestException({
+          code: 'CLOSURE_END_IN_PAST',
+          message: 'A closure cannot be shortened into the past',
+        });
+      }
+      const updated = await tx.branchClosure.update({
+        where: { id: closure.id },
+        data: {
+          endsAt: endsAt.getTime() < now.getTime() ? now : endsAt,
+        },
+      });
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'store_branch.closure_shortened',
+          entityType: 'BranchClosure',
+          entityId: closure.id,
+          beforeState: closureDto(closure),
+          afterState: { ...closureDto(updated), change_reason: dto.reason },
+        },
+        tx,
+      );
+      return closureDto(updated);
+    });
   }
 }

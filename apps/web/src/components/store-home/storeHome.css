@@ -762,6 +762,8 @@ html[dir="ltr"] .sh-banner-text { --sh-fade-to: right; }
 .si-hours li span:last-child { color: var(--si-sand-ink); font-variant-numeric: tabular-nums; }
 .si-hours li.is-today { font-weight: 700; }
 .si-hours li.is-today span:last-child { color: var(--si-wine); }
+/* «ساعات العمل والإغلاقات v1»: open until / next opening */
+.si-opening { margin: 0; font-size: .88rem; font-weight: 600; color: var(--si-sand-ink); }
 .si-closure { display: flex; flex-wrap: wrap; gap: 2px 8px; margin: 0; font-size: .86rem; color: var(--color-warning, #92400e); }
 
 /* delivery and returns: label - value rows */

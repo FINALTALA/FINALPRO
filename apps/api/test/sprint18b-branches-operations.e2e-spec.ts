@@ -1460,7 +1460,7 @@ describe('Sprint 18b - branch add/activate/archive, hours, closures, staff (e2e)
       );
     });
 
-    it('rejects a duplicate day_of_week and open_minute >= close_minute', async () => {
+    it('rejects overlapping periods on the same day (v1: several periods a day) and open_minute >= close_minute', async () => {
       const { owner, vendorId, branchAId } = await setupActiveVendor();
       const dup = await request(app.getHttpServer())
         .put(
@@ -1474,7 +1474,7 @@ describe('Sprint 18b - branch add/activate/archive, hours, closures, staff (e2e)
           ],
         })
         .expect(400);
-      expect(dup.body.error.code).toBe('DUPLICATE_DAY_OF_WEEK');
+      expect(dup.body.error.code).toBe('OVERLAPPING_PERIODS');
 
       const bad = await request(app.getHttpServer())
         .put(

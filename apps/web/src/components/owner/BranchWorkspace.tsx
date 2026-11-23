@@ -21,8 +21,9 @@ export type BranchTab = "orders" | "stock" | "delivery-windows" | "hours" | "min
 export type BranchView = "overview" | BranchTab;
 /** The owner manages everything of a branch; an employee keeps the tools she already had (the API decides anyway). */
 const OWNER_TABS: BranchTab[] = ["orders", "stock", "delivery-windows", "hours", "minimum-order", "returns", "settings"];
-// «نوافذ التوصيل v1»: the branch employee reads their branch's delivery board (no actions).
-const EMPLOYEE_TABS: BranchTab[] = ["orders", "stock", "delivery-windows", "returns"];
+// «نوافذ التوصيل v1» + «ساعات العمل والإغلاقات v1»: the branch employee reads
+// their branch's delivery board and opening hours (no actions).
+const EMPLOYEE_TABS: BranchTab[] = ["orders", "stock", "delivery-windows", "hours", "returns"];
 export const BRANCH_TABS: BranchTab[] = OWNER_TABS;
 
 /** Fired after a branch changed (archived): every view of the branches loads them again. */

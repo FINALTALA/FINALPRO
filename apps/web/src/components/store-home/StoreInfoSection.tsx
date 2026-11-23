@@ -1,5 +1,6 @@
 "use client";
 
+import { openingLine } from "@/lib/branchOpeningText";
 import { type Lang, registerTranslations, translate } from "@/lib/i18n";
 import { fmt } from "@/lib/shopText";
 import { useLang } from "@/lib/useLang";
@@ -24,6 +25,9 @@ export interface StoreInfoDto {
     name: string;
     is_physical: boolean;
     open_now: boolean | null;
+    /** «ساعات العمل والإغلاقات v1»: the server's one rule (closures included) */
+    open_until?: string | null;
+    next_open_at?: string | null;
     hours: { day_of_week: number; open_minute: number; close_minute: number }[];
     upcoming_closures: { starts_at: string; ends_at: string }[];
   }[];
@@ -124,7 +128,7 @@ function money(n: number, lang: Lang): string {
 
 function closureRange(c: { starts_at: string; ends_at: string }, lang: Lang): string {
   const format = new Intl.DateTimeFormat(lang === "en" ? "en-GB" : "ar", {
-    timeZone: "Asia/Jerusalem",
+    timeZone: "Asia/Hebron",
     day: "numeric",
     month: "long",
     hour: "2-digit",
@@ -133,9 +137,9 @@ function closureRange(c: { starts_at: string; ends_at: string }, lang: Lang): st
   return `${format.format(new Date(c.starts_at))} - ${format.format(new Date(c.ends_at))}`;
 }
 
-/** Today's day of the week in Palestine (0 = Sunday), like the API's own hours - only to mark today's row. */
+/** Today's day of the week in Palestine (0 = Sunday, Asia/Hebron like the API's own hours) - only to mark today's row. */
 function todayInPalestine(): number {
-  const name = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Jerusalem", weekday: "short" }).format(new Date());
+  const name = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Hebron", weekday: "short" }).format(new Date());
   return WEEKDAY[name] ?? new Date().getDay();
 }
 
@@ -180,14 +184,18 @@ export default function StoreInfoSection({ info }: { info: StoreInfoDto }) {
                       <span className={`si-state${b.open_now ? " is-open" : ""}`}>{b.open_now ? t("info.open_now") : t("info.closed_now")}</span>
                     )}
                   </div>
+                  {b.open_now !== null && b.open_until !== undefined && (
+                    <p className="si-opening" data-testid="store-info-opening">{openingLine({ open_now: b.open_now, open_until: b.open_until ?? null, next_open_at: b.next_open_at ?? null }, lang)}</p>
+                  )}
                   {b.hours.length > 0 ? (
                     <ul className="si-hours">
                       {DAYS.map((i) => {
-                        const h = b.hours.find((x) => x.day_of_week === i);
+                        // «ساعات العمل والإغلاقات v1»: a day may have several periods
+                        const periods = b.hours.filter((x) => x.day_of_week === i).sort((x, y) => x.open_minute - y.open_minute);
                         return (
                           <li key={i} className={i === today ? "is-today" : undefined}>
                             <span>{t(`day.${i}`)}</span>
-                            <span dir="ltr">{h ? `${hhmm(h.open_minute)} - ${hhmm(h.close_minute)}` : t("info.closed")}</span>
+                            <span dir="ltr">{periods.length ? periods.map((h) => `${hhmm(h.open_minute)} - ${hhmm(h.close_minute)}`).join(", ") : t("info.closed")}</span>
                           </li>
                         );
                       })}

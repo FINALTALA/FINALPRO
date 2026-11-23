@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { AuditLogService } from '../audit/audit-log.service';
 import { stockLockKey } from '../common/availability.util';
+import { loadOpeningStates } from '../common/branch-opening.util';
 import {
   hasActiveBranchClosure,
   lockBranchOperationalStatus,
@@ -92,6 +93,24 @@ function parseDateOnly(s: string): Date {
 // delivery-fee.util.ts (shared with FulfilmentEligibilityService, PD-2);
 // re-exported here for its existing importers.
 export { resolveDeliveryFee } from './delivery-fee.util';
+
+/** null = not a physical branch, or the owner never set hours. */
+function openingOf(
+  st:
+    | {
+        open_now: boolean | null;
+        open_until: string | null;
+        next_open_at: string | null;
+      }
+    | undefined,
+) {
+  if (!st || st.open_now === null) return null;
+  return {
+    open_now: st.open_now,
+    open_until: st.open_until,
+    next_open_at: st.next_open_at,
+  };
+}
 import { resolveDeliveryFee } from './delivery-fee.util';
 import { purchaseSnapshots } from './purchase-snapshot.util';
 import {
@@ -289,6 +308,16 @@ export class CheckoutService {
       zoneSettingsByVendor.set(vendorId, settings);
     }
 
+    // «ساعات العمل والإغلاقات v1»: per physical branch, open now / next
+    // opening - informational only (pickup outside hours is still allowed;
+    // the order is prepared at the next opening).
+    const openingByBranch = await loadOpeningStates(
+      this.prisma,
+      groups.flatMap((g) =>
+        g.eligibleBranchIds.filter((id) => branchById.get(id)?.isPhysical),
+      ),
+    );
+
     const groupDtos = await Promise.all(
       groups.map(async (g) => {
         const items = g.cartItemIds.map((id) => {
@@ -373,6 +402,7 @@ export class CheckoutService {
               branch_id: branch.id,
               branch_name: branch.name,
               is_physical: branch.isPhysical,
+              opening: openingOf(openingByBranch.get(branch.id)),
               delivery_fee: deliveryFee,
               minimum_order_value: {
                 pickup: pickupMinimum,
@@ -1521,36 +1551,6 @@ export class CheckoutService {
         resultingByItem.set(item, updated[0].quantity);
       }
 
-      // PD-3: what each line is right now, frozen onto its order item.
-      const snapshots = await purchaseSnapshots(
-        tx,
-        sortedItems.map((i) => i.offerVariantId),
-      );
-      // PD-4 (decision 6): the size-guide version describing each line's
-      // size when bought - kept for any later return dispute.
-      const guideVersions = await this.sizeGuides.versionSnapshots(
-        tx,
-        sortedItems.map((i) => i.offerVariantId),
-      );
-
-      let onlineTotal = 0;
-      for (const [key, items] of itemsByBranch) {
-        if (items[0].paymentMethod !== 'ONLINE') continue;
-        // Review-round fix: Decimal-precise, same as quote()'s own
-        // subtotal above - this is real money about to be charged via
-        // sandboxPayment.charge().
-        const subtotal = sumLineAmounts(
-          items.map((i) => ({
-            amount: i.unitPriceAtReserve,
-            quantity: i.quantity,
-          })),
-        );
-        const slot = slotByBranchKey.get(key);
-        const deliveryFee = slot ? Number(slot.deliveryFeeAtReserve) : 0;
-        onlineTotal = addMoney(onlineTotal, subtotal, deliveryFee);
-      }
-
-      const customerOrder = await tx.customerOrder.create({
       // «نوافذ التوصيل v1»: every held delivery slot is re-checked HERE,
       // under its window row lock (taken after the stock rows - the same
       // order reserve() uses), against what may have changed since the
@@ -1593,6 +1593,36 @@ export class CheckoutService {
         }
       }
 
+      // PD-3: what each line is right now, frozen onto its order item.
+      const snapshots = await purchaseSnapshots(
+        tx,
+        sortedItems.map((i) => i.offerVariantId),
+      );
+      // PD-4 (decision 6): the size-guide version describing each line's
+      // size when bought - kept for any later return dispute.
+      const guideVersions = await this.sizeGuides.versionSnapshots(
+        tx,
+        sortedItems.map((i) => i.offerVariantId),
+      );
+
+      let onlineTotal = 0;
+      for (const [key, items] of itemsByBranch) {
+        if (items[0].paymentMethod !== 'ONLINE') continue;
+        // Review-round fix: Decimal-precise, same as quote()'s own
+        // subtotal above - this is real money about to be charged via
+        // sandboxPayment.charge().
+        const subtotal = sumLineAmounts(
+          items.map((i) => ({
+            amount: i.unitPriceAtReserve,
+            quantity: i.quantity,
+          })),
+        );
+        const slot = slotByBranchKey.get(key);
+        const deliveryFee = slot ? Number(slot.deliveryFeeAtReserve) : 0;
+        onlineTotal = addMoney(onlineTotal, subtotal, deliveryFee);
+      }
+
+      const customerOrder = await tx.customerOrder.create({
         data: {
           customerId,
           // Sprint 20b (FR-CART-012): a verbatim snapshot of the

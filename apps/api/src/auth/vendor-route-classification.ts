@@ -277,6 +277,9 @@ export const SUSPENDED_ALLOW_ROUTES: readonly string[] = [
   'PUT vendors/:vendorId/branches/:branchId/operating-hours',
   'GET vendors/:vendorId/branches/:branchId/closures',
   'POST vendors/:vendorId/branches/:branchId/closures',
+  // «ساعات العمل والإغلاقات v1»: cancel / shorten a closure
+  'POST vendors/:vendorId/branches/:branchId/closures/:closureId/cancel',
+  'POST vendors/:vendorId/branches/:branchId/closures/:closureId/shorten',
   'GET vendors/:vendorId/staff',
   'POST vendors/:vendorId/staff/:vendorUserId/transfer',
   'POST vendors/:vendorId/staff/:vendorUserId/suspend',

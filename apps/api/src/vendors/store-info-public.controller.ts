@@ -1,6 +1,6 @@
 import { Controller, Get, NotFoundException, Param } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { isOpenNow } from './branch-operating-hours.util';
+import { loadOpeningStates } from '../common/branch-opening.util';
 
 const UPCOMING_CLOSURES_LIMIT = 3;
 
@@ -40,7 +40,7 @@ export class StoreInfoPublicController {
           name: true,
           isPhysical: true,
           operatingHours: {
-            orderBy: { dayOfWeek: 'asc' },
+            orderBy: [{ dayOfWeek: 'asc' }, { openMinute: 'asc' }],
             select: { dayOfWeek: true, openMinute: true, closeMinute: true },
           },
           closures: {
@@ -57,21 +57,27 @@ export class StoreInfoPublicController {
       }),
     ]);
 
+    // «ساعات العمل والإغلاقات v1»: one rule (Palestine time, several
+    // periods a day, a temporary closure always wins) for open_now, "open
+    // until" and "next opening".
+    const opening = await loadOpeningStates(
+      this.prisma,
+      branches.map((b) => b.id),
+      now,
+    );
+
     return {
       is_available: true,
       branches: branches.map((b) => {
-        const closedNow = b.closures.some(
-          (c) => c.startsAt <= now && c.endsAt > now,
-        );
+        const o = opening.get(b.id)!;
         return {
           id: b.id,
           name: b.name,
           is_physical: b.isPhysical,
           // null when the owner never set hours (unknown, not "closed").
-          open_now:
-            b.operatingHours.length === 0
-              ? null
-              : !closedNow && isOpenNow(b.operatingHours, now),
+          open_now: o.open_now,
+          open_until: o.open_until,
+          next_open_at: o.next_open_at,
           hours: b.operatingHours.map((h) => ({
             day_of_week: h.dayOfWeek,
             open_minute: h.openMinute,

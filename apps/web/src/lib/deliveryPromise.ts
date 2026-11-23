@@ -47,8 +47,9 @@ export function estimateNote(lang: Lang = "ar"): string {
   return lang === "en" ? ESTIMATE_NOTE_EN : ESTIMATE_NOTE;
 }
 
-/** Today's real opening hours of a pickup branch. */
-export function hoursTodayText(hours: { open: string; close: string } | null, lang: Lang = "ar"): string {
-  if (lang === "en") return hours ? `open today ${hours.open}–${hours.close}` : "closed today";
-  return hours ? `مفتوح اليوم ${hours.open}–${hours.close}` : "مغلق اليوم";
+/** Today's real opening hours of a pickup branch («ساعات العمل والإغلاقات v1»: several periods a day). */
+export function hoursTodayText(periods: { open: string; close: string }[], lang: Lang = "ar"): string {
+  const list = periods.map((p) => `⁦${p.open}–${p.close}⁩`).join(lang === "en" ? ", " : "، ");
+  if (lang === "en") return periods.length ? `open today ${list}` : "closed today";
+  return periods.length ? `مفتوح اليوم ${list}` : "مغلق اليوم";
 }

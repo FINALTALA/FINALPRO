@@ -432,7 +432,8 @@ describe('PD-5.1 delivery promise (e2e)', () => {
       const unset = (await detail(s, 'WEST_BANK')).body.variants[0].fulfilment;
       expect(unset.pickup.branches[0]).toMatchObject({
         hours_set: false,
-        hours_today: null,
+        hours_today: [],
+        opening: null,
       });
       // Hours for tomorrow only: closed today.
       await prisma.branchOperatingHours.create({
@@ -447,7 +448,7 @@ describe('PD-5.1 delivery promise (e2e)', () => {
       expect(
         (await detail(s, 'WEST_BANK')).body.variants[0].fulfilment.pickup
           .branches[0],
-      ).toMatchObject({ hours_set: true, hours_today: null });
+      ).toMatchObject({ hours_set: true, hours_today: [] });
       // And today's hours.
       await prisma.branchOperatingHours.create({
         data: {
@@ -463,10 +464,9 @@ describe('PD-5.1 delivery promise (e2e)', () => {
       expect(none.delivery.earliest_slot).toBeNull();
       expect(none.delivery.earliest_slot_date).toBeNull();
       expect(none.pickup.status).toBe('AVAILABLE');
-      expect(none.pickup.branches[0].hours_today).toEqual({
-        open: '09:00',
-        close: '21:00',
-      });
+      expect(none.pickup.branches[0].hours_today).toEqual([
+        { open: '09:00', close: '21:00' },
+      ]);
 
       await window(s, 1, 600);
       // A guest with no zone: the real earliest window, zone still to choose.

@@ -56,6 +56,9 @@ export const BRANCH_ARCHIVED_DENY_ROUTES: readonly string[] = [
   'POST vendors/:vendorId/branches/:branchId/delivery-windows/days/:date/reopen',
   'PUT vendors/:vendorId/branches/:branchId/operating-hours',
   'POST vendors/:vendorId/branches/:branchId/closures',
+  // «ساعات العمل والإغلاقات v1»: cancel / shorten a closure
+  'POST vendors/:vendorId/branches/:branchId/closures/:closureId/cancel',
+  'POST vendors/:vendorId/branches/:branchId/closures/:closureId/shorten',
   'POST vendors/:vendorId/branches/:branchId/archive',
   // Sprint 20b: a branch setting, same reasoning as operating-hours
   // above - pointless (and blocked) once the branch is retired.
@@ -97,11 +100,11 @@ export const BRANCH_ARCHIVED_ALLOW_ROUTES: readonly string[] = [
   'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/approve-refund',
   'GET vendors/:vendorId/branches/:branchId/verification-evidence',
   'GET vendors/:vendorId/branches/:branchId/delivery-windows',
+  // «نوافذ التوصيل v1»: the 7-day board (owner + that branch's employee).
+  'GET vendors/:vendorId/branches/:branchId/delivery-windows/board',
   'GET vendors/:vendorId/branches/:branchId/operating-hours',
   'GET vendors/:vendorId/branches/:branchId/closures',
   // Sprint 20b: a plain read (same reasoning as operating-hours' own
-  // «نوافذ التوصيل v1»: the 7-day board (owner + that branch's employee).
-  'GET vendors/:vendorId/branches/:branchId/delivery-windows/board',
   // GET above).
   'GET vendors/:vendorId/branches/:branchId/minimum-order',
   // PD-5.1.

@@ -21,6 +21,8 @@ import {
 import { clearSession, getSessionToken } from "@/lib/session";
 import { registerTranslations, translate } from "@/lib/i18n";
 import { useLang } from "@/lib/useLang";
+import type { OpeningState } from "@/lib/branchHours";
+import { openingLine } from "@/lib/branchOpeningText";
 import { apiErrorMessage } from "@/lib/apiErrors";
 import { pickText } from "@/lib/localized";
 import { fmt } from "@/lib/shopText";
@@ -45,6 +47,7 @@ registerTranslations({
     "cart.select": "اختيار {title}",
     "cart.unavailable": "غير متوفر",
     "cart.limited": "كمية محدودة",
+    "cart.pickup_opening": "الاستلام من الفرع: {text}",
     "cart.quantity": "الكمية",
     "cart.remove": "حذف",
     "cart.set_quantity": "اضبطي الكمية على {n}",
@@ -70,6 +73,7 @@ registerTranslations({
     "cart.select": "Select {title}",
     "cart.unavailable": "Out of stock",
     "cart.limited": "Limited stock",
+    "cart.pickup_opening": "Branch pickup: {text}",
     "cart.quantity": "Quantity",
     "cart.remove": "Remove",
     "cart.set_quantity": "Set the quantity to {n}",
@@ -94,6 +98,8 @@ interface CartItemDto extends CartLineState {
   color_hex?: string | null;
   color_swatch_url?: string | null;
   size_label?: string | null;
+  /** «ساعات العمل والإغلاقات v1»: branch pickup open now / next opening (null = unknown) */
+  pickup_opening?: OpeningState | null;
 }
 
 // Sprint 10 (PDR-002/003): the server-side cart. Fulfilment is never
@@ -389,6 +395,11 @@ function Cart() {
                     <div className="muted">
                       {item.unit_price} ₪ × {item.quantity} = {item.unit_price * item.quantity} ₪
                     </div>
+                    {!dimmed && item.pickup_opening && openingLine(item.pickup_opening, lang) && (
+                      <div className="muted" data-testid="cart-pickup-opening">
+                        {fmt(t("cart.pickup_opening"), { text: openingLine(item.pickup_opening, lang)! })}
+                      </div>
+                    )}
                   </div>
                   {dimmed && <span className="availability-badge availability-sold_out">{t("cart.unavailable")}</span>}
                   {!dimmed && item.availability === "low_stock" && (

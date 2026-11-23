@@ -11,6 +11,8 @@ import { allGroupsFulfillable, availableMethods, coerceMethod, defaultMethod, Fu
 import { clearSession, getSessionToken } from "@/lib/session";
 import { cartQuantityErrorMessage, expiredReservationMessage, replacedReservationNotice, reservationMessage, unitsLimitMessage } from "@/lib/cart";
 import { useLang } from "@/lib/useLang";
+import type { OpeningState } from "@/lib/branchHours";
+import { openingLine, pickupPreparedLine } from "@/lib/branchOpeningText";
 import { registerTranslations, translate } from "@/lib/i18n";
 import { apiErrorMessage } from "@/lib/apiErrors";
 import { pickText } from "@/lib/localized";
@@ -175,6 +177,8 @@ interface EligibleBranch {
   branch_id: string;
   branch_name: string;
   is_physical: boolean;
+  /** «ساعات العمل والإغلاقات v1»: open now / next opening (null = no hours set) - never blocks pickup */
+  opening?: OpeningState | null;
   delivery_fee: number | null;
   minimum_order_value: { pickup: number | null; delivery: number | null };
   blockers: QuoteBlocker[];
@@ -715,6 +719,13 @@ export default function CheckoutPage({ embedded = false }: { embedded?: boolean 
                 {choice.fulfilmentMethod === null && (
                   <p className="cart-line-note" role="alert" style={{ margin: "6px 0 0" }}>
                     {t("co.no_method_branch")}
+                  </p>
+                )}
+                {/* «ساعات العمل والإغلاقات v1»: pickup outside the branch's hours is
+                    still allowed - the order is prepared at the next opening */}
+                {choice.fulfilmentMethod === "PICKUP" && branch?.opening && (
+                  <p className="muted" data-testid="co-pickup-opening" style={{ margin: "6px 0 0" }}>
+                    {pickupPreparedLine(branch.opening, lang) ?? openingLine(branch.opening, lang)}
                   </p>
                 )}
               </div>

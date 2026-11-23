@@ -1,71 +1,111 @@
 import {
   isOpenNow,
-  jerusalemDayAndMinute,
+  palestineDayAndMinute,
 } from './branch-operating-hours.util';
+import { openingState } from '../common/branch-opening.util';
 
+// «ساعات العمل والإغلاقات v1»: Palestine time (Asia/Hebron), several
+// periods a day, a temporary closure always winning, "open until" and
+// "next opening".
 describe('branch-operating-hours.util', () => {
-  describe('jerusalemDayAndMinute', () => {
-    it('applies the +2 winter (standard time) offset correctly', () => {
-      // 2026-01-15T10:00:00Z - Israel Standard Time is UTC+2 in January,
-      // so Jerusalem local time is 12:00.
-      const at = new Date('2026-01-15T10:00:00Z');
-      const { dayOfWeek, minuteOfDay } = jerusalemDayAndMinute(at);
+  describe('palestineDayAndMinute', () => {
+    it('applies the +2 winter offset', () => {
+      const at = new Date('2026-01-15T10:00:00Z'); // Thursday 12:00 local
+      const { dayOfWeek, minuteOfDay } = palestineDayAndMinute(at);
       expect(minuteOfDay).toBe(12 * 60);
-      // 10:00 UTC + 2h never crosses midnight, so the local weekday
-      // matches the UTC weekday for this instant.
       expect(dayOfWeek).toBe(at.getUTCDay());
     });
 
-    it('applies the +3 summer (daylight saving) offset correctly - the whole point of using Intl/IANA tz data instead of a fixed offset', () => {
-      // 2026-07-15T10:00:00Z - Israel Daylight Time is UTC+3 in July,
-      // so Jerusalem local time is 13:00.
-      const at = new Date('2026-07-15T10:00:00Z');
-      const { dayOfWeek, minuteOfDay } = jerusalemDayAndMinute(at);
-      expect(minuteOfDay).toBe(13 * 60);
-      expect(dayOfWeek).toBe(at.getUTCDay());
+    it('applies the +3 summer offset', () => {
+      const at = new Date('2026-07-15T10:00:00Z'); // 13:00 local
+      expect(palestineDayAndMinute(at).minuteOfDay).toBe(13 * 60);
     });
 
-    it('derives day-of-week and minute-of-day from the SAME localized instant near a UTC day boundary', () => {
-      // 2026-01-14T22:30:00Z (Wednesday) + 2h winter offset = Thursday
-      // 00:30 local - a UTC-day-of-week paired with a locally-
-      // interpreted minute would wrongly report Wednesday 22:30 + 120
-      // minutes without rolling the day over; this must roll over.
-      const at = new Date('2026-01-14T22:30:00Z');
-      const { dayOfWeek, minuteOfDay } = jerusalemDayAndMinute(at);
+    it('rolls the day over near a UTC day boundary', () => {
+      const at = new Date('2026-01-14T22:30:00Z'); // Thursday 00:30 local
+      const { dayOfWeek, minuteOfDay } = palestineDayAndMinute(at);
       expect(dayOfWeek).toBe((at.getUTCDay() + 1) % 7);
       expect(minuteOfDay).toBe(30);
     });
   });
 
+  // Thursday 2026-01-15 (winter, UTC+2): 09:00-14:00 and 16:00-21:00
+  const THU = 4;
+  const twoPeriods = [
+    { dayOfWeek: THU, openMinute: 9 * 60, closeMinute: 14 * 60 },
+    { dayOfWeek: THU, openMinute: 16 * 60, closeMinute: 21 * 60 },
+  ];
+  const local = (hhmm: string) => new Date(`2026-01-15T${hhmm}:00+02:00`);
+
   describe('isOpenNow', () => {
-    const hours = [{ dayOfWeek: 4, openMinute: 9 * 60, closeMinute: 17 * 60 }];
+    it('two periods a day: open in each, closed in the gap, boundaries half-open', () => {
+      expect(isOpenNow(twoPeriods, local('09:00'))).toBe(true);
+      expect(isOpenNow(twoPeriods, local('13:59'))).toBe(true);
+      expect(isOpenNow(twoPeriods, local('14:00'))).toBe(false);
+      expect(isOpenNow(twoPeriods, local('15:00'))).toBe(false);
+      expect(isOpenNow(twoPeriods, local('16:00'))).toBe(true);
+      expect(isOpenNow(twoPeriods, local('21:00'))).toBe(false);
+      expect(isOpenNow([], local('12:00'))).toBe(false);
+    });
+  });
 
-    it('true at the exact open boundary (inclusive)', () => {
-      // Matches the first jerusalemDayAndMinute test's own instant:
-      // Thursday 12:00 Jerusalem time - well inside 09:00-17:00.
-      expect(isOpenNow(hours, new Date('2026-01-15T10:00:00Z'))).toBe(true);
+  describe('openingState', () => {
+    it('open: until the end of the current period, then opens again at the next one', () => {
+      expect(openingState(twoPeriods, [], local('10:00'))).toEqual({
+        open_now: true,
+        open_until: local('14:00').toISOString(),
+        next_open_at: local('16:00').toISOString(),
+      });
     });
 
-    it('false just before opening and at/after closing', () => {
-      const dayOfWeek = jerusalemDayAndMinute(
-        new Date('2026-01-15T10:00:00Z'),
-      ).dayOfWeek;
-      expect(
-        isOpenNow(
-          [{ dayOfWeek, openMinute: 9 * 60, closeMinute: 17 * 60 }],
-          new Date('2026-01-15T05:00:00Z'), // 07:00 local, winter
-        ),
-      ).toBe(false);
-      expect(
-        isOpenNow(
-          [{ dayOfWeek, openMinute: 9 * 60, closeMinute: 17 * 60 }],
-          new Date('2026-01-15T15:00:00Z'), // 17:00 local exactly, winter
-        ),
-      ).toBe(false);
+    it('closed in the gap: the next opening is the afternoon period', () => {
+      expect(openingState(twoPeriods, [], local('15:00'))).toMatchObject({
+        open_now: false,
+        open_until: null,
+        next_open_at: local('16:00').toISOString(),
+      });
     });
 
-    it('false on a day with no matching entry (closed that day)', () => {
-      expect(isOpenNow([], new Date('2026-01-15T10:00:00Z'))).toBe(false);
+    it('after the last period: the next opening is next week (only Thursday has hours)', () => {
+      const s = openingState(twoPeriods, [], local('22:00'));
+      expect(s.open_now).toBe(false);
+      expect(s.next_open_at).toBe(
+        new Date('2026-01-22T09:00:00+02:00').toISOString(),
+      );
+    });
+
+    it('a temporary closure always wins: it cuts the period and moves the next opening', () => {
+      const closure = { startsAt: local('12:00'), endsAt: local('17:00') };
+      expect(openingState(twoPeriods, [closure], local('10:00'))).toEqual({
+        open_now: true,
+        open_until: local('12:00').toISOString(),
+        next_open_at: local('17:00').toISOString(),
+      });
+      expect(openingState(twoPeriods, [closure], local('13:00'))).toMatchObject(
+        {
+          open_now: false,
+          next_open_at: local('17:00').toISOString(),
+        },
+      );
+    });
+
+    it('no hours set: unknown, not "closed"', () => {
+      expect(openingState([], [], local('10:00'))).toEqual({
+        open_now: null,
+        open_until: null,
+        next_open_at: null,
+      });
+    });
+
+    it('24:00 then 00:00 the next day reads as one continuous opening', () => {
+      const late = [
+        { dayOfWeek: THU, openMinute: 18 * 60, closeMinute: 24 * 60 },
+        { dayOfWeek: 5, openMinute: 0, closeMinute: 2 * 60 },
+      ];
+      expect(openingState(late, [], local('23:00'))).toMatchObject({
+        open_now: true,
+        open_until: new Date('2026-01-16T02:00:00+02:00').toISOString(),
+      });
     });
   });
 });

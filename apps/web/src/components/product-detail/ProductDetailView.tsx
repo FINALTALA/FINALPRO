@@ -11,6 +11,8 @@ import SizeGuideModal from "@/components/SizeGuideModal";
 import OfferPairingsSection from "@/components/OfferPairingsSection";
 import BestsellerBadge from "@/components/BestsellerBadge";
 import type { BestsellerMark } from "@/lib/types";
+import type { OpeningState } from "@/lib/branchHours";
+import { openingLine } from "@/lib/branchOpeningText";
 import { EarliestSlot, estimateNote, formatSlotDay, hoursTodayText, laterSlotsText, slotHours } from "@/lib/deliveryPromise";
 import { SIZE_GUIDE_TEXT, type SizeGuidePublicDto } from "@/lib/sizeGuides";
 import { useLang } from "@/lib/useLang";
@@ -121,7 +123,7 @@ interface VariantFulfilmentDto {
   };
   pickup: {
     status: "AVAILABLE" | "NO_PICKUP_BRANCH_WITH_STOCK" | "NOT_PURCHASABLE";
-    branches: { name: string; minimum_order_value: number | null; hours_set?: boolean; hours_today?: { open: string; close: string } | null }[];
+    branches: { name: string; minimum_order_value: number | null; hours_set?: boolean; hours_today?: { open: string; close: string }[]; opening?: OpeningState | null }[];
   };
 }
 
@@ -908,7 +910,7 @@ export default function ProductDetailView({ source }: { source: ProductDetailSou
                   <span>
                     {facts.pickup.status === "AVAILABLE"
                       ? facts.pickup.branches
-                          .map((b) => (b.hours_set ? `${b.name} (${hoursTodayText(b.hours_today ?? null, lang)})` : b.name))
+                          .map((b) => (b.hours_set ? `${b.name} (${openingLine(b.opening, lang) ?? hoursTodayText(b.hours_today ?? [], lang)})` : b.name))
                           .join(t("pdp.list_sep"))
                       : t("pdp.no_pickup")}
                   </span>

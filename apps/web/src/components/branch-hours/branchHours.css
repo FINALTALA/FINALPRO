@@ -1,0 +1,106 @@
+/* «ساعات العمل والإغلاقات v1»: the branch's weekly hours + closures. Reuses
+   the delivery board's tokens and controls (deliveryBoard.css: .dw, .dw-btn,
+   .dw-input, .dw-dialog...). Logical properties only (RTL/LTR), 44px targets.
+   Computer: a week calendar (Sunday..Saturday columns, hour rows). Phone: day
+   cards + a read-only mini week - never a squeezed calendar, never a
+   sideways scroll. */
+
+.hb-readonly { margin: 4px 0 0; padding: 6px 10px; border-radius: 10px; background: var(--wz-sand-soft); color: var(--wz-sand-ink); font-weight: 700; justify-self: start; }
+.hb-summary { margin: 0; padding: 10px 14px; border-radius: 12px; background: var(--wz-wine-soft); font-weight: 800; }
+.hb-summary-note { font-weight: 500; color: var(--wz-muted); }
+.hb-week, .hc { display: grid; gap: 12px; }
+.hb-week > *, .hc > * { min-inline-size: 0; }
+.hb-week-head { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; justify-content: space-between; }
+.hb-savebar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+/* ---- computer: the week calendar */
+.hb-cal {
+  --hb-row: 40px;
+  display: grid; grid-template-columns: 52px repeat(7, minmax(0, 1fr)); grid-template-rows: auto auto;
+  border: 1px solid var(--wz-line); border-radius: 12px; background: var(--wz-paper); overflow: hidden;
+}
+.hb-cal-corner { border-block-end: 1px solid var(--wz-line); }
+.hb-cal-dayhead {
+  display: grid; gap: 6px; justify-items: start; padding: 8px; border-block-end: 1px solid var(--wz-line);
+  border-inline-start: 1px solid var(--wz-line);
+}
+.hb-cal-dayname { font-weight: 800; }
+.hb-cal-dayacts { display: flex; flex-wrap: wrap; gap: 4px; }
+.hb-mini-btn {
+  min-block-size: 32px; min-inline-size: 32px; padding: 0 8px; border: 1px solid var(--wz-line-strong); border-radius: 8px;
+  background: var(--wz-paper); color: var(--wz-wine); font: inherit; font-size: 0.82rem; font-weight: 700; cursor: pointer;
+}
+.hb-dots { font-size: 1rem; line-height: 1; }
+.hb-cal-axis, .hb-cal-col { position: relative; block-size: calc(var(--hb-rows, 12) * var(--hb-row)); }
+.hb-cal-hour {
+  position: absolute; inset-inline: 0; transform: translateY(-50%); padding-inline: 6px; text-align: center;
+  font-size: 0.72rem; color: var(--wz-muted); font-variant-numeric: tabular-nums; direction: ltr;
+}
+.hb-cal-hour:first-child { transform: none; }
+.hb-cal-hour:last-child { transform: translateY(-100%); }
+.hb-cal-col {
+  position: relative; border-inline-start: 1px solid var(--wz-line);
+  background-image: repeating-linear-gradient(to bottom, var(--wz-line) 0 1px, transparent 1px calc(100% / var(--hb-rows, 12)));
+}
+.hb-cal-closed {
+  position: absolute; inset: 0; display: grid; place-items: center; color: var(--wz-muted); font-weight: 700;
+  background: repeating-linear-gradient(135deg, transparent 0 8px, rgba(120, 100, 95, 0.07) 8px 16px);
+}
+.hb-block {
+  position: absolute; inset-inline: 4px; box-sizing: border-box; min-block-size: 22px; padding: 3px 6px;
+  display: flex; align-items: flex-start; justify-content: center; overflow: hidden;
+  border: 1px solid #2f7a4e; border-inline-start-width: 4px; border-radius: 8px; background: #e7f2ea; color: #1d4a31;
+  font: inherit; font-size: 0.8rem; font-weight: 800; font-variant-numeric: tabular-nums; cursor: pointer; text-align: center;
+}
+.hb-block.is-static { cursor: default; }
+.hb-block:not(.is-static):hover { background: #d6eadc; }
+.hb-block:focus-visible, .hb-mini-btn:focus-visible, .hb-card:focus-visible, .hc-history summary:focus-visible { outline: none; box-shadow: var(--wz-ring); z-index: 1; }
+
+/* ---- phone: day cards + mini week */
+.hb-phone { display: none; gap: 14px; }
+.hb-cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.hb-card {
+  box-sizing: border-box; inline-size: 100%; min-block-size: 56px; display: grid; grid-template-columns: 6.5em 1fr auto; gap: 10px;
+  align-items: center; padding: 10px 14px; border: 1px solid var(--wz-line); border-radius: 12px; background: var(--wz-paper);
+  color: var(--wz-ink); font: inherit; text-align: start;
+}
+button.hb-card { cursor: pointer; }
+.hb-card-day { font-weight: 800; }
+.hb-card-text { font-variant-numeric: tabular-nums; }
+.hb-card-text.is-closed { color: var(--wz-muted); font-weight: 700; }
+.hb-card-chev { color: var(--wz-muted); font-size: 1.2rem; }
+[dir="ltr"] .hb-card-chev { transform: scaleX(-1); }
+.hb-miniweek { margin: 0; display: grid; gap: 6px; }
+.hb-miniweek-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.hb-miniweek-day { display: grid; gap: 4px; justify-items: center; }
+.hb-miniweek-col { position: relative; inline-size: 100%; block-size: 96px; border-radius: 6px; background: #eeeae7; }
+.hb-miniweek-block { position: absolute; inset-inline: 2px; border-radius: 4px; background: #2f7a4e; }
+.hb-miniweek-name { font-size: 0.72rem; color: var(--wz-muted); }
+
+/* ---- closures */
+.hc-form { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--wz-line); border-radius: 12px; background: var(--wz-paper); }
+.hc-form .error-banner { margin: 0; }
+.hc-hours-row { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 10px; }
+.hc-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.hc-item {
+  display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; justify-content: space-between;
+  padding: 10px 14px; border: 1px solid var(--wz-line); border-radius: 12px; background: var(--wz-paper);
+}
+.hc-item.is-active { border-inline-start: 4px solid #8a2b20; }
+.hc-item.is-upcoming { border-inline-start: 4px solid #8a5a7a; }
+.hc-item.is-past { background: transparent; border-style: dashed; }
+.hc-item-main { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.hc-range { font-weight: 700; }
+.hc-acts { margin-inline-start: auto; }
+.hc-history summary { cursor: pointer; min-block-size: 44px; display: flex; align-items: center; font-weight: 700; color: var(--wz-muted); }
+.hc-history .hc-list { margin-block-start: 6px; }
+.hc-end-at { margin-block-start: 4px; inline-size: 100%; }
+
+@container (max-width: 760px) {
+  .hb-cal { display: none; }
+  .hb-phone { display: grid; }
+  .hc-hours-row { grid-template-columns: 1fr 1fr; }
+  .hc-hours-row > :first-child { grid-column: 1 / -1; }
+  /* the closure actions stay visible on a phone (two short buttons) */
+  .hc .dw-actions-inline { display: flex; }
+}

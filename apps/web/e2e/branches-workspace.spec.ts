@@ -172,9 +172,9 @@ test.describe("Branch management", () => {
     await expect(page.getByTestId("br-fixed")).toHaveText("فرع رام الله", { timeout: 30_000 });
     await expect(page.getByTestId("br-switch")).toHaveCount(0);
     await expect(page.getByTestId("br-add")).toHaveCount(0);
-    // «نوافذ التوصيل v1»: the employee also reads the branch's delivery board
-    await expect(page.locator(".br-tool")).toHaveCount(5);
-    for (const k of ["orders", "stock", "delivery-windows", "returns"]) await expect(page.getByTestId(`br-tab-${k}`)).toBeVisible();
+    // «نوافذ التوصيل v1» + «ساعات العمل والإغلاقات v1»: the employee also reads the branch's delivery board and hours
+    await expect(page.locator(".br-tool")).toHaveCount(6);
+    for (const k of ["orders", "stock", "delivery-windows", "hours", "returns"]) await expect(page.getByTestId(`br-tab-${k}`)).toBeVisible();
     await page.getByTestId("br-tab-stock").click();
     await expect(page).toHaveURL(new RegExp(`/branches/${ramallah}/stock`));
     await expect(page.getByTestId("br-fixed")).toHaveText("فرع رام الله");
