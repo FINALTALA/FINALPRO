@@ -319,7 +319,7 @@ test.describe("TB-16.1: returns screens - 403, 404, 409 and 401", () => {
       await loginAs(page, owner.token);
       await enterWorkspace(page, owner.token, { type: "vendor", vendor_id: vendorId });
       await page.goto(`/vendor/${vendorId}/returns/redeem`);
-      const input = page.locator('input[maxlength="6"]'); // the code field (not the header search)
+      const input = page.getByTestId("rt-redeem-code"); // the redeem dialog of the branch's returns
       await expect(input).toBeVisible({ timeout: 30_000 });
       await input.fill(code);
       // TB-16.2: the page is bilingual now - the button follows the language.
@@ -358,8 +358,7 @@ test.describe("TB-16.1: returns screens - 403, 404, 409 and 401", () => {
       ["my returns", () => "/returns"],
       ["a return", () => `/returns/${mineId}`],
       ["the branch returns page", () => `/vendor/${vendorId}/branches/${branchA}/returns`],
-      ["redeem", () => `/vendor/${vendorId}/returns/redeem`],
-      ["the return policy", () => `/vendor/${vendorId}/return-policy`],
+      ["the store settings (return policy)", () => `/vendor/${vendorId}/settings`],
       ["the admin escalations", () => "/admin/returns"],
       ["the return request form", () => orderPath],
     ];

@@ -54,6 +54,8 @@ export interface QueueQuery {
   /** «نوافذ التوصيل v1»: one delivery date / window (from the 7-day board). */
   date?: string;
   window?: string;
+  /** owner, all branches: narrow to one branch */
+  branch?: string;
   sort?: QueueSort;
   cursor?: string;
   limit?: number;
@@ -156,14 +158,29 @@ export class BranchOrderQueueService {
   // The queue
   // ------------------------------------------------------------------
 
+  /**
+   * The queue of one branch, or - branchId null, the OWNER only (the caller
+   * enforces it) - of every branch of the store (optionally narrowed by
+   * query.branch). Rows always carry their branch; the all-branches scope
+   * also returns each branch's active count for the branch filter.
+   */
   async list(
     vendorId: string,
-    branchId: string,
+    branchId: string | null,
     viewer: Viewer,
     query: QueueQuery,
     correlationId: string,
   ) {
-    await this.requireBranch(vendorId, branchId);
+    if (branchId) await this.requireBranch(vendorId, branchId);
+    else if (!isOwner(viewer)) {
+      throw new ForbiddenException({
+        code: 'QUEUE_ALL_BRANCHES_OWNER_ONLY',
+        message: 'Only the store owner can list the orders of every branch',
+      });
+    }
+    if (!branchId && query.branch)
+      await this.requireBranch(vendorId, query.branch);
+    const scopeBranch = branchId ?? query.branch ?? null;
     const tab: QueueTab = query.tab ?? 'active';
     const sort: QueueSort =
       query.sort ?? (tab === 'done' ? 'newest' : 'priority');
@@ -186,7 +203,7 @@ export class BranchOrderQueueService {
     const delivered = await this.prisma.branchOrder.findMany({
       where: {
         vendorId,
-        branchId,
+        ...(scopeBranch ? { branchId: scopeBranch } : {}),
         status: 'DELIVERED',
         deliveredAt: { not: null },
       },
@@ -199,10 +216,7 @@ export class BranchOrderQueueService {
       );
     }
 
-    const filters: Prisma.Sql[] = [
-      Prisma.sql`bo."vendorId" = ${vendorId}`,
-      Prisma.sql`bo."branchId" = ${branchId}`,
-    ];
+    const filters: Prisma.Sql[] = [Prisma.sql`bo."vendorId" = ${vendorId}`];
     if (query.date) {
       filters.push(Prisma.sql`bo."scheduledDate" = ${query.date}::date`);
     }
@@ -214,6 +228,12 @@ export class BranchOrderQueueService {
     }
     const search = searchCondition(query.q);
     if (search) filters.push(search);
+    // the branch filter last: the all-branches counts per branch use the
+    // same filters without it
+    const otherFilters = [...filters];
+    if (scopeBranch) {
+      filters.push(Prisma.sql`bo."branchId" = ${scopeBranch}`);
+    }
     const base = Prisma.sql`
       SELECT bo.id, bo."createdAt" AS created_at, ${BUCKET} AS bucket, ${DUE_AT} AS due_at
       FROM branch_orders bo
@@ -266,6 +286,25 @@ export class BranchOrderQueueService {
       counts.late += r.late;
     }
 
+    // all branches: each branch's active (not done) orders, for the filter
+    let branchCounts: { branch_id: string; active: number }[] | undefined;
+    if (!branchId) {
+      const perBranch = await this.prisma.$queryRaw<
+        { branch_id: string; n: number }[]
+      >`SELECT bo."branchId" AS branch_id, count(*)::int AS n
+        FROM branch_orders bo
+        LEFT JOIN delivery_windows dw ON dw.id = bo."deliveryWindowId"
+        JOIN customer_orders co ON co.id = bo."customerOrderId"
+        JOIN customer_profiles cp ON cp.id = co."customerId"
+        JOIN users u ON u.id = cp."userId"
+        WHERE ${Prisma.join(otherFilters, ' AND ')} AND ${BUCKET} <> 'done'
+        GROUP BY bo."branchId"`;
+      branchCounts = perBranch.map((r) => ({
+        branch_id: r.branch_id,
+        active: r.n,
+      }));
+    }
+
     const shown = page.slice(0, limit);
     const meta = new Map(shown.map((r) => [r.id, r]));
     const rows = await this.prisma.branchOrder.findMany({
@@ -283,6 +322,7 @@ export class BranchOrderQueueService {
         },
         refunds: { select: { amount: true, reason: true } },
         deliveryWindow: { select: { startMinute: true, endMinute: true } },
+        branch: { select: { name: true } },
       },
     });
     const byId = new Map(rows.map((r) => [r.id, r]));
@@ -296,6 +336,8 @@ export class BranchOrderQueueService {
         {
           id: o.id,
           number: o.id.slice(0, 8),
+          branch_id: o.branchId,
+          branch_name: o.branch.name,
           status: o.status,
           bucket: bucketOf(o.status, o.notReceivedReportedAt),
           fulfilment_method: o.fulfilmentMethod,
@@ -328,6 +370,8 @@ export class BranchOrderQueueService {
       items,
       next_cursor: page.length > limit ? String(offset + limit) : null,
       counts,
+      ...(branchCounts ? { branch_counts: branchCounts } : {}),
+      scope: branchId ? 'branch' : 'all',
       tab,
       sort,
     };

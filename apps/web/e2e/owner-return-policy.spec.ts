@@ -28,21 +28,25 @@ test.describe("owner return-policy UI", () => {
 
     await loginAs(page, fixtures.ownerToken);
     await enterWorkspace(page, fixtures.ownerToken, { type: "vendor", vendor_id: vendorId });
+    // 2026-11-23: the old address opens «إعدادات المتجر» at its policy section
     await page.goto(`/vendor/${vendorId}/return-policy`);
+    await expect(page).toHaveURL(new RegExp(`/vendor/${vendorId}/settings#returns$`), { timeout: 30_000 });
+    const sec = page.getByTestId("ss-returns");
+    await expect(sec).toBeFocused();
 
-    const modeSelect = page.locator("select");
+    const modeSelect = sec.locator("select");
     await expect(modeSelect).toHaveValue("NO_RETURN");
 
     await modeSelect.selectOption("REFUND_ONLY");
-    await page.locator('input[type="number"]').nth(0).fill("10");
-    await page.locator('input[type="number"]').nth(1).fill("3");
-    await page.getByRole("button", { name: "حفظ" }).click();
-    await expect(page.getByText("تم الحفظ")).toBeVisible();
+    await sec.locator('input[type="number"]').nth(0).fill("10");
+    await sec.locator('input[type="number"]').nth(1).fill("3");
+    await sec.getByRole("button", { name: "حفظ سياسة الإرجاع" }).click();
+    await expect(sec.getByText("تم الحفظ")).toBeVisible();
     await expect(modeSelect).toHaveValue("REFUND_ONLY");
 
     // Same six-month window, same vendor: the second update is
     // rejected and the 409 renders as a plain error banner.
-    await page.getByRole("button", { name: "حفظ" }).click();
+    await sec.getByRole("button", { name: "حفظ سياسة الإرجاع" }).click();
     await expect(
       page.getByText(
         "يمكن تعديل سياسة الإرجاع مرة واحدة كل ستة أشهر فقط - لم تحن المدة بعد.",
@@ -66,17 +70,18 @@ test.describe("owner return-policy UI", () => {
 
     await loginAs(page, fixtures.ownerToken);
     await enterWorkspace(page, fixtures.ownerToken, { type: "vendor", vendor_id: vendorId });
-    await page.goto(`/vendor/${vendorId}/return-policy`);
+    await page.goto(`/vendor/${vendorId}/settings#returns`);
+    const sec = page.getByTestId("ss-returns");
 
-    const modeSelect = page.locator("select");
+    const modeSelect = sec.locator("select");
     await modeSelect.selectOption("BOTH");
-    await expect(page.getByText("رسوم الإرجاع (₪)")).toBeVisible();
-    await expect(page.getByText(/رسوم التبديل/)).toBeVisible();
-    await page.locator('input[type="number"]').nth(0).fill("14"); // window
-    await page.locator('input[type="number"]').nth(1).fill("5"); // return fee
-    await page.locator('input[type="number"]').nth(2).fill("10"); // exchange fee
-    await page.getByRole("button", { name: "حفظ" }).click();
-    await expect(page.getByText("تم الحفظ")).toBeVisible();
+    await expect(sec.getByText("رسوم الإرجاع (₪)")).toBeVisible();
+    await expect(sec.getByText(/رسوم التبديل/)).toBeVisible();
+    await sec.locator('input[type="number"]').nth(0).fill("14"); // window
+    await sec.locator('input[type="number"]').nth(1).fill("5"); // return fee
+    await sec.locator('input[type="number"]').nth(2).fill("10"); // exchange fee
+    await sec.getByRole("button", { name: "حفظ سياسة الإرجاع" }).click();
+    await expect(sec.getByText("تم الحفظ")).toBeVisible();
     await expect(modeSelect).toHaveValue("BOTH");
 
     // EXCHANGE_ONLY is a different vendor's own save - the 6-month
@@ -97,14 +102,15 @@ test.describe("owner return-policy UI", () => {
 
     await loginAs(page, fixtures.ownerToken);
     await enterWorkspace(page, fixtures.ownerToken, { type: "vendor", vendor_id: vendorId });
-    await page.goto(`/vendor/${vendorId}/return-policy`);
+    await page.goto(`/vendor/${vendorId}/settings#returns`);
+    const sec = page.getByTestId("ss-returns");
 
-    await page.locator("select").selectOption("EXCHANGE_ONLY");
-    await expect(page.getByText("رسوم الإرجاع (₪)")).not.toBeVisible();
-    await expect(page.getByText(/رسوم التبديل/)).toBeVisible();
-    await page.locator('input[type="number"]').nth(0).fill("14");
-    await page.locator('input[type="number"]').nth(1).fill("10");
-    await page.getByRole("button", { name: "حفظ" }).click();
-    await expect(page.getByText("تم الحفظ")).toBeVisible();
+    await sec.locator("select").selectOption("EXCHANGE_ONLY");
+    await expect(sec.getByText("رسوم الإرجاع (₪)")).not.toBeVisible();
+    await expect(sec.getByText(/رسوم التبديل/)).toBeVisible();
+    await sec.locator('input[type="number"]').nth(0).fill("14");
+    await sec.locator('input[type="number"]').nth(1).fill("10");
+    await sec.getByRole("button", { name: "حفظ سياسة الإرجاع" }).click();
+    await expect(sec.getByText("تم الحفظ")).toBeVisible();
   });
 });

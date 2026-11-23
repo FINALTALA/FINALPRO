@@ -55,12 +55,11 @@ test.describe("staff/owner returns UI", () => {
       where: { id: submitted.body.id },
     });
 
+    // 2026-11-23: the old address opens the branch's returns with the redeem dialog
     await page.goto(`/vendor/${vendorId}/returns/redeem`);
-    // Scoped to <main> - a plain "input" locator also matches the
-    // shared header's own search box (role "searchbox", but still a
-    // bare <input> tag), which this page sits behind.
-    await page.locator("main input").first().fill(withCode.code!);
-    await page.getByRole("button", { name: "استبدال" }).click();
+    await expect(page.getByTestId("rt-redeem-dialog")).toBeVisible({ timeout: 30_000 });
+    await page.getByTestId("rt-redeem-code").fill(withCode.code!);
+    await page.getByRole("button", { name: "استبدال", exact: true }).click();
     await expect(page.getByText("تم استلام المنتج بنجاح")).toBeVisible();
   });
 
@@ -69,8 +68,8 @@ test.describe("staff/owner returns UI", () => {
     await loginAs(page, fixtures.ownerToken);
     await enterWorkspace(page, fixtures.ownerToken, { type: "vendor", vendor_id: vendorId });
     await page.goto(`/vendor/${vendorId}/returns/redeem`);
-    await page.locator("main input").first().fill("000000");
-    await page.getByRole("button", { name: "استبدال" }).click();
+    await page.getByTestId("rt-redeem-code").fill("000000");
+    await page.getByRole("button", { name: "استبدال", exact: true }).click();
     await expect(
       page.getByText("هذا الكود غير صالح، أو مستخدم من قبل، أو منتهي."),
     ).toBeVisible();
@@ -156,8 +155,8 @@ test.describe("staff/owner returns UI", () => {
     });
 
     await page.goto(`/vendor/${vendorId}/returns/redeem`);
-    await page.locator("main input").first().fill(withCode.code!);
-    await page.getByRole("button", { name: "استبدال" }).click();
+    await page.getByTestId("rt-redeem-code").fill(withCode.code!);
+    await page.getByRole("button", { name: "استبدال", exact: true }).click();
     await expect(page.getByText("تم تسليم البديل بنجاح")).toBeVisible();
     // 80 (replacement) - 100 (original) + 10 (exchange fee) = -10, refunded to the customer.
     await expect(page.getByText(/يُردّ للعميل 10 ₪ نقداً/)).toBeVisible();

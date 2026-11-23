@@ -122,7 +122,8 @@ test.describe("TB-26: shopping vs store/platform workspaces", () => {
     expect(stored.local).not.toContain(token);
 
     // Into a management page and back out: leaving ends the workspace.
-    await page.goto(`/vendor/${s.vendorId}/orders`);
+    // (2026-11-23: /orders only redirects into «إدارة الفروع» now - a page of its own here)
+    await page.goto(`/vendor/${s.vendorId}/settings`);
     await expect(page.getByTestId("workspace-bar")).toBeVisible();
     // «خروج من مساحة العمل» lives in the workspace's header menu
     await page.getByTestId("workspace-menu-button").click();
@@ -452,7 +453,7 @@ test.describe("TB-26: a lost session goes to sign-in first, never by way of the 
 
   test("401 answered BEFORE the workspace gate: sign-in with next = this page; the session is cleared", async ({ page }) => {
     const s = await expired();
-    const path = `/vendor/${s.vendorId}/return-policy`;
+    const path = `/vendor/${s.vendorId}/settings`;
     await loginAs(page, s.owner.token);
     await page.route("**/api/v1/me/workspaces", (route) => route.fulfill(lost401));
     const urls = visited(page);
@@ -464,7 +465,7 @@ test.describe("TB-26: a lost session goes to sign-in first, never by way of the 
 
   test("the workspace gate BEFORE the 401 (the read held back): still no confirmation - the same sign-in with next = this page", async ({ page }) => {
     const s = await expired();
-    const path = `/vendor/${s.vendorId}/returns/redeem`;
+    const path = `/vendor/${s.vendorId}/staff`;
     await loginAs(page, s.owner.token);
     let release: () => void = () => {};
     const held = new Promise<void>((r) => (release = r));
@@ -492,7 +493,7 @@ test.describe("TB-26: a lost session goes to sign-in first, never by way of the 
   test("a real expired session (no route forced) ends the same way on every workspace page", async ({ page }) => {
     const s = await expired();
     await loginAs(page, s.owner.token);
-    for (const path of [`/vendor/${s.vendorId}`, `/vendor/${s.vendorId}/return-policy`, `/vendor/${s.vendorId}/returns/redeem`]) {
+    for (const path of [`/vendor/${s.vendorId}`, `/vendor/${s.vendorId}/settings`, `/vendor/${s.vendorId}/staff`]) {
       const urls = visited(page);
       await page.goto(path);
       await expect.poll(() => loginNext(page), { timeout: 30_000 }).toBe(path);
@@ -509,7 +510,7 @@ test.describe("TB-26: a lost session goes to sign-in first, never by way of the 
 
   test("still signed in (valid session, no workspace token): the confirmation - only once the session is confirmed - and the session is kept", async ({ page }) => {
     const s = await store("valid");
-    const path = `/vendor/${s.vendorId}/return-policy`;
+    const path = `/vendor/${s.vendorId}/settings`;
     await loginAs(page, s.owner.token);
     let release: () => void = () => {};
     const held = new Promise<void>((r) => (release = r));
@@ -529,7 +530,7 @@ test.describe("TB-26: a lost session goes to sign-in first, never by way of the 
 
   test("signed out, a direct workspace link: sign-in first, then the confirmation, then the page", async ({ page }) => {
     const s = await store("direct");
-    const path = `/vendor/${s.vendorId}/return-policy`;
+    const path = `/vendor/${s.vendorId}/settings`;
     const entry = `/workspaces/enter?type=vendor&vendor_id=${s.vendorId}&next=${encodeURIComponent(path)}`;
     for (const start of [path, entry]) {
       await page.goto("/");

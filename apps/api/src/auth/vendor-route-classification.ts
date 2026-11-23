@@ -126,6 +126,8 @@ export const SUSPENDED_ALLOW_ROUTES: readonly string[] = [
   'GET vendors/:vendorId/branches/:branchId/orders',
   // 2026-11-22: the branch's order queue, one order and its timeline (reads).
   'GET vendors/:vendorId/branches/:branchId/order-queue',
+  // the owner's queue of every branch («كل الفروع»)
+  'GET vendors/:vendorId/order-queue',
   'GET vendors/:vendorId/branches/:branchId/order-queue/:branchOrderId',
   'GET vendors/:vendorId/branches/:branchId/order-queue/:branchOrderId/timeline',
   'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/start-preparation',

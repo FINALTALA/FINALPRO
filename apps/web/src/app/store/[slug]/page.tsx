@@ -223,12 +223,7 @@ const MANAGEMENT_TILE_DETAILS: Record<string, { icon: ManagementTileIconName; ba
   "match-review": { icon: "shield", badge: "store.tile.3.badge", footer: "store.tile.3.footer" },
   branches: { icon: "pin", badge: "store.tile.4.badge", footer: "store.tile.4.footer" },
   staff: { icon: "team", badge: "store.tile.5.badge", footer: "store.tile.5.footer" },
-  "delivery-zones": { icon: "map", badge: "store.tile.6.badge", footer: "store.tile.6.footer" },
-  "delivery-windows": { icon: "calendar", badge: "store.tile.7.badge", footer: "store.tile.7.footer" },
-  orders: { icon: "box", badge: "store.tile.8.badge", footer: "store.tile.8.footer" },
   verification: { icon: "document", badge: "store.tile.9.badge", footer: "store.tile.9.footer" },
-  "return-policy": { icon: "return", badge: "store.tile.10.badge", footer: "store.tile.10.footer" },
-  "returns/redeem": { icon: "barcode", badge: "store.tile.11.badge", footer: "store.tile.11.footer" },
   reviews: { icon: "star", badge: "store.tile.12.badge", footer: "store.tile.12.footer" },
   performance: { icon: "chart", badge: "store.tile.13.badge", footer: "store.tile.13.footer" },
   "store-sales": { icon: "barcode", badge: "", footer: "pos.tile.sales_hint" },
@@ -450,7 +445,9 @@ export default function StorefrontPage() {
     }
     const key = href.split("?")[0].split("/").slice(3).join("/");
     const tiles = ownerHubTiles(ownerVendorId);
-    const tile = tiles.find((x) => key === x.href.split("/").slice(3).join("/")) ?? tiles.find((x) => key.startsWith(`${x.href.split("/").slice(3).join("/")}/`));
+    // addresses that moved into «إدارة الفروع» (their old pages redirect there) keep its title
+    const moved = /^(orders|delivery-windows|delivery-zones|return-policy|returns\/redeem|settings)$/.test(key) ? "branches" : key;
+    const tile = tiles.find((x) => moved === x.href.split("/").slice(3).join("/")) ?? tiles.find((x) => moved.startsWith(`${x.href.split("/").slice(3).join("/")}/`));
     setFrameState({ title: null, canBack: false, backTitle: null });
     setManagementDetail({ href, title: tile?.title ?? t("store.manage") });
   }
@@ -2140,12 +2137,6 @@ export default function StorefrontPage() {
                   <span className="employee-workspace-card-footer"><small /><b>{t("store.open")} <i>‹</i></b></span>
                 </Link>
               )}
-              <Link href={`/vendor/${employeeWorkspace.vendor_id}/returns/redeem`} className="employee-workspace-card" onClick={() => setEmployeeWorkspaceOpen(false)}>
-                <span className="employee-workspace-card-icon"><ManagementTileIcon name="barcode" /></span>
-                <strong>{t("store.ws.redeem")}</strong>
-                <p>{t("store.ws.redeem_hint")}</p>
-                <span className="employee-workspace-card-footer"><small>{t("store.ws.redeem_footer")}</small><b>{t("store.open")} <i>‹</i></b></span>
-              </Link>
             </div>
           </section>
         </div>

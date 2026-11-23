@@ -18,6 +18,9 @@ export type Method = "PICKUP" | "DELIVERY";
 export interface QueueRow {
   id: string;
   number: string;
+  /** the order's branch (shown as a badge in the owner's «كل الفروع») */
+  branch_id: string;
+  branch_name: string;
   status: string;
   bucket: QueueTab;
   fulfilment_method: Method;
@@ -39,6 +42,9 @@ export interface QueuePage {
   items: QueueRow[];
   next_cursor: string | null;
   counts: QueueCounts;
+  /** «كل الفروع» only: each branch's active (not done) orders */
+  branch_counts?: { branch_id: string; active: number }[];
+  scope?: "branch" | "all";
   tab: QueueTab;
   sort: QueueSort;
 }
@@ -132,6 +138,10 @@ export interface QueueFilters {
   /** «نوافذ التوصيل v1»: one delivery date / window (from the 7-day board). */
   date: string | null;
   window: string | null;
+  /** the owner's scope: this branch, or every branch of the store */
+  scope: "branch" | "all";
+  /** «كل الفروع»: narrowed to one branch */
+  branch: string | null;
 }
 
 const base = (vendorId: string, branchId: string) => `/vendors/${vendorId}/branches/${branchId}`;
@@ -145,9 +155,12 @@ export function fetchQueue(vendorId: string, branchId: string, f: QueueFilters, 
   if (f.sort) p.set("sort", f.sort);
   if (f.date) p.set("date", f.date);
   if (f.window) p.set("window", f.window);
+  if (f.scope === "all" && f.branch) p.set("branch", f.branch);
   if (cursor) p.set("cursor", cursor);
   const qs = p.toString();
-  return apiFetch<QueuePage>(`${base(vendorId, branchId)}/order-queue${qs ? `?${qs}` : ""}`);
+  // the owner's «كل الفروع»: the store-wide queue (owner only on the server too)
+  const path = f.scope === "all" ? `/vendors/${vendorId}/order-queue` : `${base(vendorId, branchId)}/order-queue`;
+  return apiFetch<QueuePage>(`${path}${qs ? `?${qs}` : ""}`);
 }
 export const fetchOrder = (vendorId: string, branchId: string, id: string) =>
   apiFetch<OrderDetail>(`${base(vendorId, branchId)}/order-queue/${encodeURIComponent(id)}`);

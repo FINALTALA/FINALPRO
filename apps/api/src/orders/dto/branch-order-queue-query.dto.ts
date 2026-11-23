@@ -32,6 +32,11 @@ export class BranchOrderQueueQueryDto {
   @IsOptional()
   @IsUUID()
   window?: string;
+  /** owner, all branches (vendors/:vendorId/order-queue): one branch */
+  @IsOptional()
+  @IsUUID()
+  branch?: string;
+
   @IsOptional()
   @IsIn(QUEUE_SORTS)
   sort?: (typeof QUEUE_SORTS)[number];

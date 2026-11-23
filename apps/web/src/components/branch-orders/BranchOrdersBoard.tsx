@@ -46,6 +46,8 @@ function readFilters(sp: URLSearchParams): QueueFilters {
     sort: sort === "newest" || sort === "priority" ? sort : null,
     date: /^\d{4}-\d{2}-\d{2}$/.test(sp.get("date") ?? "") ? sp.get("date") : null,
     window: /^[0-9a-f-]{36}$/i.test(sp.get("window") ?? "") ? sp.get("window") : null,
+    scope: sp.get("scope") === "all" ? "all" : "branch",
+    branch: /^[0-9a-f-]{36}$/i.test(sp.get("branch") ?? "") ? sp.get("branch") : null,
   };
 }
 
@@ -55,7 +57,11 @@ function readFilters(sp: URLSearchParams): QueueFilters {
  * between them. Phone: the queue, then the order as a full screen with one
  * «رجوع» back to the same tab, filters and scroll. Everything the screen
  * shows is in the URL (tab, filters, search, the order), so a link -
- * a notification's included - opens exactly that.
+ * a notification's included - opens exactly that. The owner also picks the
+ * scope: «الفرع الحالي» (default) or «كل الفروع» (?scope=all: every branch,
+ * a branch badge on each order, a branch filter; an opened order keeps its
+ * branch in ?ob= and its actions go to that branch). An employee never gets
+ * the scope (the server refuses it too).
  */
 export default function BranchOrdersBoard({ vendorId, branchId }: { vendorId: string; branchId: string }) {
   const t = useT();
@@ -66,7 +72,17 @@ export default function BranchOrdersBoard({ vendorId, branchId }: { vendorId: st
   const ws = useBranchWorkspace(vendorId);
   // an expired session: sign in again and come back here (TB-34) - never an error text
   const onExpired = useSessionExpiredRedirect();
-  const filters = useMemo(() => readFilters(new URLSearchParams(sp.toString())), [sp]);
+  const urlFilters = useMemo(() => readFilters(new URLSearchParams(sp.toString())), [sp]);
+  // only the owner has a scope; anyone else always reads this branch
+  const filters = useMemo<QueueFilters>(
+    () => (ws.isOwner || urlFilters.scope === "branch" ? urlFilters : { ...urlFilters, scope: "branch", branch: null }),
+    [urlFilters, ws.isOwner],
+  );
+  const allScope = filters.scope === "all";
+  // the scope radios answer at once; the URL (the real state) follows a moment later
+  const [pendingScope, setPendingScope] = useState<"all" | "branch" | null>(null);
+  if (pendingScope !== null && pendingScope === filters.scope) setPendingScope(null);
+  const shownAll = (pendingScope ?? filters.scope) === "all";
   const selected = sp.get("order");
 
   const rootRef = useRef<HTMLDivElement>(null);
@@ -75,6 +91,7 @@ export default function BranchOrdersBoard({ vendorId, branchId }: { vendorId: st
   const [narrow, setNarrow] = useState(false);
   const [rows, setRows] = useState<QueueRow[] | null>(null);
   const [counts, setCounts] = useState<QueueCounts | null>(null);
+  const [branchCounts, setBranchCounts] = useState<Record<string, number>>({});
   const [cursor, setCursor] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -91,7 +108,9 @@ export default function BranchOrdersBoard({ vendorId, branchId }: { vendorId: st
   const order = cur?.order ?? null;
   const events = cur?.events ?? null;
   const truncated = cur?.truncated ?? false;
-  const orderMissing = cur?.missing ?? false;
+  // «كل الفروع»: an order neither in the loaded list nor with a branch in the link
+  const unknownBranch = filters.scope === "all" && Boolean(selected) && rows !== null && !rows.some((r) => r.id === selected) && !/^[0-9a-f-]{36}$/i.test(sp.get("ob") ?? "");
+  const orderMissing = cur?.missing ?? unknownBranch;
   const orderError = cur?.error ?? null;
   const [notice, setNotice] = useState("");
   const [searchText, setSearchText] = useState(filters.q);
@@ -173,6 +192,7 @@ export default function BranchOrdersBoard({ vendorId, branchId }: { vendorId: st
         if (seq !== listSeq.current) return;
         setRows(page.items);
         setCounts(page.counts);
+        setBranchCounts(Object.fromEntries((page.branch_counts ?? []).map((b) => [b.branch_id, b.active])));
         setCursor(page.next_cursor);
         setListError(null);
       },
@@ -219,11 +239,16 @@ export default function BranchOrdersBoard({ vendorId, branchId }: { vendorId: st
     return () => window.clearTimeout(h);
   }, [searchText, filters.q, go]);
 
-  // ---- one order
+  // ---- one order (in «كل الفروع»: under its own branch - from its row, or ?ob= of a link)
+  const obParam = sp.get("ob");
+  const detailBranch = allScope
+    ? (rows?.find((r) => r.id === selected)?.branch_id ?? (obParam && /^[0-9a-f-]{36}$/i.test(obParam) ? obParam : null))
+    : branchId;
   const loadOrder = useCallback(
     (id: string): Promise<void> => {
       const seq = ++orderSeq.current;
-      return Promise.all([fetchOrder(vendorId, branchId, id), fetchTimeline(vendorId, branchId, id)]).then(
+      if (!detailBranch) return Promise.resolve();
+      return Promise.all([fetchOrder(vendorId, detailBranch, id), fetchTimeline(vendorId, detailBranch, id)]).then(
         ([d, tl]) => {
           if (seq !== orderSeq.current) return;
           setOd({ id, order: d, events: tl.items, truncated: tl.truncated, missing: false, error: null });
@@ -238,17 +263,18 @@ export default function BranchOrdersBoard({ vendorId, branchId }: { vendorId: st
         },
       );
     },
-    [vendorId, branchId, onExpired],
+    [vendorId, detailBranch, onExpired],
   );
 
   useEffect(() => {
-    if (!canLoad || !selected) {
+    // «كل الفروع»: the order's branch comes from the list (or the link's ?ob=)
+    if (!canLoad || !selected || !detailBranch) {
       // a reply still on its way for an order no longer chosen is dropped
       orderSeq.current += 1;
       return;
     }
     void loadOrder(selected);
-  }, [canLoad, selected, loadOrder]);
+  }, [canLoad, selected, detailBranch, loadOrder]);
 
   // on a phone the order is its own screen: its title takes the focus
   useEffect(() => {
@@ -272,13 +298,14 @@ export default function BranchOrdersBoard({ vendorId, branchId }: { vendorId: st
 
   function openOrder(id: string) {
     if (id === selected) return;
+    const ob = allScope ? (rows?.find((r) => r.id === id)?.branch_id ?? null) : null;
     if (narrow) {
       scrollRef.current = window.scrollY;
       pushedRef.current = true;
-      go({ order: id }, "push");
+      go({ order: id, ob }, "push");
       window.scrollTo({ top: 0 });
     } else {
-      go({ order: id });
+      go({ order: id, ob });
     }
   }
   function backToQueue() {
@@ -305,10 +332,15 @@ export default function BranchOrdersBoard({ vendorId, branchId }: { vendorId: st
     links[next]?.focus();
   }
 
-  const hrefFor = (id: string) => {
+  const hrefFor = (r: QueueRow) => {
     const next = new URLSearchParams(sp.toString());
-    next.set("order", id);
+    next.set("order", r.id);
+    if (allScope) next.set("ob", r.branch_id);
     return `${pathname}?${next.toString()}`;
+  };
+  const setScope = (all: boolean) => {
+    setPendingScope(all ? "all" : "branch");
+    go({ scope: all ? "all" : null, branch: null, order: null, ob: null, date: null, window: null, slot: null, cursor: null });
   };
 
   // ---------------------------------------------------------------- render
@@ -327,7 +359,7 @@ export default function BranchOrdersBoard({ vendorId, branchId }: { vendorId: st
   const showDetailOnly = narrow && Boolean(selected);
   const owner = ws.isOwner;
   const tabCount = (k: QueueTab) => counts?.[k] ?? null;
-  const filtered = filters.method !== null || filters.late || filters.q !== "" || filters.date !== null;
+  const filtered = filters.method !== null || filters.late || filters.q !== "" || filters.date !== null || filters.branch !== null;
   const slotLabel = sp.get("slot");
   const inTab =
     !order || filters.tab === order.bucket || (filters.tab === "active" && order.bucket !== "done");
@@ -336,6 +368,20 @@ export default function BranchOrdersBoard({ vendorId, branchId }: { vendorId: st
   const queue = (
     <section className="bo-queue" aria-labelledby="bo-queue-title" hidden={showDetailOnly}>
       <h2 id="bo-queue-title" className="visually-hidden">{t("bo.list")}</h2>
+      {owner && (
+        <fieldset className="bo-scope" data-testid="bo-scope">
+          <legend className="visually-hidden">{t("bo.scope")}</legend>
+          <label className={`bo-scope-opt${!shownAll ? " is-on" : ""}`}>
+            <input type="radio" name="bo-scope" checked={!shownAll} onChange={() => setScope(false)} data-testid="bo-scope-branch" />
+            <span>{t("bo.scope.branch")}</span>
+            {branchName && <span className="bo-scope-name" dir="auto">{branchName}</span>}
+          </label>
+          <label className={`bo-scope-opt${shownAll ? " is-on" : ""}`}>
+            <input type="radio" name="bo-scope" checked={shownAll} onChange={() => setScope(true)} data-testid="bo-scope-all" />
+            <span>{t("bo.scope.all")}</span>
+          </label>
+        </fieldset>
+      )}
       <nav className="bo-tabs" aria-label={t("bo.tabs")} data-testid="bo-tabs">
         {QUEUE_TABS.map((k) => {
           const n = tabCount(k);
@@ -406,6 +452,21 @@ export default function BranchOrdersBoard({ vendorId, branchId }: { vendorId: st
           <input key={String(filters.late)} type="checkbox" defaultChecked={filters.late} onChange={(e) => go({ late: e.target.checked ? "1" : null })} data-testid="bo-late" />
           <span>{counts ? fillBo(t("bo.filter.late_n"), { n: counts.late }) : t("bo.filter.late")}</span>
         </label>
+        {allScope && (
+          <label className="bo-sort bo-branch-filter">
+            <span className="visually-hidden">{t("bo.filter.branch")}</span>
+            <select value={filters.branch ?? ""} onChange={(e) => go({ branch: e.target.value || null, order: null, ob: null })} aria-label={t("bo.filter.branch")} data-testid="bo-branch-filter">
+              <option value="">{t("bo.filter.branch_all")}</option>
+              {(ws.branches ?? [])
+                .filter((b) => !b.archived_at || branchCounts[b.id])
+                .map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {fillBo(t("bo.filter.branch_n"), { name: b.name, n: branchCounts[b.id] ?? 0 })}
+                  </option>
+                ))}
+            </select>
+          </label>
+        )}
         {owner && (
           <label className="bo-sort">
             <span className="visually-hidden">{t("bo.sort")}</span>
@@ -437,7 +498,7 @@ export default function BranchOrdersBoard({ vendorId, branchId }: { vendorId: st
             return (
               <li key={r.id}>
                 <a
-                  href={hrefFor(r.id)}
+                  href={hrefFor(r)}
                   className={`bo-row-link${isSel ? " is-selected" : ""}${isSel && linked === r.id ? " is-notified" : ""}${r.is_late ? " is-late" : ""}`}
                   aria-current={isSel ? "true" : undefined}
                   data-order-id={r.id}
@@ -466,6 +527,7 @@ export default function BranchOrdersBoard({ vendorId, branchId }: { vendorId: st
                     </span>
                   </span>
                   <span className="bo-row-bottom">
+                    {allScope && <span className="bo-branch" dir="auto" data-testid="bo-row-branch">{r.branch_name}</span>}
                     <span dir="auto" className="bo-row-name">{r.customer_short ?? "—"}</span>
                     <span className="bo-muted" dir="ltr">•••• {r.phone_last4}</span>
                     <span className="bo-muted">{r.item_count === 1 ? t("bo.item_one") : fillBo(t("bo.items_n"), { n: r.item_count })}</span>
@@ -517,7 +579,7 @@ export default function BranchOrdersBoard({ vendorId, branchId }: { vendorId: st
         <OrderDetailView
           key={order.id}
           vendorId={vendorId}
-          branchId={branchId}
+          branchId={detailBranch ?? branchId}
           order={order}
           events={events}
           truncated={truncated}
@@ -535,7 +597,7 @@ export default function BranchOrdersBoard({ vendorId, branchId }: { vendorId: st
 
   return (
     <div ref={rootRef} className={`bo${narrow ? " is-narrow" : ""}${showDetailOnly ? " is-detail" : ""}`} data-testid="branch-orders">
-      <h2 className="visually-hidden">{t("bo.title")}</h2>
+      <h2 className="visually-hidden">{t(allScope ? "bo.title_all" : "bo.title")}</h2>
       {switchedFrom && owner && branchName && (
         <p className="bo-switched" role="status" data-testid="bo-switched">
           {fillBo(t("bo.switched"), { branch: branchName })}

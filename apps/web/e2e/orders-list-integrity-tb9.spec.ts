@@ -65,7 +65,7 @@ test.describe("TB-9: order lists with an invalid order", () => {
     await enterWorkspace(page, fixtures.ownerToken, { type: "vendor", vendor_id: vendorId });
     // 2026-11-22: the branch's screen is the order queue (rows, not cards)
     for (const [url, row] of [
-      [`/vendor/${vendorId}/orders`, ".card"],
+      [`/vendor/${vendorId}/orders`, '[data-testid^="branch-order-"]'],
       [`/vendor/${vendorId}/branches/${branchId}/orders`, '[data-testid^="branch-order-"]'],
     ] as const) {
       await page.goto(url);
@@ -90,9 +90,9 @@ test.describe("TB-9: order lists with an invalid order", () => {
     await enterWorkspace(page, fixtures.ownerToken, { type: "vendor", vendor_id: vendorId });
     // 2026-11-22: the branch's screen reads the order queue
     for (const [path, pagePath, status, text] of [
-      [`/vendors/${vendorId}/orders`, `/vendor/${vendorId}/orders`, 409, LOAD_FAILED],
+      [`/vendors/${vendorId}/order-queue`, `/vendor/${vendorId}/orders`, 409, LOAD_FAILED],
       [`/vendors/${vendorId}/branches/${branchId}/order-queue`, `/vendor/${vendorId}/branches/${branchId}/orders`, 500, LOAD_FAILED],
-      [`/vendors/${vendorId}/orders`, `/vendor/${vendorId}/orders`, 403, FORBIDDEN],
+      [`/vendors/${vendorId}/order-queue`, `/vendor/${vendorId}/orders`, 403, FORBIDDEN],
     ] as const) {
       await page.route(`**${path}`, fail(status));
       await page.goto(pagePath);

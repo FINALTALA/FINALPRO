@@ -238,3 +238,18 @@ html[dir="rtl"] .bo-row-link.is-selected, [dir="rtl"] .bo-row-link.is-selected {
 @media (prefers-reduced-motion: reduce) {
   .bo * { scroll-behavior: auto !important; transition: none !important; }
 }
+
+/* the owner's scope: «الفرع الحالي» | «كل الفروع» (real radios, arrow keys move between them) */
+.bo-scope { flex: none; display: inline-flex; flex-wrap: wrap; gap: 0; margin: 0 0 6px; padding: 0; border: 1px solid var(--wz-line-strong); border-radius: 12px; overflow: hidden; align-self: flex-start; }
+.bo-scope-opt { position: relative; display: inline-flex; align-items: center; gap: 6px; min-block-size: 40px; padding: 0 14px; cursor: pointer; font-weight: 700; color: var(--wz-muted); background: var(--wz-paper); }
+.bo-scope-opt + .bo-scope-opt { border-inline-start: 1px solid var(--wz-line-strong); }
+.bo-scope-opt input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.bo-scope-opt.is-on { background: var(--wz-wine-soft); color: var(--wz-wine); }
+.bo-scope-opt:focus-within { box-shadow: inset var(--wz-ring); }
+.bo-scope-name { font-weight: 500; color: var(--wz-muted); font-size: 0.85rem; }
+.bo-scope-name::before { content: "·"; margin-inline-end: 6px; }
+/* «كل الفروع»: each order says its branch */
+.bo-branch {
+  display: inline-flex; align-items: center; min-block-size: 22px; padding: 0 8px; border-radius: 999px;
+  background: var(--wz-sand-soft); color: var(--wz-sand-ink); font-size: 0.78rem; font-weight: 700;
+}

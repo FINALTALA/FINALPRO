@@ -283,18 +283,18 @@ test.describe("TB-16.2: returns screens in Arabic and English", () => {
   test("owner - redeem a code and the return policy", async ({ browser }) => {
     await eachView(browser, owner, `/vendor/${vendorId}/returns/redeem`, async (page, lang) => {
       await words(page, lang, {
-        ar: ["استبدال كود إرجاع", "كود الإرجاع (6 أرقام)", "الفرع المستلِم", "حالة المنتج"],
-        en: ["Redeem a return code", "Return code (6 digits)", "Receiving branch", "Item condition"],
+        ar: ["استبدال كود إرجاع", "كود الإرجاع (6 أرقام)", "يُستلم في:", "حالة المنتج"],
+        en: ["Redeem a return code", "Return code (6 digits)", "Received at:", "Item condition"],
       });
-      const conditions = await page.locator("select").nth(1).locator("option").allInnerTexts();
+      const conditions = await page.getByTestId("rt-redeem-condition").locator("option").allInnerTexts();
       expect(conditions).toEqual(lang === "en" ? ["Resellable", "Damaged"] : ["قابل لإعادة البيع", "تالف"]);
     });
     await eachView(browser, owner, `/vendor/${vendorId}/return-policy`, async (page, lang) => {
       await words(page, lang, {
-        ar: ["سياسة الإرجاع والتبديل", "السياسة", "آخر تعديل:"],
-        en: ["Return and exchange policy", "Policy", "Last changed:"],
+        ar: ["سياسة الإرجاع", "السياسة", "آخر تعديل:"],
+        en: ["Return policy", "Policy", "Last changed:"],
       });
-      const modes = await page.locator("select").first().locator("option").allInnerTexts();
+      const modes = await page.getByTestId("ss-policy-mode").locator("option").allInnerTexts();
       expect(modes).toEqual(
         lang === "en"
           ? ["No returns or exchanges", "Returns for a refund only", "Exchanges only", "Returns or exchanges (the customer chooses)"]

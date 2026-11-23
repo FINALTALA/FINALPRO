@@ -150,19 +150,14 @@ export function ownerHubTiles(vendorId: string): HubTile[] {
     { href: `${base}/storefront/home`, title: "تصميم الصفحة الرئيسية", description: "بانرات ومجموعات ومنتجات مختارة أعلى قائمة المنتجات" },
     // «مجموعات المتجر» are reached from «المنتجات والعروض» (its toolbar), not a tile of their own.
     { href: `${base}/offers`, title: "المنتجات والعروض", description: "قائمة عروض المتجر وحالتها" },
-    { href: `${base}/branches`, title: "إدارة الفروع", description: "الفرع الحالي وطلباته ومخزونه ونوافذ توصيله وساعاته" },
+    // 2026-11-23: «إدارة الفروع» holds each branch's daily tools (orders - with
+    // the owner's «كل الفروع» -, stock, delivery, hours, returns and the
+    // return-code redeem), «إعدادات الفرع» and «إعدادات المتجر» (delivery
+    // zones and fees, the return policy). Their old cards are gone; the old
+    // addresses redirect there.
+    { href: `${base}/branches`, title: "إدارة الفروع", description: "طلبات الفروع ومخزونها وتوصيلها وساعاتها وإرجاعاتها، وإعدادات المتجر" },
     { href: `${base}/staff`, title: "الموظفون", description: "قائمة موظفي الفروع، نقلهم وتعليقهم" },
-    { href: `${base}/delivery-zones`, title: "مناطق التوصيل", description: "الأسعار والمناطق المفعّلة" },
-    { href: `${base}/delivery-windows`, title: "نوافذ التوصيل", description: "أوقات التوصيل وسعتها لكل فرع" },
-    { href: `${base}/orders`, title: "الطلبات", description: "طلبات كل الفروع" },
     { href: `${base}/verification`, title: "حالة التحقق", description: "نتيجة مراجعة المتجر وملاحظات المراجع" },
-    // Sprint 21 (EPIC-RET): return policy is vendor-wide (one setting,
-    // not per-branch); redeem is deliberately vendor-wide too (any
-    // branch may accept a drop-off) - see VendorReturnsController's own
-    // comment - so both live on the hub, unlike the per-branch returns
-    // queue which is reached from the branches page itself.
-    { href: `${base}/return-policy`, title: "سياسة الإرجاع", description: "تفعيل الإرجاع، مهلته ورسومه" },
-    { href: `${base}/returns/redeem`, title: "استبدال كود إرجاع", description: "استلام منتج مُرجَع بكوده في أي فرع" },
     // PD-3 (decision 11): read-only - a store never edits, deletes or replies.
     { href: `${base}/reviews`, title: "تقييمات العملاء", description: "قراءة تقييمات منتجاتكم ومتجركم الموثّقة" },
     // Sprint 25 (FR-VEND-011): the owner's performance indicators - back

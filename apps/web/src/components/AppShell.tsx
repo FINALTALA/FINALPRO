@@ -194,6 +194,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
       if (/^\/vendor\/[^/]+\/notifications\/?$/.test(path)) return tFrame("store.inbox");
       if (/^\/vendor\/[^/]+\/branches\/?$/.test(path)) return tFrame("br.title");
       if (/^\/vendor\/[^/]+\/branches\/new\/?$/.test(path)) return tFrame("br.add");
+      if (/^\/vendor\/[^/]+\/branches\/[^/]+\/settings\/?$/.test(path)) return tFrame("br.settings.title");
+      if (/^\/vendor\/[^/]+\/settings\/?$/.test(path)) return tFrame("br.store_settings");
       // a branch and each of its tabs: one screen, «إدارة الفروع» (the branch header says which branch and tab)
       if (/^\/vendor\/[^/]+\/branches\/[^/]+(?:\/[a-z-]+)?\/?$/.test(path)) return tFrame("br.title");
       if (/^\/vendor\/[^/]+\/cashier\/?$/.test(path)) return tFrame("pos.title");
@@ -203,7 +205,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
       return null;
     }, (href) => router.push(href), (a, b) => {
       // «إدارة الفروع»: the branches, each branch and its tabs are views of one screen - no «رجوع» between them
-      const view = /^(\/vendor\/[^/]+\/branches)(?:\/(?!new\/?$)[^/]+(?:\/[a-z-]+)?)?\/?$/;
+      // («إضافة فرع» and «إعدادات الفرع» are screens opened from it: they get «رجوع»)
+      const view = /^(\/vendor\/[^/]+\/branches)(?:\/(?!new\/?$)[^/]+(?:\/(?!settings\/?$)[a-z-]+)?)?\/?$/;
       const x = view.exec(a);
       const y = view.exec(b);
       return Boolean(x && y && x[1] === y[1]);

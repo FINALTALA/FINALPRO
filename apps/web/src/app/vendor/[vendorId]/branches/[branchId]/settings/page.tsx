@@ -12,7 +12,7 @@ import { loginRedirectHref } from "@/lib/loginRedirect";
 import { useT } from "@/lib/useLang";
 
 /**
- * «إعدادات الفرع / الأرشفة» (owner): the branch as the list knows it, its
+ * «إعدادات الفرع» (owner; the gear beside the branch picker - not a tab): the branch as the list knows it, its
  * «الحد الأدنى للطلب» (moved here from its own tab), and the
  * archive action that used to sit on each branch card - the same request; the
  * server's own refusals are shown as they come (no client-side rules).
@@ -79,6 +79,7 @@ export default function BranchSettingsPage() {
             <dd data-testid="br-settings-state">{branch.archived_at ? t("br.state.archived") : t("br.state.active")}</dd>
           </div>
         </dl>
+        {branch.archived_at && <p className="muted br-settings-note" data-testid="br-settings-archived-note">{t("br.settings.archived_note")}</p>}
       </section>
       {!branch.archived_at && <BranchMinimumOrderSection vendorId={params.vendorId} branchId={branch.id} />}
       <section className="br-card br-danger" aria-labelledby="br-archive-title">

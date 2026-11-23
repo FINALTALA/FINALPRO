@@ -2,12 +2,12 @@
 
 import { useParams, usePathname } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
-import { BRANCH_TABS, BranchShell, useBranchWorkspace, writeCurrentBranch, type BranchTab } from "@/components/owner/BranchWorkspace";
+import { BRANCH_TABS, BranchShell, useBranchWorkspace, writeCurrentBranch, type BranchTab, type BranchView } from "@/components/owner/BranchWorkspace";
 import "@/lib/branchesText";
 
 /**
  * Every view of one branch («نظرة عامة» and its tools: orders, stock,
- * delivery windows, hours, minimum order, returns, settings) inside the same
+ * delivery windows, hours, returns; «إعدادات الفرع» from the header) inside the same
  * branch dashboard: the context header and the tools bar stay, only the work
  * area changes. The tools are the existing pages, unchanged (their own title
  * and cross-links give way to the bar). Another branch's employee gets the
@@ -18,7 +18,8 @@ export default function BranchLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const ws = useBranchWorkspace(params.vendorId);
   const seg = pathname.split("/")[5] as BranchTab | undefined;
-  const view = seg && BRANCH_TABS.includes(seg) ? seg : "overview";
+  // «إعدادات الفرع» is a screen of this dashboard (header action), not a tab
+  const view: BranchView = (seg as string) === "settings" ? "settings" : seg && BRANCH_TABS.includes(seg) ? seg : "overview";
   const branch = ws.branches?.find((b) => b.id === params.branchId) ?? null;
   const foreign = ws.ready && !ws.isOwner && ws.ownBranchId !== params.branchId;
 

@@ -10170,6 +10170,23 @@ html[data-embed="management"] .br-page-title { display: none; }
 .br-add:hover { border-color: rgba(100, 40, 59, 0.3); }
 .br-add:focus-visible { outline: none; box-shadow: var(--wz-ring); }
 
+/* the owner's two settings entries: the store's (by the title - every branch) and this branch's (by the picker) */
+.br-eyebrow-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.br-store-settings {
+  display: inline-flex; align-items: center; gap: 6px; min-block-size: 32px; padding: 2px 10px; border-radius: 999px;
+  border: 1px solid var(--wz-line-strong); background: transparent; color: var(--wz-wine); font-size: 0.82rem; font-weight: 700; text-decoration: none;
+}
+.br-store-settings-scope { font-weight: 500; color: var(--wz-muted); }
+.br-store-settings-scope::before { content: "·"; margin-inline-end: 6px; color: var(--wz-line-strong); }
+.br-store-settings:hover { border-color: rgba(100, 40, 59, 0.35); background: var(--wz-paper); }
+.br-branch-settings {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-block-size: 42px; min-inline-size: 42px; padding: 0 12px;
+  border-radius: 12px; border: 1px solid var(--wz-line-strong); background: var(--wz-paper); color: var(--wz-wine); font-weight: 700; text-decoration: none;
+}
+.br-branch-settings:hover { border-color: rgba(100, 40, 59, 0.35); }
+.br-branch-settings.is-active { background: var(--wz-wine-soft); border-color: var(--wz-wine); }
+.br-store-settings:focus-visible, .br-branch-settings:focus-visible { outline: none; box-shadow: var(--wz-ring); }
+
 /* the branch's tools: one bar, the open one in wine */
 .br-tools {
   position: sticky; inset-block-start: 0; z-index: 5; display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none;
@@ -10223,6 +10240,66 @@ html[dir="ltr"] .br-start-go { transform: scaleX(-1); }
 
 /* settings and «إضافة فرع» */
 .br-pane { display: grid; gap: 14px; max-inline-size: 860px; }
+/* «إعدادات المتجر»: the store-wide settings (every branch), one card per setting, each with its own save */
+.ss-shell { align-items: stretch; padding-inline: 0; }
+.ss-page-wrap { inline-size: 100%; }
+.ss-head { display: grid; gap: 6px; padding: 18px 0 14px; }
+.ss-title { margin: 0; font-size: clamp(1.35rem, 2.2vw, 1.75rem); color: var(--wz-ink); }
+html[data-embed="management"] .ss-title { display: none; }
+.ss-page-lead { margin: 0; max-inline-size: 70ch; line-height: 1.6; }
+.ss-jump { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.ss-jump a { min-block-size: 32px; display: inline-flex; align-items: center; color: var(--wz-wine); font-weight: 700; text-decoration: none; }
+.ss-jump a:hover { text-decoration: underline; }
+.ss-jump a:focus-visible, .ss-section:focus-visible { outline: none; box-shadow: var(--wz-ring); border-radius: 8px; }
+.ss-pane { max-inline-size: 960px; }
+.ss-section { scroll-margin-block-start: 80px; }
+.ss-lead { margin: 0 0 12px; line-height: 1.6; max-inline-size: 75ch; }
+.ss-zones { list-style: none; margin: 0; padding: 0; display: grid; }
+.ss-zone {
+  display: grid; grid-template-columns: minmax(110px, 1.1fr) minmax(120px, 1fr) minmax(130px, 1fr) minmax(160px, 1.2fr) auto;
+  gap: 8px 14px; align-items: center; padding: 12px 0; border-block-start: 1px solid var(--wz-line);
+}
+.ss-zone-head { padding-block: 0 8px; border-block-start: 0; font-size: 0.8rem; font-weight: 700; color: var(--wz-muted); }
+.ss-zone .ss-field-label { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.ss-zone .ss-check span { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.ss-zone-note { grid-column: 1 / -1; margin: 0; font-size: 0.85rem; }
+.ss-error { color: #8a2a1a; font-weight: 600; }
+.ss-check { display: inline-flex; align-items: center; gap: 8px; min-block-size: 44px; cursor: pointer; }
+.ss-check input { inline-size: 18px; block-size: 18px; accent-color: var(--wz-wine); }
+.ss-field { display: grid; gap: 4px; }
+.ss-field-label { font-weight: 600; }
+.ss-input { box-sizing: border-box; inline-size: 100%; min-block-size: 44px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--wz-line-strong); background: #fff; font: inherit; font-variant-numeric: tabular-nums; }
+.ss-input:focus { outline: none; border-color: var(--wz-wine); box-shadow: var(--wz-ring); }
+.ss-select { max-inline-size: 360px; }
+.ss-form { display: grid; gap: 12px; max-inline-size: 420px; }
+.ss-meta { margin: 0; }
+.ss-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.ss-btn {
+  min-block-size: 44px; padding: 0 16px; border: 1px solid var(--wz-wine); border-radius: 10px; background: var(--wz-wine); color: #fff;
+  font: inherit; font-weight: 700; cursor: pointer;
+}
+.ss-btn:hover { filter: brightness(1.08); }
+.ss-btn:disabled { opacity: 0.6; cursor: default; }
+.ss-btn:focus-visible { outline: none; box-shadow: var(--wz-ring); }
+.ss-save { white-space: nowrap; }
+@media (max-width: 720px) {
+  .ss-zone-head { display: none; }
+  .ss-zone { grid-template-columns: 1fr 1fr; padding: 14px 0; }
+  .ss-zone-name { grid-column: 1 / -1; }
+  .ss-zone .ss-check { grid-column: 1 / -1; }
+  .ss-zone .ss-check span, .ss-zone .ss-field-label { position: static; inline-size: auto; block-size: auto; overflow: visible; clip: auto; white-space: normal; }
+  .ss-save { grid-column: 1 / -1; justify-self: stretch; }
+}
+
+/* the branch's returns: the store policy in one quiet line, and «استبدال كود إرجاع» */
+.rt-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin: 0 0 14px; max-inline-size: 720px; }
+.rt-policy { margin: 0; font-size: 0.9rem; color: var(--wz-muted); line-height: 1.6; }
+.rt-policy strong { color: var(--wz-ink); }
+.rt-policy-link { color: var(--wz-wine); font-weight: 700; }
+.rt-redeem-open { white-space: nowrap; }
+.rt-at { margin: 0; }
+.rt-code { max-inline-size: 200px; font-size: 1.2rem; letter-spacing: 0.2em; font-variant-numeric: tabular-nums; }
+.br-settings-note { margin: 10px 0 0; }
 /* «الحد الأدنى للطلب» inside settings: one quiet card like its neighbours */
 .br-min-lead { margin: 0 0 12px; line-height: 1.6; }
 .br-min-form { display: grid; gap: 10px; justify-items: start; }
@@ -10251,6 +10328,8 @@ html[dir="ltr"] .br-start-go { transform: scaleX(-1); }
   .br-picker { flex: 1 1 auto; min-inline-size: 0; }
   .br-picker select { min-inline-size: 0; inline-size: 100%; max-inline-size: none; }
   .br-add { flex: none; }
+  .br-branch-settings { flex: none; padding: 0; }
+  .br-branch-settings-text { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .br-tool { padding-inline: 10px; }
   .br-card { padding: 14px 16px; }
   .br-facts { grid-template-columns: 1fr 1fr; row-gap: 10px; }

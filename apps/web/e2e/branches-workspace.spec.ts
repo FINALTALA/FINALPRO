@@ -82,12 +82,15 @@ test.describe("Branch management", () => {
     await expect(frame.locator(".br-start-link")).toHaveCount(3);
     for (const k of ["orders", "stock", "hours"]) await expect(frame.getByTestId(`br-link-${k}`)).toBeVisible();
     await expect(frame.locator(".hub-tile")).toHaveCount(0);
-    for (const k of ["overview", "orders", "stock", "delivery-windows", "hours", "returns", "settings"]) {
+    for (const k of ["overview", "orders", "stock", "delivery-windows", "hours", "returns"]) {
       await expect(frame.getByTestId(`br-tab-${k}`)).toBeVisible();
       await expect(frame.getByTestId(`br-tab-${k}`).locator("svg")).toHaveCount(1);
     }
-    // «الحد الأدنى للطلب» lives inside «الإعدادات» now - no tab of its own
+    // no settings tab: «إعدادات الفرع» beside the picker, «إعدادات المتجر» by the title
     await expect(frame.getByTestId("br-tab-minimum-order")).toHaveCount(0);
+    await expect(frame.getByTestId("br-tab-settings")).toHaveCount(0);
+    await expect(frame.getByTestId("br-branch-settings")).toBeVisible();
+    await expect(frame.getByTestId("br-store-settings")).toContainText("إعدادات المتجر");
 
     // switching: the whole dashboard follows
     await pick.selectOption(nablus);
@@ -152,7 +155,7 @@ test.describe("Branch management", () => {
     await expect(frame.getByTestId("br-current-name")).toHaveText("فرع الخليل");
 
     // archive it (the same request as the old card's button)
-    await frame.getByTestId("br-tab-settings").click();
+    await frame.getByTestId("br-branch-settings").click();
     await frame.getByTestId("br-archive").click();
     await frame.getByTestId("br-archive-yes").click();
     await expect(frame.getByTestId("br-archived")).toBeVisible({ timeout: 30_000 });
@@ -189,6 +192,8 @@ test.describe("Branch management", () => {
     await expect(page.getByText("إضافة الفروع للمالكة فقط.")).toBeVisible({ timeout: 30_000 });
     // no minimum-order tab or editor for the employee - the old address leads to the owner-only settings
     await expect(page.getByTestId("br-tab-minimum-order")).toHaveCount(0);
+    await expect(page.getByTestId("br-branch-settings")).toHaveCount(0);
+    await expect(page.getByTestId("br-store-settings")).toHaveCount(0);
     await page.goto(`/vendor/${vendorId}/branches/${ramallah}/minimum-order`);
     await expect(page).toHaveURL(new RegExp(`/branches/${ramallah}/settings#minimum-order$`), { timeout: 30_000 });
     await expect(page.getByText("لا تملكين صلاحية على هذا الفرع")).toBeVisible({ timeout: 30_000 });
@@ -202,7 +207,7 @@ test.describe("Branch management", () => {
     // the old address: the settings tab, scrolled to the section, its field focused
     await page.goto(`/vendor/${vendorId}/branches/${ramallah}/minimum-order`);
     await expect(page).toHaveURL(new RegExp(`/branches/${ramallah}/settings#minimum-order$`), { timeout: 30_000 });
-    await expect(page.getByTestId("br-tab-settings")).toHaveAttribute("aria-current", "page");
+    await expect(page.getByTestId("br-branch-settings")).toHaveAttribute("aria-current", "page");
     const section = page.getByTestId("br-minimum-order");
     await expect(section.locator("h2")).toHaveText("الحد الأدنى للطلب");
     await expect(section).toContainText("يُحسب الحد الأدنى من قيمة المنتجات فقط، ولا يشمل رسوم التوصيل. يطبّق على الاستلام من الفرع، وعلى التوصيل عندما لا يكون للمنطقة حد أدنى خاص بها.");

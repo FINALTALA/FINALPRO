@@ -173,6 +173,63 @@ describe('Branch order queue, details and timeline (e2e)', () => {
     expect(b.body.counts.active).toBe(0);
   });
 
+  it("«كل الفروع»: the owner's store-wide queue - every branch, each row with its branch, per-branch counts, ?branch=; employees and other stores 403", async () => {
+    const t = await f.store();
+    const v = await f.offer(t, 10);
+    const a1 = (await f.buy(await shopper('أسيل'), t, v)).branchOrderId;
+    const b1 = (await f.buy(await shopper('بيان'), t, v)).branchOrderId;
+    // one order of branch B (a read-only test: only its branch changes)
+    await prisma.branchOrder.update({
+      where: { id: b1 },
+      data: { branchId: t.branchB },
+    });
+    const branches = await prisma.storeBranch.findMany({
+      where: { vendorId: t.vendorId },
+      select: { id: true, name: true },
+    });
+    const nameOf = (id: string) => branches.find((b) => b.id === id)!.name;
+    const all = `/api/v1/vendors/${t.vendorId}/order-queue`;
+    type Row = { id: string; branch_id: string; branch_name: string };
+
+    const r = await get(all, t.owner).expect(200);
+    expect(r.body.scope).toBe('all');
+    const rows = r.body.items as Row[];
+    expect(rows.map((i) => i.id).sort()).toEqual([a1, b1].sort());
+    for (const i of rows) expect(i.branch_name).toBe(nameOf(i.branch_id));
+    expect(rows.find((i) => i.id === b1)!.branch_id).toBe(t.branchB);
+    expect(r.body.counts.active).toBe(2);
+    expect(r.body.branch_counts).toEqual(
+      expect.arrayContaining([
+        { branch_id: t.branchA, active: 1 },
+        { branch_id: t.branchB, active: 1 },
+      ]),
+    );
+
+    // narrowed to one branch: its rows and counts; the per-branch counts stay whole
+    const onlyB = await get(`${all}?branch=${t.branchB}`, t.owner).expect(200);
+    expect((onlyB.body.items as Row[]).map((i) => i.id)).toEqual([b1]);
+    expect(onlyB.body.counts.active).toBe(1);
+    expect(onlyB.body.branch_counts).toHaveLength(2);
+    // another store's branch is not a filter of this store
+    await get(`${all}?branch=${s.branchA}`, t.owner).expect(404);
+
+    // the branch route is unchanged: one branch, rows with their branch, no store-wide counts
+    const onlyA = await get(queue(t, t.branchA), t.owner).expect(200);
+    expect(onlyA.body.scope).toBe('branch');
+    expect((onlyA.body.items as Row[]).map((i) => [i.id, i.branch_id])).toEqual(
+      [[a1, t.branchA]],
+    );
+    expect(onlyA.body.branch_counts).toBeUndefined();
+    // an order opened from «كل الفروع» is read under its own branch
+    await get(queue(t, t.branchB, `/${b1}`), t.owner).expect(200);
+
+    // never an employee (own branch only), never another store's owner
+    const emp = await employee(t, t.branchA, 'سلمى موظفة');
+    await get(all, emp).expect(403);
+    await get(`${all}?branch=${t.branchA}`, emp).expect(403);
+    await get(all, otherOwner).expect(403);
+  });
+
   it('the fixed priority order: the late one first, then the soonest slot, then the oldest without a slot', async () => {
     const r = await get(queue(s, s.branchA), empA).expect(200);
     const ids = r.body.items.map((i: { id: string }) => i.id);

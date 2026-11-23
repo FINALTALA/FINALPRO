@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { EmptyState, ErrorBanner } from "@/components/States";
 import { apiFetch, newIdempotencyKey } from "@/lib/api";
@@ -20,6 +20,8 @@ import { useHydrated, useSessionToken } from "@/lib/useSession";
 import SizeGuideSnapshotNote from "@/components/SizeGuideSnapshotNote";
 import type { SizeGuideSnapshot } from "@/lib/sizeGuides";
 import { loginRedirectHref } from "@/lib/loginRedirect";
+import { useBranchWorkspace } from "@/components/owner/BranchWorkspace";
+import { RedeemDialog, ReturnPolicySummary } from "@/components/branch-returns/BranchReturnsTools";
 
 interface ReturnRow {
   id: string;
@@ -151,6 +153,9 @@ function DecisionRow({
 // returns queue - decisions stay with the ORIGINATING branch only
 // (see BranchReturnsController's own comment for why redeem, unlike
 // this, is vendor-wide). TB-16.2: Arabic and English.
+// 2026-11-23: the store's return policy as one read-only line, and
+// «استبدال كود إرجاع» as this branch's action (receiving branch = this
+// one; ?redeem=1 - the old store-level address - opens it).
 export default function BranchReturnsPage() {
   const params = useParams<{ vendorId: string; branchId: string }>();
   const router = useRouter();
@@ -161,6 +166,13 @@ export default function BranchReturnsPage() {
   const token = useSessionToken();
   const [rows, setRows] = useState<ReturnRow[] | null>(null);
   const [error, setError] = useState<UiError | null>(null);
+  const ws = useBranchWorkspace(params.vendorId);
+  const sp = useSearchParams();
+  const pathname = usePathname();
+  const redeemOpen = sp.get("redeem") === "1";
+  const setRedeem = (open: boolean) => router.replace(open ? `${pathname}?redeem=1` : pathname, { scroll: false });
+  const branchName = ws.branches?.find((b) => b.id === params.branchId)?.name ?? "";
+  const archived = Boolean(ws.branches?.find((b) => b.id === params.branchId)?.archived_at);
 
   function load() {
     apiFetch<ReturnRow[]>(`/vendors/${params.vendorId}/branches/${params.branchId}/returns`)
@@ -202,6 +214,24 @@ export default function BranchReturnsPage() {
           <Link href="/notifications" className="button-link">{t("ret.branch.notifications")}</Link>
         </div>
       </div>
+      <div className="rt-tools" data-testid="rt-tools">
+        <ReturnPolicySummary vendorId={params.vendorId} isOwner={ws.isOwner} />
+        {ws.ready && !archived && (
+          <button type="button" className="button rt-redeem-open" onClick={() => setRedeem(true)} data-testid="rt-redeem-open">
+            {t("rt.redeem.open")}
+          </button>
+        )}
+      </div>
+      {redeemOpen && ws.ready && !archived && branchName && (
+        <RedeemDialog
+          vendorId={params.vendorId}
+          branchId={params.branchId}
+          branchName={branchName}
+          isOwner={ws.isOwner}
+          onClose={() => setRedeem(false)}
+          onRedeemed={load}
+        />
+      )}
       {error && <ErrorBanner message={uiErrorText(error, lang)} />}
       {!rows && !error && (
         <div className="skeleton" style={{ height: 120, width: "100%", maxWidth: 720 }} />

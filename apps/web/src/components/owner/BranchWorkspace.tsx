@@ -17,10 +17,11 @@ export interface BranchDto {
   archived_at: string | null;
 }
 
-export type BranchTab = "orders" | "stock" | "delivery-windows" | "hours" | "returns" | "settings";
-export type BranchView = "overview" | BranchTab;
+/** The branch's daily tools (one bar). Its settings are an action in the header, not a tab. */
+export type BranchTab = "orders" | "stock" | "delivery-windows" | "hours" | "returns";
+export type BranchView = "overview" | BranchTab | "settings";
 /** The owner manages everything of a branch; an employee keeps the tools she already had (the API decides anyway). */
-const OWNER_TABS: BranchTab[] = ["orders", "stock", "delivery-windows", "hours", "returns", "settings"];
+const OWNER_TABS: BranchTab[] = ["orders", "stock", "delivery-windows", "hours", "returns"];
 // «نوافذ التوصيل v1» + «ساعات العمل والإغلاقات v1»: the branch employee reads
 // their branch's delivery board and opening hours (no actions).
 const EMPLOYEE_TABS: BranchTab[] = ["orders", "stock", "delivery-windows", "hours", "returns"];
@@ -129,7 +130,9 @@ export function BranchIcon({ name, size = 18 }: { name: keyof typeof PATHS; size
  * then the branch's tools as one bar (the open one in wine), then the work
  * area - the only part that changes. Moving between the branch's tools is
  * not a step: the frame's «رجوع» appears only for a screen opened from here
- * («إضافة فرع»), and returns to the same branch and tool.
+ * («إضافة فرع», «إعدادات الفرع», «إعدادات المتجر»), and returns to the same
+ * branch and tool. The owner's «إعدادات المتجر» sits by the «إدارة الفروع»
+ * title (it applies to every branch); «إعدادات الفرع» beside the picker.
  */
 export function BranchShell({
   vendorId,
@@ -148,6 +151,7 @@ export function BranchShell({
   const router = useRouter();
   const options = !current || ws.active.some((b) => b.id === current.id) ? ws.active : [current, ...ws.active];
   const views: BranchView[] = ["overview", ...ws.tabs];
+  const settingsHref = current ? branchViewHref(vendorId, current.id, "settings") : null;
   const switchTo = (id: string) => {
     writeCurrentBranch(vendorId, id);
     router.replace(branchViewHref(vendorId, id, view));
@@ -157,7 +161,16 @@ export function BranchShell({
     <div className="br-ws br-dash" data-testid="branch-workspace">
       <header className="br-head" data-testid="br-bar">
         <div className="br-head-main">
-          <p className="br-eyebrow">{t("br.title")}</p>
+          <div className="br-eyebrow-row">
+            <p className="br-eyebrow">{t("br.title")}</p>
+            {ws.isOwner && (
+              <Link href={`/vendor/${vendorId}/settings`} className="br-store-settings" title={t("br.store_settings.hint")} data-testid="br-store-settings">
+                <BranchIcon name="settings" size={16} />
+                <span>{t("br.store_settings")}</span>
+                <span className="br-store-settings-scope">{t("br.store_settings.scope")}</span>
+              </Link>
+            )}
+          </div>
           {current && (
             <>
               <h1 className="br-name" dir="auto">
@@ -195,6 +208,19 @@ export function BranchShell({
               <span>{t("br.my_branch")}:</span> <strong data-testid="br-fixed">{current.name}</strong>
             </p>
           ) : null}
+          {ws.isOwner && settingsHref && (
+            <Link
+              href={settingsHref}
+              className={`br-branch-settings${view === "settings" ? " is-active" : ""}`}
+              aria-current={view === "settings" ? "page" : undefined}
+              aria-label={fillBr(t("br.branch_settings.for"), { name: current?.name ?? "" })}
+              title={fillBr(t("br.branch_settings.for"), { name: current?.name ?? "" })}
+              data-testid="br-branch-settings"
+            >
+              <BranchIcon name="settings" size={17} />
+              <span className="br-branch-settings-text">{t("br.branch_settings")}</span>
+            </Link>
+          )}
           {ws.isOwner && (
             <Link href={`/vendor/${vendorId}/branches/new`} className="br-add" data-testid="br-add">
               <BranchIcon name="plus" size={16} /> {t("br.add")}

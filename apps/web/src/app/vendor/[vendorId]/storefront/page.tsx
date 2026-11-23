@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import SafeImage from "@/components/SafeImage";
 import { apiFetch, ApiError, IMAGE_UPLOAD_ACCEPT, newIdempotencyKey, uploadVendorImage } from "@/lib/api";
 import { clearSession, getSessionToken } from "@/lib/session";
-import StoreCoverControls from "@/components/StoreCoverControls";
+import StoreCoverControls from "@/components/StoreCoverControls";
 import { loginRedirectHref } from "@/lib/loginRedirect";
 import {
   coverLookBody,
@@ -489,18 +489,6 @@ export default function StorefrontSettingsPage() {
       <div className="storefront-settings-links" style={{ maxWidth: 560, width: "100%", marginTop: 16 }}>
         <Link href={`/vendor/${params.vendorId}/offers?open=collections`} className="button-link">
           مجموعات المتجر ←
-        </Link>
-        <div style={{ height: 8 }} />
-        <Link href={`/vendor/${params.vendorId}/delivery-windows`} className="button-link">
-          تقويم نوافذ التوصيل ←
-        </Link>
-        <div style={{ height: 8 }} />
-        <Link href={`/vendor/${params.vendorId}/delivery-zones`} className="button-link">
-          مناطق ورسوم التوصيل ←
-        </Link>
-        <div style={{ height: 8 }} />
-        <Link href={`/vendor/${params.vendorId}/orders`} className="button-link">
-          طلبات جميع الفروع ←
         </Link>
       </div>
     </div>

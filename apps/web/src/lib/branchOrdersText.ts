@@ -7,6 +7,13 @@ import { registerTranslations } from "./i18n";
 registerTranslations({
   ar: {
     "bo.title": "طلبات الفرع",
+    "bo.title_all": "طلبات كل الفروع",
+    "bo.scope": "نطاق الطلبات",
+    "bo.scope.branch": "الفرع الحالي",
+    "bo.scope.all": "كل الفروع",
+    "bo.filter.branch": "الفرع",
+    "bo.filter.branch_all": "كل الفروع",
+    "bo.filter.branch_n": "{name} ({n})",
     "bo.tabs": "تبويبات الطلبات",
     "bo.tab.active": "النشطة",
     "bo.tab.new": "جديدة",
@@ -181,6 +188,13 @@ registerTranslations({
   },
   en: {
     "bo.title": "Branch orders",
+    "bo.title_all": "Orders of every branch",
+    "bo.scope": "Orders scope",
+    "bo.scope.branch": "This branch",
+    "bo.scope.all": "All branches",
+    "bo.filter.branch": "Branch",
+    "bo.filter.branch_all": "All branches",
+    "bo.filter.branch_n": "{name} ({n})",
     "bo.tabs": "Order tabs",
     "bo.tab.active": "Active",
     "bo.tab.new": "New",

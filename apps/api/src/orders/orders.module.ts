@@ -6,7 +6,10 @@ import { PlatformAlertsModule } from '../platform-alerts/platform-alerts.module'
 import { BranchOrderAddressChangeService } from './branch-order-address-change.service';
 import { BranchOrderCancellationService } from './branch-order-cancellation.service';
 import { BranchOrderIntegrityService } from './branch-order-integrity.service';
-import { BranchOrderQueueController } from './branch-order-queue.controller';
+import {
+  BranchOrderQueueController,
+  VendorOrderQueueController,
+} from './branch-order-queue.controller';
 import { BranchOrderQueueService } from './branch-order-queue.service';
 import { OrderActorContextInterceptor } from './order-actor-context.interceptor';
 import { BranchOrderRescheduleService } from './branch-order-reschedule.service';
@@ -40,6 +43,7 @@ import { FulfilmentSweepService } from './fulfilment-sweep.service';
     BranchOrdersStaffController,
     CustomerOrdersController,
     BranchOrderQueueController,
+    VendorOrderQueueController,
   ],
   providers: [
     BranchOrderQueueService,

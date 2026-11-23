@@ -114,7 +114,8 @@ function pagesFor(v: string, b: string): Pages {
     s("branch orders", `/branches/${b}/orders`),
     s("branch delivery windows", `/branches/${b}/delivery-windows`),
     s("delivery windows", "/delivery-windows"),
-    s("delivery zones", "/delivery-zones"),
+    // 2026-11-23: zones and the return policy live in «إعدادات المتجر» (the old addresses redirect there)
+    s("store settings", "/settings"),
     // «مجموعات المتجر» (2026-11-18): the old /sections page only redirects there now
     { name: "store collections", path: `/vendor/${v}/offers?open=collections&${QUERY.slice(1)}`, store: true },
     s("storefront", "/storefront"),
