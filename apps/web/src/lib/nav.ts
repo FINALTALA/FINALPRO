@@ -158,18 +158,12 @@ export function ownerHubTiles(vendorId: string): HubTile[] {
     { href: `${base}/branches`, title: "إدارة الفروع", description: "طلبات الفروع ومخزونها وتوصيلها وساعاتها وإرجاعاتها، وإعدادات المتجر" },
     { href: `${base}/staff`, title: "الموظفون", description: "قائمة موظفي الفروع، نقلهم وتعليقهم" },
     { href: `${base}/verification`, title: "حالة التحقق", description: "نتيجة مراجعة المتجر وملاحظات المراجع" },
-    // PD-3 (decision 11): read-only - a store never edits, deletes or replies.
-    { href: `${base}/reviews`, title: "تقييمات العملاء", description: "قراءة تقييمات منتجاتكم ومتجركم الموثّقة" },
-    // Sprint 25 (FR-VEND-011): the owner's performance indicators - back
-    // here after the old owner dashboard became the public storefront.
-    { href: `${base}/performance`, title: "أداء المتجر", description: "الإلغاء وزمن الاستجابة والتقييم خلال آخر 30 يوماً" },
-    // PD-5.3: the owner's own sales in the bestseller window (own data only).
-    { href: `${base}/sales`, title: "مبيعات آخر 30 يوماً", description: "الوحدات والعملاء لكل منتج وأهليته لشارة الأكثر مبيعاً" },
-    // Barcodes and in-store sales (2026-11-20): what was sold in the shop
-    // (never part of the bestseller numbers above). The store page hides
-    // this tile while store_cashier_enabled is off.
-    { href: `${base}/store-sales`, title: "مبيعات المحل", description: "ما بِيع في المحل من «بيع من المحل»، مع إلغاء بيع اليوم" },
-    { href: `${base}/labels`, title: "طباعة ملصقات", description: "ملصقات باركود لعدة منتجات دفعة واحدة، حرارية أو A4" },
+    // 2026-11-23 «أداء المتجر»: ONE card for the performance indicators,
+    // the sales (online in the last 30 days, the shop's sales log), the
+    // customers' reviews and the shop's quick tools (labels, the cashier).
+    // The old cards (تقييمات العملاء، مبيعات آخر 30 يوماً، مبيعات المحل،
+    // طباعة ملصقات) are gone; their old addresses open the right view.
+    { href: `${base}/performance`, title: "أداء المتجر", description: "المؤشرات والمبيعات وتقييمات العملاء وأدوات المحل" },
     // Deferred (2026-11-20): kept and still openable, but last and muted -
     // it may be removed later and must not compete with the active tiles.
     { href: `${base}/match-review`, title: "مراجعة التطابق", description: "مرشّحو التطابق غير الدقيق بانتظار قرارك", deferred: true },

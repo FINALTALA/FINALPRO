@@ -94,48 +94,48 @@ export default function ReturnPolicySection({ vendorId }: { vendorId: string }) 
 
   const num = (set: (v: number | "") => void) => (e: { target: { value: string } }) => set(e.target.value === "" ? "" : Number(e.target.value));
   return (
-    <section className="br-card ss-section" id="returns" aria-labelledby="ss-returns-title" tabIndex={-1} data-testid="ss-returns">
+    <section className="br-card sst-section" id="returns" aria-labelledby="ss-returns-title" tabIndex={-1} data-testid="ss-returns">
       <h2 id="ss-returns-title">{t("ss.returns")}</h2>
-      <p className="muted ss-lead">{t("ret.policy.hint")}</p>
+      <p className="muted sst-lead">{t("ret.policy.hint")}</p>
       {error && <ErrorBanner message={uiErrorText(error, lang)} />}
       {!policy && !error && <div className="skeleton" style={{ height: 140, width: "100%" }} />}
       {policy && (
         <form
-          className="ss-form"
+          className="sst-form"
           onSubmit={(e) => {
             e.preventDefault();
             void save();
           }}
         >
-          <label className="ss-field">
-            <span className="ss-field-label">{t("ret.policy.label")}</span>
-            <select className="ss-input ss-select" value={mode} onChange={(e) => setMode(e.target.value as ReturnMode)} data-testid="ss-policy-mode">
+          <label className="sst-field">
+            <span className="sst-field-label">{t("ret.policy.label")}</span>
+            <select className="sst-input sst-select" value={mode} onChange={(e) => setMode(e.target.value as ReturnMode)} data-testid="ss-policy-mode">
               {MODES.map((m) => (
                 <option key={m} value={m}>{t(`ret.policy.mode.${m}`)}</option>
               ))}
             </select>
           </label>
           {needsWindow && (
-            <label className="ss-field">
-              <span className="ss-field-label">{t("ret.policy.window")}</span>
-              <input type="number" min={1} dir="ltr" className="ss-input" value={windowDays} onChange={num(setWindowDays)} data-testid="ss-policy-window" />
+            <label className="sst-field">
+              <span className="sst-field-label">{t("ret.policy.window")}</span>
+              <input type="number" min={1} dir="ltr" className="sst-input" value={windowDays} onChange={num(setWindowDays)} data-testid="ss-policy-window" />
             </label>
           )}
           {needsReturnFee && (
-            <label className="ss-field">
-              <span className="ss-field-label">{t("ret.policy.fee")}</span>
-              <input type="number" min={0} dir="ltr" className="ss-input" value={feeIls} onChange={num(setFeeIls)} data-testid="ss-policy-fee" />
+            <label className="sst-field">
+              <span className="sst-field-label">{t("ret.policy.fee")}</span>
+              <input type="number" min={0} dir="ltr" className="sst-input" value={feeIls} onChange={num(setFeeIls)} data-testid="ss-policy-fee" />
             </label>
           )}
           {needsExchangeFee && (
-            <label className="ss-field">
-              <span className="ss-field-label">{t("ret.policy.exchange_fee")}</span>
-              <input type="number" min={0} dir="ltr" className="ss-input" value={exchangeFeeIls} onChange={num(setExchangeFeeIls)} data-testid="ss-policy-exchange-fee" />
+            <label className="sst-field">
+              <span className="sst-field-label">{t("ret.policy.exchange_fee")}</span>
+              <input type="number" min={0} dir="ltr" className="sst-input" value={exchangeFeeIls} onChange={num(setExchangeFeeIls)} data-testid="ss-policy-exchange-fee" />
             </label>
           )}
-          <p className="muted ss-meta">{fmt(t("ret.policy.last_changed"), { date: formatDateTime(policy.updated_at, lang) })}</p>
-          <div className="ss-actions">
-            <button type="submit" className="ss-btn" disabled={saving} aria-busy={saving} data-testid="ss-policy-save">
+          <p className="muted sst-meta">{fmt(t("ret.policy.last_changed"), { date: formatDateTime(policy.updated_at, lang) })}</p>
+          <div className="sst-actions">
+            <button type="submit" className="sst-btn" disabled={saving} aria-busy={saving} data-testid="ss-policy-save">
               {saving ? t("common.saving") : t("ss.returns.save")}
             </button>
             {notice && <span className="muted" role="status" data-testid="ss-policy-saved">{t(notice)}</span>}

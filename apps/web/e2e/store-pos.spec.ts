@@ -754,7 +754,9 @@ test.describe("Barcodes and the in-store cashier", () => {
   test("«مبيعات المحل»: the owner voids a whole sale with a reason and the stock comes back", async ({ page }) => {
     await loginAs(page, fixtures.ownerToken);
     await enterWorkspace(page, fixtures.ownerToken, { type: "vendor", vendor_id: vendorId });
+    // 2026-11-23: for the owner the old address is «أداء المتجر» › «المبيعات» › «مبيعات المحل»
     await page.goto(`/vendor/${vendorId}/store-sales`);
+    await expect(page).toHaveURL(new RegExp(`/vendor/${vendorId}/performance\\?view=sales#store-sales$`), { timeout: 30_000 });
     await expect(page.getByTestId("store-sales-summary")).toBeVisible({ timeout: 30_000 });
     const first = page.getByTestId("store-sale").first();
     const before = await qtyOf(branchId, p.scarf.variants["وردي|مقاس واحد"]);

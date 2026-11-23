@@ -2,13 +2,17 @@
 
 import { ReactNode, useEffect, useState } from "react";
 import { ApiError, apiFetch } from "@/lib/api";
+import { type Lang, translate } from "@/lib/i18n";
+import { fillPf } from "@/lib/performanceText";
+import { useLang } from "@/lib/useLang";
 
 // Sprint 25 (FR-VEND-011, FR-VPORTAL-007) - review round: the owner's
 // "آخر 30 يوماً" section with its own loading / error-with-retry /
 // not-enough-data states, and two small charts over the API's weekly
-// buckets (Part 5: "performance charts ... data-table fallback"). Still
-// omitted entirely when the dashboard flag is off - the API's 404
-// FEATURE_DISABLED is not a failure worth alarming the owner about.
+// buckets (Part 5: "performance charts ... data-table fallback"). While the
+// dashboard flag is off the caller's `whenDisabled` shows instead (the
+// API's 404 FEATURE_DISABLED is not a failure worth alarming the owner
+// about). 2026-11-23: part of «أداء المتجر», in Arabic and English.
 
 interface PerformanceWeek {
   week_from: string;
@@ -44,30 +48,32 @@ const CANCELLED_COLOR = "#d9622b";
 // Single-series chart: one neutral hue, no legend (its title names it).
 const RESPONSE_COLOR = "#1f3557";
 
+const tr = (lang: Lang, key: string, v?: Record<string, string | number>) => (v ? fillPf(translate(lang, key), v) : translate(lang, key));
+
 function formatPercent(v: number | null): string {
   if (v === null) return "-";
   return `${(v * 100).toFixed(1)}%`;
 }
 
-function formatHours(v: number | null): string {
+function formatHours(v: number | null, lang: Lang): string {
   if (v === null) return "-";
-  if (v >= 1) return `${v.toFixed(1)} ساعة`;
-  if (v * 60 >= 1) return `${Math.round(v * 60)} دقيقة`;
-  return "أقل من دقيقة";
+  if (v >= 1) return tr(lang, "pf.hours_n", { n: v.toFixed(1) });
+  if (v * 60 >= 1) return tr(lang, "pf.minutes_n", { n: Math.round(v * 60) });
+  return tr(lang, "pf.under_minute");
 }
 
 // The response chart's unit follows its data, so its axis never reads
 // "0.0, 0.0, 0" for fast responders: hours, else minutes, else seconds.
-function responseUnit(maxHours: number): { label: string; factor: number } {
-  if (maxHours >= 1) return { label: "ساعة", factor: 1 };
-  if (maxHours * 60 >= 1) return { label: "دقيقة", factor: 60 };
-  return { label: "ثانية", factor: 3600 };
+function responseUnit(maxHours: number, lang: Lang): { label: string; factor: number } {
+  if (maxHours >= 1) return { label: tr(lang, "pf.unit.hours"), factor: 1 };
+  if (maxHours * 60 >= 1) return { label: tr(lang, "pf.unit.minutes"), factor: 60 };
+  return { label: tr(lang, "pf.unit.seconds"), factor: 3600 };
 }
 
 // Whole percent in the charts/table, so they never repeat the tiles'
 // exact one-decimal figures.
-function wholePercent(v: number | null): string {
-  return v === null ? "لا بيانات" : `${Math.round(v * 100)}٪`;
+function wholePercent(v: number | null, lang: Lang): string {
+  return v === null ? tr(lang, "pf.no_data") : `${Math.round(v * 100)}${lang === "en" ? "%" : "٪"}`;
 }
 
 function weekLabel(w: PerformanceWeek): string {
@@ -75,9 +81,9 @@ function weekLabel(w: PerformanceWeek): string {
   return `${d.getUTCDate()}/${d.getUTCMonth() + 1}`;
 }
 
-function weekRange(w: PerformanceWeek): string {
+function weekRange(w: PerformanceWeek, lang: Lang): string {
   const fmt = (iso: string) =>
-    new Date(iso).toLocaleDateString("ar", { day: "numeric", month: "long", timeZone: "UTC" });
+    new Date(iso).toLocaleDateString(lang === "en" ? "en-GB" : "ar", { day: "numeric", month: "long", timeZone: "UTC" });
   return `${fmt(w.week_from)} - ${fmt(w.week_to)}`;
 }
 
@@ -114,6 +120,7 @@ function ColumnChart({
   segments: (w: PerformanceWeek) => { value: number; color: string }[];
   describe: (w: PerformanceWeek) => string[];
 }) {
+  const lang = useLang();
   const [hover, setHover] = useState<number | null>(null);
   const band = PLOT_W / weeks.length;
   const barW = Math.min(28, band * 0.56);
@@ -183,7 +190,7 @@ function ColumnChart({
                   height={PLOT_H}
                   fill="transparent"
                   tabIndex={0}
-                  aria-label={`${weekRange(w)}: ${describe(w).join("، ")}`}
+                  aria-label={`${weekRange(w, lang)}: ${describe(w).join(lang === "en" ? ", " : "، ")}`}
                   onMouseEnter={() => setHover(i)}
                   onMouseLeave={() => setHover(null)}
                   onFocus={() => setHover(i)}
@@ -197,12 +204,12 @@ function ColumnChart({
           <div
             className="perf-tooltip"
             role="status"
-            dir="rtl"
+            dir={lang === "en" ? "ltr" : "rtl"}
             style={{
               left: `${((PAD.left + band * hover + band / 2) / W) * 100}%`,
             }}
           >
-            <strong>{weekRange(weeks[hover])}</strong>
+            <strong>{weekRange(weeks[hover], lang)}</strong>
             {describe(weeks[hover]).map((line) => (
               <span key={line}>{line}</span>
             ))}
@@ -221,6 +228,8 @@ export default function PerformanceSection({
   /** What to show while the dashboard flag is off (default: nothing). */
   whenDisabled?: ReactNode;
 }) {
+  const lang = useLang();
+  const t = (key: string, v?: Record<string, string | number>) => tr(lang, key, v);
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<{ attempt: number; value: LoadState }>({
     attempt: -1,
@@ -242,7 +251,7 @@ export default function PerformanceSection({
             attempt,
             value: {
               kind: "error",
-              message: err instanceof ApiError ? err.message : "تعذّر الاتصال بالخادم",
+              message: err instanceof ApiError ? err.message : "",
             },
           });
         }
@@ -259,7 +268,7 @@ export default function PerformanceSection({
 
   if (current.kind === "loading") {
     return (
-      <div className="card perf-card" aria-busy="true" aria-label="جارٍ تحميل مؤشرات الأداء">
+      <div className="card perf-card" aria-busy="true" aria-label={t("pf.kpi.loading")}>
         <div className="perf-skel" style={{ width: 200, height: 18 }} />
         <div className="perf-kpis">
           {[0, 1, 2, 3].map((i) => (
@@ -274,10 +283,10 @@ export default function PerformanceSection({
   if (current.kind === "error") {
     return (
       <div className="card perf-card" role="alert">
-        <h3 style={{ marginTop: 0 }}>مؤشرات الأداء</h3>
-        <p className="muted">تعذّر تحميل مؤشرات الأداء: {current.message}</p>
+        <h3 style={{ marginTop: 0 }}>{t("pf.kpi.heading")}</h3>
+        <p className="muted">{t("pf.kpi.failed", { message: current.message || t("pf.kpi.network") })}</p>
         <button className="button button-secondary" type="button" onClick={() => setAttempt((n) => n + 1)}>
-          إعادة المحاولة
+          {t("pf.kpi.retry")}
         </button>
       </div>
     );
@@ -287,30 +296,30 @@ export default function PerformanceSection({
   const hasOrders = d.terminal_orders_count > 0 || d.responded_orders_count > 0;
   const weeks = d.weekly ?? [];
   const maxOrders = niceMax(Math.max(...weeks.map((w) => w.terminal_orders_count), 0));
-  const unit = responseUnit(Math.max(...weeks.map((w) => w.average_response_time_hours ?? 0), 0));
+  const unit = responseUnit(Math.max(...weeks.map((w) => w.average_response_time_hours ?? 0), 0), lang);
   const maxResponse = niceMax(
     Math.max(...weeks.map((w) => (w.average_response_time_hours ?? 0) * unit.factor), 0),
   );
 
   return (
     <div className="card perf-card">
-      <h3 style={{ marginTop: 0 }}>مؤشرات الأداء (آخر 30 يوماً)</h3>
+      <h3 style={{ marginTop: 0 }}>{t("pf.kpi.title")}</h3>
 
       <div className="perf-kpis">
         <div>
-          <div className="muted">معدّل الإلغاء</div>
+          <div className="muted">{t("pf.kpi.cancel_rate")}</div>
           <div className="perf-kpi-value">{formatPercent(d.cancellation_rate)}</div>
         </div>
         <div>
-          <div className="muted">متوسط زمن الاستجابة</div>
-          <div className="perf-kpi-value">{formatHours(d.average_response_time_hours)}</div>
+          <div className="muted">{t("pf.kpi.response")}</div>
+          <div className="perf-kpi-value">{formatHours(d.average_response_time_hours, lang)}</div>
         </div>
         <div>
-          <div className="muted">عدد الطلبات المستجاب لها</div>
+          <div className="muted">{t("pf.kpi.responded")}</div>
           <div className="perf-kpi-value">{d.responded_orders_count}</div>
         </div>
         <div>
-          <div className="muted">التقييم</div>
+          <div className="muted">{t("pf.kpi.rating")}</div>
           <div className="perf-kpi-value">
             {d.rating_average === null ? "-" : `${d.rating_average.toFixed(1)} (${d.rating_count})`}
           </div>
@@ -319,17 +328,17 @@ export default function PerformanceSection({
 
       {!hasOrders ? (
         <p className="perf-empty">
-          لا توجد بيانات كافية بعد - تظهر الرسوم البيانية بعد أول طلبات مكتملة أو ملغاة خلال آخر 30 يوماً.
+          {t("pf.kpi.empty")}
         </p>
       ) : (
         <>
           <div className="perf-charts">
             <ColumnChart
-              title="الطلبات المنتهية أسبوعياً"
+              title={t("pf.chart.orders")}
               integer
               legend={[
-                { label: "مكتملة", color: COMPLETED_COLOR },
-                { label: "ملغاة", color: CANCELLED_COLOR },
+                { label: t("pf.chart.completed"), color: COMPLETED_COLOR },
+                { label: t("pf.chart.cancelled"), color: CANCELLED_COLOR },
               ]}
               weeks={weeks}
               max={maxOrders}
@@ -338,13 +347,13 @@ export default function PerformanceSection({
                 { value: w.cancelled_orders_count, color: CANCELLED_COLOR },
               ]}
               describe={(w) => [
-                `مكتملة: ${w.terminal_orders_count - w.cancelled_orders_count}`,
-                `ملغاة: ${w.cancelled_orders_count}`,
-                `نسبة الإلغاء: ${wholePercent(w.cancellation_rate)}`,
+                t("pf.chart.completed_n", { n: w.terminal_orders_count - w.cancelled_orders_count }),
+                t("pf.chart.cancelled_n", { n: w.cancelled_orders_count }),
+                t("pf.chart.rate_n", { v: wholePercent(w.cancellation_rate, lang) }),
               ]}
             />
             <ColumnChart
-              title={`متوسط زمن الاستجابة أسبوعياً (${unit.label})`}
+              title={t("pf.chart.response", { unit: unit.label })}
               weeks={weeks}
               max={maxResponse}
               segments={(w) => [
@@ -352,32 +361,32 @@ export default function PerformanceSection({
               ]}
               describe={(w) => [
                 w.average_response_time_hours === null
-                  ? "لا توجد طلبات مستجاب لها"
-                  : `المتوسط: ${formatHours(w.average_response_time_hours)}`,
-                `طلبات مستجاب لها: ${w.responded_orders_count}`,
+                  ? t("pf.chart.no_response")
+                  : t("pf.chart.avg_n", { v: formatHours(w.average_response_time_hours, lang) }),
+                t("pf.chart.responded_n", { n: w.responded_orders_count }),
               ]}
             />
           </div>
           <details className="perf-table">
-            <summary>عرض البيانات كجدول</summary>
+            <summary>{t("pf.table.show")}</summary>
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>الأسبوع</th>
-                  <th>مكتملة</th>
-                  <th>ملغاة</th>
-                  <th>نسبة الإلغاء</th>
-                  <th>متوسط الاستجابة</th>
+                  <th scope="col">{t("pf.table.week")}</th>
+                  <th scope="col">{t("pf.chart.completed")}</th>
+                  <th scope="col">{t("pf.chart.cancelled")}</th>
+                  <th scope="col">{t("pf.table.rate")}</th>
+                  <th scope="col">{t("pf.table.avg")}</th>
                 </tr>
               </thead>
               <tbody>
                 {weeks.map((w) => (
                   <tr key={w.week_from}>
-                    <td>{weekRange(w)}</td>
+                    <td>{weekRange(w, lang)}</td>
                     <td>{w.terminal_orders_count - w.cancelled_orders_count}</td>
                     <td>{w.cancelled_orders_count}</td>
-                    <td>{wholePercent(w.cancellation_rate)}</td>
-                    <td>{formatHours(w.average_response_time_hours)}</td>
+                    <td>{wholePercent(w.cancellation_rate, lang)}</td>
+                    <td>{formatHours(w.average_response_time_hours, lang)}</td>
                   </tr>
                 ))}
               </tbody>

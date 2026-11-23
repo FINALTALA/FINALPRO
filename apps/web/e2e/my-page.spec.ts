@@ -35,7 +35,9 @@ test.describe("«صفحتي»", () => {
     slug = (await prisma.vendor.findUniqueOrThrow({ where: { id: vendorId }, select: { slug: true } })).slug;
   });
   test.afterAll(async () => {
-    if (flagBefore !== null) await prisma.featureFlag.update({ where: { key: "store_home_blocks_enabled" }, data: { enabled: flagBefore } });
+    // back as it was - a row this spec created is removed again
+    if (flagBefore === null) await prisma.featureFlag.deleteMany({ where: { key: "store_home_blocks_enabled" } });
+    else await prisma.featureFlag.update({ where: { key: "store_home_blocks_enabled" }, data: { enabled: flagBefore } });
   });
 
   async function openManagement(page: Page, viewport = { width: 1360, height: 900 }) {

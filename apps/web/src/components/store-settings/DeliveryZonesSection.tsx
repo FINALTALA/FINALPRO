@@ -118,14 +118,14 @@ export default function DeliveryZonesSection({ vendorId }: { vendorId: string })
   }
 
   return (
-    <section className="br-card ss-section" id="delivery" aria-labelledby="ss-delivery-title" tabIndex={-1} data-testid="ss-delivery">
+    <section className="br-card sst-section" id="delivery" aria-labelledby="ss-delivery-title" tabIndex={-1} data-testid="ss-delivery">
       <h2 id="ss-delivery-title">{t("ss.delivery")}</h2>
-      <p className="muted ss-lead">{t("ss.delivery.lead")}</p>
+      <p className="muted sst-lead">{t("ss.delivery.lead")}</p>
       {error && <ErrorBanner message={error} />}
       {!rows && !error && <div className="skeleton" style={{ height: 140, width: "100%" }} />}
       {rows && (
-        <ul className="ss-zones">
-          <li className="ss-zone ss-zone-head" aria-hidden="true">
+        <ul className="sst-zones">
+          <li className="sst-zone sst-zone-head" aria-hidden="true">
             <span>{t("ss.zone.region")}</span>
             <span>{t("ss.zone.enabled")}</span>
             <span>{t("ss.zone.fee")}</span>
@@ -141,21 +141,21 @@ export default function DeliveryZonesSection({ vendorId }: { vendorId: string })
             };
             const id = `ss-zone-${row.region}`;
             return (
-              <li key={row.region} className="ss-zone" data-testid={`ss-zone-${row.region}`}>
-                <strong className="ss-zone-name" id={`${id}-name`}>{name}</strong>
-                <label className="ss-check">
+              <li key={row.region} className="sst-zone" data-testid={`ss-zone-${row.region}`}>
+                <strong className="sst-zone-name" id={`${id}-name`}>{name}</strong>
+                <label className="sst-check">
                   <input type="checkbox" checked={d.enabled} onChange={(e) => set({ enabled: e.target.checked })} aria-describedby={`${id}-name`} data-testid={`ss-zone-enabled-${row.region}`} />
                   <span>{t("ss.zone.enabled")}</span>
                 </label>
-                <label className="ss-field">
-                  <span className="ss-field-label">{t("ss.zone.fee")}</span>
+                <label className="sst-field">
+                  <span className="sst-field-label">{t("ss.zone.fee")}</span>
                   <input
                     type="number"
                     inputMode="decimal"
                     min={0}
                     step="0.01"
                     dir="ltr"
-                    className="ss-input"
+                    className="sst-input"
                     value={d.fee}
                     placeholder={t("ss.zone.fee_unset")}
                     onChange={(e) => set({ fee: e.target.value })}
@@ -163,15 +163,15 @@ export default function DeliveryZonesSection({ vendorId }: { vendorId: string })
                     data-testid={`ss-zone-fee-${row.region}`}
                   />
                 </label>
-                <label className="ss-field">
-                  <span className="ss-field-label">{t("ss.zone.minimum")}</span>
+                <label className="sst-field">
+                  <span className="sst-field-label">{t("ss.zone.minimum")}</span>
                   <input
                     type="number"
                     inputMode="decimal"
                     min={0}
                     step="0.01"
                     dir="ltr"
-                    className="ss-input"
+                    className="sst-input"
                     value={d.minimum}
                     placeholder={t("ss.zone.minimum_none")}
                     onChange={(e) => set({ minimum: e.target.value })}
@@ -179,12 +179,12 @@ export default function DeliveryZonesSection({ vendorId }: { vendorId: string })
                     data-testid={`ss-zone-min-${row.region}`}
                   />
                 </label>
-                <button type="button" className="ss-btn ss-save" disabled={busy !== null} aria-busy={busy === row.region} onClick={() => void save(row)} data-testid={`ss-zone-save-${row.region}`}>
+                <button type="button" className="sst-btn sst-save" disabled={busy !== null} aria-busy={busy === row.region} onClick={() => void save(row)} data-testid={`ss-zone-save-${row.region}`}>
                   {fill(t("ss.zone.save"), { zone: name })}
                 </button>
-                {row.fee === null && <p className="muted ss-zone-note">{t("ss.zone.not_offered")}</p>}
-                {rowError?.region === row.region && <p className="ss-zone-note ss-error" role="alert">{rowError.text}</p>}
-                {saved === row.region && <p className="muted ss-zone-note" role="status" data-testid={`ss-zone-saved-${row.region}`}>{fill(t("ss.zone.saved"), { zone: name })}</p>}
+                {row.fee === null && <p className="muted sst-zone-note">{t("ss.zone.not_offered")}</p>}
+                {rowError?.region === row.region && <p className="sst-zone-note sst-error" role="alert">{rowError.text}</p>}
+                {saved === row.region && <p className="muted sst-zone-note" role="status" data-testid={`ss-zone-saved-${row.region}`}>{fill(t("ss.zone.saved"), { zone: name })}</p>}
               </li>
             );
           })}

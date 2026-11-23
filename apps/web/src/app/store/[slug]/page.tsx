@@ -224,10 +224,7 @@ const MANAGEMENT_TILE_DETAILS: Record<string, { icon: ManagementTileIconName; ba
   branches: { icon: "pin", badge: "store.tile.4.badge", footer: "store.tile.4.footer" },
   staff: { icon: "team", badge: "store.tile.5.badge", footer: "store.tile.5.footer" },
   verification: { icon: "document", badge: "store.tile.9.badge", footer: "store.tile.9.footer" },
-  reviews: { icon: "star", badge: "store.tile.12.badge", footer: "store.tile.12.footer" },
   performance: { icon: "chart", badge: "store.tile.13.badge", footer: "store.tile.13.footer" },
-  "store-sales": { icon: "barcode", badge: "", footer: "pos.tile.sales_hint" },
-  labels: { icon: "barcode", badge: "", footer: "pos.tile.labels_hint" },
 };
 const tileKey = (href: string) => href.split("/").slice(3).join("/");
 
@@ -447,7 +444,11 @@ export default function StorefrontPage() {
     const key = href.split("?")[0].split("/").slice(3).join("/");
     const tiles = ownerHubTiles(ownerVendorId);
     // addresses that moved into «إدارة الفروع» (their old pages redirect there) keep its title
-    const moved = /^(orders|delivery-windows|delivery-zones|return-policy|returns\/redeem|settings)$/.test(key) ? "branches" : key;
+    const moved = /^(orders|delivery-windows|delivery-zones|return-policy|returns\/redeem|settings)$/.test(key)
+      ? "branches"
+      : /^(reviews|sales|store-sales|labels|cashier)$/.test(key)
+        ? "performance"
+        : key;
     const tile = tiles.find((x) => moved === x.href.split("/").slice(3).join("/")) ?? tiles.find((x) => moved.startsWith(`${x.href.split("/").slice(3).join("/")}/`));
     setFrameState({ title: null, canBack: false, backTitle: null });
     setManagementDetail({ href, title: tile?.title ?? t("store.manage") });
@@ -1987,7 +1988,6 @@ export default function StorefrontPage() {
             </header>
             <div className="hub-grid store-management-grid">
               {ownerHubTiles(ownerVendorId)
-                .filter((tile) => cashierEnabled || !(tile.href.endsWith("/store-sales") || tile.href.endsWith("/labels")))
                 .map((tile) => {
                 // Keep the management panel usable if a new navigation tile is
                 // added before its optional visual metadata is configured.

@@ -33,6 +33,7 @@ import "@/lib/storePosText";
 import "@/lib/offerWizardText";
 import "@/lib/collectionsText";
 import "@/lib/storeHomeText";
+import "@/lib/performanceText";
 import {
   useCartCount,
   useHydrated,
@@ -204,6 +205,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
       if (/^\/vendor\/[^/]+\/storefront\/home\/?$/.test(path)) return tFrame("home.title");
       // «صفحتي» (the store page's identity; «رجوع» from the designer names it)
       if (/^\/vendor\/[^/]+\/storefront\/?$/.test(path)) return tFrame("mypage.title");
+      // «أداء المتجر» (labels and the cashier opened from its tools say «رجوع إلى أداء المتجر»)
+      if (/^\/vendor\/[^/]+\/performance\/?$/.test(path)) return tFrame("pf.title");
       return null;
     }, (href) => router.push(href), (a, b) => {
       // «إدارة الفروع»: the branches, each branch and its tabs are views of one screen - no «رجوع» between them

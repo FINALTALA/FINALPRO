@@ -59,12 +59,12 @@ export default function StoreSettingsPage() {
     );
 
   return (
-    <div className="page-shell ss-shell">
-      <div className="br-ws br-dash ss-page-wrap" data-testid="store-settings">
-        <header className="ss-head">
-          <h1 className="ss-title">{t("ss.title")}</h1>
-          <p className="muted ss-page-lead">{t("ss.lead")}</p>
-          <nav className="ss-jump" aria-label={t("ss.jump")}>
+    <div className="page-shell sst-shell">
+      <div className="br-ws br-dash sst-page-wrap" data-testid="store-settings">
+        <header className="sst-head">
+          <h1 className="sst-title">{t("ss.title")}</h1>
+          <p className="muted sst-page-lead">{t("ss.lead")}</p>
+          <nav className="sst-jump" aria-label={t("ss.jump")}>
             <a href="#delivery" data-testid="ss-jump-delivery">
               {t("ss.delivery")}
             </a>
@@ -73,7 +73,7 @@ export default function StoreSettingsPage() {
             </a>
           </nav>
         </header>
-        <div className="br-pane ss-pane">
+        <div className="br-pane sst-pane">
           <DeliveryZonesSection vendorId={params.vendorId} />
           <ReturnPolicySection vendorId={params.vendorId} />
         </div>

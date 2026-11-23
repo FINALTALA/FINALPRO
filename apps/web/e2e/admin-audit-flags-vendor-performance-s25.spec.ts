@@ -166,7 +166,9 @@ test.describe("Sprint 25: admin audit logs, feature flags, vendor performance UI
     await loginAs(page, fixtures.ownerToken);
     await enterWorkspace(page, fixtures.ownerToken, { type: "vendor", vendor_id: vendorId });
     await page.goto(`/vendor/${vendorId}/performance`);
-    await expect(page.getByText("لوحة الأداء غير مفعّلة حالياً")).toBeVisible();
+    // 2026-11-23 «أداء المتجر»: only the indicators say «غير متاحة»; the screen's other views stay
+    await expect(page.getByText("مؤشرات الأداء غير متاحة حالياً")).toBeVisible();
     await expect(page.getByText("مؤشرات الأداء (آخر 30 يوماً)")).not.toBeVisible();
+    await expect(page.getByTestId("pf-view-sales")).toBeVisible();
   });
 });

@@ -106,7 +106,7 @@ test.describe("Branch management and store settings", () => {
     for (const k of ["delivery-zones", "delivery-windows", "orders", "return-policy", "returns/redeem"]) {
       await expect(page.getByTestId(`management-tile-${k}`)).toHaveCount(0);
     }
-    for (const k of ["offers", "storefront", "staff", "verification", "reviews"]) await expect(page.getByTestId(`management-tile-${k}`)).toBeVisible();
+    for (const k of ["offers", "storefront", "staff", "verification", "performance"]) await expect(page.getByTestId(`management-tile-${k}`)).toBeVisible();
   });
 
   test("branch settings: a gear beside the picker (no tab) - details, minimum order, archiving; an archived branch only reads", async ({ page }) => {
@@ -295,7 +295,7 @@ test.describe("Branch management and store settings", () => {
       await page.evaluate(() => localStorage.setItem("finalpro_lang_pref", "en"));
       await page.goto(`/vendor/${vendorId}/settings`);
       await expect(page.locator("html")).toHaveAttribute("dir", "ltr", { timeout: 30_000 });
-      await expect(page.locator(".ss-title")).toHaveText("Store settings");
+      await expect(page.locator(".sst-title")).toHaveText("Store settings");
       await expect(page.getByTestId("ss-delivery").locator("h2")).toHaveText("Delivery zones and fees");
       expect(await axe('[data-testid="store-settings"]')).toEqual([]);
       await page.goto(`/vendor/${vendorId}/branches/${branchA}/orders`);
