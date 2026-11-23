@@ -25,6 +25,11 @@ import { VendorMembershipGuard } from '../auth/vendor-membership.guard';
 import { RequireVendorRole } from '../auth/vendor-role.decorator';
 import { lockBranchOperationalStatus } from '../common/branch-operational-lock.util';
 import { IdempotencyCompletionService } from '../common/idempotency/idempotency-completion.service';
+import {
+  activeOrdersDetails,
+  activeOrdersInSpan,
+  lockBranchWindowRows,
+} from '../delivery-windows/delivery-window-rules';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import {
   decodeCursor,
@@ -178,6 +183,26 @@ export class BranchClosuresController {
           },
           tx,
         );
+        // «نوافذ التوصيل v1»: a planned closure is never placed on top of
+        // active delivery orders (same rule as closing a day). The branch's
+        // window rows are locked first - the locks reserve()/confirm() take
+        // on a slot - so no booking lands in the closure meanwhile.
+        await lockBranchWindowRows(tx, vendorId, branchId);
+        const covered = await activeOrdersInSpan(
+          tx,
+          vendorId,
+          branchId,
+          startsAt,
+          endsAt,
+        );
+        if (covered.length > 0) {
+          throw new ConflictException({
+            code: 'BRANCH_CLOSURE_HAS_ACTIVE_ORDERS',
+            message: `This closure covers ${covered.length} active delivery order(s) - choose other times, or handle the orders first.`,
+            details: [activeOrdersDetails(covered)],
+          });
+        }
+
         const responseBody = closureDto(closure);
         await this.idempotencyCompletion.complete(
           tx,

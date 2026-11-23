@@ -19,12 +19,16 @@ describe('PD-5.1 delivery calendar (Asia/Hebron)', () => {
     expect(localDateString(at('2026-12-01T22:00:00Z'))).toBe('2026-12-02');
   });
 
-  it('the bookable calendar starts on the local day', () => {
+  it('the bookable calendar starts on the local day and spans seven days (delivery windows v1)', () => {
     const days = calendarDates(at('2026-07-28T23:30:00Z'));
     expect(days.map((d) => d.toISOString().slice(0, 10))).toEqual([
       '2026-07-29',
       '2026-07-30',
       '2026-07-31',
+      '2026-08-01',
+      '2026-08-02',
+      '2026-08-03',
+      '2026-08-04',
     ]);
     expect(
       daysFromToday(dateOnly('2026-07-29'), at('2026-07-28T23:30:00Z')),

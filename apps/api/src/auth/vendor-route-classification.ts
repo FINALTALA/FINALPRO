@@ -155,6 +155,8 @@ export const SUSPENDED_ALLOW_ROUTES: readonly string[] = [
   'GET vendors/:vendorId/pickup-points/:pickupPointId',
   'GET vendors/:vendorId/delivery-zones',
   'GET vendors/:vendorId/branches/:branchId/delivery-windows',
+  // «نوافذ التوصيل v1»: the 7-day board (owner + that branch's employee).
+  'GET vendors/:vendorId/branches/:branchId/delivery-windows/board',
   // PD-5.1.
   'GET vendors/:vendorId/branches/:branchId/delivery-lead-time',
   // PD-5.3: the owner's own sales in the ranking window (read only).
@@ -249,6 +251,14 @@ export const SUSPENDED_ALLOW_ROUTES: readonly string[] = [
   'DELETE vendors/:vendorId/branches/:branchId/delivery-windows/:windowId',
   'POST vendors/:vendorId/branches/:branchId/delivery-windows/:windowId/exceptions',
   'DELETE vendors/:vendorId/branches/:branchId/delivery-windows/:windowId/exceptions/:exceptionId',
+  // «نوافذ التوصيل v1»: pause / resume, stop new bookings, close a day.
+  'POST vendors/:vendorId/branches/:branchId/delivery-windows/:windowId/pause',
+  'POST vendors/:vendorId/branches/:branchId/delivery-windows/:windowId/resume',
+  'POST vendors/:vendorId/branches/:branchId/delivery-windows/:windowId/stop-booking',
+  'POST vendors/:vendorId/branches/:branchId/delivery-windows/:windowId/reopen',
+  'POST vendors/:vendorId/branches/:branchId/delivery-windows/days/:date/stop-booking',
+  'POST vendors/:vendorId/branches/:branchId/delivery-windows/days/:date/close',
+  'POST vendors/:vendorId/branches/:branchId/delivery-windows/days/:date/reopen',
   // Verification (already refused by their own status rules while
   // SUSPENDED) and reviewer-only reads/decisions.
   'POST vendors/:vendorId/branches/:branchId/verification-evidence',

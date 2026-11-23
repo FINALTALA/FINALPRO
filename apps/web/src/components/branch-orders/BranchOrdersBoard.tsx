@@ -44,6 +44,8 @@ function readFilters(sp: URLSearchParams): QueueFilters {
     late: sp.get("late") === "1",
     q: sp.get("q") ?? "",
     sort: sort === "newest" || sort === "priority" ? sort : null,
+    date: /^\d{4}-\d{2}-\d{2}$/.test(sp.get("date") ?? "") ? sp.get("date") : null,
+    window: /^[0-9a-f-]{36}$/i.test(sp.get("window") ?? "") ? sp.get("window") : null,
   };
 }
 
@@ -325,7 +327,8 @@ export default function BranchOrdersBoard({ vendorId, branchId }: { vendorId: st
   const showDetailOnly = narrow && Boolean(selected);
   const owner = ws.isOwner;
   const tabCount = (k: QueueTab) => counts?.[k] ?? null;
-  const filtered = filters.method !== null || filters.late || filters.q !== "";
+  const filtered = filters.method !== null || filters.late || filters.q !== "" || filters.date !== null;
+  const slotLabel = sp.get("slot");
   const inTab =
     !order || filters.tab === order.bucket || (filters.tab === "active" && order.bucket !== "done");
   const sortValue = filters.sort ?? (filters.tab === "done" ? "newest" : "priority");
@@ -354,6 +357,19 @@ export default function BranchOrdersBoard({ vendorId, branchId }: { vendorId: st
           );
         })}
       </nav>
+      {filters.date && (
+        <p className="bo-slot-filter" role="status" data-testid="bo-slot-filter">
+          <span>
+            {fillBo(t(filters.window ? "bo.filter.slot_window" : "bo.filter.slot"), {
+              date: filters.date,
+              time: slotLabel && /^\d{2}:\d{2}-\d{2}:\d{2}$/.test(slotLabel) ? slotLabel : "",
+            })}
+          </span>
+          <button type="button" className="bo-link-btn" onClick={() => go({ date: null, window: null, slot: null })} data-testid="bo-slot-filter-clear">
+            {t("bo.filter.slot_clear")}
+          </button>
+        </p>
+      )}
       <div className="bo-filters">
         <div className="bo-search">
           <label htmlFor="bo-search" className="visually-hidden">{t("bo.search")}</label>

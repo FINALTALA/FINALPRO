@@ -37,6 +37,11 @@
   font-size: 0.75rem; line-height: 20px; text-align: center; color: var(--wz-ink);
 }
 .bo-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex: none; }
+/* «نوافذ التوصيل v1»: opened from the 7-day board on one date / window. */
+.bo-slot-filter {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 0; padding: 8px 12px; flex: none;
+  border: 1px solid var(--wz-line); border-radius: 10px; background: var(--wz-wine-soft); font-size: 0.88rem;
+}
 .bo-search { flex: 1 1 100%; }
 .bo-input {
   inline-size: 100%; box-sizing: border-box; min-block-size: 42px; padding: 8px 12px; font: inherit; color: var(--wz-ink);

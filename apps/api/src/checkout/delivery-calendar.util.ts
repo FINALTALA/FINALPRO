@@ -64,8 +64,15 @@ export function dateOnly(dateString: string): Date {
   return new Date(`${dateString}T00:00:00.000Z`);
 }
 
+/**
+ * «نوافذ التوصيل v1»: delivery is bookable for a fixed seven Palestine
+ * calendar days (today and the next six) - the slot list, reserve,
+ * confirm, reschedule and the branch's 7-day board all use this one value.
+ */
+export const BOOKING_HORIZON_DAYS = 7;
+
 /** The calendar days a customer may book: today (local) and the next days. */
-export function calendarDates(now: Date, days = 3): Date[] {
+export function calendarDates(now: Date, days = BOOKING_HORIZON_DAYS): Date[] {
   const first = dateOnly(localDateString(now)).getTime();
   return Array.from({ length: days }, (_, i) => new Date(first + i * DAY_MS));
 }

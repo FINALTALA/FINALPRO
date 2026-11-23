@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   ConflictException,
   Controller,
@@ -24,11 +25,32 @@ import { VendorMembershipGuard } from '../auth/vendor-membership.guard';
 import { RequireVendorRole } from '../auth/vendor-role.decorator';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { TERMINAL_BRANCH_ORDER_STATUSES } from '../orders/branch-order-state-machine';
+import {
+  ACTIVE_BRANCH_ORDER_STATUSES,
+  activeOrderStatusFilter,
+} from '../orders/branch-order-state-machine';
+import {
+  BOOKING_HORIZON_DAYS,
+  calendarDates,
+  dateOnly,
+  daysFromToday,
+  localDateString,
+} from '../checkout/delivery-calendar.util';
 import { CreateDeliveryWindowExceptionDto } from './dto/create-delivery-window-exception.dto';
 import { CreateDeliveryWindowDto } from './dto/create-delivery-window.dto';
 import { UpdateDeliveryWindowDto } from './dto/update-delivery-window.dto';
+import {
+  DeliveryReasonDto,
+  ISO_DATE,
+  StopWindowBookingDto,
+} from './dto/delivery-window-actions.dto';
 import { lockDeliveryWindowRow } from './delivery-window-locking.util';
+import {
+  activeOrdersDetails,
+  activeOrdersOnDate,
+  lockBranchWindowRows,
+} from './delivery-window-rules';
+import { loadSlotStates } from './window-status';
 
 function minutesToTime(minutes: number): string {
   const h = Math.floor(minutes / 60)
@@ -49,6 +71,8 @@ function windowDto(w: {
   startMinute: number;
   endMinute: number;
   capacity: number;
+  pausedAt?: Date | null;
+  pausedReason?: string | null;
 }) {
   return {
     id: w.id,
@@ -56,7 +80,24 @@ function windowDto(w: {
     start_time: minutesToTime(w.startMinute),
     end_time: minutesToTime(w.endMinute),
     capacity: w.capacity,
+    paused: Boolean(w.pausedAt),
+    paused_at: w.pausedAt ? w.pausedAt.toISOString() : null,
+    paused_reason: w.pausedReason ?? null,
   };
+}
+
+/** 'YYYY-MM-DD' path date -> the UTC-midnight Date a @db.Date stores (400 otherwise). */
+function parseDayParam(raw: string): Date {
+  if (
+    !ISO_DATE.test(raw) ||
+    Number.isNaN(new Date(`${raw}T00:00:00.000Z`).getTime())
+  ) {
+    throw new BadRequestException({
+      code: 'INVALID_DATE',
+      message: 'date must be YYYY-MM-DD',
+    });
+  }
+  return dateOnly(raw);
 }
 
 function exceptionDto(e: {
@@ -64,9 +105,13 @@ function exceptionDto(e: {
   exceptionDate: Date;
   isClosed: boolean;
   capacityOverride: number | null;
+  bookingStopped?: boolean;
+  reason?: string | null;
 }) {
   return {
     id: e.id,
+    booking_stopped: e.bookingStopped ?? false,
+    reason: e.reason ?? null,
     // toISOString().slice(0,10): the DB column is DATE (no time
     // component) - this avoids a timezone-shifted day when Node's own
     // local timezone differs from UTC.
@@ -164,31 +209,6 @@ export class DeliveryWindowsController {
     }
   }
 
-  // PDR-024: "a slot that has orders cannot be changed/deleted without
-  // resolving affected orders." Used by update() only - editing a
-  // window's own time/capacity doesn't erase anything a terminal order
-  // snapshot depends on, so only a still-active (non-terminal) order
-  // blocks an edit. Must run AFTER lockWindowRow() and inside the same
-  // transaction, or the lock buys nothing.
-  private async assertNoActiveOrders(
-    tx: Prisma.TransactionClient,
-    windowId: string,
-  ): Promise<void> {
-    const blocking = await tx.branchOrder.findFirst({
-      where: {
-        deliveryWindowId: windowId,
-        status: { notIn: [...TERMINAL_BRANCH_ORDER_STATUSES] },
-      },
-    });
-    if (blocking) {
-      throw new ConflictException({
-        code: 'DELIVERY_WINDOW_HAS_ACTIVE_ORDERS',
-        message:
-          'This window has an active (non-terminal) branch order attached to it - resolve or reassign it before changing the window',
-      });
-    }
-  }
-
   // Sprint 10 (RB-ORD-002, PDR-024): a live (unexpired) checkout hold
   // on this window is just as real a reason to refuse an edit/delete as
   // an active BranchOrder - the customer mid-checkout was promised this
@@ -255,13 +275,29 @@ export class DeliveryWindowsController {
     @Param('branchId') branchId: string,
   ) {
     await this.requireBranch(vendorId, branchId);
+    return this.templateOf(vendorId, branchId);
+  }
+
+  /**
+   * The weekly template with what the owner needs to manage it: whether a
+   * window has ANY order history (then it can only be paused, never
+   * deleted, and its day/time never edited) and its exceptions.
+   */
+  private async templateOf(vendorId: string, branchId: string) {
     const windows = await this.prisma.deliveryWindow.findMany({
       where: { vendorId, branchId },
       orderBy: [{ dayOfWeek: 'asc' }, { startMinute: 'asc' }],
       include: { exceptions: { orderBy: { exceptionDate: 'asc' } } },
     });
+    const withHistory = await this.prisma.branchOrder.findMany({
+      where: { deliveryWindowId: { in: windows.map((w) => w.id) } },
+      select: { deliveryWindowId: true },
+      distinct: ['deliveryWindowId'],
+    });
+    const used = new Set(withHistory.map((o) => o.deliveryWindowId));
     return windows.map((w) => ({
       ...windowDto(w),
+      has_order_history: used.has(w.id),
       exceptions: w.exceptions.map(exceptionDto),
     }));
   }
@@ -291,12 +327,16 @@ export class DeliveryWindowsController {
         // creates for the same branch never both pass it.
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('finalpro:delivery_windows:' || ${vendorId} || ':' || ${branchId}))`;
 
+        // «نوافذ التوصيل v1»: a paused window no longer holds its time
+        // (the DB constraint excludes it too) - pause + create new is how
+        // a used window's day/time is changed.
         const overlapping = await tx.deliveryWindow.findFirst({
           where: {
             branchId,
             dayOfWeek: dto.day_of_week,
             startMinute: { lt: endMinute },
             endMinute: { gt: startMinute },
+            pausedAt: null,
           },
         });
         if (overlapping) {
@@ -357,29 +397,121 @@ export class DeliveryWindowsController {
     this.validateTimes(dto.start_time, dto.end_time);
     const startMinute = timeToMinutes(dto.start_time);
     const endMinute = timeToMinutes(dto.end_time);
+    const timeChanged =
+      dto.day_of_week !== existing.dayOfWeek ||
+      startMinute !== existing.startMinute ||
+      endMinute !== existing.endMinute;
+    const capacityChanged = dto.capacity !== existing.capacity;
+    // «نوافذ التوصيل v1»: a capacity change is audited with its reason.
+    if (capacityChanged && !dto.reason) {
+      throw new BadRequestException({
+        code: 'REASON_REQUIRED',
+        message: 'A reason is required to change the capacity',
+      });
+    }
 
     try {
       return await this.prisma.$transaction(async (tx) => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('finalpro:delivery_windows:' || ${vendorId} || ':' || ${branchId}))`;
         await lockDeliveryWindowRow(tx, windowId);
-        await this.assertNoActiveOrders(tx, windowId);
-        await this.assertNoActiveReservationSlots(tx, windowId);
 
-        const overlapping = await tx.deliveryWindow.findFirst({
-          where: {
-            id: { not: windowId },
-            branchId,
-            dayOfWeek: dto.day_of_week,
-            startMinute: { lt: endMinute },
-            endMinute: { gt: startMinute },
-          },
-        });
-        if (overlapping) {
-          throw new ConflictException({
-            code: 'DELIVERY_WINDOW_OVERLAP',
-            message:
-              'This window overlaps an existing window for the same branch and day',
+        if (timeChanged) {
+          // «نوافذ التوصيل v1»: the day/time of a window that has ANY
+          // order in its history never changes (its orders - future and
+          // past - were booked for THIS time). Pause it and create a new
+          // window instead.
+          const anyOrder = await tx.branchOrder.findFirst({
+            where: { deliveryWindowId: windowId },
+            select: { id: true },
           });
+          if (anyOrder) {
+            throw new ConflictException({
+              code: 'DELIVERY_WINDOW_TIME_LOCKED',
+              message:
+                "This window has orders - its day and time can't change. Pause it and add a new window instead.",
+            });
+          }
+          await this.assertNoActiveReservationSlots(tx, windowId);
+          if (!existing.pausedAt) {
+            const overlapping = await tx.deliveryWindow.findFirst({
+              where: {
+                id: { not: windowId },
+                branchId,
+                dayOfWeek: dto.day_of_week,
+                startMinute: { lt: endMinute },
+                endMinute: { gt: startMinute },
+                pausedAt: null,
+              },
+            });
+            if (overlapping) {
+              throw new ConflictException({
+                code: 'DELIVERY_WINDOW_OVERLAP',
+                message:
+                  'This window overlaps an existing window for the same branch and day',
+              });
+            }
+          }
+        }
+
+        if (capacityChanged && dto.capacity < existing.capacity) {
+          // «نوافذ التوصيل v1»: lowering never goes under what is already
+          // taken on any upcoming date - active orders + live checkout
+          // holds, the same count the window state uses (dates with their
+          // own capacity override are not affected by this value).
+          const today = dateOnly(localDateString(new Date()));
+          const [orders, holds, overrides] = await Promise.all([
+            tx.branchOrder.findMany({
+              where: {
+                deliveryWindowId: windowId,
+                scheduledDate: { gte: today },
+                status: activeOrderStatusFilter(),
+              },
+              select: { scheduledDate: true },
+            }),
+            tx.checkoutReservationSlot.findMany({
+              where: {
+                deliveryWindowId: windowId,
+                scheduledDate: { gte: today },
+                reservation: { expiresAt: { gt: new Date() } },
+              },
+              select: { scheduledDate: true },
+            }),
+            tx.deliveryWindowException.findMany({
+              where: {
+                windowId,
+                exceptionDate: { gte: today },
+                capacityOverride: { not: null },
+              },
+              select: { exceptionDate: true },
+            }),
+          ]);
+          const skip = new Set(
+            overrides.map((o) => o.exceptionDate.toISOString().slice(0, 10)),
+          );
+          const perDate = new Map<string, number>();
+          for (const r of [...orders, ...holds]) {
+            if (!r.scheduledDate) continue;
+            const k = r.scheduledDate.toISOString().slice(0, 10);
+            if (skip.has(k)) continue;
+            perDate.set(k, (perDate.get(k) ?? 0) + 1);
+          }
+          let peak = 0;
+          let peakDate: string | null = null;
+          for (const [d, n] of perDate) {
+            if (n > peak) {
+              peak = n;
+              peakDate = d;
+            }
+          }
+          if (dto.capacity < peak) {
+            throw new ConflictException({
+              code: 'CAPACITY_BELOW_BOOKINGS',
+              message: `The capacity can't go below ${peak}: ${peak} active order(s) and checkout hold(s) are already booked in this window on ${peakDate}.`,
+              details: [
+                { requested: dto.capacity, booked: peak, date: peakDate },
+              ],
+            });
+          }
         }
 
         const updated = await tx.deliveryWindow.update({
@@ -395,11 +527,14 @@ export class DeliveryWindowsController {
           {
             actorId: user.id,
             correlationId: req.correlationId,
-            action: 'delivery_window.updated',
+            action:
+              capacityChanged && !timeChanged
+                ? 'delivery_window.capacity_changed'
+                : 'delivery_window.updated',
             entityType: 'DeliveryWindow',
             entityId: windowId,
             beforeState: windowDto(existing),
-            afterState: windowDto(updated),
+            afterState: { ...windowDto(updated), reason: dto.reason ?? null },
           },
           tx,
         );
@@ -503,22 +638,45 @@ export class DeliveryWindowsController {
     }
 
     try {
-      const created = await this.prisma.deliveryWindowException.create({
-        data: {
-          vendorId,
-          windowId,
-          exceptionDate: new Date(dto.exception_date),
-          isClosed,
-          capacityOverride: isClosed ? null : dto.capacity_override,
-        },
-      });
-      await this.auditLog.record({
-        actorId: user.id,
-        correlationId: req.correlationId,
-        action: 'delivery_window_exception.created',
-        entityType: 'DeliveryWindowException',
-        entityId: created.id,
-        afterState: exceptionDto(created),
+      const created = await this.prisma.$transaction(async (tx) => {
+        const exceptionDate = new Date(dto.exception_date);
+        if (isClosed) {
+          // «نوافذ التوصيل v1»: a date is never closed on top of active
+          // orders (same rule as closing a whole day) - under the window
+          // lock reserve/confirm take, so no booking slips in meanwhile.
+          await lockDeliveryWindowRow(tx, windowId);
+          const onDate = (
+            await activeOrdersOnDate(tx, vendorId, branchId, exceptionDate)
+          ).filter((o) => o.deliveryWindowId === windowId);
+          if (onDate.length > 0) {
+            throw new ConflictException({
+              code: 'DATE_HAS_ACTIVE_ORDERS',
+              message: `This window has ${onDate.length} active order(s) on this date - it can't be closed. Stop new bookings instead, or handle the orders first.`,
+              details: [activeOrdersDetails(onDate)],
+            });
+          }
+        }
+        const row = await tx.deliveryWindowException.create({
+          data: {
+            vendorId,
+            windowId,
+            exceptionDate,
+            isClosed,
+            capacityOverride: isClosed ? null : dto.capacity_override,
+          },
+        });
+        await this.auditLog.record(
+          {
+            actorId: user.id,
+            correlationId: req.correlationId,
+            action: 'delivery_window_exception.created',
+            entityType: 'DeliveryWindowException',
+            entityId: row.id,
+            afterState: exceptionDto(row),
+          },
+          tx,
+        );
+        return row;
       });
       return exceptionDto(created);
     } catch (err) {
@@ -570,5 +728,552 @@ export class DeliveryWindowsController {
       beforeState: exceptionDto(existing),
     });
     return { deleted: true };
+  }
+
+  // ==================================================================
+  // «نوافذ التوصيل v1» - pause / resume, stop new bookings for a date,
+  // close a whole day, and the branch's 7-day board. Every write is
+  // OWNER-only (a branch employee gets 403), carries a reason and is
+  // audited with the actor and the before/after values.
+  // ==================================================================
+
+  /** Pause a weekly window: no new bookings; history and orders stay. */
+  @Post(':windowId/pause')
+  @HttpCode(200)
+  @RequireVendorRole('OWNER')
+  @BlockWhenBranchArchived()
+  async pause(
+    @Param('vendorId') vendorId: string,
+    @Param('branchId') branchId: string,
+    @Param('windowId') windowId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: DeliveryReasonDto,
+    @Req() req: Request,
+  ) {
+    await this.requireWindow(vendorId, branchId, windowId);
+    return this.prisma.$transaction(async (tx) => {
+      await lockDeliveryWindowRow(tx, windowId);
+      const before = await tx.deliveryWindow.findUniqueOrThrow({
+        where: { id: windowId },
+      });
+      if (before.pausedAt) {
+        throw new ConflictException({
+          code: 'DELIVERY_WINDOW_ALREADY_PAUSED',
+          message: 'This window is already paused',
+        });
+      }
+      const after = await tx.deliveryWindow.update({
+        where: { id: windowId },
+        data: { pausedAt: new Date(), pausedReason: dto.reason },
+      });
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'delivery_window.paused',
+          entityType: 'DeliveryWindow',
+          entityId: windowId,
+          beforeState: windowDto(before),
+          afterState: { ...windowDto(after), reason: dto.reason },
+        },
+        tx,
+      );
+      return windowDto(after);
+    });
+  }
+
+  /** Resume a paused window (its time must not overlap an active window). */
+  @Post(':windowId/resume')
+  @HttpCode(200)
+  @RequireVendorRole('OWNER')
+  @BlockWhenBranchArchived()
+  async resume(
+    @Param('vendorId') vendorId: string,
+    @Param('branchId') branchId: string,
+    @Param('windowId') windowId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: DeliveryReasonDto,
+    @Req() req: Request,
+  ) {
+    await this.requireWindow(vendorId, branchId, windowId);
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('finalpro:delivery_windows:' || ${vendorId} || ':' || ${branchId}))`;
+        await lockDeliveryWindowRow(tx, windowId);
+        const before = await tx.deliveryWindow.findUniqueOrThrow({
+          where: { id: windowId },
+        });
+        if (!before.pausedAt) {
+          throw new ConflictException({
+            code: 'DELIVERY_WINDOW_NOT_PAUSED',
+            message: 'This window is not paused',
+          });
+        }
+        const overlapping = await tx.deliveryWindow.findFirst({
+          where: {
+            id: { not: windowId },
+            branchId,
+            dayOfWeek: before.dayOfWeek,
+            startMinute: { lt: before.endMinute },
+            endMinute: { gt: before.startMinute },
+            pausedAt: null,
+          },
+        });
+        if (overlapping) {
+          throw new ConflictException({
+            code: 'DELIVERY_WINDOW_OVERLAP',
+            message:
+              'Another active window now uses this time - pause it first, or keep this one paused',
+          });
+        }
+        const after = await tx.deliveryWindow.update({
+          where: { id: windowId },
+          data: { pausedAt: null, pausedReason: null },
+        });
+        await this.auditLog.record(
+          {
+            actorId: user.id,
+            correlationId: req.correlationId,
+            action: 'delivery_window.resumed',
+            entityType: 'DeliveryWindow',
+            entityId: windowId,
+            beforeState: windowDto(before),
+            afterState: { ...windowDto(after), reason: dto.reason },
+          },
+          tx,
+        );
+        return windowDto(after);
+      });
+    } catch (err) {
+      if (isExclusionViolation(err, 'delivery_windows_no_overlap')) {
+        throw new ConflictException({
+          code: 'DELIVERY_WINDOW_OVERLAP',
+          message:
+            'Another active window now uses this time - pause it first, or keep this one paused',
+        });
+      }
+      throw err;
+    }
+  }
+
+  /** The date must be today or later (Palestine time). */
+  private requireNotPast(date: Date): void {
+    if (daysFromToday(date, new Date()) < 0) {
+      throw new ConflictException({
+        code: 'DATE_IN_PAST',
+        message: 'This date has already passed',
+      });
+    }
+  }
+
+  /**
+   * Upserts one (window, date) exception to a v1 kind. `stop`: new
+   * bookings stopped (a closed date stays closed); `close`: closed.
+   * Returns the before/after exception (null when nothing changed).
+   */
+  private async setDateKind(
+    tx: Prisma.TransactionClient,
+    vendorId: string,
+    windowId: string,
+    date: Date,
+    kind: 'stop' | 'close',
+    reason: string,
+  ) {
+    const before = await tx.deliveryWindowException.findUnique({
+      where: { windowId_exceptionDate: { windowId, exceptionDate: date } },
+    });
+    if (kind === 'stop' && before?.isClosed) return null; // already closed
+    if (kind === 'stop' && before?.bookingStopped) return null;
+    if (kind === 'close' && before?.isClosed) return null;
+    const data = {
+      isClosed: kind === 'close',
+      bookingStopped: kind === 'stop',
+      capacityOverride: null,
+      reason,
+    };
+    const after = before
+      ? await tx.deliveryWindowException.update({
+          where: { id: before.id },
+          data,
+        })
+      : await tx.deliveryWindowException.create({
+          data: { vendorId, windowId, exceptionDate: date, ...data },
+        });
+    return { before, after };
+  }
+
+  private async auditDateChange(
+    tx: Prisma.TransactionClient,
+    user: AuthenticatedUser,
+    req: Request,
+    action: string,
+    change: {
+      before: Parameters<typeof exceptionDto>[0] | null;
+      after: Parameters<typeof exceptionDto>[0] & { id: string };
+    },
+    reason: string,
+  ) {
+    await this.auditLog.record(
+      {
+        actorId: user.id,
+        correlationId: req.correlationId,
+        action,
+        entityType: 'DeliveryWindowException',
+        entityId: change.after.id,
+        beforeState: change.before ? exceptionDto(change.before) : null,
+        afterState: { ...exceptionDto(change.after), reason },
+      },
+      tx,
+    );
+  }
+
+  /** Stop NEW bookings of one window on one date - its orders stay. */
+  @Post(':windowId/stop-booking')
+  @HttpCode(200)
+  @RequireVendorRole('OWNER')
+  @BlockWhenBranchArchived()
+  async stopWindowBooking(
+    @Param('vendorId') vendorId: string,
+    @Param('branchId') branchId: string,
+    @Param('windowId') windowId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: StopWindowBookingDto,
+    @Req() req: Request,
+  ) {
+    const window = await this.requireWindow(vendorId, branchId, windowId);
+    const date = parseDayParam(dto.date);
+    this.requireNotPast(date);
+    if (date.getUTCDay() !== window.dayOfWeek) {
+      throw new ConflictException({
+        code: 'INVALID_SLOT_DATE',
+        message: "This date does not match the window's day of week",
+      });
+    }
+    return this.prisma.$transaction(async (tx) => {
+      await lockDeliveryWindowRow(tx, windowId);
+      const change = await this.setDateKind(
+        tx,
+        vendorId,
+        windowId,
+        date,
+        'stop',
+        dto.reason,
+      );
+      if (change) {
+        await this.auditDateChange(
+          tx,
+          user,
+          req,
+          'delivery_window.booking_stopped',
+          change,
+          dto.reason,
+        );
+      }
+      return {
+        date: dto.date,
+        delivery_window_id: windowId,
+        changed: Boolean(change),
+      };
+    });
+  }
+
+  /** Undo a booking stop / closure of one window on one date. */
+  @Post(':windowId/reopen')
+  @HttpCode(200)
+  @RequireVendorRole('OWNER')
+  @BlockWhenBranchArchived()
+  async reopenWindowDate(
+    @Param('vendorId') vendorId: string,
+    @Param('branchId') branchId: string,
+    @Param('windowId') windowId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: StopWindowBookingDto,
+    @Req() req: Request,
+  ) {
+    await this.requireWindow(vendorId, branchId, windowId);
+    const date = parseDayParam(dto.date);
+    this.requireNotPast(date);
+    return this.prisma.$transaction(async (tx) => {
+      await lockDeliveryWindowRow(tx, windowId);
+      const reopened = await this.reopenExceptions(
+        tx,
+        user,
+        req,
+        [windowId],
+        date,
+        dto.reason,
+      );
+      return { date: dto.date, delivery_window_id: windowId, reopened };
+    });
+  }
+
+  private async reopenExceptions(
+    tx: Prisma.TransactionClient,
+    user: AuthenticatedUser,
+    req: Request,
+    windowIds: string[],
+    date: Date,
+    reason: string,
+  ): Promise<number> {
+    const rows = await tx.deliveryWindowException.findMany({
+      where: {
+        windowId: { in: windowIds },
+        exceptionDate: date,
+        OR: [{ isClosed: true }, { bookingStopped: true }],
+      },
+    });
+    for (const row of rows) {
+      await tx.deliveryWindowException.delete({ where: { id: row.id } });
+      await this.auditLog.record(
+        {
+          actorId: user.id,
+          correlationId: req.correlationId,
+          action: 'delivery_window.date_reopened',
+          entityType: 'DeliveryWindowException',
+          entityId: row.id,
+          beforeState: exceptionDto(row),
+          afterState: { reopened: true, reason },
+        },
+        tx,
+      );
+    }
+    return rows.length;
+  }
+
+  /** Stop NEW bookings of every window of that day - orders stay. */
+  @Post('days/:date/stop-booking')
+  @HttpCode(200)
+  @RequireVendorRole('OWNER')
+  @BlockWhenBranchArchived()
+  async stopDayBooking(
+    @Param('vendorId') vendorId: string,
+    @Param('branchId') branchId: string,
+    @Param('date') dateRaw: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: DeliveryReasonDto,
+    @Req() req: Request,
+  ) {
+    await this.requireBranch(vendorId, branchId);
+    const date = parseDayParam(dateRaw);
+    this.requireNotPast(date);
+    return this.prisma.$transaction(async (tx) => {
+      const rows = await lockBranchWindowRows(
+        tx,
+        vendorId,
+        branchId,
+        date.getUTCDay(),
+      );
+      let changed = 0;
+      for (const { id } of rows) {
+        const change = await this.setDateKind(
+          tx,
+          vendorId,
+          id,
+          date,
+          'stop',
+          dto.reason,
+        );
+        if (!change) continue;
+        changed += 1;
+        await this.auditDateChange(
+          tx,
+          user,
+          req,
+          'delivery_window.day_booking_stopped',
+          change,
+          dto.reason,
+        );
+      }
+      return { date: dateRaw, windows: rows.length, changed };
+    });
+  }
+
+  /**
+   * Close a whole day: every window of that date. Refused while the day
+   * has ANY active delivery order (the 409 lists them - date and window -
+   * so the screen can open the branch orders filtered to them).
+   */
+  @Post('days/:date/close')
+  @HttpCode(200)
+  @RequireVendorRole('OWNER')
+  @BlockWhenBranchArchived()
+  async closeDay(
+    @Param('vendorId') vendorId: string,
+    @Param('branchId') branchId: string,
+    @Param('date') dateRaw: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: DeliveryReasonDto,
+    @Req() req: Request,
+  ) {
+    await this.requireBranch(vendorId, branchId);
+    const date = parseDayParam(dateRaw);
+    this.requireNotPast(date);
+    return this.prisma.$transaction(async (tx) => {
+      const rows = await lockBranchWindowRows(
+        tx,
+        vendorId,
+        branchId,
+        date.getUTCDay(),
+      );
+      const active = await activeOrdersOnDate(tx, vendorId, branchId, date);
+      if (active.length > 0) {
+        throw new ConflictException({
+          code: 'DAY_HAS_ACTIVE_ORDERS',
+          message: `This day has ${active.length} active delivery order(s) - it can't be closed. Stop new bookings instead, or handle the orders first.`,
+          details: [activeOrdersDetails(active)],
+        });
+      }
+      let changed = 0;
+      for (const { id } of rows) {
+        const change = await this.setDateKind(
+          tx,
+          vendorId,
+          id,
+          date,
+          'close',
+          dto.reason,
+        );
+        if (!change) continue;
+        changed += 1;
+        await this.auditDateChange(
+          tx,
+          user,
+          req,
+          'delivery_window.day_closed',
+          change,
+          dto.reason,
+        );
+      }
+      return { date: dateRaw, windows: rows.length, changed };
+    });
+  }
+
+  /** Reopen a whole day (removes its booking stops / closures). */
+  @Post('days/:date/reopen')
+  @HttpCode(200)
+  @RequireVendorRole('OWNER')
+  @BlockWhenBranchArchived()
+  async reopenDay(
+    @Param('vendorId') vendorId: string,
+    @Param('branchId') branchId: string,
+    @Param('date') dateRaw: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: DeliveryReasonDto,
+    @Req() req: Request,
+  ) {
+    await this.requireBranch(vendorId, branchId);
+    const date = parseDayParam(dateRaw);
+    this.requireNotPast(date);
+    return this.prisma.$transaction(async (tx) => {
+      const rows = await lockBranchWindowRows(
+        tx,
+        vendorId,
+        branchId,
+        date.getUTCDay(),
+      );
+      const reopened = await this.reopenExceptions(
+        tx,
+        user,
+        req,
+        rows.map((r) => r.id),
+        date,
+        dto.reason,
+      );
+      return { date: dateRaw, reopened };
+    });
+  }
+
+  /**
+   * The branch's 7-day board - the OWNER and the employee of THIS branch
+   * (no @RequireVendorRole: VendorMembershipGuard lets an employee in for
+   * their own branch only). Every state comes from window-status.ts, the
+   * same one the shopper's slot list uses.
+   */
+  @Get('board')
+  async board(
+    @Param('vendorId') vendorId: string,
+    @Param('branchId') branchId: string,
+  ) {
+    await this.requireBranch(vendorId, branchId);
+    const now = new Date();
+    const dates = calendarDates(now, BOOKING_HORIZON_DAYS);
+    const [states, branch, template, byStatusRows] = await Promise.all([
+      loadSlotStates(this.prisma, { vendorId, branchId, dates, now }),
+      this.prisma.storeBranch.findUnique({
+        where: { id: branchId },
+        select: { deliveryLeadMinutes: true },
+      }),
+      this.templateOf(vendorId, branchId),
+      this.prisma.branchOrder.findMany({
+        where: {
+          vendorId,
+          branchId,
+          scheduledDate: { in: dates },
+          deliveryWindowId: { not: null },
+          status: activeOrderStatusFilter(),
+        },
+        select: { deliveryWindowId: true, scheduledDate: true, status: true },
+      }),
+    ]);
+    const byStatus = new Map<string, Record<string, number>>();
+    for (const o of byStatusRows) {
+      const k = `${o.deliveryWindowId}|${o.scheduledDate!.toISOString().slice(0, 10)}`;
+      const m = byStatus.get(k) ?? {};
+      m[o.status] = (m[o.status] ?? 0) + 1;
+      byStatus.set(k, m);
+    }
+    const days = dates.map((d) => {
+      const key = d.toISOString().slice(0, 10);
+      const ws = states.filter((s) => s.date === key);
+      const closed = ws.filter((s) => s.status === 'CLOSED');
+      const dayStatus =
+        ws.length === 0
+          ? 'NO_WINDOWS'
+          : ws.some((s) => s.status === 'OPEN')
+            ? 'OPEN'
+            : ws.every((s) => s.status === 'PAST')
+              ? 'PAST'
+              : closed.length === ws.length
+                ? 'CLOSED'
+                : 'NOT_BOOKABLE';
+      return {
+        date: key,
+        day_of_week: d.getUTCDay(),
+        status: dayStatus,
+        closed_reason:
+          dayStatus === 'CLOSED' ? (closed[0]?.reason ?? null) : null,
+        closed_source:
+          dayStatus === 'CLOSED' ? (closed[0]?.closedSource ?? null) : null,
+        active_orders: ws.reduce((n, s) => n + s.activeOrders, 0),
+        windows: ws.map((s) => ({
+          window_id: s.windowId,
+          start_time: minutesToTime(s.startMinute),
+          end_time: minutesToTime(s.endMinute),
+          status: s.status,
+          reason: s.reason,
+          closed_source: s.closedSource,
+          capacity: s.capacity,
+          booked: s.activeOrders,
+          active_holds: s.activeHolds,
+          remaining: s.remaining,
+          booking_deadline: s.bookingDeadline.toISOString(),
+          paused: s.paused,
+          orders_by_status: Object.fromEntries(
+            ACTIVE_BRANCH_ORDER_STATUSES.map((st) => [
+              st,
+              byStatus.get(`${s.windowId}|${s.date}`)?.[st] ?? 0,
+            ]).filter(([, n]) => (n as number) > 0),
+          ),
+        })),
+      };
+    });
+    return {
+      branch_id: branchId,
+      today: localDateString(now),
+      horizon_days: BOOKING_HORIZON_DAYS,
+      lead_minutes: branch?.deliveryLeadMinutes ?? 0,
+      days,
+      template,
+    };
   }
 }

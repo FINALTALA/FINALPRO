@@ -3796,6 +3796,12 @@ model DeliveryWindow {
   createdAt   DateTime    @default(now())
 
   exceptions               DeliveryWindowException[]
+  /// «نوافذ التوصيل v1»: a paused window is not offered for booking; its
+  /// history and orders stay, and the owner can resume it (a window with
+  /// any order history can never be deleted). pausedReason is required
+  /// while paused (CHECK delivery_windows_paused_reason_check).
+  pausedAt     DateTime? @db.Timestamptz(3)
+  pausedReason String?
   branchOrders             BranchOrder[]
   checkoutReservationSlots CheckoutReservationSlot[]
 
@@ -3837,6 +3843,12 @@ model DeliveryWindowException {
   capacityOverride Int?
   createdAt        DateTime       @default(now())
 
+  /// «نوافذ التوصيل v1»: new bookings stopped for this date (existing
+  /// orders stay). Exclusive with isClosed, never with a capacity
+  /// override (CHECK delivery_window_exceptions_kind_check).
+  bookingStopped   Boolean        @default(false)
+  /// Why the date was closed / stopped (v1 actions always set it).
+  reason           String?
   /// At most one exception per (window, date) - editing an existing
   /// exception is PUT-by-id, not a second POST for the same date.
   @@unique([windowId, exceptionDate])

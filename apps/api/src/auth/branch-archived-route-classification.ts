@@ -46,6 +46,14 @@ export const BRANCH_ARCHIVED_DENY_ROUTES: readonly string[] = [
   'DELETE vendors/:vendorId/branches/:branchId/delivery-windows/:windowId',
   'POST vendors/:vendorId/branches/:branchId/delivery-windows/:windowId/exceptions',
   'DELETE vendors/:vendorId/branches/:branchId/delivery-windows/:windowId/exceptions/:exceptionId',
+  // «نوافذ التوصيل v1»: pause / resume, stop new bookings, close a day.
+  'POST vendors/:vendorId/branches/:branchId/delivery-windows/:windowId/pause',
+  'POST vendors/:vendorId/branches/:branchId/delivery-windows/:windowId/resume',
+  'POST vendors/:vendorId/branches/:branchId/delivery-windows/:windowId/stop-booking',
+  'POST vendors/:vendorId/branches/:branchId/delivery-windows/:windowId/reopen',
+  'POST vendors/:vendorId/branches/:branchId/delivery-windows/days/:date/stop-booking',
+  'POST vendors/:vendorId/branches/:branchId/delivery-windows/days/:date/close',
+  'POST vendors/:vendorId/branches/:branchId/delivery-windows/days/:date/reopen',
   'PUT vendors/:vendorId/branches/:branchId/operating-hours',
   'POST vendors/:vendorId/branches/:branchId/closures',
   'POST vendors/:vendorId/branches/:branchId/archive',
@@ -92,6 +100,8 @@ export const BRANCH_ARCHIVED_ALLOW_ROUTES: readonly string[] = [
   'GET vendors/:vendorId/branches/:branchId/operating-hours',
   'GET vendors/:vendorId/branches/:branchId/closures',
   // Sprint 20b: a plain read (same reasoning as operating-hours' own
+  // «نوافذ التوصيل v1»: the 7-day board (owner + that branch's employee).
+  'GET vendors/:vendorId/branches/:branchId/delivery-windows/board',
   // GET above).
   'GET vendors/:vendorId/branches/:branchId/minimum-order',
   // PD-5.1.

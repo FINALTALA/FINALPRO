@@ -1,94 +1,35 @@
 "use client";
 
-import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-import { apiFetch, ApiError } from "@/lib/api";
-import { clearSession, getSessionToken } from "@/lib/session";
+import { useEffect } from "react";
+import { useBranchWorkspace } from "@/components/owner/BranchWorkspace";
 import { loginRedirectHref } from "@/lib/loginRedirect";
 
-interface BranchDto {
-  id: string;
-  vendor_id: string;
-  name: string;
-  is_physical: boolean;
-  verification_status: string;
-}
-
-// Sprint 9 (RB-FUL-001): a delivery-window calendar belongs to one
-// branch, not to the vendor as a whole (PDR-022/024) - this is just a
-// branch picker in front of each branch's own calendar page.
-export default function DeliveryWindowsBranchPickerPage() {
+/**
+ * «نوافذ التوصيل v1»: the old store-level address now opens the «نوافذ
+ * التوصيل» tab of «إدارة الفروع» - the employee's own branch, or the owner's
+ * first active branch (the branch switcher in the header changes it). No
+ * branch yet -> the branches page.
+ */
+export default function DeliveryWindowsRedirectPage() {
   const params = useParams<{ vendorId: string }>();
   const router = useRouter();
-  const [branches, setBranches] = useState<BranchDto[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const ws = useBranchWorkspace(params.vendorId);
 
   useEffect(() => {
-    if (!getSessionToken()) {
+    if (ws.hydrated && !ws.token) {
       router.replace(loginRedirectHref());
       return;
     }
-    apiFetch<BranchDto[]>(`/vendors/${params.vendorId}/branches`)
-      .then(setBranches)
-      .catch((err) => {
-        if (err instanceof ApiError && err.status === 401) {
-          clearSession();
-          router.replace(loginRedirectHref());
-          return;
-        }
-        setError(err instanceof ApiError ? err.message : "تعذّر تحميل الفروع");
-      });
-  }, [params.vendorId, router]);
+    if (!ws.ready) return;
+    if (ws.ownBranchId) {
+      router.replace(`/vendor/${params.vendorId}/branches/${ws.ownBranchId}/delivery-windows`);
+      return;
+    }
+    if (ws.branches === null && !ws.error) return;
+    const first = ws.active[0];
+    router.replace(first ? `/vendor/${params.vendorId}/branches/${first.id}/delivery-windows` : `/vendor/${params.vendorId}/branches`);
+  }, [ws.hydrated, ws.token, ws.ready, ws.ownBranchId, ws.branches, ws.active, ws.error, params.vendorId, router]);
 
-  if (error && !branches) {
-    return (
-      <div className="page-shell">
-        <div className="error-banner" style={{ maxWidth: 560 }}>{error}</div>
-      </div>
-    );
-  }
-
-  if (!branches) {
-    return (
-      <div className="page-shell">
-        <p className="muted">جارٍ التحميل...</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="page-shell">
-      <div className="top-bar">
-        <div className="brand" style={{ margin: 0 }}>
-          تقويم مواعيد التوصيل
-        </div>
-        <Link href={`/vendor/${params.vendorId}`} className="button-link">
-          لوحة المتجر
-        </Link>
-      </div>
-
-      <p className="muted" style={{ maxWidth: 560 }}>
-        اختاري فرعاً لإدارة نوافذ التوصيل الأسبوعية والاستثناءات الخاصة به.
-        كل فرع له تقويمه المستقل.
-      </p>
-
-      <div style={{ maxWidth: 560, width: "100%", display: "flex", flexDirection: "column", gap: 12 }}>
-        {branches.length === 0 && <p className="muted">لا توجد فروع بعد.</p>}
-        {branches.map((branch) => (
-          <Link
-            key={branch.id}
-            href={`/vendor/${params.vendorId}/branches/${branch.id}/delivery-windows`}
-            className="card"
-            style={{ display: "block", textDecoration: "none", color: "inherit" }}
-          >
-            <div style={{ fontWeight: 600 }}>{branch.name}</div>
-            <div className="muted">
-              {branch.is_physical ? "فرع فعلي" : "فرع غير فعلي"}
-            </div>
-          </Link>
-        ))}
-      </div>
-    </div>
-  );
+  return <div className="skeleton" style={{ height: 240, width: "100%" }} aria-busy="true" data-testid="dw-redirect" />;
 }

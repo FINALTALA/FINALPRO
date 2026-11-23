@@ -1,4 +1,4 @@
-import { IsIn, IsOptional, Matches, MaxLength } from 'class-validator';
+import { IsIn, IsOptional, IsUUID, Matches, MaxLength } from 'class-validator';
 import { QUEUE_SORTS, QUEUE_TABS } from '../branch-order-queue.service';
 
 // «إدارة طلبات الفرع v1»: GET .../order-queue query. Every value is
@@ -25,6 +25,13 @@ export class BranchOrderQueueQueryDto {
   })
   q?: string;
 
+  /** «نوافذ التوصيل v1»: the 7-day board opens the queue on one date / window. */
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'date must be YYYY-MM-DD' })
+  date?: string;
+  @IsOptional()
+  @IsUUID()
+  window?: string;
   @IsOptional()
   @IsIn(QUEUE_SORTS)
   sort?: (typeof QUEUE_SORTS)[number];

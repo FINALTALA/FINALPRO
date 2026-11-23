@@ -48,6 +48,8 @@ export class BranchOrderQueueController {
         method: query.method,
         late: query.late === 'true',
         q: query.q,
+        date: query.date,
+        window: query.window,
         sort: query.sort,
         cursor: query.cursor,
         limit: query.limit ? Number(query.limit) : undefined,

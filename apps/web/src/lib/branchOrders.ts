@@ -129,6 +129,9 @@ export interface QueueFilters {
   late: boolean;
   q: string;
   sort: QueueSort | null;
+  /** «نوافذ التوصيل v1»: one delivery date / window (from the 7-day board). */
+  date: string | null;
+  window: string | null;
 }
 
 const base = (vendorId: string, branchId: string) => `/vendors/${vendorId}/branches/${branchId}`;
@@ -140,6 +143,8 @@ export function fetchQueue(vendorId: string, branchId: string, f: QueueFilters, 
   if (f.late) p.set("late", "true");
   if (f.q.trim()) p.set("q", f.q.trim());
   if (f.sort) p.set("sort", f.sort);
+  if (f.date) p.set("date", f.date);
+  if (f.window) p.set("window", f.window);
   if (cursor) p.set("cursor", cursor);
   const qs = p.toString();
   return apiFetch<QueuePage>(`${base(vendorId, branchId)}/order-queue${qs ? `?${qs}` : ""}`);

@@ -205,6 +205,8 @@ describe('Sprint 9 - BranchOrder model + delivery-window calendar setup (e2e)', 
           start_time: '11:00',
           end_time: '15:00',
           capacity: 8,
+          // «نوافذ التوصيل v1»: a capacity change carries a reason (audited)
+          reason: 'تعديل السعة',
         })
         .expect(200);
       expect(updated.body.start_time).toBe('11:00');
@@ -532,6 +534,8 @@ describe('Sprint 9 - BranchOrder model + delivery-window calendar setup (e2e)', 
           start_time: '10:00',
           end_time: '12:00',
           capacity: 9,
+          // «نوافذ التوصيل v1»: a capacity change carries a reason (audited)
+          reason: 'تعديل السعة',
         })
         .expect(200);
     });
@@ -1229,9 +1233,9 @@ describe('Sprint 9 - BranchOrder model + delivery-window calendar setup (e2e)', 
           capacity: 3,
         });
       expect(blockedUpdate.status).toBe(409);
-      expect(blockedUpdate.body.error.code).toBe(
-        'DELIVERY_WINDOW_HAS_ACTIVE_ORDERS',
-      );
+      // «نوافذ التوصيل v1»: a window with orders never changes its day/time
+      // (pause it and add a new window instead).
+      expect(blockedUpdate.body.error.code).toBe('DELIVERY_WINDOW_TIME_LOCKED');
 
       // A hard delete is blocked by the SAME still-active order, but
       // with the distinct "has order history" code - not the
@@ -1246,15 +1250,16 @@ describe('Sprint 9 - BranchOrder model + delivery-window calendar setup (e2e)', 
         'DELIVERY_WINDOW_HAS_ORDER_HISTORY',
       );
 
-      // Once the order reaches a terminal status, editing the window
-      // (time/capacity) is allowed again - a terminal order's own
-      // history doesn't depend on the window's live fields.
+      // «نوافذ التوصيل v1» (replaces the older "editable again once the
+      // order is terminal"): the order history keeps the day/time locked
+      // even after the order ends - the order was booked for THIS time -
+      // while the capacity stays editable (with a reason).
       await prisma.branchOrder.update({
         where: { id: branchOrder.id },
         data: { status: 'CANCELLED' },
       });
 
-      await request(app.getHttpServer())
+      const stillTimeLocked = await request(app.getHttpServer())
         .put(
           `/api/v1/vendors/${vendorId}/branches/${branchAId}/delivery-windows/${window.body.id}`,
         )
@@ -1264,6 +1269,22 @@ describe('Sprint 9 - BranchOrder model + delivery-window calendar setup (e2e)', 
           start_time: '09:00',
           end_time: '13:00',
           capacity: 3,
+        });
+      expect(stillTimeLocked.status).toBe(409);
+      expect(stillTimeLocked.body.error.code).toBe(
+        'DELIVERY_WINDOW_TIME_LOCKED',
+      );
+      await request(app.getHttpServer())
+        .put(
+          `/api/v1/vendors/${vendorId}/branches/${branchAId}/delivery-windows/${window.body.id}`,
+        )
+        .set('Authorization', `Bearer ${owner}`)
+        .send({
+          day_of_week: 3,
+          start_time: '09:00',
+          end_time: '12:00',
+          capacity: 5,
+          reason: 'سائق إضافي',
         })
         .expect(200);
 

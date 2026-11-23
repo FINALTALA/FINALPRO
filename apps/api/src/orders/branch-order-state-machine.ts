@@ -188,6 +188,32 @@ export const TERMINAL_BRANCH_ORDER_STATUSES: readonly BranchOrderStatus[] = [
   'REFUNDED',
 ];
 
+/**
+ * «نوافذ التوصيل v1»: THE definition of an ACTIVE order, everywhere a
+ * delivery window counts its orders (capacity, the 7-day board, the
+ * "no closing over active orders" rules). Active = every BranchOrderStatus
+ * except the ones meaning the order is over: COMPLETED (finished),
+ * CANCELLED (cancelled - a store refusal is also recorded as CANCELLED),
+ * REFUNDED. There is no separate "rejected" or "payment failed" status: a
+ * failed payment never creates a BranchOrder. So PLACED, PREPARING, SENT,
+ * DELIVERED, PICKED_UP, DELIVERY_FAILED and REFUND_REQUESTED all still hold
+ * their slot.
+ */
+export const ACTIVE_BRANCH_ORDER_STATUSES: readonly BranchOrderStatus[] = [
+  'PLACED',
+  'PREPARING',
+  'SENT',
+  'DELIVERED',
+  'PICKED_UP',
+  'DELIVERY_FAILED',
+  'REFUND_REQUESTED',
+];
+
+/** Prisma filter for an ACTIVE order's status. */
+export function activeOrderStatusFilter(): { in: BranchOrderStatus[] } {
+  return { in: [...ACTIVE_BRANCH_ORDER_STATUSES] };
+}
+
 export function isTerminalBranchOrderStatus(
   status: BranchOrderStatus,
 ): boolean {

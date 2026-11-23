@@ -18,7 +18,6 @@ import {
 } from '../../generated/prisma/client';
 import { OutboxEventService } from '../outbox/outbox-event.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { TERMINAL_BRANCH_ORDER_STATUSES } from '../orders/branch-order-state-machine';
 import { lockDeliveryWindowRow } from '../delivery-windows/delivery-window-locking.util';
 import { SubscriptionGateService } from '../subscriptions/subscription-gate.service';
 import { groupByVendorAndBranch, GroupingItem } from './checkout-grouping.util';
@@ -35,7 +34,11 @@ import {
   releaseReservationItemHolds,
 } from './stock-lock.util';
 import { computeAvailableSlots } from './slot-availability.util';
-import { daysFromToday, isWindowOpen } from './delivery-calendar.util';
+import { BOOKING_HORIZON_DAYS, daysFromToday } from './delivery-calendar.util';
+import {
+  assertSlotBookable,
+  loadSlotStates,
+} from '../delivery-windows/window-status';
 import {
   SandboxCardToken,
   SandboxPaymentService,
@@ -1099,10 +1102,10 @@ export class CheckoutService {
     // PD-5.1: "today" in Palestine time (delivery-calendar.util.ts).
     const now = new Date();
     const diffDays = daysFromToday(scheduledDate, now);
-    if (diffDays < 0 || diffDays > 2) {
+    if (diffDays < 0 || diffDays >= BOOKING_HORIZON_DAYS) {
       throw new ConflictException({
         code: 'INVALID_SLOT_DATE',
-        message: 'The slot date must be within the next three days',
+        message: 'The slot date must be within the next seven days',
       });
     }
     if (scheduledDate.getUTCDay() !== window.dayOfWeek) {
@@ -1111,39 +1114,6 @@ export class CheckoutService {
         message: "This date does not match the window's day of week",
       });
     }
-    // PD-5.1: the same rule as the slot list - a window that already
-    // started, or is closer than the branch's preparation time, is gone.
-    const branchLead = await tx.storeBranch.findUnique({
-      where: { id: branchId },
-      select: { deliveryLeadMinutes: true },
-    });
-    if (
-      !isWindowOpen(
-        scheduledDate,
-        window.startMinute,
-        now,
-        branchLead?.deliveryLeadMinutes ?? 0,
-      )
-    ) {
-      throw new ConflictException({
-        code: 'SLOT_NO_LONGER_AVAILABLE',
-        message:
-          'This delivery window has started or is too close to prepare for - choose a later one',
-      });
-    }
-
-    const exception = await tx.deliveryWindowException.findUnique({
-      where: {
-        windowId_exceptionDate: { windowId, exceptionDate: scheduledDate },
-      },
-    });
-    if (exception?.isClosed) {
-      throw new ConflictException({
-        code: 'SLOT_CLOSED',
-        message: 'This branch is closed on this date',
-      });
-    }
-    const effectiveCapacity = exception?.capacityOverride ?? window.capacity;
 
     const expiredSlots = await tx.checkoutReservationSlot.findMany({
       where: {
@@ -1158,28 +1128,17 @@ export class CheckoutService {
       });
     }
 
-    const [activeReservationCount, activeOrderCount] = await Promise.all([
-      tx.checkoutReservationSlot.count({
-        where: {
-          deliveryWindowId: windowId,
-          scheduledDate,
-          reservation: { expiresAt: { gt: new Date() } },
-        },
-      }),
-      tx.branchOrder.count({
-        where: {
-          deliveryWindowId: windowId,
-          scheduledDate,
-          status: { notIn: [...TERMINAL_BRANCH_ORDER_STATUSES] },
-        },
-      }),
-    ]);
-    if (activeReservationCount + activeOrderCount >= effectiveCapacity) {
-      throw new ConflictException({
-        code: 'SLOT_CAPACITY_EXCEEDED',
-        message: 'This slot is now fully booked - choose another',
-      });
-    }
+    // «نوافذ التوصيل v1»: the shared window state, under the window lock
+    // the caller already holds - past, closed (date or a planned branch
+    // closure), paused, booking stopped, lead time, then capacity.
+    const [state] = await loadSlotStates(tx, {
+      vendorId,
+      branchId,
+      dates: [scheduledDate],
+      now,
+      windowIds: [windowId],
+    });
+    assertSlotBookable(state);
 
     await tx.checkoutReservationSlot.create({
       data: {
@@ -1592,6 +1551,48 @@ export class CheckoutService {
       }
 
       const customerOrder = await tx.customerOrder.create({
+      // «نوافذ التوصيل v1»: every held delivery slot is re-checked HERE,
+      // under its window row lock (taken after the stock rows - the same
+      // order reserve() uses), against what may have changed since the
+      // hold: a planned branch closure, a closed or booking-stopped date,
+      // a paused window, a longer lead time, a lower capacity. The hold
+      // itself is excluded from the count (it already is the seat). Any
+      // failure rolls this whole transaction back - no order, no stock
+      // change, the customer's cart untouched - and orders confirmed
+      // earlier are never affected.
+      const slotsToRecheck = [...reservation.slots].sort((a, b) =>
+        a.deliveryWindowId < b.deliveryWindowId
+          ? -1
+          : a.deliveryWindowId > b.deliveryWindowId
+            ? 1
+            : 0,
+      );
+      for (const slot of slotsToRecheck) {
+        await lockDeliveryWindowRow(tx, slot.deliveryWindowId);
+        const [slotState] = await loadSlotStates(tx, {
+          vendorId: slot.vendorId,
+          branchId: slot.branchId,
+          dates: [slot.scheduledDate],
+          now: new Date(),
+          windowIds: [slot.deliveryWindowId],
+          excludeReservationId: reservation.id,
+        });
+        if (slotState?.status !== 'OPEN') {
+          throw new ConflictException({
+            code: 'SLOT_NO_LONGER_AVAILABLE',
+            message:
+              'The delivery time you held is no longer available - choose another time',
+            details: [
+              {
+                delivery_window_id: slot.deliveryWindowId,
+                scheduled_date: slot.scheduledDate.toISOString().slice(0, 10),
+                status: slotState?.status ?? 'NOT_FOUND',
+              },
+            ],
+          });
+        }
+      }
+
         data: {
           customerId,
           // Sprint 20b (FR-CART-012): a verbatim snapshot of the

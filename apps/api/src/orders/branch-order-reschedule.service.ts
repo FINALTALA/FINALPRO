@@ -6,11 +6,14 @@ import {
 import { Prisma } from '../../generated/prisma/client';
 import { lockDeliveryWindowRow } from '../delivery-windows/delivery-window-locking.util';
 import { BranchOrderService } from './branch-order.service';
-import { TERMINAL_BRANCH_ORDER_STATUSES } from './branch-order-state-machine';
 import {
+  BOOKING_HORIZON_DAYS,
   daysFromToday,
-  isWindowOpen,
 } from '../checkout/delivery-calendar.util';
+import {
+  assertSlotBookable,
+  loadSlotStates,
+} from '../delivery-windows/window-status';
 
 // Same tiny date-only helper CheckoutService keeps its own copy of.
 function parseDateOnly(s: string): Date {
@@ -90,14 +93,13 @@ export class BranchOrderRescheduleService {
     }
 
     const scheduledDate = parseDateOnly(newScheduledDateStr);
-    // PD-5.1: the same Palestine-time calendar and open-window rule as
-    // checkout (delivery-calendar.util.ts).
+    // PD-5.1: the same Palestine-time calendar as checkout.
     const now = new Date();
     const diffDays = daysFromToday(scheduledDate, now);
-    if (diffDays < 0 || diffDays > 2) {
+    if (diffDays < 0 || diffDays >= BOOKING_HORIZON_DAYS) {
       throw new ConflictException({
         code: 'INVALID_SLOT_DATE',
-        message: 'The slot date must be within the next three days',
+        message: 'The slot date must be within the next seven days',
       });
     }
     if (scheduledDate.getUTCDay() !== window.dayOfWeek) {
@@ -106,69 +108,21 @@ export class BranchOrderRescheduleService {
         message: "This date does not match the window's day of week",
       });
     }
-    const branchLead = await tx.storeBranch.findUnique({
-      where: { id: order.branchId },
-      select: { deliveryLeadMinutes: true },
-    });
-    if (
-      !isWindowOpen(
-        scheduledDate,
-        window.startMinute,
-        now,
-        branchLead?.deliveryLeadMinutes ?? 0,
-      )
-    ) {
-      throw new ConflictException({
-        code: 'SLOT_NO_LONGER_AVAILABLE',
-        message:
-          'This delivery window has started or is too close to prepare for - choose a later one',
-      });
-    }
 
-    const exception = await tx.deliveryWindowException.findUnique({
-      where: {
-        windowId_exceptionDate: {
-          windowId: newWindowId,
-          exceptionDate: scheduledDate,
-        },
-      },
+    // «نوافذ التوصيل v1»: the shared window state (window-status.ts) -
+    // the same rule as the slot list, reserve and confirm, including a
+    // planned branch closure, a paused window and a booking-stopped date.
+    // The order being moved is excluded from the count (it does not
+    // occupy the NEW slot yet).
+    const [state] = await loadSlotStates(tx, {
+      vendorId: order.vendorId,
+      branchId: order.branchId,
+      dates: [scheduledDate],
+      now,
+      windowIds: [newWindowId],
+      excludeOrderId: order.id,
     });
-    if (exception?.isClosed) {
-      throw new ConflictException({
-        code: 'SLOT_CLOSED',
-        message: 'This branch is closed on this date',
-      });
-    }
-    const effectiveCapacity = exception?.capacityOverride ?? window.capacity;
-
-    // Same capacity accounting as checkout's own reserve() - active
-    // (unexpired) CheckoutReservationSlot rows plus active (non-
-    // terminal) BranchOrder rows on this exact (window, date) pair -
-    // EXCLUDING this order's own current row, which would otherwise
-    // double-count itself against the NEW slot it does not occupy yet.
-    const [activeReservationCount, activeOrderCount] = await Promise.all([
-      tx.checkoutReservationSlot.count({
-        where: {
-          deliveryWindowId: newWindowId,
-          scheduledDate,
-          reservation: { expiresAt: { gt: new Date() } },
-        },
-      }),
-      tx.branchOrder.count({
-        where: {
-          deliveryWindowId: newWindowId,
-          scheduledDate,
-          status: { notIn: [...TERMINAL_BRANCH_ORDER_STATUSES] },
-          id: { not: order.id },
-        },
-      }),
-    ]);
-    if (activeReservationCount + activeOrderCount >= effectiveCapacity) {
-      throw new ConflictException({
-        code: 'SLOT_CAPACITY_EXCEEDED',
-        message: 'This slot is now fully booked - choose another',
-      });
-    }
+    assertSlotBookable(state);
 
     // If rescheduling out of DELIVERY_FAILED, the status transition
     // itself (DELIVERY_FAILED->SENT) goes through BranchOrderService

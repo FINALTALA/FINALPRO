@@ -1,0 +1,130 @@
+/* «نوافذ التوصيل v1»: the branch's delivery windows - the 7-day strip, the
+   chosen day's windows, the weekly template, then the preparation card.
+   The branch dashboard's tokens (.br-ws), logical properties only (RTL/LTR),
+   44px targets. Sections are not boxed (no panel in a panel): only a window
+   is a card. Phone: the strip scrolls sideways, owner actions open as a
+   bottom sheet. */
+
+.dw { container-type: inline-size; inline-size: 100%; display: grid; gap: 22px; color: var(--wz-ink); }
+.dw [hidden] { display: none !important; }
+/* grid children may shrink: the day strip scrolls inside, never widens the page */
+.dw > * { min-inline-size: 0; }
+.dw-muted { margin: 0; color: var(--wz-muted); font-size: 0.88rem; }
+.dw-head { display: grid; gap: 4px; }
+.dw-title { margin: 0; font-size: 1.25rem; }
+.dw-h2 { margin: 0 0 4px; font-size: 1.08rem; }
+.dw-h3 { margin: 0 0 6px; font-size: 0.95rem; }
+.dw-notice { margin: 0; padding: 8px 12px; border-radius: 10px; background: #e7f2ea; color: #245a3c; font-weight: 700; }
+.dw-link { color: var(--wz-wine); font-weight: 700; }
+
+/* ---- buttons */
+.dw-btn {
+  min-block-size: 44px; padding: 0 16px; border: 1px solid var(--wz-wine); border-radius: 10px;
+  background: var(--wz-wine); color: #fff; font: inherit; font-weight: 700; cursor: pointer;
+}
+.dw-btn:disabled { opacity: 0.6; cursor: default; }
+.dw-btn-quiet { background: var(--wz-paper); color: var(--wz-wine); border-color: var(--wz-line-strong); font-weight: 600; }
+.dw-btn-danger { background: #8a2b20; border-color: #8a2b20; }
+.dw-btn:focus-visible, .dw-day:focus-visible, .dw-link:focus-visible, .dw-input:focus-visible { outline: none; box-shadow: var(--wz-ring); }
+.dw-actions-inline { display: flex; flex-wrap: wrap; gap: 6px; }
+.dw-more { display: none; }
+
+/* ---- 7-day strip */
+.dw-strip { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
+.dw-day {
+  display: grid; gap: 2px; justify-items: start; min-block-size: 92px; padding: 10px 12px;
+  border: 1px solid var(--wz-line); border-radius: 12px; background: var(--wz-paper); color: var(--wz-ink);
+  font: inherit; text-align: start; cursor: pointer;
+}
+.dw-day:hover { border-color: rgba(100, 40, 59, 0.3); }
+.dw-day.is-on { border-color: var(--wz-wine); background: var(--wz-wine-soft); box-shadow: inset 0 -3px 0 var(--wz-wine); }
+.dw-day-name { font-weight: 800; }
+.dw-day-date { font-size: 0.82rem; color: var(--wz-muted); font-variant-numeric: tabular-nums; }
+.dw-day-status { font-size: 0.8rem; font-weight: 700; }
+.dw-day-load { font-size: 0.8rem; color: var(--wz-muted); }
+.dw-day.is-OPEN .dw-day-status { color: #245a3c; }
+.dw-day.is-CLOSED .dw-day-status, .dw-day.is-NOT_BOOKABLE .dw-day-status { color: #8a2b20; }
+/* quieter, never fainter: the text keeps its contrast (WCAG AA) */
+.dw-day.is-NO_WINDOWS, .dw-day.is-PAST { background: transparent; border-style: dashed; }
+
+/* ---- the chosen day */
+.dw-dayview, .dw-template { display: grid; gap: 12px; }
+.dw-dayview-head { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-start; justify-content: space-between; }
+.dw-badge {
+  display: inline-flex; align-items: center; min-block-size: 24px; padding: 0 10px; border-radius: 999px;
+  font-size: 0.78rem; font-weight: 700; background: var(--wz-sand-soft); color: var(--wz-sand-ink);
+}
+.dw-badge.is-OPEN { background: #e7f2ea; color: #245a3c; }
+.dw-badge.is-FULL { background: #fbeee0; color: #7a4a12; }
+.dw-badge.is-CLOSED, .dw-badge.is-NOT_BOOKABLE { background: #f7e3df; color: #8a2b20; }
+.dw-badge.is-PAUSED, .dw-badge.is-BOOKING_STOPPED { background: #ece6f3; color: #4b3670; }
+.dw-badge.is-CUTOFF_PASSED, .dw-badge.is-PAST, .dw-badge.is-NO_WINDOWS, .dw-badge.is-history { background: #eeeae7; color: #5c5350; }
+
+.dw-wins { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.dw-win {
+  display: grid; gap: 6px; align-content: start; padding: 12px 14px;
+  border: 1px solid var(--wz-line); border-radius: 12px; background: var(--wz-paper);
+}
+.dw-win.is-OPEN { border-inline-start: 4px solid #2f7a4e; }
+.dw-win.is-FULL { border-inline-start: 4px solid #b0702a; }
+.dw-win.is-CLOSED, .dw-win.is-PAUSED, .dw-win.is-BOOKING_STOPPED { border-inline-start: 4px solid #8a5a7a; }
+.dw-win-top { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.dw-win-time { font-weight: 800; font-variant-numeric: tabular-nums; }
+.dw-win-load { margin: 0; font-size: 0.9rem; }
+.dw-win-foot { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin-block-start: 4px; }
+.dw-ostatus { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; font-size: 0.8rem; }
+.dw-ostatus li { padding: 2px 8px; border-radius: 999px; background: var(--wz-wine-soft); }
+
+/* ---- weekly template */
+.dw-week { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px 20px; }
+.dw-tpl-list { list-style: none; margin: 0; padding: 0; border-block-start: 1px solid var(--wz-line); }
+.dw-tpl {
+  display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; min-block-size: 52px; padding: 8px 2px;
+  border-block-end: 1px solid var(--wz-line);
+}
+.dw-tpl.is-paused .dw-win-time { color: var(--wz-muted); text-decoration: line-through; }
+.dw-tpl .dw-actions-inline, .dw-tpl .dw-more { margin-inline-start: auto; }
+
+/* ---- dialog (a bottom sheet on a phone) */
+.dw-dialog {
+  border: 0; border-radius: 16px; padding: 20px; inline-size: min(500px, calc(100vw - 32px)); box-sizing: border-box;
+  background: var(--wz-paper, #fffdf9); color: var(--wz-ink, #2a1f22); box-shadow: 0 20px 50px rgba(42, 31, 34, 0.25);
+}
+.dw-dialog::backdrop { background: rgba(42, 31, 34, 0.45); }
+.dw-dialog-title { margin: 0 0 10px; font-size: 1.08rem; }
+.dw-form { display: grid; gap: 12px; }
+.dw-form .error-banner { margin: 0; }
+.dw-field { display: grid; gap: 4px; font-weight: 600; }
+.dw-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.dw-input {
+  box-sizing: border-box; min-block-size: 44px; padding: 8px 12px; font: inherit; color: var(--wz-ink); inline-size: 100%;
+  border: 1px solid var(--wz-line-strong); border-radius: 10px; background: var(--wz-paper);
+}
+.dw-input-num { max-inline-size: 160px; font-variant-numeric: tabular-nums; }
+.dw-days-pick { border: 0; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.dw-days-pick legend { font-weight: 600; margin-block-end: 4px; padding: 0; }
+.dw-check { display: inline-flex; align-items: center; gap: 6px; min-block-size: 40px; cursor: pointer; }
+.dw-check input { inline-size: 18px; block-size: 18px; accent-color: var(--wz-wine); }
+.dw-dialog-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-block-start: 6px; }
+.dw-sheet-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.dw-sheet-btn { inline-size: 100%; text-align: start; }
+
+/* ---- phone / narrow */
+@container (max-width: 720px) {
+  .dw-strip {
+    display: flex; overflow-x: auto; scroll-snap-type: x mandatory; gap: 8px; padding-block-end: 4px;
+    scrollbar-width: thin;
+  }
+  .dw-day { flex: 0 0 112px; min-block-size: 84px; scroll-snap-align: start; }
+  .dw-wins { grid-template-columns: 1fr; }
+  .dw-actions-inline { display: none; }
+  .dw-more { display: inline-flex; align-items: center; }
+  .dw-week { grid-template-columns: 1fr; }
+}
+@media (max-width: 720px) {
+  .dw-dialog {
+    margin: auto 0 0; inline-size: 100vw; max-inline-size: 100vw; border-radius: 18px 18px 0 0;
+    max-block-size: 90dvh; overflow-y: auto; padding-block-end: calc(20px + env(safe-area-inset-bottom, 0px));
+  }
+  .dw-row { grid-template-columns: 1fr; }
+}

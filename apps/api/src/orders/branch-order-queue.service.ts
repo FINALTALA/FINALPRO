@@ -51,6 +51,9 @@ export interface QueueQuery {
   method?: 'PICKUP' | 'DELIVERY';
   late?: boolean;
   q?: string;
+  /** «نوافذ التوصيل v1»: one delivery date / window (from the 7-day board). */
+  date?: string;
+  window?: string;
   sort?: QueueSort;
   cursor?: string;
   limit?: number;
@@ -200,6 +203,12 @@ export class BranchOrderQueueService {
       Prisma.sql`bo."vendorId" = ${vendorId}`,
       Prisma.sql`bo."branchId" = ${branchId}`,
     ];
+    if (query.date) {
+      filters.push(Prisma.sql`bo."scheduledDate" = ${query.date}::date`);
+    }
+    if (query.window) {
+      filters.push(Prisma.sql`bo."deliveryWindowId" = ${query.window}`);
+    }
     if (query.method) {
       filters.push(Prisma.sql`bo."fulfilmentMethod"::text = ${query.method}`);
     }
