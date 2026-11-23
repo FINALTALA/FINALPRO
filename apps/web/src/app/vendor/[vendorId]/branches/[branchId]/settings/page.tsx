@@ -2,6 +2,7 @@
 
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import BranchMinimumOrderSection from "@/components/owner/BranchMinimumOrderSection";
 import { BRANCHES_CHANGED, useBranchWorkspace, writeCurrentBranch } from "@/components/owner/BranchWorkspace";
 import { EmptyState, ErrorBanner } from "@/components/States";
 import { ApiError, apiFetch, newIdempotencyKey } from "@/lib/api";
@@ -11,7 +12,8 @@ import { loginRedirectHref } from "@/lib/loginRedirect";
 import { useT } from "@/lib/useLang";
 
 /**
- * «إعدادات الفرع / الأرشفة» (owner): the branch as the list knows it, and the
+ * «إعدادات الفرع / الأرشفة» (owner): the branch as the list knows it, its
+ * «الحد الأدنى للطلب» (moved here from its own tab), and the
  * archive action that used to sit on each branch card - the same request; the
  * server's own refusals are shown as they come (no client-side rules).
  */
@@ -78,6 +80,7 @@ export default function BranchSettingsPage() {
           </div>
         </dl>
       </section>
+      {!branch.archived_at && <BranchMinimumOrderSection vendorId={params.vendorId} branchId={branch.id} />}
       <section className="br-card br-danger" aria-labelledby="br-archive-title">
         <h2 id="br-archive-title">{t("br.settings.archive")}</h2>
         {error && <ErrorBanner message={error} />}

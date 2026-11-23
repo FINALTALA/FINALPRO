@@ -17,10 +17,10 @@ export interface BranchDto {
   archived_at: string | null;
 }
 
-export type BranchTab = "orders" | "stock" | "delivery-windows" | "hours" | "minimum-order" | "returns" | "settings";
+export type BranchTab = "orders" | "stock" | "delivery-windows" | "hours" | "returns" | "settings";
 export type BranchView = "overview" | BranchTab;
 /** The owner manages everything of a branch; an employee keeps the tools she already had (the API decides anyway). */
-const OWNER_TABS: BranchTab[] = ["orders", "stock", "delivery-windows", "hours", "minimum-order", "returns", "settings"];
+const OWNER_TABS: BranchTab[] = ["orders", "stock", "delivery-windows", "hours", "returns", "settings"];
 // «نوافذ التوصيل v1» + «ساعات العمل والإغلاقات v1»: the branch employee reads
 // their branch's delivery board and opening hours (no actions).
 const EMPLOYEE_TABS: BranchTab[] = ["orders", "stock", "delivery-windows", "hours", "returns"];
@@ -108,7 +108,6 @@ const PATHS: Record<BranchView | "pin" | "plus" | "chevron", ReactNode> = {
   stock: <><path d="M3.5 7.5 12 3l8.5 4.5v9L12 21l-8.5-4.5z" /><path d="M3.5 7.5 12 12l8.5-4.5M12 12v9" /></>,
   "delivery-windows": <><path d="M3 6h11v10H3zM14 9h4l3 3v4h-7" /><circle cx="7" cy="17.5" r="1.8" /><circle cx="17" cy="17.5" r="1.8" /></>,
   hours: <><circle cx="12" cy="12" r="8.5" /><path d="M12 7.5V12l3 2" /></>,
-  "minimum-order": <><path d="M4 12.5 12.5 4H20v7.5L11.5 20z" /><circle cx="16" cy="8" r="1.4" /></>,
   returns: <><path d="M9 7 5 11l4 4" /><path d="M5 11h9a5 5 0 0 1 0 10h-2" /></>,
   settings: <><circle cx="12" cy="12" r="3" /><path d="M12 2.8v2.4M12 18.8v2.4M4.2 7.5l2.1 1.2M17.7 15.3l2.1 1.2M4.2 16.5l2.1-1.2M17.7 8.7l2.1-1.2" /></>,
   pin: <><path d="M12 21s-6.5-6.2-6.5-11.2a6.5 6.5 0 0 1 13 0C18.5 14.8 12 21 12 21z" /><circle cx="12" cy="9.8" r="2.3" /></>,

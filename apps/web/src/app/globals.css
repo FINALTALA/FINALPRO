@@ -10223,6 +10223,16 @@ html[dir="ltr"] .br-start-go { transform: scaleX(-1); }
 
 /* settings and «إضافة فرع» */
 .br-pane { display: grid; gap: 14px; max-inline-size: 860px; }
+/* «الحد الأدنى للطلب» inside settings: one quiet card like its neighbours */
+.br-min-lead { margin: 0 0 12px; line-height: 1.6; }
+.br-min-form { display: grid; gap: 10px; justify-items: start; }
+.br-min-none { display: inline-flex; align-items: center; gap: 8px; min-block-size: 44px; font-weight: 600; cursor: pointer; }
+.br-min-none input { inline-size: 18px; block-size: 18px; accent-color: var(--wz-wine); }
+.br-min-field { margin: 0; }
+.br-min-input { display: flex; align-items: center; gap: 8px; }
+.br-min-input input { inline-size: 160px; min-block-size: 44px; font-variant-numeric: tabular-nums; }
+.br-min-notice { margin: 0; }
+#minimum-order { scroll-margin-block-start: 90px; }
 .br-danger { border-color: rgba(168, 50, 31, 0.22); }
 .br-danger h2 { color: #8a2a1a; }
 .br-archive { color: #a8321f; }
