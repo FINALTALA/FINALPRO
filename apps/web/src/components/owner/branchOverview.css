@@ -1,0 +1,49 @@
+/* «نظرة عامة» of a branch (2026-11-24): an operating overview - quiet
+   sections, lines not cards, logical properties (RTL / LTR). */
+
+.bov { display: grid; gap: 22px; max-inline-size: 860px; }
+.bov-sec { display: grid; gap: 10px; }
+.bov-title { margin: 0; font-size: 1.05rem; }
+.bov-muted { margin: 0; color: var(--wz-muted, #6e625b); font-size: 0.88rem; }
+
+/* «وضع الفرع الآن»: one line per fact */
+.bov-now { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.bov-now-item { display: flex; align-items: baseline; gap: 10px; line-height: 1.5; }
+.bov-dot { flex: none; inline-size: 9px; block-size: 9px; border-radius: 50%; background: var(--wz-sand, #c9a46a); transform: translateY(-1px); }
+.bov-now-item.is-ok .bov-dot { background: #2f7a4f; }
+.bov-now-item.is-off .bov-dot { background: #9b2c22; }
+
+/* «يحتاج متابعة»: action lines with their count */
+.bov-follow {
+  list-style: none; margin: 0; padding: 0; border-radius: 14px; overflow: hidden;
+  background: var(--wz-paper, #fffdf9); border: 1px solid var(--wz-line, #ece3dc);
+}
+.bov-follow > li + li { border-block-start: 1px solid var(--wz-line, #ece3dc); }
+.bov-follow-link {
+  display: flex; align-items: center; gap: 12px; min-block-size: 52px; padding: 8px 14px;
+  color: var(--wz-ink, #2a1f22); text-decoration: none;
+}
+.bov-follow-link:hover { background: rgba(100, 40, 59, 0.04); }
+.bov-follow-link:focus-visible, .bov-quick-link:focus-visible { outline: none; box-shadow: var(--wz-ring, 0 0 0 3px rgba(100, 40, 59, 0.35)); }
+.bov-follow-link:focus-visible { box-shadow: inset var(--wz-ring, 0 0 0 3px rgba(100, 40, 59, 0.35)); }
+.bov-count {
+  flex: none; min-inline-size: 34px; block-size: 30px; padding: 0 8px; border-radius: 999px; display: inline-flex;
+  align-items: center; justify-content: center; font-weight: 800; font-variant-numeric: tabular-nums;
+  background: var(--wz-wine-soft, #f4e8ec); color: var(--wz-wine, #64283b);
+}
+.bov-follow-text { flex: 1; min-inline-size: 0; font-weight: 600; }
+.bov-go { color: var(--wz-muted, #6e625b); font-size: 1.3rem; line-height: 1; }
+.bov-clear { margin: 0; padding: 10px 14px; border-radius: 12px; background: #e9f4ec; color: #245a3c; font-weight: 600; }
+
+/* «إجراءات سريعة»: four compact links */
+.bov-quick { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.bov-quick-link {
+  display: flex; align-items: center; justify-content: center; min-block-size: 44px; padding: 0 12px; border-radius: 12px;
+  border: 1px solid var(--wz-line-strong, #d9cfc8); background: var(--wz-paper, #fffdf9);
+  color: var(--wz-wine, #64283b); font-weight: 700; text-decoration: none; text-align: center;
+}
+.bov-quick-link:hover { border-color: var(--wz-wine, #64283b); }
+
+@media (max-width: 560px) {
+  .bov-quick { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

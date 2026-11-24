@@ -75,12 +75,13 @@ test.describe("Branch management", () => {
     expect(await frame.locator(".br-head-actions").evaluate((el) => el.contains(document.querySelector('[data-testid="br-switch"]')) && el.contains(document.querySelector('[data-testid="br-add"]')))).toBe(true);
     // only the active branches
     await expect(pick.locator("option")).toHaveText(["فرع رام الله", "فرع نابلس"]);
-    // «نظرة عامة»: one wide card + «ابدئي من هنا» (3 actions) - not a copy of every tool
+    // «نظرة عامة» (2026-11-24): the branch right now, what needs attention and
+    // four quick actions - no card repeating the branch, no store-wide count
     await expect(frame.getByTestId("br-tab-overview")).toHaveAttribute("aria-current", "page");
-    await expect(frame.getByTestId("br-summary").locator(".br-card")).toHaveCount(1);
-    await expect(frame.getByTestId("br-active-count")).toHaveText("2");
-    await expect(frame.locator(".br-start-link")).toHaveCount(3);
-    for (const k of ["orders", "stock", "hours"]) await expect(frame.getByTestId(`br-link-${k}`)).toBeVisible();
+    await expect(frame.getByTestId("br-overview")).toBeVisible({ timeout: 30_000 });
+    await expect(frame.getByTestId("br-summary").locator(".br-card")).toHaveCount(0);
+    await expect(frame.getByTestId("br-active-count")).toHaveCount(0);
+    for (const k of ["orders", "stock", "hours", "returns"]) await expect(frame.getByTestId(`br-link-${k}`)).toBeVisible();
     await expect(frame.locator(".hub-tile")).toHaveCount(0);
     // 2026-11-23: «الموظفون» is the owner's tab too
     for (const k of ["overview", "orders", "stock", "delivery-windows", "hours", "returns", "staff"]) {
@@ -96,7 +97,7 @@ test.describe("Branch management", () => {
     // switching: the whole dashboard follows
     await pick.selectOption(nablus);
     await expect(frame.getByTestId("br-current-name")).toHaveText("فرع نابلس", { timeout: 30_000 });
-    await expect(frame.getByTestId("br-summary")).toContainText("فرع نابلس");
+    await expect(frame.getByTestId("br-overview")).toBeVisible({ timeout: 30_000 });
 
     // a tool: the header and the bar stay, only the work area changes; no «رجوع» between tools
     await frame.getByTestId("br-tab-orders").click();
@@ -120,7 +121,8 @@ test.describe("Branch management", () => {
     await expect(frame.getByTestId("br-tab-hours")).toHaveAttribute("aria-current", "page", { timeout: 30_000 });
     await expect(page.getByTestId("management-frame-back")).toHaveCount(0);
     await frame.getByTestId("br-tab-overview").click();
-    await expect(frame.getByTestId("br-summary")).toContainText("فرع رام الله", { timeout: 30_000 });
+    await expect(frame.getByTestId("br-current-name")).toHaveText("فرع رام الله", { timeout: 30_000 });
+    await expect(frame.getByTestId("br-overview")).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId("management-frame-back")).toHaveCount(0);
   });
 

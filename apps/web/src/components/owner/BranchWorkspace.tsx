@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 import { ApiError, apiFetch } from "@/lib/api";
 import "@/lib/branchesText";
+import BranchOverviewNow from "./BranchOverviewNow";
 import { fillBr } from "@/lib/branchesText";
 import { useHydrated, useSessionToken, useWorkspaces } from "@/lib/useSession";
 import { useT } from "@/lib/useLang";
@@ -181,7 +182,8 @@ export function BranchShell({
               </h1>
               <p className="br-meta" data-testid="br-meta">
                 <span>{current.is_physical ? t("br.kind.physical") : t("br.kind.fulfilment")}</span>
-                <span>{t("br.verification")}: {t(v) !== v ? t(v) : current.verification_status}</span>
+                {/* «فرع فعلي · معتمد · نشط» - the word «التحقق» for a screen reader only */}
+                <span><span className="visually-hidden">{t("br.verification")}: </span>{t(v) !== v ? t(v) : current.verification_status}</span>
                 <span className={current.archived_at ? "br-meta-archived" : "br-meta-active"} data-testid="br-state">
                   {current.archived_at ? t("br.state.archived") : t("br.state.active")}
                 </span>
@@ -253,56 +255,16 @@ export function BranchShell({
   );
 }
 
-/** «نظرة عامة»: one wide card of what is known of the branch (no new numbers), then where to start. */
+/**
+ * «نظرة عامة» (2026-11-24): the current branch as an operating screen - no
+ * card repeating the branch (its name and «فرع فعلي · معتمد · نشط» are in the
+ * header), no store-wide numbers: «وضع الفرع الآن», «يحتاج متابعة», «إجراءات
+ * سريعة» (components/owner/BranchOverviewNow.tsx, existing reads only).
+ */
 export function BranchOverview({ vendorId, ws, branch }: { vendorId: string; ws: BranchWs; branch: BranchDto }) {
-  const t = useT();
-  const v = `br.v.${branch.verification_status}`;
-  const start: BranchTab[] = ws.isOwner ? ["orders", "stock", "hours"] : ["orders", "stock", "returns"];
   return (
     <div className="br-overview" data-testid="br-summary">
-      <section className="br-card" aria-labelledby="br-card-title">
-        <h2 id="br-card-title" dir="auto">{branch.name}</h2>
-        <dl className="br-facts">
-          <div>
-            <dt>{t("br.kind")}</dt>
-            <dd>{branch.is_physical ? t("br.kind.physical") : t("br.kind.fulfilment")}</dd>
-          </div>
-          <div>
-            <dt>{t("br.state")}</dt>
-            <dd>
-              <span className={`br-dot${branch.archived_at ? " is-archived" : ""}`} aria-hidden="true" />
-              {branch.archived_at ? t("br.state.archived") : t("br.state.active")}
-            </dd>
-          </div>
-          <div>
-            <dt>{t("br.verification")}</dt>
-            <dd>{t(v) !== v ? t(v) : branch.verification_status}</dd>
-          </div>
-          {ws.isOwner && (
-            <div>
-              <dt>{t("br.active_n")}</dt>
-              <dd data-testid="br-active-count">{ws.active.length}</dd>
-            </div>
-          )}
-        </dl>
-      </section>
-      <section className="br-start" aria-labelledby="br-start-title">
-        <h3 id="br-start-title">{t("br.start")}</h3>
-        <ul>
-          {start.map((k) => (
-            <li key={k}>
-              <Link href={branchViewHref(vendorId, branch.id, k)} replace className="br-start-link" data-testid={`br-link-${k}`}>
-                <span className="br-start-icon"><BranchIcon name={k} size={20} /></span>
-                <span className="br-start-text">
-                  <strong>{t(`br.nav.${k}`)}</strong>
-                  <span>{t(`br.start.${k}`)}</span>
-                </span>
-                <span className="br-start-go" aria-hidden="true">‹</span>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </section>
+      <BranchOverviewNow vendorId={vendorId} branchId={branch.id} isOwner={ws.isOwner} />
     </div>
   );
 }
