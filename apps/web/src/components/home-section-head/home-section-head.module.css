@@ -1,0 +1,62 @@
+/* =========================================================================
+   Homepage section heading (HomeSectionHead.tsx) - shared by every section
+   between the hero and the footer. Title at the reading start, aside at the
+   far end, a 1px beige rule under the row: 12px title -> rule, 24px rule ->
+   content. The header spans its section's content box, so the rule runs
+   edge to edge with the cards below.
+   The doubled class only out-ranks each section's `.root.root *` and the
+   page's `.home :is(h2)` / `.home-editorial h2` font rules.
+   ========================================================================= */
+
+.head.head {
+  --hsh-ink: #1c1917;
+  --hsh-muted: #57534e;
+  --hsh-rule: #ded3c4;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 24px;
+  margin: 0 0 24px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--hsh-rule);
+  text-align: start;
+}
+
+.head.head .title {
+  min-width: 0;
+  margin: 0;
+  color: var(--hsh-ink);
+  font-size: 24px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-align: start;
+  text-transform: none;
+}
+.head.head[data-lang="ar"] .title {
+  font-family: var(--hsh-ar-display), "Noto Naskh Arabic", serif !important;
+  line-height: 1.35;
+}
+.head.head[data-lang="en"] .title {
+  font-family: var(--hsh-en-display), "Cormorant Garamond", Georgia, serif !important;
+  /* Cormorant's only loaded cut on the site; it reads as a regular weight. */
+  font-weight: 500;
+  line-height: 1.15;
+}
+
+/* The far end of the row: quiet, never competing with the title. */
+.head.head .aside {
+  min-width: 0;
+  margin: 0;
+  color: var(--hsh-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.head.head .aside p { margin: 0; }
+
+@media (max-width: 599px) {
+  .head.head .title { font-size: 20px; }
+  /* A subtitle has no room beside a phone title: it drops under it,
+     still above the rule. */
+  .head.head .aside { flex-basis: 100%; font-size: 12.5px; }
+}

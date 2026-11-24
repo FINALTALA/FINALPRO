@@ -1,0 +1,153 @@
+/* =========================================================================
+   Homepage - shopping steps, right under the hero. Four steps on one thin
+   gold line: a small numbered ring, a line icon, a short title, one or two
+   lines of text. No heading, no cards, no shadows.
+   Wide screens: across. Phones: down, the line running vertically.
+   Font families need !important only to win over `.home *`.
+   ========================================================================= */
+
+.root {
+  --hsp-ink: #1c1917;
+  --hsp-muted: #57534e;
+  --hsp-gold: #b8925a;
+  --hsp-rule: #ded3c4;
+  --hsp-ring: 24px;
+  --hsp-gap: clamp(24px, 3vw, 48px);
+  color: var(--hsp-ink);
+}
+/* Doubled: out-ranks .home-editorial .wide-shell (globals.css), which
+   gives the page column its width and zeroes its padding. */
+.root.root { padding: clamp(18px, 1.8vw, 26px) 0 clamp(6px, .8vw, 12px); }
+.root.root * { font-family: inherit !important; }
+.root[data-lang="ar"] { font-family: "Finalpro Noto", "Segoe UI", sans-serif; }
+.root[data-lang="en"] { font-family: var(--hsp-en-text), "Inter", sans-serif; }
+
+.steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--hsp-gap);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Each step centred in its column: ring, icon, title and text on one axis. */
+.step { position: relative; min-width: 0; text-align: center; }
+
+/* The thin line joining each ring to the next one (the last has none). */
+.step:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  top: calc(var(--hsp-ring) / 2);
+  /* From just past this ring's centre line to just before the next. */
+  inset-inline-start: calc(50% + var(--hsp-ring) / 2 + 10px);
+  width: calc(100% + var(--hsp-gap) - var(--hsp-ring) - 20px);
+  height: 1px;
+  background: var(--hsp-rule);
+}
+
+.num {
+  display: grid;
+  margin-inline: auto;
+  place-items: center;
+  width: var(--hsp-ring);
+  height: var(--hsp-ring);
+  border: 1px solid var(--hsp-gold);
+  border-radius: 50%;
+  color: var(--hsp-gold);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: .04em;
+}
+.root .num { font-family: var(--hsp-en-text), "Inter", sans-serif !important; }
+
+.body { margin-top: 10px; }
+
+.icon {
+  display: block;
+  margin-inline: auto;
+  width: 18px;
+  height: 18px;
+  color: var(--hsp-gold);
+}
+.icon svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.root .title {
+  margin: 6px 0 0;
+  color: var(--hsp-ink);
+  font-weight: 400;
+}
+.root[data-lang="ar"] .title {
+  font-family: var(--hsp-ar-display), "Noto Naskh Arabic", serif !important;
+  font-size: 17px;
+  line-height: 1.4;
+}
+.root[data-lang="en"] .title {
+  font-family: var(--hsp-en-display), "Cormorant Garamond", Georgia, serif !important;
+  font-size: 19px;
+  font-weight: 500;
+  line-height: 1.15;
+}
+
+.root .text {
+  margin: 2px 0 0;
+  color: var(--hsp-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* ------------------------------------------------------------ tablets */
+
+@media (max-width: 899px) {
+  .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 40px; }
+  /* Two rows: the line joins only the pair on each row. */
+  .step:nth-child(2n)::before { display: none; }
+}
+
+/* ------------------------------------------------------------ phones
+   One column: the ring at the reading start, the text beside it, and the
+   line running down from ring to ring. */
+@media (max-width: 599px) {
+  .root { --hsp-ring: 30px; }
+  .root.root { padding-top: 32px; }
+  .num { font-size: 11px; }
+  .steps { grid-template-columns: 1fr; row-gap: 26px; }
+  .step {
+    display: grid;
+    text-align: start;
+    grid-template-columns: var(--hsp-ring) minmax(0, 1fr);
+    column-gap: 16px;
+    align-items: start;
+  }
+  .step:nth-child(2n)::before { display: block; }
+  .step:not(:last-child)::before {
+    top: calc(var(--hsp-ring) + 8px);
+    bottom: calc(-26px + 8px);
+    inset-inline-start: calc(var(--hsp-ring) / 2);
+    width: 1px;
+    margin: 0;
+    height: auto;
+  }
+  .body {
+    display: grid;
+    grid-template-columns: 22px minmax(0, 1fr);
+    column-gap: 10px;
+    margin-top: 4px;
+  }
+  .num, .icon { margin-inline: 0; }
+  .icon { grid-row: 1; width: 22px; height: 22px; margin-top: 2px; }
+  .root .title { grid-column: 2; margin: 0; }
+  .root .text { grid-column: 2; max-width: none; margin-top: 2px; }
+  .root[data-lang="ar"] .title { font-size: 18px; }
+  .root[data-lang="en"] .title { font-size: 20px; }
+}

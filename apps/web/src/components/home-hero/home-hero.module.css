@@ -15,8 +15,9 @@
   --hero-head: calc(clamp(8px, 1.2vw, 20px) + 73px);
   /* Total height, header area included; capped so the next section always
      shows below the fold. */
-  /* ~605px at 1440px, 620px at most: the next section shows sooner. */
-  --hero-h: clamp(560px, min(42vw, 100svh - 140px), 620px);
+  /* ~605px at 1440px, 620px at most; on shorter screens it gives a little
+     (520px at least) so the shopping steps under it show whole. */
+  --hero-h: clamp(520px, min(42vw, 100svh - 150px), 620px);
   --hero-ease: cubic-bezier(.22, .7, .24, 1);
   position: relative;
   isolation: isolate;
@@ -345,8 +346,9 @@
 }
 
 /* The hero's lower edge dissolving into the page background (globals.css
-   --color-bg). Eased stops: no visible band, no fog. Shared by every scene,
-   so it never changes during a transition; it ignores the pointer. */
+   --color-bg) - a very light, short fade. Eased stops: no visible band, no
+   fog. Shared by every scene, so it never changes during a transition; it
+   ignores the pointer. */
 .bottomFade {
   --fade-to: var(--color-bg, #f6f1e8);
   position: absolute;
@@ -786,7 +788,7 @@
   .copies { display: grid; padding-bottom: 30px; }
   /* Phones: the photo already settles into the ivory text area (.media
      ::after); it is that area's foot, with the dots, that meets the page -
-     so the ivory itself dissolves into the page background there. */
+     so the ivory itself dissolves (lightly) into the page background there. */
   .bottomFade,
   .textScrim { display: none; }
   .hero {

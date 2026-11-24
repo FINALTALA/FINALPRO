@@ -1,0 +1,80 @@
+/* =========================================================================
+   Homepage - How VIA works. Three steps, each a real VIA screenshot in a
+   light browser frame, a gold step number, a title and one line of copy.
+   Same heading as the other homepage sections.
+   Font families need !important only to win over `.home *`.
+   ========================================================================= */
+
+.root {
+  --hv-ink: #1c1917;
+  --hv-muted: #57534e;
+  --hv-gold: #b8925a;
+  --hv-line: rgba(231, 229, 228, .9);
+  --hv-gutter: clamp(16px, 3vw, 48px);
+  width: 100vw;
+  margin-inline: calc(50% - 50vw);
+  padding: clamp(28px, 3vw, 48px) var(--hv-gutter) clamp(40px, 5vw, 80px);
+  color: var(--hv-ink);
+}
+.root.root * { font-family: inherit !important; }
+.root[data-lang="ar"] { font-family: "Finalpro Noto", "Segoe UI", sans-serif; }
+.root[data-lang="en"] { font-family: var(--hv-en-text), "Inter", sans-serif; }
+
+/* The heading: HomeSectionHead (shared). Its rule spans the steps' own
+   width, which is capped (and centred) - not the full section box. */
+.root .head.head { max-width: 1440px; margin-inline: auto; }
+
+/* ------------------------------------------------------------ steps */
+
+.steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(20px, 2.4vw, 40px);
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 0;
+  list-style: none;
+}
+.step { display: flex; flex-direction: column; min-width: 0; }
+
+.frame {
+  overflow: hidden;
+  border: 1px solid var(--hv-line);
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 10px 30px -14px rgba(28, 25, 23, .22);
+  transition: transform .3s ease, box-shadow .3s ease;
+}
+.step:hover .frame { transform: translateY(-3px); box-shadow: 0 16px 34px -14px rgba(28, 25, 23, .28); }
+.chrome {
+  display: flex;
+  gap: 5px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--hv-line);
+  background: #faf8f5;
+  direction: ltr;
+}
+.chrome i { width: 7px; height: 7px; border-radius: 50%; background: #d6d3d1; }
+.shot { position: relative; display: block; aspect-ratio: 4 / 3; background: #f5f2ed; }
+.img { object-fit: cover; }
+
+.text { padding: 18px 4px 0; }
+.num {
+  display: block;
+  color: var(--hv-gold);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: .14em;
+}
+.root .stepTitle { margin: 6px 0 0; color: var(--hv-ink); font-size: 18px; font-weight: 500; line-height: 1.4; }
+.body { margin: 6px 0 0; color: var(--hv-muted); font-size: 14px; line-height: 1.75; }
+
+@media (max-width: 899px) {
+  .steps { grid-template-columns: 1fr; max-width: 560px; gap: 36px; }
+  .root .head.head { max-width: 560px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .frame { transition: none; }
+  .step:hover .frame { transform: none; }
+}

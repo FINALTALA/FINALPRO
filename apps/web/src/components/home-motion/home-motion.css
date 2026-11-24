@@ -1,0 +1,18 @@
+/* Homepage reveal (useHomeReveal.ts). Only applies once the page is armed
+   ([data-motion="on"]), so content is never hidden without JS, and it is
+   never armed under prefers-reduced-motion. Same easing and timing as the
+   Trending / Advertising pages' reveals. */
+
+[data-motion="on"] [data-hr] {
+  transition:
+    opacity .7s ease var(--hr-d, 0ms),
+    transform .9s cubic-bezier(.22, 1, .36, 1) var(--hr-d, 0ms);
+}
+[data-motion="on"] [data-hr]:not([data-hr-in]) {
+  opacity: 0;
+  transform: translate3d(0, 18px, 0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-motion="on"] [data-hr] { transition: none; opacity: 1; transform: none; }
+}
