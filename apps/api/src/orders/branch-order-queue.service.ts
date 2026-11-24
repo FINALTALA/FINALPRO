@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -50,6 +51,10 @@ export interface QueueQuery {
   tab?: QueueTab;
   method?: 'PICKUP' | 'DELIVERY';
   late?: boolean;
+  /** cash on delivery only */
+  pay?: 'COD';
+  /** placed today (Palestine date) */
+  created?: 'today';
   q?: string;
   /** «نوافذ التوصيل v1»: one delivery date / window (from the 7-day board). */
   date?: string;
@@ -100,31 +105,44 @@ export function shortName(name: string | null | undefined): string | null {
   return `${parts[0]} ${Array.from(parts[1])[0]}.`;
 }
 
+/** Escapes LIKE's own wildcards so a typed «%» or «_» is just a character. */
+function likeLiteral(s: string): string {
+  return s.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
 /** The search box: an order number (the first characters of its id, as the
- * customer sees it at checkout), the last 4 digits of the phone, or the
- * 6-digit pickup code. Anything else matches nothing. */
-function searchCondition(raw: string | undefined): Prisma.Sql | null {
-  const q = (raw ?? '')
-    .trim()
-    .replace(/^#/, '')
-    .replace(/\s+/g, '')
-    .toLowerCase();
-  if (!q) return null;
+ * customer sees it at checkout), the shopper's name (part of it, any case),
+ * or the last 4 digits of the phone. Anything else matches nothing.
+ *
+ * «إدارة طلبات الفرع v2» phase 1 (2026-11-24): the pickup code is NO LONGER
+ * a search key - a 6-digit query is only ever an order-number prefix. The
+ * code is checked only at the hand-over of one order. Every query is a bound
+ * parameter (never SQL text) and is ANDed with the viewer's branch / store
+ * scope, so a name search never reaches beyond the queue she may read. */
+export function searchCondition(raw: string | undefined): Prisma.Sql | null {
+  const text = (raw ?? '').trim().replace(/\s+/g, ' ');
+  if (!text) return null;
+  const compact = text.replace(/^#/, '').replace(/\s+/g, '').toLowerCase();
   const parts: Prisma.Sql[] = [];
-  if (/^[0-9a-f-]{4,36}$/.test(q)) {
-    parts.push(Prisma.sql`lower(bo.id) LIKE ${`${q}%`}`);
+  if (/^[0-9a-f-]{4,36}$/.test(compact)) {
+    parts.push(Prisma.sql`lower(bo.id) LIKE ${`${likeLiteral(compact)}%`}`);
   }
-  if (/^\d{4}$/.test(q)) {
-    parts.push(Prisma.sql`u.phone LIKE ${`%${q}`}`);
+  if (/^\d{4}$/.test(compact)) {
+    parts.push(Prisma.sql`u.phone LIKE ${`%${compact}`}`);
   }
-  if (/^\d{6}$/.test(q)) {
-    parts.push(
-      Prisma.sql`(bo."fulfilmentMethod" = 'PICKUP' AND bo."pickupCode" = ${q})`,
-    );
+  // a name: at least 2 letters, matched anywhere in the shopper's name
+  const name = text.replace(/^#/, '').trim();
+  if ((name.match(/\p{L}/gu) ?? []).length >= 2) {
+    parts.push(Prisma.sql`cp."displayName" ILIKE ${`%${likeLiteral(name)}%`}`);
   }
   if (parts.length === 0) return Prisma.sql`FALSE`;
   return Prisma.sql`(${Prisma.join(parts, ' OR ')})`;
 }
+
+/** Palestine time - the same calendar as delivery windows and opening hours.
+ * The timestamp columns hold UTC without a zone, hence the double AT TIME ZONE. */
+const ZONE = 'Asia/Hebron';
+const CREATED_TODAY = Prisma.sql`((bo."createdAt" AT TIME ZONE 'UTC') AT TIME ZONE ${ZONE})::date = (now() AT TIME ZONE ${ZONE})::date`;
 
 function isoDate(d: Date | null): string | null {
   return d ? d.toISOString().slice(0, 10) : null;
@@ -226,6 +244,10 @@ export class BranchOrderQueueService {
     if (query.method) {
       filters.push(Prisma.sql`bo."fulfilmentMethod"::text = ${query.method}`);
     }
+    if (query.pay === 'COD') {
+      filters.push(Prisma.sql`bo."paymentMethod"::text = 'COD'`);
+    }
+    if (query.created === 'today') filters.push(CREATED_TODAY);
     const search = searchCondition(query.q);
     if (search) filters.push(search);
     // the branch filter last: the all-branches counts per branch use the
@@ -534,6 +556,63 @@ export class BranchOrderQueueService {
       delivery_attempt_count: o.deliveryAttemptCount,
       is_own_order: ownOrder,
       actions: allowedActions(o, ownOrder),
+    };
+  }
+
+  // ------------------------------------------------------------------
+  // The internal prep sheet (one order)
+  // ------------------------------------------------------------------
+
+  /**
+   * «إدارة طلبات الفرع v2» phase 1 (2026-11-24): what the team needs to
+   * prepare ONE order - its number, branch, fulfilment, the pieces (title,
+   * colour, size, quantity; cancelled lines left out) and the shopper's /
+   * the team's notes. Never the pickup code, never a price, never the
+   * shopper's name, phone or address: an internal sheet, not a receipt.
+   * Only while the order still needs preparing (PLACED) or is being
+   * prepared (PREPARING); otherwise 409 PREP_SHEET_NOT_AVAILABLE. The same
+   * boundary as the details (the guard + another branch / store = 404).
+   */
+  async prepSheet(vendorId: string, branchId: string, branchOrderId: string) {
+    const branch = await this.requireBranch(vendorId, branchId);
+    const o = await this.requireOrder(vendorId, branchId, branchOrderId);
+    if (o.status !== 'PLACED' && o.status !== 'PREPARING') {
+      throw new ConflictException({
+        code: 'PREP_SHEET_NOT_AVAILABLE',
+        message:
+          'A prep sheet exists only for an order that is new or being prepared',
+      });
+    }
+    const items = o.items
+      .filter((i) => i.cancelledAt === null)
+      .map((i) => ({
+        id: i.id,
+        title_ar: i.titleArSnapshot ?? i.offerVariant.vendorOffer.titleAr,
+        title_en: i.titleEnSnapshot ?? i.offerVariant.vendorOffer.titleEn,
+        color_name_ar: i.colorNameArSnapshot ?? i.colorLabelSnapshot ?? null,
+        color_name_en: i.colorNameEnSnapshot ?? i.colorLabelSnapshot ?? null,
+        size_label:
+          i.sizeLabelSnapshot ?? i.sizeCodeSnapshot ?? i.offerVariant.sizeCode,
+        quantity: i.quantity,
+      }));
+    return {
+      id: o.id,
+      number: o.id.slice(0, 8),
+      branch_name: branch.name,
+      status: o.status,
+      fulfilment_method: o.fulfilmentMethod,
+      created_at: o.createdAt.toISOString(),
+      scheduled_date: isoDate(o.scheduledDate),
+      window: o.deliveryWindow
+        ? {
+            start_minute: o.deliveryWindow.startMinute,
+            end_minute: o.deliveryWindow.endMinute,
+          }
+        : null,
+      items,
+      item_count: items.reduce((n, i) => n + i.quantity, 0),
+      customer_note: o.customerNote,
+      internal_store_note: o.internalStoreNote,
     };
   }
 

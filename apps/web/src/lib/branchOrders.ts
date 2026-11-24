@@ -133,6 +133,11 @@ export interface QueueFilters {
   tab: QueueTab;
   method: Method | null;
   late: boolean;
+  /** «إدارة طلبات الفرع v2» phase 1: cash on delivery only */
+  cod: boolean;
+  /** placed today (Palestine date, decided by the server) */
+  today: boolean;
+  /** an order number, the shopper's name or the phone's last 4 digits (never a pickup code) */
   q: string;
   sort: QueueSort | null;
   /** «نوافذ التوصيل v1»: one delivery date / window (from the 7-day board). */
@@ -151,6 +156,8 @@ export function fetchQueue(vendorId: string, branchId: string, f: QueueFilters, 
   if (f.tab !== "active") p.set("tab", f.tab);
   if (f.method) p.set("method", f.method);
   if (f.late) p.set("late", "true");
+  if (f.cod) p.set("pay", "COD");
+  if (f.today) p.set("created", "today");
   if (f.q.trim()) p.set("q", f.q.trim());
   if (f.sort) p.set("sort", f.sort);
   if (f.date) p.set("date", f.date);
@@ -166,6 +173,41 @@ export const fetchOrder = (vendorId: string, branchId: string, id: string) =>
   apiFetch<OrderDetail>(`${base(vendorId, branchId)}/order-queue/${encodeURIComponent(id)}`);
 export const fetchTimeline = (vendorId: string, branchId: string, id: string) =>
   apiFetch<{ items: TimelineEvent[]; truncated: boolean }>(`${base(vendorId, branchId)}/order-queue/${encodeURIComponent(id)}/timeline`);
+
+/** What the search box may hold: letters (any script), digits, spaces, # - ' . (the server checks the same). */
+const SEARCH_DROP = new RegExp("[^#\\p{L}\\p{M}0-9\\s'.-]", "gu");
+export const cleanSearch = (s: string) => s.replace(SEARCH_DROP, "").slice(0, 40);
+
+/** «إدارة طلبات الفرع v2» phase 1: the internal prep sheet of one order - no
+ * pickup code, no price, no shopper name / phone / address (the server sends none). */
+export interface PrepSheet {
+  id: string;
+  number: string;
+  branch_name: string;
+  status: string;
+  fulfilment_method: Method;
+  created_at: string;
+  scheduled_date: string | null;
+  window: { start_minute: number; end_minute: number } | null;
+  items: {
+    id: string;
+    title_ar: string;
+    title_en: string;
+    color_name_ar: string | null;
+    color_name_en: string | null;
+    size_label: string | null;
+    quantity: number;
+  }[];
+  item_count: number;
+  customer_note: string | null;
+  internal_store_note: string | null;
+}
+export const fetchPrepSheet = (vendorId: string, branchId: string, id: string) =>
+  apiFetch<PrepSheet>(`${base(vendorId, branchId)}/order-queue/${encodeURIComponent(id)}/prep-sheet`);
+/** Only an order that is new or being prepared has a sheet (the server says 409 otherwise). */
+export const hasPrepSheet = (status: string) => status === "PLACED" || status === "PREPARING";
+export const prepSheetHref = (vendorId: string, branchId: string, id: string) =>
+  `/print/prep-sheet/${encodeURIComponent(vendorId)}/${encodeURIComponent(branchId)}/${encodeURIComponent(id)}`;
 
 /** The existing endpoint of each step (unchanged). */
 const ACTION_PATH: Partial<Record<ActionKey, string>> = {
@@ -239,6 +281,11 @@ export function exactTime(iso: string, lang: Lang): string {
 export function dayLabel(isoDate: string, lang: Lang): string {
   const [y, m, d] = isoDate.split("-").map(Number);
   return new Intl.DateTimeFormat(locale(lang), { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }).format(new Date(Date.UTC(y, m - 1, d)));
+}
+/** «26/11» - the queue row's short date (the full one is its tooltip). */
+export function shortDay(isoDate: string, lang: Lang): string {
+  const [y, m, d] = isoDate.split("-").map(Number);
+  return new Intl.DateTimeFormat(locale(lang), { day: "numeric", month: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(y, m - 1, d)));
 }
 /** «منذ 5 دقائق» / «in 2 hours». */
 export function relativeTime(iso: string, lang: Lang, now = Date.now()): string {

@@ -1,13 +1,16 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import SafeImage from "@/components/SafeImage";
 import { cameraPossible, startCameraReader } from "@/components/pos/BarcodeScanner";
 import {
   actionErrorKey,
   exactTime,
+  hasPrepSheet,
   lateBy,
   money,
+  prepSheetHref,
   relativeTime,
   runOrderAction,
   saveInternalNote,
@@ -332,9 +335,23 @@ export default function OrderDetailView({
 
         {/* العناصر */}
         <section className="bo-sec" aria-labelledby="bo-sec-items">
-          <h3 id="bo-sec-items" className="bo-sec-title">
-            {t("bo.sec.items")} <span className="bo-muted">({order.item_count === 1 ? t("bo.item_one") : fillBo(t("bo.items_n"), { n: order.item_count })})</span>
-          </h3>
+          <div className="bo-sec-head">
+            <h3 id="bo-sec-items" className="bo-sec-title">
+              {t("bo.sec.items")} <span className="bo-muted">({order.item_count === 1 ? t("bo.item_one") : fillBo(t("bo.items_n"), { n: order.item_count })})</span>
+            </h3>
+            {/* the internal prep sheet: only while the order is new or being prepared */}
+            {hasPrepSheet(order.status) && (
+              // the same tab (and the same frame): the store workspace lives in this
+              // tab's session storage only - a new tab would not be in the workspace
+              <Link href={prepSheetHref(vendorId, branchId, order.id)} className="bo-btn bo-btn-quiet bo-print" data-testid="bo-prep-print">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M7 9V3h10v6M7 18H5a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+                  <path d="M7 14h10v7H7z" />
+                </svg>
+                {t("bo.prep.print")}
+              </Link>
+            )}
+          </div>
           <ul className="bo-items" data-testid="bo-items">
             {order.items.map((i) => {
               const title = lang === "en" && i.title_en ? i.title_en : i.title_ar;

@@ -306,14 +306,14 @@ describe('Branch order queue, details and timeline (e2e)', () => {
     await get(queue(s, s.branchA, '?method=SHIP'), empA).expect(400);
   });
 
-  it('search: an order number, the last 4 phone digits or the pickup code - one box', async () => {
+  it('search: an order number, the shopper name or the last 4 phone digits - one box; never the pickup code', async () => {
+    const ids = (r: { body: { items: { id: string }[] } }) =>
+      r.body.items.map((i) => i.id);
     const byNumber = await get(
       queue(s, s.branchA, `?q=%23${o.soon.slice(0, 8)}`),
       empA,
     ).expect(200);
-    expect(byNumber.body.items.map((i: { id: string }) => i.id)).toEqual([
-      o.soon,
-    ]);
+    expect(ids(byNumber)).toEqual([o.soon]);
     const phone = (
       await prisma.branchOrder.findUniqueOrThrow({
         where: { id: o.later },
@@ -326,22 +326,245 @@ describe('Branch order queue, details and timeline (e2e)', () => {
       queue(s, s.branchA, `?q=${phone.slice(-4)}`),
       empA,
     ).expect(200);
-    expect(byPhone.body.items.map((i: { id: string }) => i.id)).toContain(
-      o.later,
-    );
+    expect(ids(byPhone)).toContain(o.later);
+    // a name: the first name, the family name, a part of it
+    for (const q of ['ليلى', 'محمود', 'ليلى محمود', 'ليلى  محمود ']) {
+      const r = await get(
+        queue(s, s.branchA, `?q=${encodeURIComponent(q)}`),
+        empA,
+      ).expect(200);
+      expect(ids(r)).toEqual([o.late]);
+    }
+    // the row still shows the short name only
+    const byName = await get(
+      queue(s, s.branchA, `?q=${encodeURIComponent('محمود')}`),
+      s.owner,
+    ).expect(200);
+    expect(byName.body.items[0].customer_short).toBe('ليلى م.');
+    expect(JSON.stringify(byName.body)).not.toContain('ليلى محمود');
+    // one letter is not a name search
+    const oneLetter = await get(
+      queue(s, s.branchA, `?q=${encodeURIComponent('ل')}`),
+      empA,
+    ).expect(200);
+    expect(oneLetter.body.items).toEqual([]);
+    // 2026-11-24: the pickup code is NOT a search key any more (a 6-digit
+    // query is only an order-number prefix, which these ids do not start with)
     const code = await pickupCodeOf(o.pickupNew);
     const byCode = await get(queue(s, s.branchA, `?q=${code}`), empA).expect(
       200,
     );
-    expect(byCode.body.items.map((i: { id: string }) => i.id)).toContain(
-      o.pickupNew,
-    );
-    // the found row still does not carry the code
-    expect(JSON.stringify(byCode.body)).not.toContain(`"${code}"`);
+    expect(
+      ids(byCode).filter((id) => !id.startsWith(code)), // (never, in practice)
+    ).toEqual([]);
     expect(JSON.stringify(byCode.body)).not.toContain('pickup_code');
+    const ownerByCode = await get(
+      queue(s, s.branchA, `?q=${code}`),
+      s.owner,
+    ).expect(200);
+    expect(ids(ownerByCode)).not.toContain(o.pickupNew);
     const none = await get(queue(s, s.branchA, '?q=hello'), empA).expect(200);
     expect(none.body.items).toEqual([]);
-    await get(queue(s, s.branchA, '?q=%3Cscript%3E'), empA).expect(400);
+    // only letters, digits, spaces and # - ' . : SQL / LIKE characters are refused,
+    // a quote is just a character
+    for (const bad of ['%3Cscript%3E', '%25', '_a', 'a%3D1', 'x%3B', '*']) {
+      await get(queue(s, s.branchA, `?q=${bad}`), empA).expect(400);
+    }
+    const quoted = await get(
+      queue(s, s.branchA, `?q=${encodeURIComponent("x' or 'a")}`),
+      empA,
+    ).expect(200);
+    expect(quoted.body.items).toEqual([]);
+  });
+
+  it('name search stays inside the queue the viewer may read: an employee never finds another branch, the owner finds every branch only in «كل الفروع»', async () => {
+    const t = await f.store();
+    const v = await f.offer(t, 10);
+    const inA = (await f.buy(await shopper('Yasmin Haddad'), t, v))
+      .branchOrderId;
+    const inB = (await f.buy(await shopper('Yasmin Saleh'), t, v))
+      .branchOrderId;
+    // a read-only test: only the branch of one order changes
+    await prisma.branchOrder.update({
+      where: { id: inB },
+      data: { branchId: t.branchB },
+    });
+    const ids = (r: { body: { items: { id: string }[] } }) =>
+      r.body.items.map((i) => i.id).sort();
+    const empTA = await employee(t, t.branchA, 'Reem staff');
+    // any case, a part of the name
+    const a = await get(queue(t, t.branchA, '?q=yasmin'), empTA).expect(200);
+    expect(ids(a)).toEqual([inA]);
+    expect(a.body.counts.active).toBe(1);
+    const aSaleh = await get(queue(t, t.branchA, '?q=SALEH'), empTA).expect(
+      200,
+    );
+    expect(aSaleh.body.items).toEqual([]);
+    expect(aSaleh.body.counts.active).toBe(0);
+    // her own branch only - the other branch's queue is refused before any search
+    await get(queue(t, t.branchB, '?q=yasmin'), empTA).expect(403);
+    await get(
+      `/api/v1/vendors/${t.vendorId}/order-queue?q=yasmin`,
+      empTA,
+    ).expect(403);
+    // another store's staff never reach this store
+    await get(queue(t, t.branchA, '?q=yasmin'), empA).expect(403);
+    await get(queue(t, t.branchA, '?q=yasmin'), otherOwner).expect(403);
+    // the owner: one branch in its own queue, both in «كل الفروع»
+    const ownA = await get(queue(t, t.branchA, '?q=Yasmin'), t.owner).expect(
+      200,
+    );
+    expect(ids(ownA)).toEqual([inA]);
+    const ownAll = await get(
+      `/api/v1/vendors/${t.vendorId}/order-queue?q=yasmin`,
+      t.owner,
+    ).expect(200);
+    expect(ids(ownAll)).toEqual([inA, inB].sort());
+    expect(ownAll.body.branch_counts).toEqual(
+      expect.arrayContaining([
+        { branch_id: t.branchA, active: 1 },
+        { branch_id: t.branchB, active: 1 },
+      ]),
+    );
+    // and never another store's shoppers
+    const elsewhere = await get(
+      queue(t, t.branchA, `?q=${encodeURIComponent('ليلى')}`),
+      t.owner,
+    ).expect(200);
+    expect(elsewhere.body.items).toEqual([]);
+  });
+
+  it('filters «دفع عند الاستلام» (pay=COD) and «أُنشئ اليوم» (created=today, Palestine date) - with tabs, counts, the branch and «كل الفروع»', async () => {
+    const t = await f.store();
+    const v = await f.offer(t, 10);
+    const codToday = (await f.buy(await shopper('أ'), t, v)).branchOrderId;
+    const onlineToday = (await f.buy(await shopper('ب'), t, v)).branchOrderId;
+    const codOld = (await f.buy(await shopper('ج'), t, v)).branchOrderId;
+    const codTodayB = (await f.buy(await shopper('د'), t, v)).branchOrderId;
+    // read-only test data: the payment of one, the age of one, the branch of one
+    await prisma.branchOrder.update({
+      where: { id: onlineToday },
+      data: { paymentMethod: 'ONLINE' },
+    });
+    await prisma.branchOrder.update({
+      where: { id: codOld },
+      data: { createdAt: new Date(Date.now() - 3 * 24 * 3600_000) },
+    });
+    await prisma.branchOrder.update({
+      where: { id: codTodayB },
+      data: { branchId: t.branchB },
+    });
+    const ids = (r: { body: { items: { id: string }[] } }) =>
+      r.body.items.map((i) => i.id).sort();
+    const emp = await employee(t, t.branchA, 'لمى موظفة');
+
+    const cod = await get(queue(t, t.branchA, '?pay=COD'), emp).expect(200);
+    expect(ids(cod)).toEqual([codToday, codOld].sort());
+    expect(cod.body.counts.active).toBe(2);
+    const today = await get(queue(t, t.branchA, '?created=today'), emp).expect(
+      200,
+    );
+    expect(ids(today)).toEqual([codToday, onlineToday].sort());
+    const both = await get(
+      queue(t, t.branchA, '?pay=COD&created=today'),
+      emp,
+    ).expect(200);
+    expect(ids(both)).toEqual([codToday]);
+    expect(both.body.counts).toMatchObject({ active: 1, new: 1, done: 0 });
+    // with a tab: none of them is done
+    const doneTab = await get(
+      queue(t, t.branchA, '?pay=COD&tab=done'),
+      emp,
+    ).expect(200);
+    expect(doneTab.body.items).toEqual([]);
+    // the owner's «كل الفروع»: every branch, the branch counts follow the filters
+    const all = await get(
+      `/api/v1/vendors/${t.vendorId}/order-queue?pay=COD&created=today`,
+      t.owner,
+    ).expect(200);
+    expect(ids(all)).toEqual([codToday, codTodayB].sort());
+    expect(all.body.branch_counts).toEqual(
+      expect.arrayContaining([
+        { branch_id: t.branchA, active: 1 },
+        { branch_id: t.branchB, active: 1 },
+      ]),
+    );
+    // closed values only
+    await get(queue(t, t.branchA, '?pay=ONLINE'), emp).expect(400);
+    await get(queue(t, t.branchA, '?created=yesterday'), emp).expect(400);
+    // still her branch only
+    await get(queue(t, t.branchB, '?pay=COD'), emp).expect(403);
+  });
+
+  it('the prep sheet of one order: number, branch, method, pieces, notes - never a pickup code, a price or the shopper; new or being prepared only', async () => {
+    const t = await f.store();
+    const v = await f.offer(t, 75);
+    const buyer = await shopper('سما يوسف');
+    const id = (await f.buy(buyer, t, v)).branchOrderId;
+    await prisma.branchOrder.update({
+      where: { id },
+      data: {
+        customerNote: 'لفّيها كهدية',
+        internalStoreNote: 'من الرف الثاني',
+      },
+    });
+    const code = await pickupCodeOf(id);
+    const emp = await employee(t, t.branchA, 'جنى موظفة');
+    const sheet = `/${id}/prep-sheet`;
+    for (const who of [t.owner, emp]) {
+      const r = await get(queue(t, t.branchA, sheet), who).expect(200);
+      expect(r.body).toMatchObject({
+        id,
+        number: id.slice(0, 8),
+        status: 'PLACED',
+        fulfilment_method: 'PICKUP',
+        item_count: 1,
+        customer_note: 'لفّيها كهدية',
+        internal_store_note: 'من الرف الثاني',
+      });
+      expect(r.body.branch_name).toEqual(expect.any(String));
+      expect(r.body.items).toHaveLength(1);
+      expect(Object.keys(r.body.items[0]).sort()).toEqual(
+        [
+          'color_name_ar',
+          'color_name_en',
+          'id',
+          'quantity',
+          'size_label',
+          'title_ar',
+          'title_en',
+        ].sort(),
+      );
+      const text = JSON.stringify(r.body);
+      expect(text).not.toContain(code);
+      for (const k of [
+        'pickup_code',
+        'price',
+        'total',
+        'amount',
+        'phone',
+        'customer"',
+        'address',
+      ]) {
+        expect(text).not.toContain(k);
+      }
+      expect(text).not.toContain('سما');
+    }
+    // the same boundary as the details
+    const empB = await employee(t, t.branchB, 'غيداء موظفة');
+    await get(queue(t, t.branchA, sheet), empB).expect(403);
+    await get(queue(t, t.branchA, sheet), otherOwner).expect(403);
+    await get(queue(t, t.branchB, sheet), t.owner).expect(404);
+    await get(queue(s, s.branchA, sheet), s.owner).expect(404);
+    // being prepared: still there; handed over: no sheet
+    await f.staff(t, emp, id, 'start-preparation', {}).expect(201);
+    const prep = await get(queue(t, t.branchA, sheet), emp).expect(200);
+    expect(prep.body.status).toBe('PREPARING');
+    await f
+      .staff(t, emp, id, 'pickup-handover', { pickup_code: code })
+      .expect(201);
+    const gone = await get(queue(t, t.branchA, sheet), emp).expect(409);
+    expect(gone.body.error.code).toBe('PREP_SHEET_NOT_AVAILABLE');
   });
 
   it("the row and the details per role: masked name in the list, the owner's money, never a pickup code", async () => {

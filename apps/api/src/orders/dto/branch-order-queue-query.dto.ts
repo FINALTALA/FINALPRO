@@ -17,11 +17,23 @@ export class BranchOrderQueueQueryDto {
   @IsIn(['true', 'false'])
   late?: 'true' | 'false';
 
-  /** an order number, the phone's last 4 digits or a pickup code */
+  /** «إدارة طلبات الفرع v2» phase 1: cash on delivery only */
+  @IsOptional()
+  @IsIn(['COD'])
+  pay?: 'COD';
+
+  /** «إدارة طلبات الفرع v2» phase 1: placed today (Palestine date) */
+  @IsOptional()
+  @IsIn(['today'])
+  created?: 'today';
+
+  /** an order number, the shopper's name, or the phone's last 4 digits -
+   * letters (any script), digits, spaces, «#», «-», «'» and «.» only.
+   * Never a pickup code (2026-11-24: the code is only checked at hand-over). */
   @IsOptional()
   @MaxLength(40)
-  @Matches(/^[#0-9A-Za-z\s-]*$/, {
-    message: 'q must be an order number, 4 phone digits or a pickup code',
+  @Matches(/^[#\p{L}\p{M}0-9\s'.-]*$/u, {
+    message: "q must be an order number, a shopper's name or 4 phone digits",
   })
   q?: string;
 

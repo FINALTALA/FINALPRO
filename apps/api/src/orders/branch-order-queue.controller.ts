@@ -48,6 +48,8 @@ export class BranchOrderQueueController {
         tab: query.tab,
         method: query.method,
         late: query.late === 'true',
+        pay: query.pay,
+        created: query.created,
         q: query.q,
         date: query.date,
         window: query.window,
@@ -74,6 +76,17 @@ export class BranchOrderQueueController {
       branchOrderId,
       this.viewer(req, user),
     );
+  }
+
+  /** The internal prep sheet of one order (new or being prepared only):
+   * no pickup code, no price, no shopper name / phone / address. */
+  @Get(':branchOrderId/prep-sheet')
+  prepSheet(
+    @Param('vendorId') vendorId: string,
+    @Param('branchId') branchId: string,
+    @Param('branchOrderId') branchOrderId: string,
+  ) {
+    return this.queue.prepSheet(vendorId, branchId, branchOrderId);
   }
 
   @Get(':branchOrderId/timeline')
@@ -120,6 +133,8 @@ export class VendorOrderQueueController {
         tab: query.tab,
         method: query.method,
         late: query.late === 'true',
+        pay: query.pay,
+        created: query.created,
         q: query.q,
         date: query.date,
         window: query.window,

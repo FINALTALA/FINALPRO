@@ -584,7 +584,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
   // menu or bottom tab bar belongs on top of them. LangEffect still
   // runs so <html lang/dir> stays correct for whichever page the
   // customer lands on next.
-  if (AUTH_PAGE_PATHS.has(pathname)) {
+  // «إدارة طلبات الفرع v2» phase 1: print pages (the internal prep sheet)
+  // are paper - no header, no menus, no bottom tab bar, on screen or printed.
+  if (AUTH_PAGE_PATHS.has(pathname) || pathname.startsWith("/print/")) {
     // Deliberately NOT the shared .app-main class - that reserves
     // header/bottom-nav space (globals.css) neither of which renders
     // here, which would just leave a dead gap under the auth pages'
