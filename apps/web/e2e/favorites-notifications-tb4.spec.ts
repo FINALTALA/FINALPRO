@@ -68,7 +68,8 @@ test.describe("TB-4: favourites and notifications", () => {
       await page.waitForTimeout(1_000);
       expect(calls.cards).toBe(cardsAfterLoad);
 
-      // Adding from the comparison page, then the header heart opens the favourites.
+      // Adding from the comparison page, then the personal page's «أحببته» shows it
+      // (2026-11-24: no heart in the header any more - the favourites stay on the personal page).
       await page.goto(`/compare/${added.canonicalProductId}`);
       const clear = page.getByRole("button", { name: "مسح الفلاتر" });
       await expect(page.locator(".compare-card").or(clear).first()).toBeVisible({ timeout: 20_000 });
@@ -76,8 +77,9 @@ test.describe("TB-4: favourites and notifications", () => {
       await page.getByRole("button", { name: "إضافة إلى المفضلة" }).click();
       await expect(page.getByRole("button", { name: "إزالة من المفضلة" })).toBeVisible();
       await page.goto("/");
-      await page.getByRole("link", { name: "أحببته" }).click();
-      await expect(page).toHaveURL(/\/profile\?tab=favorites/);
+      await expect(page.locator("header").getByRole("link", { name: "أحببته" })).toHaveCount(0);
+      await page.goto("/profile?tab=favorites");
+      await expect(page.getByRole("tab", { name: /أحببته/ })).toHaveAttribute("aria-selected", "true");
       await expect(card(added.canonicalProductId)).toBeVisible({ timeout: 20_000 });
       await expect(card(kept.canonicalProductId)).toBeVisible();
     });

@@ -103,7 +103,9 @@ export function workspaceEntry(w: WorkspaceInfo): WorkspaceEntry {
       id: `vendor:${w.vendor_id}`,
       label: w.vendor_legal_name,
       subtitle: "مالك المتجر - لوحة المتجر",
-      href: `/vendor/${w.vendor_id}`,
+      // 2026-11-24: straight to the store page (the owner's entry) - never
+      // through the old /vendor/<id> redirect, whose wait showed the legacy bar
+      href: w.storefront_slug ? `/store/${w.storefront_slug}` : `/vendor/${w.vendor_id}`,
       kind: "owner",
     };
   }

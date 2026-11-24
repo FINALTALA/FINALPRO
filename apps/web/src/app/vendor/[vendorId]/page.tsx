@@ -3,9 +3,10 @@
 import { useParams, useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { EmptyState } from "@/components/States";
+import StoreSkeleton from "@/components/store/StoreSkeleton";
 import { workspaceEntry } from "@/lib/nav";
 import { useFetch } from "@/lib/useFetch";
-import { useHydrated, useSessionToken, useWorkspaces } from "@/lib/useSession";
+import { useHydrated, useSessionToken, useWorkspaces } from "@/lib/useSession";
 import { loginRedirectHref } from "@/lib/loginRedirect";
 
 interface OwnerStorefrontDto {
@@ -48,13 +49,9 @@ export default function OwnerHubPage() {
     }
   }, [isOwner, router, storefront.data]);
 
-  if (!hydrated || !token || workspaces === null) {
-    return (
-      <div className="page-shell">
-        <div className="skeleton" style={{ height: 120, width: "100%", maxWidth: 1000 }} />
-      </div>
-    );
-  }
+  // 2026-11-24: the wait looks like the store page it opens (its own
+  // skeleton, no other header) - never the legacy bar or an empty page
+  if (!hydrated || !token || workspaces === null) return <StoreSkeleton />;
 
   if (!membership) {
     return (
@@ -71,11 +68,5 @@ export default function OwnerHubPage() {
     );
   }
 
-  return (
-    <div className="page-shell">
-      <div className="wide-shell" style={{ maxWidth: 1000 }}>
-        <div className="skeleton" style={{ height: 120, width: "100%" }} />
-      </div>
-    </div>
-  );
+  return <StoreSkeleton />;
 }

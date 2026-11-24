@@ -15,7 +15,7 @@ import { useLang } from "@/lib/useLang";
 
 registerTranslations({
   ar: {
-    "availability.back": "العودة إلى حسابي",
+    "availability.back": "العودة إلى الإعدادات",
     "availability.title": "تنبيهات عودة التوفر",
     "availability.subtitle": "سنخبرك عندما يعود اللون والمقاس اللذان اخترتهما للمخزون.",
     "availability.load_error": "تعذّر تحميل التنبيهات.",
@@ -28,7 +28,7 @@ registerTranslations({
     "availability.cancelling": "جارٍ الإلغاء…",
   },
   en: {
-    "availability.back": "Back to account",
+    "availability.back": "Back to settings",
     "availability.title": "Back-in-stock alerts",
     "availability.subtitle": "We'll let you know when your selected colour and size are back in stock.",
     "availability.load_error": "Couldn't load your alerts.",
@@ -95,7 +95,7 @@ export default function AvailabilityAlertsPage() {
   return (
     <main className="page-shell availability-alerts-page">
       <div className="wide-shell" style={{ maxWidth: 860 }}>
-        <Link href="/account" className="button-link">← {t("availability.back")}</Link>
+        <Link href="/profile?view=settings" className="button-link">← {t("availability.back")}</Link>
         <h1 className="page-title">{t("availability.title")}</h1>
         <p className="page-subtitle">{t("availability.subtitle")}</p>
         {alerts.error && alerts.status !== 401 && <ErrorBanner message={t("availability.load_error")} />}

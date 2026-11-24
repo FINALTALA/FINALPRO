@@ -115,7 +115,7 @@ export default function ChangePhonePage() {
       });
       if (patched.session_token) {
         setSessionToken(patched.session_token);
-        router.push("/account");
+        router.push("/profile?view=settings");
       } else {
         setStep("done-login-required");
       }
@@ -199,7 +199,7 @@ export default function ChangePhonePage() {
         )}
 
         <p className="muted" style={{ textAlign: "center", marginBottom: 0 }}>
-          <Link href="/account">{t("common.back")}</Link>
+          <Link href="/profile?view=settings">{t("common.back")}</Link>
         </p>
       </div>
     </div>

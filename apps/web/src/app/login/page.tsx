@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { FormEvent, Suspense, useState } from "react";
+import { FormEvent, Suspense, useEffect, useState } from "react";
 import AuthField from "@/components/AuthField";
 import AuthLogo from "@/components/AuthLogo";
 import { PhoneIcon } from "@/components/AuthIcons";
@@ -31,6 +31,28 @@ function LoginForm() {
   const [error, setError] = useState<string | null>(null);
   const [deactivated, setDeactivated] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // 2026-11-24: the sign-in page is always the whole site's page - never a
+  // form inside the account overlay or the store's management window. Loaded
+  // inside one of this site's frames, it moves the top window here (the same
+  // address, `next` kept); everything around it closes with that load.
+  useEffect(() => {
+    try {
+      if (window.top && window.top !== window.self) {
+        const url = new URL(window.location.href);
+        const nextParam = url.searchParams.get("next");
+        if (nextParam) {
+          // a frame's own `?embed=` layout must not come back as the whole page
+          const n = new URL(nextParam, url.origin);
+          n.searchParams.delete("embed");
+          url.searchParams.set("next", `${n.pathname}${n.search}${n.hash}`);
+        }
+        window.top.location.replace(`${url.pathname}${url.search}`);
+      }
+    } catch {
+      // a foreign parent: stay as we are
+    }
+  }, []);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();

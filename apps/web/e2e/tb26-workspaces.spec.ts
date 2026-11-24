@@ -391,7 +391,8 @@ test.describe("TB-26: shopping vs store/platform workspaces", () => {
     await page.evaluate((t) => localStorage.setItem("finalpro_session_token", t), s.owner.token);
     await page.goto(`/vendor/${s.vendorId}`);
     await page.getByTestId("ws-enter-confirm").click();
-    await expect(page.getByTestId("workspace-bar")).toBeVisible();
+    // 2026-11-24: the old owner hub only leads to the store page (no legacy bar on the way)
+    await expect(page).toHaveURL(new RegExp(`/store/${s.slug}$`), { timeout: 30_000 });
     expect((await storedWorkspaces(page)).session).toContain(s.vendorId);
 
     await page.goto("/account");

@@ -26,7 +26,8 @@ import {
   mobileTabs,
   workspaceEntry,
 } from "@/lib/nav";
-import { logout } from "@/lib/auth";
+import { signOutToLogin } from "@/lib/auth";
+import { loginHref } from "@/lib/loginRedirect";
 import { recordRoute } from "@/lib/navTrail";
 import { reportFrameState, startManageFrame } from "@/lib/manageFrame";
 import "@/lib/storePosText";
@@ -174,7 +175,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const usesViaHeader = isViaExperience || isShoppingProfilePage || isNotificationsPage || isCartPage;
   // Store pages carry their own identity bar (logo, name, icon), so the
   // platform header is not rendered on top of them.
-  const isStorePage = pathname.startsWith("/store/");
+  // 2026-11-24: the old owner hub address /vendor/<id> only redirects to the
+  // store page - it shows the store page's own skeleton, never the legacy bar.
+  const isStorePage = pathname.startsWith("/store/") || /^\/vendor\/[^/]+\/?$/.test(pathname);
   const isComparisonPage = pathname.startsWith("/compare/");
   const isAccountPage = pathname === "/account";
   const isFavoritesPage = pathname === "/account/favorites";
@@ -462,8 +465,30 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   async function signOut() {
     setMenuOpen(false);
-    await logout();
-    router.replace("/login");
+    setAccountModalOpen(false);
+    // the full sign-in page of the site (closes every window around it)
+    await signOutToLogin();
+  }
+
+  /**
+   * The person icon (2026-11-24): a shopping-only account goes straight to
+   * its personal page; an owner, a branch employee or platform staff (more
+   * than one context) gets the workspace chooser; signed out -> the full
+   * sign-in page. While the account's contexts are still loading the chooser
+   * is the safe answer (it shows the personal page's entry too).
+   */
+  function openAccount() {
+    setMenuOpen(false);
+    if (!token) {
+      router.push(loginHref(currentUrl()));
+      return;
+    }
+    if (workspaces !== null && workspaces.every((w) => w.type === "customer")) {
+      setAccountModalOpen(false);
+      router.push("/profile");
+      return;
+    }
+    setAccountModalOpen(true);
   }
 
   function toggleLanguage() {
@@ -685,17 +710,15 @@ export default function AppShell({ children }: { children: ReactNode }) {
                   <CloseIcon />
                 </button>
               </form>
-              <Link href="/profile?tab=favorites" className={homeStyles.toolLink} aria-label="أحببته">
-                <HeartIcon />
-              </Link>
               <Link
                 href="/account"
                 className={homeStyles.toolLink}
                 aria-label={NAV_LABELS[lang].account}
                 onClick={(event) => {
                   event.preventDefault();
-                  setAccountModalOpen(true);
+                  openAccount();
                 }}
+                data-testid="header-account"
               >
                 <UserIcon />
               </Link>
@@ -752,7 +775,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 aria-label="حسابي"
                 onClick={(event) => {
                   event.preventDefault();
-                  setAccountModalOpen(true);
+                  openAccount();
                 }}
               >
                 <UserIcon />
@@ -865,10 +888,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
                   aria-haspopup="dialog"
                   aria-expanded={accountModalOpen}
                   aria-label={t("appshell.account_menu_aria")}
-                  onClick={() => {
-                    setMenuOpen(false);
-                    setAccountModalOpen(true);
-                  }}
+                  onClick={() => openAccount()}
                 >
                   <UserIcon />
                 </button>
@@ -909,8 +929,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
                       className="menu-item"
                       onClick={(event) => {
                         event.preventDefault();
-                        setMenuOpen(false);
-                        setAccountModalOpen(true);
+                        openAccount();
                       }}
                     >
                       {NAV_LABELS[lang].account}
@@ -948,7 +967,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
               aria-current={activeTab ? "page" : undefined}
               onClick={tab.key === "account" ? (event) => {
                 event.preventDefault();
-                setAccountModalOpen(true);
+                openAccount();
               } : undefined}
             >
               {TAB_ICONS[tab.key]}

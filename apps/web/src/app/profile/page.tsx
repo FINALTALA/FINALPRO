@@ -8,6 +8,9 @@ import SafeImage from "@/components/SafeImage";
 import { ErrorBanner } from "@/components/States";
 import FavoritesPage from "@/app/account/favorites/page";
 import FollowingFeed from "@/components/FollowingFeed";
+import UserSettings from "@/components/profile/UserSettings";
+import { SETTINGS_HREF } from "@/lib/accountSettingsText";
+import { useT } from "@/lib/useLang";
 import { clearSession } from "@/lib/session";
 import { useFetch } from "@/lib/useFetch";
 import { useHydrated, useSessionToken } from "@/lib/useSession";
@@ -68,14 +71,24 @@ function ShoppingProfile() {
   // «أتابعه» links always land on their tab - also when /profile is
   // already open on the other one - and a sign-in returns to it.
   const activePanel: ProfilePanel = searchParams.get("tab") === "following" ? "following" : "favorites";
+  // 2026-11-24: «إعدادات المستخدم» is a view of this same page (?view=settings)
+  const settingsOpen = searchParams.get("view") === "settings";
+  const t = useT();
+  const gearRef = useRef<HTMLAnchorElement>(null);
+  const settingsHeadingRef = useRef<HTMLHeadingElement>(null);
   // The chosen tab is page state (not always in the URL): its own path, checked by loginHref.
-  const loginRedirect = loginHref(`/profile?tab=${activePanel}`);
+  const loginRedirect = loginHref(settingsOpen ? SETTINGS_HREF : `/profile?tab=${activePanel}`);
   function setActivePanel(panel: ProfilePanel) {
     // Only ?tab= changes: the «أتابعه» feed's selection stays in the URL,
     // so coming back from «أحببته» finds it as it was.
     const next = new URLSearchParams(searchParams.toString());
     next.set("tab", panel);
     router.replace(`/profile?${next.toString()}`, { scroll: false });
+  }
+  function closeSettings() {
+    const next = new URLSearchParams(searchParams.toString());
+    next.delete("view");
+    router.replace(`/profile${next.toString() ? `?${next.toString()}` : ""}`, { scroll: false });
   }
   function scrollFollowing(direction: "next" | "previous") {
     followingRailRef.current?.scrollBy({
@@ -94,6 +107,13 @@ function ShoppingProfile() {
   useEffect(() => {
     if (hydrated && !token) router.replace(loginRedirect);
   }, [hydrated, token, router, loginRedirect]);
+
+  const wasSettingsOpen = useRef(settingsOpen);
+  useEffect(() => {
+    if (settingsOpen && !wasSettingsOpen.current) settingsHeadingRef.current?.focus();
+    if (!settingsOpen && wasSettingsOpen.current) gearRef.current?.focus();
+    wasSettingsOpen.current = settingsOpen;
+  }, [settingsOpen]);
 
   useEffect(() => {
     if (activePanel !== "following") return;
@@ -125,10 +145,29 @@ function ShoppingProfile() {
             <span dir="ltr">{me.data?.phone ?? ""}</span>
             <small>حساب خاص للتسوّق والحفظ ومتابعة المتاجر</small>
           </div>
+          {!settingsOpen && (
+            <Link
+              ref={gearRef}
+              href={SETTINGS_HREF}
+              className="us-open shopping-profile-settings"
+              aria-label={t("us.open")}
+              onClick={(event) => {
+                event.preventDefault();
+                const next = new URLSearchParams(searchParams.toString());
+                next.set("view", "settings");
+                router.replace(`/profile?${next.toString()}`, { scroll: false });
+              }}
+              data-testid="profile-settings-open"
+            >
+              <GearIcon />
+              <span className="us-open-label">{t("us.open")}</span>
+            </Link>
+          )}
         </section>
 
         {me.error && me.status !== 401 && <ErrorBanner message={me.error} />}
 
+        {!settingsOpen && (
         <section className="shopping-profile-panel">
         <div className="shopping-profile-tabs" role="tablist" aria-label="محتوى بروفايل التسوق">
           <button type="button" role="tab" aria-selected={activePanel === "favorites"} className={activePanel === "favorites" ? "active" : ""} onClick={() => setActivePanel("favorites")}>
@@ -139,9 +178,12 @@ function ShoppingProfile() {
           </button>
         </div>
         </section>
+        )}
       </div>
 
-      {activePanel === "favorites" ? (
+      {settingsOpen ? (
+          <UserSettings phone={me.data?.phone ?? null} onBack={closeSettings} headingRef={settingsHeadingRef} />
+        ) : activePanel === "favorites" ? (
           <div className="shopping-profile-list" role="tabpanel">
             <div className="shopping-profile-panel-heading shopping-profile-favorites-heading"><p>المنتجات والعروض التي حفظتها للعودة إليها.</p></div>
             <FavoritesPage embedded />
@@ -174,5 +216,15 @@ function ShoppingProfile() {
           </div>
         ) : null}
     </main>
+  );
+}
+
+/** «الإعدادات» - a quiet gear (the app's own line style). */
+function GearIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+    </svg>
   );
 }

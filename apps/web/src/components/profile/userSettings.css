@@ -1,0 +1,59 @@
+/* «إعدادات المستخدم» (2026-11-24): a real settings list - grouped rows,
+   quiet lines, logical properties (RTL / LTR). Not cards. */
+
+.us { max-inline-size: 720px; margin-inline: auto; padding-block: 8px 32px; display: grid; gap: 22px; }
+.us-head { display: grid; gap: 6px; }
+.us-head h2 { margin: 0; font-size: 1.4rem; }
+.us-head h2:focus { outline: none; }
+.us-head h2:focus-visible { box-shadow: var(--wz-ring, 0 0 0 3px rgba(100, 40, 59, 0.35)); border-radius: 6px; }
+.us-lead { margin: 0; color: var(--wz-muted, #6e625b); font-size: 0.92rem; }
+.us-back {
+  justify-self: start; display: inline-flex; align-items: center; gap: 6px; min-block-size: 44px; padding: 0 4px;
+  border: 0; background: none; font: inherit; font-weight: 700; color: var(--wz-wine, #64283b); cursor: pointer;
+}
+.us-back-arrow { font-size: 1.4rem; line-height: 1; }
+
+.us-group { display: grid; gap: 8px; }
+.us-group-title {
+  margin: 0; padding-inline: 4px; font-size: 0.8rem; font-weight: 800; letter-spacing: 0.02em;
+  color: var(--wz-muted, #6e625b);
+}
+.us-list {
+  list-style: none; margin: 0; padding: 0; border-radius: 16px; overflow: hidden;
+  background: var(--wz-paper, #fffdf9); border: 1px solid var(--wz-line, #ece3dc);
+}
+.us-list > li + li { border-block-start: 1px solid var(--wz-line, #ece3dc); }
+.us-row {
+  inline-size: 100%; display: flex; align-items: center; gap: 12px; min-block-size: 60px; padding: 10px 16px;
+  border: 0; background: none; font: inherit; text-align: start; color: var(--wz-ink, #2a1f22);
+  text-decoration: none; cursor: pointer;
+}
+.us-row:hover { background: rgba(100, 40, 59, 0.04); }
+.us-row:focus-visible { outline: none; box-shadow: inset var(--wz-ring, 0 0 0 3px rgba(100, 40, 59, 0.35)); }
+.us-row:disabled { opacity: 0.6; cursor: default; }
+.us-row-text { flex: 1; min-inline-size: 0; display: grid; gap: 2px; }
+.us-row-title { font-weight: 700; }
+.us-row-hint { font-size: 0.84rem; color: var(--wz-muted, #6e625b); }
+.us-row-value { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.us-phone { font-variant-numeric: tabular-nums; color: var(--wz-muted, #6e625b); }
+.us-row-action { color: var(--wz-wine, #64283b); font-weight: 700; }
+.us-row.is-danger .us-row-title { color: #8a2b20; }
+.us-chevron { flex: none; color: var(--wz-muted, #6e625b); }
+[dir="rtl"] .us-chevron { transform: scaleX(-1); }
+
+/* the personal page's quiet settings button (beside the identity) */
+.us-open {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-block-size: 44px; min-inline-size: 44px;
+  padding: 0 14px; border-radius: 999px; border: 1px solid var(--wz-line-strong, #d9cfc8); background: var(--wz-paper, #fffdf9);
+  color: var(--wz-ink, #2a1f22); font: inherit; font-weight: 700; text-decoration: none; cursor: pointer;
+}
+.us-open:hover { border-color: var(--wz-wine, #64283b); color: var(--wz-wine, #64283b); }
+.us-open:focus-visible { outline: none; box-shadow: var(--wz-ring, 0 0 0 3px rgba(100, 40, 59, 0.35)); }
+
+@media (max-width: 560px) {
+  .us-row { padding-inline: 12px; }
+  .us-open-label { display: none; }
+}
+
+/* the settings button sits at the end of the personal page's identity row */
+.shopping-profile-identity .shopping-profile-settings { margin-inline-start: auto; align-self: flex-start; }

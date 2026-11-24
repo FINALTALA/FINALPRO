@@ -9,7 +9,7 @@ import { clearSession } from "@/lib/session";
 import { registerTranslations } from "@/lib/i18n";
 import { useT } from "@/lib/useLang";
 import { useLoginRedirectHref, useLoginWhenSessionLost } from "@/lib/loginRedirect";
-import { useHydrated, useSessionToken } from "@/lib/useSession";
+import { useHydrated, useSessionToken } from "@/lib/useSession";
 
 registerTranslations({
   ar: {
@@ -103,7 +103,7 @@ export default function DeactivateAccountPage() {
         </button>
 
         <p className="muted" style={{ textAlign: "center", marginBottom: 0, marginTop: 14 }}>
-          <Link href="/account">{t("deactivate.cancel")}</Link>
+          <Link href="/profile?view=settings">{t("deactivate.cancel")}</Link>
         </p>
       </div>
     </div>

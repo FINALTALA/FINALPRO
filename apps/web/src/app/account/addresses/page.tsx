@@ -10,7 +10,7 @@ import { clearSession } from "@/lib/session";
 import { registerTranslations } from "@/lib/i18n";
 import { useT } from "@/lib/useLang";
 import { useFetch } from "@/lib/useFetch";
-import { useHydrated, useSessionToken } from "@/lib/useSession";
+import { useHydrated, useSessionToken } from "@/lib/useSession";
 import { loginRedirectHref, useLoginRedirectHref, useLoginWhenSessionLost } from "@/lib/loginRedirect";
 
 registerTranslations({
@@ -196,7 +196,7 @@ export default function AddressesPage() {
         </ul>
 
         <p className="muted" style={{ marginTop: 16 }}>
-          <Link href="/account">{t("common.back")}</Link>
+          <Link href="/profile?view=settings" data-testid="addresses-back">{t("common.back")}</Link>
         </p>
       </div>
     </div>

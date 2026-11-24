@@ -2,18 +2,18 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type MouseEvent, useEffect, useState, useSyncExternalStore } from "react";
+import { type MouseEvent, useEffect, useSyncExternalStore } from "react";
 import { EmptyState, ErrorBanner } from "@/components/States";
 import { BagIcon, StoreManageIcon, UserIcon } from "@/components/Icons";
 import { workspaceEntry } from "@/lib/nav";
-import AddressForm, { SavedAddress } from "@/components/AddressForm";
-import { logout } from "@/lib/auth";
+import { signOutToLogin } from "@/lib/auth";
 import { clearSession } from "@/lib/session";
 import { WORKSPACE_EVENT, hasWorkspace, workspaceEntryHref, workspaceSnapshot } from "@/lib/workspaceSession";
 import { enterWorkspaceNow } from "@/lib/workspaceActions";
 import { useFetch } from "@/lib/useFetch";
-import { useHydrated, useSessionToken, useWorkspaces } from "@/lib/useSession";
+import { useHydrated, useSessionToken, useWorkspaces } from "@/lib/useSession";
 import { loginRedirectHref, useLoginRedirectHref, useLoginWhenSessionLost } from "@/lib/loginRedirect";
+import { SETTINGS_HREF } from "@/lib/accountSettingsText";
 
 interface MeDto {
   id: string;
@@ -42,11 +42,15 @@ function subscribeWorkspaces(onChange: () => void): () => void {
 const inAccountOverlay = () =>
   new URLSearchParams(window.location.search).get("embed") === "account";
 
-// Sprint 13: "حسابي" - the account page (also the mobile bottom-nav
-// destination). Profile, quick links, and the workspace switcher:
-// customer (shopping), owner (store dashboard) and employee (own branch
-// only). The switcher only chooses where to go and remembers the
-// choice; every store/branch route is still authorized by the backend.
+// Sprint 13: "حسابي" - the workspace chooser (also the mobile bottom-nav
+// destination): shopping, the owner's store, the employee's branch, the
+// platform. 2026-11-24: it is the chooser only - an account with nothing
+// but shopping never sees it (it goes straight to its personal page), the
+// shopping card opens that same personal page, and the account's own
+// settings (addresses, back-in-stock alerts, phone, sign-out, closing the
+// account) live in the personal page's «إعدادات المستخدم». The chooser only
+// chooses where to go; every store/branch route is still authorized by the
+// backend.
 export default function AccountPage() {
   const loginLink = useLoginRedirectHref();
   const router = useRouter();
@@ -57,9 +61,7 @@ export default function AccountPage() {
   const me = useFetch<MeDto>(token ? "/customers/me" : null, true);
   const workspaces = useWorkspaces(token);
   const wsSnapshot = useSyncExternalStore(subscribeWorkspaces, workspaceSnapshot, () => "");
-  const addressList = useFetch<SavedAddress[]>(token ? "/customers/me/addresses" : null, true);
-  const [added, setAdded] = useState<SavedAddress[]>([]);
-  const [showAddressForm, setShowAddressForm] = useState(false);
+  const shoppingOnly = workspaces !== null && workspaces.every((w) => w.type === "customer");
 
   function leaveAccountPanel(path: string) {
     // A workspace is a destination, not a nested account detail. When this
@@ -77,7 +79,7 @@ export default function AccountPage() {
     const target = event.target as HTMLElement;
     // Cards and every useful control keep their natural click behavior.
     // Only the deliberately empty account backdrop dismisses the overlay.
-    if (target.closest("button, a, input, select, textarea, label, .hub-tile, .workspace-icon-action, .address-list li, .card")) {
+    if (target.closest("button, a, input, select, textarea, label, .hub-tile, .workspace-icon-action, .card")) {
       return;
     }
     window.parent.postMessage({ type: "close-account-overlay" }, window.location.origin);
@@ -86,12 +88,12 @@ export default function AccountPage() {
   // TB-26: choosing a workspace card here IS the explicit step - it enters
   // the workspace at once (the API issues the token after its own checks)
   // and opens its home. If entering fails, the entry page shows why.
-  // Shopping is simply the home page.
+  // Shopping is the personal page (2026-11-24).
   async function openWorkspace(w: NonNullable<typeof workspaces>[number]) {
     const entry = workspaceEntry(w);
     if (entry.disabled) return;
     if (w.type === "customer") {
-      leaveAccountPanel("/");
+      leaveAccountPanel(entry.href);
       return;
     }
     const ref = w.type === "platform" ? ({ type: "platform" } as const) : ({ type: "vendor", vendor_id: w.vendor_id } as const);
@@ -110,7 +112,14 @@ export default function AccountPage() {
     }
   }, [me.status, router]);
 
-  if (!hydrated) {
+  // shopping only: no chooser - the personal page itself
+  useEffect(() => {
+    if (!shoppingOnly) return;
+    if (inAccountOverlay() && window.parent !== window) window.parent.location.assign("/profile");
+    else router.replace("/profile");
+  }, [shoppingOnly, router]);
+
+  if (!hydrated || shoppingOnly) {
     return (
       <div className="page-shell">
         <div className="skeleton" style={{ height: 96, width: "100%", maxWidth: 720 }} />
@@ -138,11 +147,8 @@ export default function AccountPage() {
     <div className="page-shell" onMouseDown={closeOnAccountBackground}>
       <button
         className="button button-secondary account-signout"
-        onClick={async () => {
-          await logout();
-          // An explicit sign-out: a plain sign-in page, no `next`.
-          router.replace("/login");
-        }}
+        onClick={() => void signOutToLogin()}
+        data-testid="account-signout"
       >
         تسجيل الخروج
       </button>
@@ -179,6 +185,7 @@ export default function AccountPage() {
                 className={`workspace-icon-action${isActive ? " active" : ""}`}
                 disabled={entry.disabled}
                 onClick={() => openWorkspace(w)}
+                data-testid={`account-workspace-${entry.kind}`}
               >
                 <span className="workspace-icon-graphic">{icon}</span>
                 <span className="workspace-icon-label">{entry.label}</span>
@@ -189,56 +196,21 @@ export default function AccountPage() {
           })}
         </div>
 
-        {/* Sprint 22: links into the new account/addresses/phone/deactivate
-            screens - those pages are fully bilingual, this link text stays
-            plain Arabic to match this (pre-S22, untouched) page's own style. */}
-        <div className="hub-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", marginBottom: 8 }}>
-          <Link href="/account/addresses" className="hub-tile"><strong>عناويني</strong><span>إدارة العناوين، تعديلها وحذفها</span></Link>
-          <Link href="/account/availability-alerts" className="hub-tile"><strong>تنبيهات عودة التوفر</strong><span>الألوان والمقاسات التي تنتظرينها</span></Link>
-          <Link href="/account/phone" className="hub-tile"><strong>تغيير رقم الهاتف</strong><span>تحديث رقم الدخول إلى حسابك</span></Link>
-          <Link href="/account/deactivate" className="hub-tile"><strong>إغلاق الحساب</strong><span>تعطيل حسابك مؤقتاً</span></Link>
-        </div>
-
-        <div className="section-heading">
-          <h2>عناوين التوصيل</h2>
-          {!showAddressForm && (
-            <button className="button-link" onClick={() => setShowAddressForm(true)}>
-              + عنوان جديد
-            </button>
-          )}
-        </div>
-        {addressList.error && addressList.status !== 401 && <ErrorBanner message={addressList.error} />}
-        {showAddressForm && (
-          <div className="card" style={{ maxWidth: "none", marginBottom: 12 }}>
-            <AddressForm
-              onCancel={() => setShowAddressForm(false)}
-              onCreated={(a) => {
-                setAdded((prev) => [a, ...prev]);
-                setShowAddressForm(false);
-              }}
-            />
-          </div>
-        )}
-        {(() => {
-          const all = [...added, ...(addressList.data ?? []).filter((a) => !added.some((n) => n.id === a.id))];
-          if (addressList.loading) return <div className="skeleton" style={{ height: 56 }} />;
-          if (all.length === 0 && !showAddressForm) {
-            return <p className="muted">لا توجد عناوين محفوظة بعد. أضيفي عنواناً لتتمكني من الطلب بالتوصيل.</p>;
-          }
-          return (
-            <ul className="address-list">
-              {all.map((a) => (
-                <li key={a.id}>
-                  <strong>{a.label ?? "عنوان"}</strong>
-                  <span className="muted">
-                    {a.landmark_note ?? ""} · <span dir="ltr">{a.phone_number_1}</span>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          );
-        })()}
-
+        {/* The account's own settings are one place for every context: the
+            personal page's «إعدادات المستخدم» (not store settings). */}
+        <p className="account-settings-link">
+          <a
+            href={SETTINGS_HREF}
+            className="button-link"
+            onClick={(event) => {
+              event.preventDefault();
+              leaveAccountPanel(SETTINGS_HREF);
+            }}
+            data-testid="account-settings-link"
+          >
+            إعدادات الحساب: العناوين، التنبيهات، رقم الهاتف وإغلاق الحساب
+          </a>
+        </p>
       </div>
     </div>
   );

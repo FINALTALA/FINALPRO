@@ -157,10 +157,11 @@ test.describe("S22 account and addresses UI", () => {
     // sessionVersion, so the ORIGINAL token is no longer valid either
     // way once this step is done).
     // Wait for whichever of the two outcomes arrives - the URL alone is
-    // read too early, before router.push("/account") has landed.
+    // read too early, before router.push("/profile?view=settings") has landed
+    // (2026-11-24: the phone screen goes back to «إعدادات المستخدم»).
     await expect(
       page
-        .getByRole("heading", { name: "حسابي", level: 1 })
+        .getByTestId("user-settings")
         .or(page.getByText("تم تغيير رقم هاتفك"))
         .first(),
     ).toBeVisible();
