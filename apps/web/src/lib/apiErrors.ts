@@ -57,6 +57,15 @@ export const API_ERROR_TEXT: Record<string, Text> = {
     ar: "انتهت صلاحية هذا الكود (7 أيام من الاعتماد).",
     en: "This code has expired (7 days after approval).",
   },
+  // IX-P1 / IX-P2: an employee receives a return only at her own branch
+  RECEIVING_BRANCH_NOT_ASSIGNED: {
+    ar: "تستلمين الإرجاعات في فرعك فقط.",
+    en: "You can receive returns only at your own branch.",
+  },
+  SELF_DECISION_FORBIDDEN: {
+    ar: "لا يمكنك تنفيذ هذا الإجراء على طلبك الشخصي.",
+    en: "You cannot take this action on your own order.",
+  },
   RECEIVING_BRANCH_NOT_IN_VENDOR: {
     ar: "الفرع المحدَّد لا يتبع متجركم.",
     en: "The selected branch doesn't belong to your store.",

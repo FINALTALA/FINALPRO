@@ -192,7 +192,8 @@ test.describe("TB-16.2: returns screens in Arabic and English", () => {
     }
     await prisma.user.update({ where: { id: acc.id }, data: { languagePref: "ar" } });
   }
-  const shell = (page: Page) => page.locator(".page-shell").first();
+  // IX-P2: the branch returns board has no .page-shell - its own root is the screen
+  const shell = (page: Page) => page.locator(".page-shell, [data-testid=\"returns-board\"]").first();
   /** Every expected text in this language is on screen; in English no
    * Arabic letter at all; in Arabic none of the English words. */
   async function words(page: Page, lang: Lang, texts: Record<Lang, string[]>) {
@@ -269,10 +270,11 @@ test.describe("TB-16.2: returns screens in Arabic and English", () => {
 
   test("owner and branch employee - the branch returns page", async ({ browser }) => {
     for (const acc of [owner, employee]) {
-      await eachView(browser, acc, `/vendor/${vendorId}/branches/${branchA}/returns`, async (page, lang) => {
+      // IX-P2: the board, with the requested return open (its details + activity)
+      await eachView(browser, acc, `/vendor/${vendorId}/branches/${branchA}/returns?return=${r.requested.id}`, async (page, lang) => {
         await words(page, lang, {
-          ar: ["طلبات الإرجاع", "مساحة الفرع", "قيد مراجعة المتجر", "اعتماد", "رفض", "(طلب تبديل)"],
-          en: ["Return requests", "Branch workspace", "Awaiting the store's review", "Approve", "Reject", "(exchange request)"],
+          ar: ["بانتظار القرار", "بانتظار وصول القطعة", "قيد مراجعة المتجر", "تالف", "قبول الطلب", "رفض الطلب", "استلام إرجاع"],
+          en: ["Awaiting decision", "Awaiting the item", "Awaiting the store's review", "Damaged", "Approve", "Reject", "Receive a return"],
         });
         await expect(shell(page)).toContainText(NOTE);
         await dateIn(page, lang, r.requested.at);
@@ -281,13 +283,13 @@ test.describe("TB-16.2: returns screens in Arabic and English", () => {
   });
 
   test("owner - redeem a code and the return policy", async ({ browser }) => {
+    // IX-P2: «استلام إرجاع» (the old address opens it); its preview's words are in staff-returns.spec
     await eachView(browser, owner, `/vendor/${vendorId}/returns/redeem`, async (page, lang) => {
-      await words(page, lang, {
-        ar: ["استبدال كود إرجاع", "كود الإرجاع (6 أرقام)", "يُستلم في:", "حالة المنتج"],
-        en: ["Redeem a return code", "Return code (6 digits)", "Received at:", "Item condition"],
-      });
-      const conditions = await page.getByTestId("rt-redeem-condition").locator("option").allInnerTexts();
-      expect(conditions).toEqual(lang === "en" ? ["Resellable", "Damaged"] : ["قابل لإعادة البيع", "تالف"]);
+      const dlg = page.getByTestId("rb-receive-dialog");
+      await expect(dlg).toBeVisible({ timeout: 30_000 });
+      for (const text of lang === "en" ? ["Receive a return", "Return code", "Receiving at:", "Show the return"] : ["استلام إرجاع", "كود الإرجاع", "الاستلام في:", "عرض الإرجاع"])
+        await expect(dlg).toContainText(text);
+      if (lang === "en") expect(await dlg.innerText()).not.toMatch(ARABIC);
     });
     await eachView(browser, owner, `/vendor/${vendorId}/return-policy`, async (page, lang) => {
       await words(page, lang, {
@@ -366,12 +368,12 @@ test.describe("TB-16.2: returns screens in Arabic and English", () => {
     await loginAs(page, owner.token);
     await enterWorkspace(page, owner.token, { type: "vendor", vendor_id: vendorId });
     await page.goto(`/vendor/${vendorId}/returns/redeem`);
-    await page.getByRole("button", { name: "استبدال", exact: true }).click({ timeout: 30_000 });
-    await expect(banner).toHaveText("الكود مكوَّن من 6 أرقام");
+    await page.getByTestId("rb-check").click({ timeout: 30_000 });
+    await expect(banner).toHaveText("كود الإرجاع مكوّن من 6 أرقام.");
     await switchTo("en");
-    await expect(banner).toHaveText("The code has 6 digits");
+    await expect(banner).toHaveText("The return code has 6 digits.");
     await switchTo("ar");
-    await expect(banner).toHaveText("الكود مكوَّن من 6 أرقام");
+    await expect(banner).toHaveText("كود الإرجاع مكوّن من 6 أرقام.");
 
     // TB-26: a non-member never reaches the branch returns page - the
     // workspace entry refuses them, in the page's language (a tab of their

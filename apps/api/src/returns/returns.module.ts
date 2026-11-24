@@ -5,6 +5,11 @@ import { IdempotencyModule } from '../common/idempotency/idempotency.module';
 import { FeatureFlagsModule } from '../feature-flags/feature-flags.module';
 import { OutboxModule } from '../outbox/outbox.module';
 import { PlatformAlertsModule } from '../platform-alerts/platform-alerts.module';
+import {
+  BranchReturnQueueController,
+  VendorReturnQueueController,
+} from './branch-return-queue.controller';
+import { BranchReturnQueueService } from './branch-return-queue.service';
 import { BranchReturnsController } from './branch-returns.controller';
 import { CustomerReturnsController } from './customer-returns.controller';
 import { ReturnSweepService } from './return-sweep.service';
@@ -29,8 +34,10 @@ import { VendorReturnsController } from './vendor-returns.controller';
     CustomerReturnsController,
     BranchReturnsController,
     VendorReturnsController,
+    BranchReturnQueueController,
+    VendorReturnQueueController,
   ],
-  providers: [ReturnsService, ReturnSweepService],
+  providers: [ReturnsService, ReturnSweepService, BranchReturnQueueService],
   exports: [ReturnsService],
 })
 export class ReturnsModule {}

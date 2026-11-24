@@ -1,12 +1,14 @@
 import {
   Body,
   Controller,
+  HttpCode,
   Param,
   Post,
   Req,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { CurrentUser } from '../auth/current-user.decorator';
 import {
@@ -15,7 +17,9 @@ import {
 } from '../auth/session-auth.guard';
 import { VendorMembershipGuard } from '../auth/vendor-membership.guard';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
-import { RedeemReturnDto } from './dto/redeem-return.dto';
+import { OrderActorContextInterceptor } from '../orders/order-actor-context.interceptor';
+import { BranchReturnQueueService } from './branch-return-queue.service';
+import { LookupReturnDto, RedeemReturnDto } from './dto/redeem-return.dto';
 import { ReturnsService } from './returns.service';
 
 // Sprint 21 (PDR-031 cross-branch acceptance, review-round
@@ -33,8 +37,30 @@ import { ReturnsService } from './returns.service';
 // codebase.
 @Controller('vendors/:vendorId/returns')
 @UseGuards(SessionAuthGuard, VendorMembershipGuard)
+// IX-P2: the return's timeline shows who received it, as they were then
+@UseInterceptors(OrderActorContextInterceptor)
 export class VendorReturnsController {
-  constructor(private readonly returns: ReturnsService) {}
+  constructor(
+    private readonly returns: ReturnsService,
+    private readonly queue: BranchReturnQueueService,
+  ) {}
+
+  /**
+   * IX-P2: what this code would receive at this branch, BEFORE «استلام» -
+   * never writes, never consumes the code, the same who-may-receive-where
+   * rule as redeem (checked first). Throttled: a code is a credential, so
+   * guessing one by trying many is slowed down here as well.
+   */
+  @Post('lookup')
+  @HttpCode(200)
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  async lookup(
+    @Param('vendorId') vendorId: string,
+    @Body() dto: LookupReturnDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.queue.lookup(vendorId, user.id, dto);
+  }
 
   @Post('redeem')
   @UseInterceptors(IdempotencyInterceptor)

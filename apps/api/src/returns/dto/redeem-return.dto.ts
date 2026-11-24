@@ -1,4 +1,4 @@
-import { IsIn, IsString, Length } from 'class-validator';
+import { IsIn, IsString, IsUUID, Length, Matches } from 'class-validator';
 
 // Sprint 21 (PDR-031): no :branchId in this endpoint's own route (see
 // ReturnsVendorController's own comment) - receiving_branch_id names
@@ -14,4 +14,14 @@ export class RedeemReturnDto {
 
   @IsIn(['RESELLABLE', 'DAMAGED'])
   item_condition!: 'RESELLABLE' | 'DAMAGED';
+}
+
+/** IX-P2: POST vendors/:vendorId/returns/lookup - the preview before redeem. */
+export class LookupReturnDto {
+  @IsString()
+  @Matches(/^\d{6}$/, { message: 'code must be 6 digits' })
+  code!: string;
+
+  @IsUUID()
+  receiving_branch_id!: string;
 }

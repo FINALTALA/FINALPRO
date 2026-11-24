@@ -1604,11 +1604,17 @@ describe('Sprint 21 - returns: policy, request, code, receipt, refund (e2e)', ()
           'desired_outcome',
           'received_at',
           'receiving_branch_id',
+          'refund',
           'settlement',
           'status',
         ].sort(),
       );
       expect(redeemedAtB.body.settlement).toBeNull();
+      // IX-P2: what the counter hands back - the recorded refund (ONLINE here)
+      expect(redeemedAtB.body.refund).toEqual({
+        amount: 95,
+        method: 'ONLINE_GATEWAY',
+      });
       expect(JSON.stringify(redeemedAtB.body)).not.toContain(secretNote);
       expect(JSON.stringify(redeemedAtB.body)).not.toContain(usedCode);
     });
@@ -1975,6 +1981,553 @@ describe('Sprint 21 - returns: policy, request, code, receipt, refund (e2e)', ()
       expect(
         await prisma.branchOrderRefund.count({ where: { returnId } }),
       ).toBe(1);
+    });
+  });
+
+  // ------------------------------------------------------------
+  // IX-P2 (2026-11-23): the branch's returns board - list / tabs / counts /
+  // search / scope, one return + its timeline, the code preview (never
+  // consumes, never leaks), and the explicit money of the receipt.
+  // ------------------------------------------------------------
+  describe('IX-P2: the returns board, details, timeline and the code preview', () => {
+    async function staffOf(
+      vendorId: string,
+      branchId: string,
+    ): Promise<{ token: string; userId: string }> {
+      const phone = uniquePhone();
+      const token = await signup(phone, 'a-strong-password');
+      const user = await prisma.user.findUniqueOrThrow({ where: { phone } });
+      await prisma.vendorUser.create({
+        data: { userId: user.id, vendorId, role: 'BRANCH_EMPLOYEE', branchId },
+      });
+      return { token, userId: user.id };
+    }
+    const get = (token: string, path: string) =>
+      run(
+        request(app.getHttpServer())
+          .get(`/api/v1/${path}`)
+          .set('Authorization', `Bearer ${token}`),
+      );
+    const lookup = (
+      token: string,
+      vendorId: string,
+      body: Record<string, unknown>,
+    ) =>
+      run(
+        request(app.getHttpServer())
+          .post(`/api/v1/vendors/${vendorId}/returns/lookup`)
+          .set('Authorization', `Bearer ${token}`)
+          .send(body),
+      );
+    const carries = (body: unknown, code: string) =>
+      JSON.stringify(body).includes(`"${code}"`);
+    const codeOf = async (id: string) =>
+      (await prisma.return.findUniqueOrThrow({ where: { id } })).code!;
+
+    /** A store with branches A and B (approved), stock in both, an employee
+     * of A, and a shopper. */
+    async function store() {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId: branchA } =
+        await createVendorWithBranch(owner);
+      await makeVendorEligible(vendorId);
+      const branchB = await addBranch(owner, vendorId, 'Branch B');
+      const variantA = await createOfferWithStock(vendorId, branchA, 100, 10);
+      const variantB = await createOfferWithStock(vendorId, branchB, 100, 10);
+      const employeeA = await staffOf(vendorId, branchA);
+      const customerPhone = uniquePhone();
+      const customer = await signup(customerPhone, 'a-strong-password');
+      await prisma.customerProfile.updateMany({
+        where: { user: { phone: customerPhone } },
+        data: { displayName: 'سارة أحمد' },
+      });
+      return {
+        owner,
+        vendorId,
+        branchA,
+        branchB,
+        variantA,
+        variantB,
+        employeeA,
+        customer,
+        customerPhone,
+      };
+    }
+    async function aReturn(
+      s: Awaited<ReturnType<typeof store>>,
+      branchId: string,
+      variantId: string,
+      approve: boolean,
+      paymentMethod: 'COD' | 'ONLINE' = 'ONLINE',
+    ) {
+      const { branchOrderId, itemId } = await placeAndPickUpOrder(
+        s.owner,
+        s.customer,
+        s.vendorId,
+        branchId,
+        variantId,
+        paymentMethod,
+      );
+      if (paymentMethod === 'COD') {
+        await prisma.branchOrder.update({
+          where: { id: branchOrderId },
+          data: { codCollectedAt: new Date(), codCollectedAmount: 100 },
+        });
+      }
+      const submitted = await submitReturn(s.customer, branchOrderId, itemId);
+      expect(submitted.status).toBe(201);
+      const id = submitted.body.id as string;
+      if (approve) {
+        await decideReturn(s.owner, s.vendorId, branchId, id, {
+          decision: 'approve',
+        }).expect(200);
+      }
+      return { id, branchOrderId };
+    }
+
+    it("list: tabs with server counts, the working fields only, search / type / date, the owner's «كل الفروع» and the employee's own branch only - never the code", async () => {
+      const s = await store();
+      const r1 = await aReturn(s, s.branchA, s.variantA, false);
+      const r2 = await aReturn(s, s.branchA, s.variantA, true);
+      const r3 = await aReturn(s, s.branchB, s.variantB, false);
+      const code2 = await codeOf(r2.id);
+
+      const pending = await get(
+        s.owner,
+        `vendors/${s.vendorId}/branches/${s.branchA}/return-queue`,
+      );
+      expect(pending.status).toBe(200);
+      expect(pending.body.tab).toBe('pending_decision');
+      expect(pending.body.scope).toBe('branch');
+      expect(pending.body.counts).toEqual({
+        pending_decision: 1,
+        awaiting_dropoff: 1,
+        completed: 0,
+        closed: 0,
+        platform: 0,
+      });
+      expect(pending.body.items.map((x: { id: string }) => x.id)).toEqual([
+        r1.id,
+      ]);
+      const row = pending.body.items[0];
+      expect(row).toMatchObject({
+        number: r1.id.slice(0, 8),
+        order_number: r1.branchOrderId.slice(0, 8),
+        branch_id: s.branchA,
+        status: 'REQUESTED',
+        bucket: 'pending_decision',
+        outcome: 'RETURN',
+        reason: 'CHANGE_OF_MIND',
+        customer_short: 'سارة أ.',
+        money: {
+          kind: 'refund',
+          final: false,
+          amount: 95,
+          method: 'ONLINE_GATEWAY',
+        },
+        deadline: { kind: 'escalation' },
+      });
+      expect(row.item).toMatchObject({ title_ar: 'م', quantity: 1 });
+      expect(row).not.toHaveProperty('code');
+      expect(JSON.stringify(row)).not.toContain(s.customerPhone);
+
+      const awaiting = await get(
+        s.employeeA.token,
+        `vendors/${s.vendorId}/branches/${s.branchA}/return-queue?tab=awaiting_dropoff`,
+      );
+      expect(awaiting.status).toBe(200);
+      expect(awaiting.body.items.map((x: { id: string }) => x.id)).toEqual([
+        r2.id,
+      ]);
+      expect(awaiting.body.items[0].deadline.kind).toBe('code_expiry');
+      expect(carries(awaiting.body, code2)).toBe(false);
+      expect(awaiting.body.items[0]).not.toHaveProperty('code');
+
+      // search: the order number, the phone's last 4, nothing for other text
+      const byOrder = await get(
+        s.owner,
+        `vendors/${s.vendorId}/branches/${s.branchA}/return-queue?q=%23${r1.branchOrderId.slice(0, 8)}`,
+      );
+      expect(byOrder.body.items.map((x: { id: string }) => x.id)).toEqual([
+        r1.id,
+      ]);
+      const byPhone = await get(
+        s.owner,
+        `vendors/${s.vendorId}/branches/${s.branchA}/return-queue?q=${s.customerPhone.slice(-4)}`,
+      );
+      expect(byPhone.body.counts.pending_decision).toBe(1);
+      expect(byPhone.body.counts.awaiting_dropoff).toBe(1);
+      const nothing = await get(
+        s.owner,
+        `vendors/${s.vendorId}/branches/${s.branchA}/return-queue?q=zzzz`,
+      );
+      expect(nothing.body.items).toEqual([]);
+      // the raw code is not a search key
+      const byCode = await get(
+        s.owner,
+        `vendors/${s.vendorId}/branches/${s.branchA}/return-queue?tab=awaiting_dropoff&q=${code2}`,
+      );
+      expect(byCode.body.items).toEqual([]);
+      // type and date filters
+      const exchanges = await get(
+        s.owner,
+        `vendors/${s.vendorId}/branches/${s.branchA}/return-queue?outcome=EXCHANGE`,
+      );
+      expect(exchanges.body.counts.pending_decision).toBe(0);
+      const future = new Date(Date.now() + 3 * 86_400_000)
+        .toISOString()
+        .slice(0, 10);
+      const later = await get(
+        s.owner,
+        `vendors/${s.vendorId}/branches/${s.branchA}/return-queue?from=${future}`,
+      );
+      expect(later.body.counts.pending_decision).toBe(0);
+      expect(
+        (
+          await get(
+            s.owner,
+            `vendors/${s.vendorId}/branches/${s.branchA}/return-queue?tab=nope`,
+          )
+        ).status,
+      ).toBe(400);
+
+      // the owner's every-branch scope, and one branch of it
+      const all = await get(s.owner, `vendors/${s.vendorId}/return-queue`);
+      expect(all.status).toBe(200);
+      expect(all.body.scope).toBe('all');
+      expect(all.body.counts.pending_decision).toBe(2);
+      expect(all.body.items.map((x: { id: string }) => x.id).sort()).toEqual(
+        [r1.id, r3.id].sort(),
+      );
+      expect(
+        (all.body.branch_counts as { branch_id: string; open: number }[]).find(
+          (b) => b.branch_id === s.branchA,
+        )?.open,
+      ).toBe(2);
+      const onlyB = await get(
+        s.owner,
+        `vendors/${s.vendorId}/return-queue?branch=${s.branchB}`,
+      );
+      expect(onlyB.body.items.map((x: { id: string }) => x.id)).toEqual([
+        r3.id,
+      ]);
+
+      // the employee: her branch only; never the other branch, never «كل الفروع»
+      expect(
+        (
+          await get(
+            s.employeeA.token,
+            `vendors/${s.vendorId}/branches/${s.branchB}/return-queue`,
+          )
+        ).status,
+      ).toBe(403);
+      expect(
+        (await get(s.employeeA.token, `vendors/${s.vendorId}/return-queue`))
+          .status,
+      ).toBe(403);
+      // another store's owner: nothing
+      const stranger = await signup(uniquePhone(), 'a-strong-password');
+      expect(
+        (
+          await get(
+            stranger,
+            `vendors/${s.vendorId}/branches/${s.branchA}/return-queue`,
+          )
+        ).status,
+      ).toBe(403);
+    });
+
+    it('details and timeline: policy, money, where to receive, who did what (role at that time) - 404 for another branch, never the code', async () => {
+      const s = await store();
+      const r2 = await aReturn(s, s.branchA, s.variantA, true);
+      const r3 = await aReturn(s, s.branchB, s.variantB, false);
+      const code2 = await codeOf(r2.id);
+
+      for (const token of [s.owner, s.employeeA.token]) {
+        const d = await get(
+          token,
+          `vendors/${s.vendorId}/branches/${s.branchA}/return-queue/${r2.id}`,
+        );
+        expect(d.status).toBe(200);
+        expect(d.body).toMatchObject({
+          id: r2.id,
+          status: 'APPROVED_AWAITING_DROPOFF',
+          policy: { mode: 'REFUND_ONLY', window_days: 14, fee_ils: 5 },
+          payment_method: 'ONLINE',
+          can_decide: false,
+          receive_at: { any_branch: true },
+          money: { kind: 'refund', amount: 95, method: 'ONLINE_GATEWAY' },
+        });
+        expect(d.body).not.toHaveProperty('code');
+        expect(carries(d.body, code2)).toBe(false);
+      }
+      // a return of branch B through branch A's address: 404
+      expect(
+        (
+          await get(
+            s.owner,
+            `vendors/${s.vendorId}/branches/${s.branchA}/return-queue/${r3.id}`,
+          )
+        ).status,
+      ).toBe(404);
+      // the employee of A: not branch B's return at all
+      expect(
+        (
+          await get(
+            s.employeeA.token,
+            `vendors/${s.vendorId}/branches/${s.branchB}/return-queue/${r3.id}`,
+          )
+        ).status,
+      ).toBe(403);
+
+      const t = await get(
+        s.employeeA.token,
+        `vendors/${s.vendorId}/branches/${s.branchA}/return-queue/${r2.id}/timeline`,
+      );
+      expect(t.status).toBe(200);
+      expect(t.body.items.map((x: { kind: string }) => x.kind)).toEqual([
+        'approved',
+        'requested',
+      ]);
+      expect(t.body.items[0].actor.kind).toBe('owner');
+      expect(t.body.items[1].actor.kind).toBe('customer');
+      expect(carries(t.body, code2)).toBe(false);
+    });
+
+    it('the code preview: what will be received and the money, without consuming or leaking the code; the same who-may-receive-where rule; then the receipt says the refund (cash for COD) and the timeline shows it', async () => {
+      const s = await store();
+      const cod = await aReturn(s, s.branchA, s.variantA, true, 'COD');
+      const code = await codeOf(cod.id);
+
+      const p1 = await lookup(s.employeeA.token, s.vendorId, {
+        code,
+        receiving_branch_id: s.branchA,
+      });
+      expect(p1.status).toBe(200);
+      expect(p1.body).toMatchObject({
+        return_id: cod.id,
+        order_number: cod.branchOrderId.slice(0, 8),
+        outcome: 'RETURN',
+        money: { kind: 'refund', final: false, amount: 95, method: 'COD_CASH' },
+        receiving_branch: { id: s.branchA, name: 'Branch A' },
+        allowed_branch: null,
+        can_receive_here: true,
+        blocked_reason: null,
+      });
+      expect(p1.body.item).toMatchObject({ title_ar: 'م', quantity: 1 });
+      expect(carries(p1.body, code)).toBe(false);
+      for (const k of [
+        'reason_note',
+        'photo_urls',
+        'rejection_reason',
+        'customer_short',
+        'code',
+      ])
+        expect(p1.body).not.toHaveProperty(k);
+      // not consumed: same answer again, nothing written
+      expect(
+        (
+          await lookup(s.employeeA.token, s.vendorId, {
+            code,
+            receiving_branch_id: s.branchA,
+          })
+        ).status,
+      ).toBe(200);
+      const still = await prisma.return.findUniqueOrThrow({
+        where: { id: cod.id },
+      });
+      expect(still.status).toBe('APPROVED_AWAITING_DROPOFF');
+      expect(
+        await prisma.branchOrderRefund.count({ where: { returnId: cod.id } }),
+      ).toBe(0);
+
+      // the employee at another branch: refused first (says nothing about the code)
+      const atB = await lookup(s.employeeA.token, s.vendorId, {
+        code,
+        receiving_branch_id: s.branchB,
+      });
+      expect(atB.status).toBe(403);
+      expect(atB.body.error.code).toBe('RECEIVING_BRANCH_NOT_ASSIGNED');
+      // a wrong code, a malformed one
+      const wrong = await lookup(s.employeeA.token, s.vendorId, {
+        code: code === '000000' ? '000001' : '000000',
+        receiving_branch_id: s.branchA,
+      });
+      expect(wrong.status).toBe(409);
+      expect(wrong.body.error.code).toBe('INVALID_RETURN_CODE');
+      expect(
+        (
+          await lookup(s.employeeA.token, s.vendorId, {
+            code: '12ab56',
+            receiving_branch_id: s.branchA,
+          })
+        ).status,
+      ).toBe(400);
+      // the owner may preview at branch B (any branch of her store)
+      const ownerB = await lookup(s.owner, s.vendorId, {
+        code,
+        receiving_branch_id: s.branchB,
+      });
+      expect(ownerB.status).toBe(200);
+      expect(ownerB.body.can_receive_here).toBe(true);
+
+      // the receipt (existing redeem, unchanged): the refund, explicit
+      const done = await run(
+        redeemReturn(s.employeeA.token, s.vendorId, {
+          code,
+          receiving_branch_id: s.branchA,
+          item_condition: 'RESELLABLE',
+        }),
+      );
+      expect(done.status).toBe(201);
+      expect(done.body.status).toBe('REFUNDED');
+      expect(done.body.refund).toEqual({ amount: 95, method: 'COD_CASH' });
+      expect(done.body.settlement).toBeNull();
+      expect(carries(done.body, code)).toBe(false);
+      // used: the preview now refuses it
+      const used = await lookup(s.employeeA.token, s.vendorId, {
+        code,
+        receiving_branch_id: s.branchA,
+      });
+      expect(used.status).toBe(409);
+      expect(used.body.error.code).toBe('INVALID_RETURN_CODE');
+
+      const t = await get(
+        s.owner,
+        `vendors/${s.vendorId}/branches/${s.branchA}/return-queue/${cod.id}/timeline`,
+      );
+      const kinds = t.body.items.map((x: { kind: string }) => x.kind);
+      expect(kinds.slice(0, 2)).toEqual(['refunded', 'received']);
+      const received = t.body.items[1];
+      expect(received.actor.kind).toBe('employee');
+      expect(received.condition).toBe('RESELLABLE');
+      expect(received.branch_name).toBe('Branch A');
+      expect(t.body.items[0]).toMatchObject({ amount: 95, method: 'COD_CASH' });
+      // the board: completed, with the final money
+      const completed = await get(
+        s.owner,
+        `vendors/${s.vendorId}/branches/${s.branchA}/return-queue?tab=completed`,
+      );
+      expect(completed.body.items[0]).toMatchObject({
+        id: cod.id,
+        status: 'REFUNDED',
+        money: { kind: 'refund', final: true, amount: 95, method: 'COD_CASH' },
+      });
+    });
+
+    it('an exchange: the preview shows the replacement, the difference to collect and its one branch (another branch: shown, not allowed); the receipt settles it', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId: branchA } = await createVendorWithBranch(
+        owner,
+        {
+          mode: 'BOTH',
+          window_days: 14,
+          fee_ils: 5,
+          exchange_fee_ils: 3,
+        },
+      );
+      await makeVendorEligible(vendorId);
+      const branchB = await addBranch(owner, vendorId, 'Branch B');
+      await makeVendorEligible(vendorId);
+      const offer = await prisma.vendorOffer.create({
+        data: {
+          vendorId,
+          titleAr: 'فستان',
+          titleEn: 'Dress',
+          status: 'ACTIVE',
+        },
+      });
+      const original = await prisma.offerVariant.create({
+        data: {
+          vendorId,
+          vendorOfferId: offer.id,
+          sellerSku: unique('sku-o'),
+          basePrice: 100,
+          storeInventoryBarcode: unique('bc-o'),
+          size: 'M',
+        },
+      });
+      const replacement = await prisma.offerVariant.create({
+        data: {
+          vendorId,
+          vendorOfferId: offer.id,
+          sellerSku: unique('sku-r'),
+          basePrice: 120,
+          storeInventoryBarcode: unique('bc-r'),
+          size: 'L',
+        },
+      });
+      for (const v of [original.id, replacement.id]) {
+        await prisma.branchStock.create({
+          data: { vendorId, branchId: branchA, offerVariantId: v, quantity: 5 },
+        });
+      }
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const { branchOrderId, itemId } = await placeAndPickUpOrder(
+        owner,
+        customer,
+        vendorId,
+        branchA,
+        original.id,
+      );
+      const submitted = await customerReturnAction(
+        customer,
+        `orders/${branchOrderId}/items/${itemId}/returns`,
+        {
+          reason: 'CHANGE_OF_MIND',
+          desired_outcome: 'EXCHANGE',
+          replacement_offer_variant_id: replacement.id,
+          replacement_branch_id: branchA,
+        },
+      );
+      expect(submitted.status).toBe(201);
+      await decideReturn(owner, vendorId, branchA, submitted.body.id, {
+        decision: 'approve',
+      }).expect(200);
+      const code = await codeOf(submitted.body.id);
+
+      const atB = await lookup(owner, vendorId, {
+        code,
+        receiving_branch_id: branchB,
+      });
+      expect(atB.status).toBe(200);
+      expect(atB.body).toMatchObject({
+        outcome: 'EXCHANGE',
+        can_receive_here: false,
+        blocked_reason: 'WRONG_BRANCH_FOR_EXCHANGE',
+        allowed_branch: { id: branchA, name: 'Branch A' },
+      });
+      const atA = await lookup(owner, vendorId, {
+        code,
+        receiving_branch_id: branchA,
+      });
+      expect(atA.body).toMatchObject({
+        can_receive_here: true,
+        // 120 - 100 + 3
+        money: {
+          kind: 'exchange',
+          final: false,
+          direction: 'COLLECT_CASH',
+          amount: 23,
+        },
+        replacement: { title_ar: 'فستان', size_label: 'L' },
+      });
+      expect(carries(atA.body, code)).toBe(false);
+
+      const done = await run(
+        redeemReturn(owner, vendorId, {
+          code,
+          receiving_branch_id: branchA,
+          item_condition: 'RESELLABLE',
+        }),
+      );
+      expect(done.status).toBe(201);
+      expect(done.body.status).toBe('EXCHANGED');
+      expect(done.body.refund).toBeNull();
+      expect(done.body.settlement).toMatchObject({
+        direction: 'COLLECT_CASH',
+        net_amount: 23,
+      });
     });
   });
 

@@ -398,8 +398,9 @@ export function notificationHref(
     case "RETURN_PLATFORM_APPROVED":
     case "RETURN_PLATFORM_REJECTED":
     case "RETURN_CANCELLED_BY_CUSTOMER":
+      // IX-P2: straight to that return on the branch's returns board
       return n.vendor_id && n.branch_id
-        ? `/vendor/${n.vendor_id}/branches/${n.branch_id}/returns`
+        ? `/vendor/${n.vendor_id}/branches/${n.branch_id}/returns${n.target_id ? `?return=${encodeURIComponent(n.target_id)}` : ""}`
         : "/account";
     case "RETURN_APPROVED":
     case "RETURN_REJECTED":

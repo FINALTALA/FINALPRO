@@ -275,9 +275,10 @@ test.describe("TB-15: the store's return notifications in the inbox", () => {
     for (const type of TYPES) {
       await page.goto(storeInbox());
       await itemTitled(page, TITLES.ar[type]).click();
-      await expect(page).toHaveURL(new RegExp(`/vendor/${s.vendorId}/branches/${s.branchId}/returns$`));
-      await expect(page.getByRole("heading", { name: "طلبات الإرجاع" })).toBeVisible({ timeout: 30_000 });
-      await expect(page.locator(".card", { hasText: "تالف" }).first()).toBeVisible({ timeout: 30_000 });
+      await expect(page).toHaveURL(new RegExp(`/vendor/${s.vendorId}/branches/${s.branchId}/returns\\?return=[0-9a-f-]{36}$`));
+      // IX-P2: the returns board, that return open
+      await expect(page.getByTestId("returns-board")).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByTestId("rb-detail-reason")).toHaveText("تالف", { timeout: 30_000 });
       await expect(page.locator(".error-banner")).toHaveCount(0);
     }
   });
@@ -334,8 +335,8 @@ test.describe("TB-15: the store's return notifications in the inbox", () => {
     await expect(itemTitled(page, TITLES.ar.RETURN_PLATFORM_APPROVED)).toContainText(OUTCOME.ar.RETURN);
     expectNoCustomerData((await page.locator("button.card").allInnerTexts()).join("\n"), s);
     await itemTitled(page, TITLES.ar.RETURN_CANCELLED_BY_CUSTOMER).click();
-    await expect(page).toHaveURL(new RegExp(`/vendor/${s.vendorId}/branches/${s.branchId}/returns$`));
-    await expect(page.locator(".card", { hasText: "تالف" }).first()).toBeVisible({ timeout: 30_000 });
+    await expect(page).toHaveURL(new RegExp(`/vendor/${s.vendorId}/branches/${s.branchId}/returns\\?return=[0-9a-f-]{36}$`));
+    await expect(page.getByTestId("rb-detail-reason")).toHaveText("تالف", { timeout: 30_000 });
     await expect(page.locator(".error-banner")).toHaveCount(0);
   });
 

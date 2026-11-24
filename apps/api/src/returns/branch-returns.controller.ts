@@ -17,6 +17,7 @@ import {
 import { VendorMembershipGuard } from '../auth/vendor-membership.guard';
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { ReturnDecisionDto } from './dto/return-decision.dto';
+import { OrderActorContextInterceptor } from '../orders/order-actor-context.interceptor';
 import { ReturnsService } from './returns.service';
 
 // Sprint 21: branch-scoped (the decision stays with the ORIGINATING
@@ -24,6 +25,8 @@ import { ReturnsService } from './returns.service';
 // redemption, unlike this, is vendor-wide not branch-scoped).
 @Controller('vendors/:vendorId/branches/:branchId/returns')
 @UseGuards(SessionAuthGuard, VendorMembershipGuard)
+// IX-P2: the return's timeline shows who decided, as they were then
+@UseInterceptors(OrderActorContextInterceptor)
 export class BranchReturnsController {
   constructor(private readonly returns: ReturnsService) {}
 

@@ -10378,13 +10378,9 @@ html[data-embed="management"] .sst-title { display: none; }
 }
 
 /* the branch's returns: the store policy in one quiet line, and «استبدال كود إرجاع» */
-.rt-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin: 0 0 14px; max-inline-size: 720px; }
 .rt-policy { margin: 0; font-size: 0.9rem; color: var(--wz-muted); line-height: 1.6; }
 .rt-policy strong { color: var(--wz-ink); }
 .rt-policy-link { color: var(--wz-wine); font-weight: 700; }
-.rt-redeem-open { white-space: nowrap; }
-.rt-at { margin: 0; }
-.rt-code { max-inline-size: 200px; font-size: 1.2rem; letter-spacing: 0.2em; font-variant-numeric: tabular-nums; }
 .br-settings-note { margin: 10px 0 0; }
 /* «الحد الأدنى للطلب» inside settings: one quiet card like its neighbours */
 .br-min-lead { margin: 0 0 12px; line-height: 1.6; }
@@ -10426,3 +10422,13 @@ html[data-embed="management"] .sst-title { display: none; }
 .store-management-tile.is-deferred { background: var(--wz-ivory, #fbf7f0); border-style: dashed; box-shadow: none; filter: grayscale(0.7); }
 .store-management-tile.is-deferred > * { opacity: 0.55; }
 .store-management-tile.is-deferred:hover > *, .store-management-tile.is-deferred:focus-visible > * { opacity: 0.85; }
+
+/* IX-P2: the shopper's return / exchange code at the counter (digits + CODE128) */
+.return-code-card {
+  margin-block-start: 12px; padding: 16px; border-radius: 16px; display: grid; justify-items: center; gap: 6px;
+  background: #fff; border: 1px solid var(--wz-line-strong, #d9cfc8); text-align: center;
+}
+.return-code-label { margin: 0; font-weight: 700; color: var(--wz-muted, #6e625b); }
+.return-code-digits { margin: 0; font-size: 2rem; font-weight: 800; letter-spacing: 0.3em; padding-inline-start: 0.3em; font-variant-numeric: tabular-nums; color: var(--wz-ink, #2a1f22); }
+.return-code-bars { max-inline-size: 100%; block-size: auto; }
+.return-code-hint { margin: 0; font-size: 0.88rem; color: var(--wz-muted, #6e625b); max-inline-size: 42ch; }

@@ -173,6 +173,40 @@ function returnDto(r: {
  * is the proof the shopper is at the counter with the item; a store user
  * who could read it could record a receipt and a refund alone.
  */
+/**
+ * IX-P1 / IX-P2: who may receive a return WHERE - read fresh from the
+ * membership, never from the request. An employee only at her own assigned
+ * branch; the owner at any branch of her store (the same-vendor check is
+ * the caller's). Used FIRST by redeem() and by the code preview (lookup), so
+ * a refusal writes nothing and says nothing about the code.
+ */
+export async function assertMayReceiveAt(
+  client: { vendorUser: Prisma.TransactionClient['vendorUser'] },
+  vendorId: string,
+  actorUserId: string,
+  receivingBranchId: string,
+): Promise<void> {
+  const actor = await client.vendorUser.findFirst({
+    where: { userId: actorUserId, vendorId, status: 'ACTIVE' },
+    select: { role: true, branchId: true },
+  });
+  if (!actor) {
+    throw new ForbiddenException({
+      code: 'NOT_VENDOR_MEMBER',
+      message: 'Only an active member of this store can receive a return',
+    });
+  }
+  if (
+    actor.role === 'BRANCH_EMPLOYEE' &&
+    actor.branchId !== receivingBranchId
+  ) {
+    throw new ForbiddenException({
+      code: 'RECEIVING_BRANCH_NOT_ASSIGNED',
+      message: 'A branch employee can receive a return only at her own branch',
+    });
+  }
+}
+
 function withoutCode<T extends { code: unknown }>(dto: T): Omit<T, 'code'> {
   const copy: Partial<T> = { ...dto };
   delete copy.code;
@@ -212,6 +246,7 @@ function redeemResultDto(
     itemCondition: string | null;
   },
   settlement?: ExchangeSettlementRow | null,
+  refund?: { amount: number; method: 'ONLINE_GATEWAY' | 'COD_CASH' } | null,
 ) {
   return {
     id: r.id,
@@ -227,6 +262,10 @@ function redeemResultDto(
     // hand-over correctly - still privacy-safe, same as the rest of
     // this DTO (never reason_note/photo_urls/rejection_reason/code).
     settlement: settlementDto(settlement),
+    // IX-P2: a RETURN's refund as recorded in this same transaction - the
+    // counter must know what to hand back (COD_CASH) or that an online
+    // refund was recorded (ONLINE_GATEWAY). null for an exchange.
+    refund: refund ?? null,
   };
 }
 
@@ -1027,26 +1066,12 @@ export class ReturnsService {
       // existing same-vendor check below). Checked FIRST - before the code
       // is even looked up - so a refusal writes nothing (no status, no
       // stock, no refund) and says nothing about whether the code exists.
-      const actor = await tx.vendorUser.findFirst({
-        where: { userId: actorUserId, vendorId, status: 'ACTIVE' },
-        select: { role: true, branchId: true },
-      });
-      if (!actor) {
-        throw new ForbiddenException({
-          code: 'NOT_VENDOR_MEMBER',
-          message: 'Only an active member of this store can receive a return',
-        });
-      }
-      if (
-        actor.role === 'BRANCH_EMPLOYEE' &&
-        actor.branchId !== dto.receiving_branch_id
-      ) {
-        throw new ForbiddenException({
-          code: 'RECEIVING_BRANCH_NOT_ASSIGNED',
-          message:
-            'A branch employee can receive a return only at her own branch',
-        });
-      }
+      await assertMayReceiveAt(
+        tx,
+        vendorId,
+        actorUserId,
+        dto.receiving_branch_id,
+      );
       const candidate = await tx.return.findFirst({
         where: {
           vendorId,
@@ -1269,7 +1294,10 @@ export class ReturnsService {
       );
       await this.notifyCustomerForReturn(tx, r.id, 'return.refunded');
 
-      return redeemResultDto(finalReturn);
+      return redeemResultDto(finalReturn, null, {
+        amount: amount.toNumber(),
+        method,
+      });
     });
   }
 

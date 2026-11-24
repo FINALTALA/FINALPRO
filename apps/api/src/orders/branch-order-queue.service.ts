@@ -837,7 +837,7 @@ type ActorView =
  * «غير مسجّل» - never guessed from today's membership. An employee never
  * sees the name of someone from another branch, nor of an unrecorded actor.
  */
-function actorView(args: {
+export function actorView(args: {
   actorId: string | null;
   customerUserId: string;
   snapshot: ActorSnapshot | null;

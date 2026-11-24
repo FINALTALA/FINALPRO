@@ -1,0 +1,73 @@
+/* IX-P2 «لوحة إرجاعات الفرع»: what the returns board adds to the order
+   board's layout (branchOrders.css: .bo-*) - the same look, logical
+   properties only (RTL / LTR). */
+
+.rb-head {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 0 0 12px;
+}
+.rb-head .rt-policy { flex: 1 1 280px; margin: 0; }
+.rb-receive-open { flex: none; }
+
+/* a row: the item's image beside its lines */
+.rb-row { display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 12px; align-items: start; }
+.rb-row-img img, .rb-row-img .rb-item-ph { inline-size: 48px; block-size: 48px; border-radius: 10px; object-fit: cover; display: block; }
+.rb-row-main { display: grid; gap: 4px; min-inline-size: 0; }
+.rb-row-title { font-weight: 700; min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rb-row-money { font-weight: 700; color: var(--wz-wine); font-variant-numeric: tabular-nums; }
+.rb-item-ph { display: inline-block; background: var(--wz-sand-soft); }
+
+.rb-outcome {
+  display: inline-flex; align-items: center; min-block-size: 22px; padding: 0 8px; border-radius: 999px;
+  font-size: 0.78rem; font-weight: 700; background: #eef1f7; color: #2f4468;
+}
+.rb-outcome.is-exchange { background: var(--wz-sand-soft); color: var(--wz-sand-ink); }
+
+/* states (the return's own) */
+.rb-chip.is-requested { background: #e8eefb; color: #23468f; }
+.rb-chip.is-approved_awaiting_dropoff { background: var(--wz-sand-soft); color: var(--wz-sand-ink); }
+.rb-chip.is-received, .rb-chip.is-refund_processing, .rb-chip.is-refunded, .rb-chip.is-exchanged { background: #e3efe7; color: #245a3c; }
+.rb-chip.is-rejected, .rb-chip.is-rejected_closed, .rb-chip.is-admin_rejected { background: #fbecea; color: #8a2b20; }
+.rb-chip.is-expired, .rb-chip.is-cancelled_by_customer { background: #f1ecea; color: #6e625b; }
+.rb-chip.is-escalated { background: #f3e9f7; color: #5b2f73; }
+
+/* an item (detail, preview) */
+.rb-item { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 12px; align-items: center; }
+.rb-item-img img, .rb-item-img .rb-item-ph { inline-size: 56px; block-size: 56px; border-radius: 10px; object-fit: cover; display: block; }
+.rb-item-text { display: grid; gap: 2px; min-inline-size: 0; }
+.rb-item-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 0.84rem; color: var(--wz-muted); }
+
+.rb-money { margin: 0; font-weight: 800; font-size: 1.05rem; color: var(--wz-wine); }
+.rb-where { margin: 8px 0 0; padding: 8px 12px; border-radius: 10px; background: var(--wz-sand-soft); color: var(--wz-sand-ink); font-size: 0.9rem; }
+.rb-photos { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; }
+
+/* filters: dates */
+.rb-date { display: inline-flex; align-items: center; gap: 6px; font-size: 0.84rem; color: var(--wz-muted); }
+.rb-date .bo-input { inline-size: auto; min-block-size: 36px; }
+
+/* the receive dialog */
+.rb-at { margin: 0; }
+.rb-step-title { margin: 0; font-size: 1rem; }
+.rb-step-title:focus { outline: none; }
+.rb-step-title:focus-visible { box-shadow: var(--wz-ring); border-radius: 6px; }
+.rb-preview, .rb-result { display: grid; gap: 10px; }
+.rb-label { margin: 4px 0 0; font-size: 0.8rem; font-weight: 700; color: var(--wz-muted); }
+.rb-facts { margin: 0; padding-inline-start: 18px; display: grid; gap: 2px; font-size: 0.88rem; }
+.rb-blocked { margin: 0; padding: 10px 12px; border-radius: 10px; background: #fbecea; color: #8a2b20; font-weight: 700; }
+.rb-condition { margin: 0; padding: 0; border: 0; display: grid; gap: 8px; }
+.rb-condition .dw-field { padding: 0; }
+.rb-cond-opt {
+  display: flex; align-items: center; gap: 10px; min-block-size: 44px; padding: 0 12px; border-radius: 12px;
+  border: 1px solid var(--wz-line-strong); cursor: pointer; font-weight: 700;
+}
+.rb-cond-opt input { inline-size: 18px; block-size: 18px; accent-color: var(--wz-wine); }
+.rb-cond-opt.is-on { border-color: var(--wz-wine); background: var(--wz-wine-soft); color: var(--wz-wine); }
+.rb-cond-opt:focus-within { box-shadow: var(--wz-ring); }
+.rb-result-line { margin: 0; }
+.rb-result-money {
+  margin: 0; padding: 12px 14px; border-radius: 12px; background: #e9f4ec; color: #245a3c;
+  font-size: 1.1rem; font-weight: 800;
+}
+
+@media (max-width: 720px) {
+  .rb-receive-open { inline-size: 100%; }
+}

@@ -228,34 +228,35 @@ test.describe("Branch management and store settings", () => {
     await expect(page).toHaveURL(new RegExp(`/branches/${branchB}/orders$`), { timeout: 30_000 });
   });
 
-  test("returns: the store policy in one read-only line, «استبدال كود إرجاع» received at THIS branch; the old address opens it - owner and employee", async ({ page }) => {
+  test("returns: the store policy in one read-only line, «استلام إرجاع» received at THIS branch; the old address opens it - owner and employee", async ({ page }) => {
     await asOwner(page);
     await page.goto(`/vendor/${vendorId}/branches/${branchA}/returns`);
     await expect(page.getByTestId("rt-policy")).toContainText("سياسة المتجر:", { timeout: 30_000 });
     await expect(page.getByTestId("rt-policy-link")).toHaveAttribute("href", `/vendor/${vendorId}/settings#returns`);
-    await page.getByTestId("rt-redeem-open").click();
-    const dlg = page.getByTestId("rt-redeem-dialog");
+    // IX-P2: «استلام إرجاع» is the board's one entry for a code
+    await page.getByTestId("rb-receive-open").click();
+    const dlg = page.getByTestId("rb-receive-dialog");
     await expect(dlg).toBeVisible();
-    await expect(dlg.getByTestId("rt-redeem-branch")).toContainText("يُستلم في: فرع رام الله");
-    await expect(dlg.locator("select")).toHaveCount(1); // the condition only - no second branch list
-    await dlg.getByTestId("rt-redeem-code").fill("123");
-    await dlg.getByTestId("rt-redeem-submit").click();
-    await expect(dlg.locator(".error-banner")).toHaveText("الكود مكوَّن من 6 أرقام");
+    await expect(dlg.getByTestId("rb-receive-branch")).toContainText("الاستلام في: فرع رام الله");
+    await expect(dlg.locator("select")).toHaveCount(0); // no branch list - the header picker decides
+    await dlg.getByTestId("rb-code-input").fill("123");
+    await dlg.getByTestId("rb-check").click();
+    await expect(dlg.locator(".error-banner")).toHaveText("كود الإرجاع مكوّن من 6 أرقام.");
     await page.keyboard.press("Escape");
     await expect(dlg).toHaveCount(0);
-    await expect(page).not.toHaveURL(/redeem=1/);
+    await expect(page).not.toHaveURL(/redeem=1|receive=1/);
 
     // the old address: the current branch's returns with the dialog open
     await page.goto(`/vendor/${vendorId}/returns/redeem`);
     await expect(page).toHaveURL(/\/returns\?redeem=1$/, { timeout: 30_000 });
-    await expect(page.getByTestId("rt-redeem-dialog")).toBeVisible();
+    await expect(page.getByTestId("rb-receive-dialog")).toBeVisible();
 
     // the employee: own branch, the same line (read only - no settings link)
     const empPage = await page.context().browser()!.newPage();
     await asEmployee(empPage);
     await empPage.goto(`/vendor/${vendorId}/returns/redeem`);
     await expect(empPage).toHaveURL(new RegExp(`/branches/${branchB}/returns\\?redeem=1$`), { timeout: 30_000 });
-    await expect(empPage.getByTestId("rt-redeem-branch")).toContainText("فرع نابلس");
+    await expect(empPage.getByTestId("rb-receive-branch")).toContainText("فرع نابلس");
     await expect(empPage.getByTestId("rt-policy")).toBeVisible();
     await expect(empPage.getByTestId("rt-policy-link")).toHaveCount(0);
     await empPage.close();

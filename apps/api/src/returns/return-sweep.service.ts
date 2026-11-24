@@ -24,7 +24,7 @@ import { enqueueReturnEscalationAlert } from './return-escalation-alert';
 const SWEEP_INTERVAL_MS = 60_000;
 const BATCH_LIMIT = 200;
 const VENDOR_REVIEW_SLA_HOURS = 48;
-const ESCALATION_TIMEOUT_HOURS = 72;
+export const ESCALATION_TIMEOUT_HOURS = 72;
 
 /**
  * Sprint 21 (PDR-031): the three genuinely time-based sweeps this

@@ -296,6 +296,13 @@ export const SUSPENDED_ALLOW_ROUTES: readonly string[] = [
   'GET vendors/:vendorId/branches/:branchId/returns',
   'PATCH vendors/:vendorId/branches/:branchId/returns/:returnId/decision',
   'POST vendors/:vendorId/returns/redeem',
+  // IX-P2 (2026-11-23): the returns board (reads) and the code preview
+  // before redeem (a read that writes nothing) - same bucket as the above.
+  'GET vendors/:vendorId/branches/:branchId/return-queue',
+  'GET vendors/:vendorId/branches/:branchId/return-queue/:returnId',
+  'GET vendors/:vendorId/branches/:branchId/return-queue/:returnId/timeline',
+  'GET vendors/:vendorId/return-queue',
+  'POST vendors/:vendorId/returns/lookup',
   // Sprint 23: a public, unguarded read (ReviewReadsController) - "every
   // read" stays ALLOW, same bucket as every other GET above. A
   // suspended store's past reviews must stay visible either way.

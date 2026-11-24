@@ -20,6 +20,7 @@ import {
   returnStatusLabel,
   uiErrorText,
 } from "@/lib/returns";
+import ReturnCodeCard from "@/components/ReturnCodeCard";
 import SizeGuideSnapshotNote from "@/components/SizeGuideSnapshotNote";
 import type { SizeGuideSnapshot } from "@/lib/sizeGuides";
 import { loginRedirectHref } from "@/lib/loginRedirect";
@@ -164,10 +165,12 @@ export default function ReturnDetailPage() {
         <SizeGuideSnapshotNote snapshot={data.size_guide} />
 
         {data.status === "APPROVED_AWAITING_DROPOFF" && data.code && (
-          <div className="notice-banner" style={{ marginTop: 10 }}>
-            {t(`ret.code.${data.desired_outcome}`)}: <strong>{data.code}</strong>{" "}
-            {fmt(t(`ret.detail.code_hint.${data.desired_outcome}`), { date: date(data.code_expires_at) })}
-          </div>
+          // IX-P2: large digits + CODE128 bars, for the store's scanner or camera
+          <ReturnCodeCard
+            code={data.code}
+            label={t(`ret.code.${data.desired_outcome}`)}
+            hint={fmt(t(`ret.detail.code_hint.${data.desired_outcome}`), { date: date(data.code_expires_at) }).replace(/^-\s*/, "")}
+          />
         )}
 
         {data.status === "REJECTED" && (

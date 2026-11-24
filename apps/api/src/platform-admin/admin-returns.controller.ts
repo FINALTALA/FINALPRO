@@ -12,6 +12,7 @@ import { Request } from 'express';
 import { PlatformRole } from '../../generated/prisma/client';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { RequirePlatformRole } from '../auth/platform-role.decorator';
+import { OrderActorContextInterceptor } from '../orders/order-actor-context.interceptor';
 import { PlatformRoleGuard } from '../auth/platform-role.guard';
 import {
   AuthenticatedUser,
@@ -27,6 +28,8 @@ import { ReturnsService } from '../returns/returns.service';
 // support-agent role exists in this codebase).
 @Controller('admin/returns')
 @UseGuards(SessionAuthGuard, PlatformRoleGuard)
+// IX-P2: the return's timeline shows a platform decision as such
+@UseInterceptors(OrderActorContextInterceptor)
 export class AdminReturnsController {
   constructor(private readonly returns: ReturnsService) {}
 

@@ -157,7 +157,7 @@ test.describe("TB-14: return notifications in the inbox", () => {
     await page.goto(`/vendor/${vendorId}/notifications`);
     await expect(itemTitled(page, TITLES.ar.RETURN_VENDOR_REMINDER)).toBeVisible({ timeout: 30_000 });
     await itemTitled(page, TITLES.ar.RETURN_REQUESTED).click();
-    await expect(page).toHaveURL(new RegExp(`/vendor/${vendorId}/branches/${branchId}/returns$`));
+    await expect(page).toHaveURL(new RegExp(`/vendor/${vendorId}/branches/${branchId}/returns\\?return=[^&]+$`));
   });
 
   test("platform administrator: the escalation alert names the return and why, and leads to the escalated-returns queue", async ({ page }) => {

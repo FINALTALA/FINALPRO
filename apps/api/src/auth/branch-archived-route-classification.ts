@@ -121,4 +121,8 @@ export const BRANCH_ARCHIVED_ALLOW_ROUTES: readonly string[] = [
   // /transfer - see this file's own top comment.)
   'GET vendors/:vendorId/branches/:branchId/returns',
   'PATCH vendors/:vendorId/branches/:branchId/returns/:returnId/decision',
+  // IX-P2: the returns board of the branch, one return and its timeline - reads.
+  'GET vendors/:vendorId/branches/:branchId/return-queue',
+  'GET vendors/:vendorId/branches/:branchId/return-queue/:returnId',
+  'GET vendors/:vendorId/branches/:branchId/return-queue/:returnId/timeline',
 ];

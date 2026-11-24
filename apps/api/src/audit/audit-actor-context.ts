@@ -38,7 +38,7 @@ export function currentAuditActor(): ActorSnapshot | undefined {
 }
 
 /** Entity types whose audit rows carry the snapshot (the order's own timeline). */
-const SNAPSHOT_ENTITY_TYPES = new Set(['BranchOrder']);
+const SNAPSHOT_ENTITY_TYPES = new Set(['BranchOrder', 'Return']);
 
 /**
  * The afterState to store: unchanged unless a staff request is running AND
