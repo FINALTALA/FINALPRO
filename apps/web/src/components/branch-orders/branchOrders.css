@@ -138,11 +138,14 @@ html[dir="rtl"] .bo-row-link.is-selected, [dir="rtl"] .bo-row-link.is-selected {
 .bo-row-time { margin-inline-start: auto; font-size: 0.8rem; color: var(--wz-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 /* nothing in line 1 is ever cut: a long status has a short row name (the board), and when a
    narrow box still lacks room the time moves under it rather than shrinking anything */
-.bo-row-bottom { flex-wrap: nowrap; }
-.bo-row-top > * { flex: none; }
-.bo-row-top > .bo-branch { max-inline-size: 14em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; line-height: 22px; }
+.bo-orders .bo-row-bottom { flex-wrap: nowrap; }
+.bo-orders .bo-row-top > * { flex: none; }
+.bo-orders .bo-row-top > .bo-branch { max-inline-size: 14em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; line-height: 22px; }
 .bo-row-bottom { font-size: 0.84rem; }
-.bo-row-name { font-weight: 600; min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* V1 fix: the no-wrap rules above and below are «إدارة الطلبات» only (.bo-orders) - the returns board
+   shares these classes and must keep wrapping (sideways overflow at 360px otherwise) */
+.bo-row-name { font-weight: 600; }
+.bo-orders .bo-row-name { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bo-row-phone, .bo-row-pieces { white-space: nowrap; flex: none; }
 .bo-row-money { margin-inline-start: auto; display: inline-flex; align-items: center; gap: 6px; flex: none; white-space: nowrap; }
 .bo-row-amount { font-weight: 700; font-variant-numeric: tabular-nums; }
@@ -327,9 +330,9 @@ html[dir="rtl"] .bo-row-link.is-selected, [dir="rtl"] .bo-row-link.is-selected {
 }
 .bo.is-narrow .bo-btn { min-block-size: 48px; }
 .bo.is-narrow .bo-row-link { min-block-size: 60px; }
-.bo.is-narrow .bo-filters { flex-wrap: nowrap; }
-.bo.is-narrow .bo-search { flex: 1 1 0; min-inline-size: 0; }
-.bo.is-narrow .bo-input { min-block-size: 44px; }
+.bo-orders.is-narrow .bo-filters { flex-wrap: nowrap; }
+.bo-orders.is-narrow .bo-search { flex: 1 1 0; min-inline-size: 0; }
+.bo-orders.is-narrow .bo-input { min-block-size: 44px; }
 .bo-back {
   display: inline-flex; align-items: center; gap: 6px; min-block-size: 44px; margin: 0 0 6px; padding: 0 4px;
   border: 0; background: none; font: inherit; font-weight: 700; color: var(--wz-wine); cursor: pointer;
