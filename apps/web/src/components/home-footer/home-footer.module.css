@@ -1,0 +1,135 @@
+/* Homepage footer - VIA ink, cream and gold. Full width (the homepage's
+   column is broken out to the viewport edges, like the products section).
+   Font families need !important only to win over `.home *`. */
+
+.root {
+  --hf-bg: #241b20;          /* --via-ink */
+  --hf-fg: #f7f2ea;          /* --via-cream */
+  --hf-muted: rgba(247, 242, 234, .66);
+  --hf-gold: #cda55e;        /* --via-gold */
+  --hf-line: rgba(205, 165, 94, .22);
+  --hf-gutter: clamp(16px, 3vw, 48px);
+  width: 100vw;
+  /* The page's own bottom padding (page-shell 40px) is taken back so the
+     footer ends the page with no cream band under it. */
+  margin: clamp(16px, 2vw, 32px) calc(50% - 50vw) -40px;
+  background: var(--hf-bg);
+  color: var(--hf-fg);
+}
+.root.root * { font-family: inherit !important; }
+.root[data-lang="ar"] { font-family: "Finalpro Noto", "Segoe UI", sans-serif; }
+.root[data-lang="en"] { font-family: "Inter", "Segoe UI", sans-serif; }
+
+.inner {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 2fr);
+  gap: clamp(32px, 5vw, 96px);
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: clamp(48px, 5vw, 72px) var(--hf-gutter) clamp(36px, 4vw, 56px);
+}
+
+/* ------------------------------------------------------------ brand */
+
+.brandCol { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; min-width: 0; }
+.brand {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  color: var(--hf-fg);
+  text-decoration: none;
+}
+.logo { display: block; width: 64px; height: 46px; object-fit: contain; }
+/* As the header's "ViA" under the logo. */
+.root .brandName {
+  font-size: 16px;
+  letter-spacing: .08em;
+  line-height: 1;
+}
+.tagline {
+  margin-top: 6px;
+  color: var(--hf-gold);
+  font-size: 13px;
+  letter-spacing: .02em;
+}
+.about {
+  max-width: 340px;
+  margin: 0;
+  color: var(--hf-muted);
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+/* ---------------------------------------------------------- columns */
+
+.cols {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(24px, 3vw, 48px);
+}
+.col { min-width: 0; }
+.root .colTitle {
+  margin: 0 0 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--hf-line);
+  color: var(--hf-gold);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: .04em;
+}
+.links { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  color: var(--hf-muted);
+  font-size: 14px;
+  text-decoration: none;
+  transition: color .2s ease;
+}
+.link:hover,
+.link:focus-visible { color: var(--hf-fg); }
+.link:focus-visible { outline: 1px solid var(--hf-gold); outline-offset: 3px; }
+
+/* ----------------------------------------------------------- bottom */
+
+.bottom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 24px;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 18px var(--hf-gutter) 24px;
+  border-top: 1px solid var(--hf-line);
+  color: var(--hf-muted);
+  font-size: 12.5px;
+}
+.bottom .link { min-height: 32px; font-size: 12.5px; }
+
+/* ------------------------------------------------------- responsive */
+
+@media (max-width: 899px) {
+  /* Below 900px the main area also keeps room for the fixed bottom nav
+     (globals.css .app-main): the footer runs under it instead, and keeps
+     that room inside its own ink background. */
+  .root { margin-bottom: calc(-40px - var(--bottom-nav-h, 64px) - env(safe-area-inset-bottom, 0px) - 28px); }
+  .bottom { padding-bottom: calc(var(--bottom-nav-h, 64px) + env(safe-area-inset-bottom, 0px) + 20px); }
+  .inner { grid-template-columns: 1fr; gap: 36px; }
+  .brandCol { align-items: center; text-align: center; }
+  .about { max-width: 420px; }
+}
+@media (max-width: 599px) {
+  .cols { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px 20px; }
+  .col:last-child { grid-column: 1 / -1; }
+  .col:last-child .links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 20px; }
+  .root .colTitle { margin-bottom: 8px; }
+  .link { min-height: 40px; }
+  .bottom { justify-content: center; text-align: center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .link { transition: none; }
+}

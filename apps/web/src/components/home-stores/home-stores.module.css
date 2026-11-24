@@ -1,0 +1,206 @@
+/* =========================================================================
+   Homepage - Browse Stores. The advertising page's store cards (rounded
+   cover, monogram + name, categories, a quiet "Browse store" link) on the
+   homepage: same heading as "Pieces Worth Discovering", one scrolling row.
+   Font families need !important only to win over `.home *`.
+   ========================================================================= */
+
+.root {
+  --hs-ink: #1c1917;
+  --hs-muted: #57534e;
+  --hs-quiet: #a8a29e;
+  --hs-wine: #4a1626;
+  --hs-gold: #cda55e;
+  --hs-gutter: clamp(16px, 3vw, 48px);
+  width: 100vw;
+  margin-inline: calc(50% - 50vw);
+  padding: clamp(28px, 3vw, 48px) var(--hs-gutter) clamp(36px, 4vw, 64px);
+  color: var(--hs-ink);
+}
+.root.root * { font-family: inherit !important; }
+.root[data-lang="ar"] { font-family: "Finalpro Noto", "Segoe UI", sans-serif; }
+.root[data-lang="en"] { font-family: var(--hs-en-text), "Inter", sans-serif; }
+
+/* The heading (title + subtitle): HomeSectionHead, shared by every
+   homepage section. */
+
+/* ------------------------------------------------------------ the row */
+
+.strip { position: relative; }
+/* A hairline 4px between covers (the text keeps its own inner padding,
+   .id). */
+.track {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  padding: 6px 0 16px;
+  scroll-snap-type: x mandatory;
+  scroll-padding-inline: 0;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.track::-webkit-scrollbar { display: none; }
+
+/* Prev / next: desktop only (touch scrolls). */
+.nav {
+  position: absolute;
+  z-index: 2;
+  top: 40%;
+  display: none;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid rgba(231, 229, 228, .9);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .92);
+  color: var(--hs-ink);
+  box-shadow: 0 4px 14px rgba(28, 25, 23, .08);
+  cursor: pointer;
+  transform: translateY(-50%);
+  transition: background-color .2s ease, transform .2s ease;
+}
+.nav:hover { background: #fff; transform: translateY(-50%) scale(1.04); }
+.nav:focus-visible { outline: 1px solid var(--hs-ink); outline-offset: 3px; }
+.nav svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.root[dir="rtl"] .nav svg { transform: scaleX(-1); }
+.navPrev { inset-inline-start: -14px; }
+.navNext { inset-inline-end: -14px; }
+@media (min-width: 900px) and (hover: hover) { .nav { display: grid; } }
+
+/* ------------------------------------------------------------ a card */
+
+.card {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  width: min(62vw, 240px);
+  color: inherit;
+  text-decoration: none;
+  scroll-snap-align: start;
+}
+/* Same number of cards in view (3.2 / 4.25 / 5), with the 4px gaps. */
+@media (min-width: 600px) { .card { width: calc((100% - 3 * 4px) / 3.2); } }
+@media (min-width: 900px) { .card { width: calc((100% - 4 * 4px) / 4.25); } }
+@media (min-width: 1280px) { .card { width: calc((100% - 4 * 4px) / 5); } }
+.static { cursor: default; }
+
+.cover {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 5;
+  overflow: hidden;
+  /* Square, frameless covers that sit flush (as VIA Stories). */
+  border: 0;
+  border-radius: 0;
+  background: #e7e5e4;
+}
+.coverImg { object-fit: cover; transition: transform .5s ease-out; }
+.card:hover .coverImg { transform: scale(1.03); }
+.shade { position: absolute; inset: 0; background: linear-gradient(to top, rgba(12, 10, 9, .25), transparent 50%); pointer-events: none; }
+
+.id { display: block; width: 100%; margin-top: 12px; padding: 0 8px; }
+.nameRow { display: flex; align-items: center; gap: 10px; }
+.mono {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(205, 165, 94, .55);
+  border-radius: 50%;
+  background: var(--hs-wine);
+  color: #f7f2ea;
+  font-size: 12px;
+  font-weight: 500;
+  transition: transform .2s ease;
+}
+.card:hover .mono { transform: scale(1.05); }
+.name {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--hs-ink);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.25;
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.root[dir="rtl"] .name { text-align: right; }
+.cats {
+  display: block;
+  overflow: hidden;
+  margin-top: 5px;
+  color: var(--hs-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browse {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  color: #44403c;
+  font-size: 12px;
+  font-weight: 500;
+  transition: color .2s ease;
+}
+.browse span { padding-bottom: 1px; border-bottom: 1px solid transparent; }
+.browse svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.card:hover .browse:not([data-unavailable]) { color: var(--hs-ink); }
+.card:hover .browse:not([data-unavailable]) span { border-color: var(--hs-ink); }
+.browse[data-unavailable] { color: var(--hs-quiet); cursor: default; }
+
+/* ------------------------------------------------------------ phones
+   Two even cards in view, the rest a swipe away (the way the line reads:
+   RTL scrolls left, LTR right). The row runs to the screen edge so the
+   next store peeks in from the edge; each card snaps to the gutter line.
+   A taller 3:4 cover keeps each storefront's sign in frame, one fixed text
+   block per card so every card ends at the same height. */
+@media (max-width: 599px) {
+  .root { padding-top: 12px; padding-bottom: 28px; }
+
+  .track {
+    gap: 4px;
+    margin-inline: calc(-1 * var(--hs-gutter));
+    padding: 0 var(--hs-gutter) 4px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scroll-padding-inline: var(--hs-gutter);
+  }
+  .card { width: calc((100vw - 2 * var(--hs-gutter) - 4px) / 2); min-width: 0; }
+  .cover { aspect-ratio: 3 / 4; }
+
+  .id { display: flex; flex: 1; flex-direction: column; margin-top: 10px; padding: 0 8px; }
+  .nameRow { gap: 8px; }
+  .mono { width: 26px; height: 26px; font-size: 11px; }
+  .name { font-size: 13px; line-height: 1.3; }
+  /* Long category lists wrap to two lines at most, in a fixed block. */
+  .cats {
+    display: -webkit-box;
+    min-height: calc(2 * 1.5em);
+    margin-top: 6px;
+    font-size: 11.5px;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+  .browse { align-self: flex-start; min-height: 32px; margin-top: 4px; font-size: 12.5px; }
+  .browse svg { width: 15px; height: 15px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .coverImg, .mono, .nav { transition: none; }
+  .card:hover .coverImg, .card:hover .mono { transform: none; }
+}
+
+.liveCover {
+  display: grid;
+  place-items: center;
+}

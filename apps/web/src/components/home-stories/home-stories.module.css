@@ -1,0 +1,162 @@
+/* =========================================================================
+   Homepage - VIA STORIES. Editorial stories laid out exactly as the Browse
+   Stores row (home-stores.module.css): the same card widths, cover ratio,
+   gapless square covers, scrolling row with desktop prev / next - each
+   captioned below with a small category label and a headline.
+   Font families need !important only to win over `.home *`.
+   ========================================================================= */
+
+.root {
+  --hst-ink: #1c1917;
+  --hst-muted: #57534e;
+  --hst-gutter: clamp(16px, 3vw, 48px);
+  width: 100vw;
+  margin-inline: calc(50% - 50vw);
+  padding: clamp(28px, 3vw, 48px) var(--hst-gutter) clamp(36px, 4vw, 64px);
+  color: var(--hst-ink);
+}
+.root.root * { font-family: inherit !important; }
+.root[data-lang="ar"] { font-family: "Finalpro Noto", "Segoe UI", sans-serif; }
+.root[data-lang="en"] { font-family: var(--hst-en-text), "Inter", sans-serif; }
+
+/* The heading: HomeSectionHead (shared by every homepage section). */
+
+/* ------------------------------------------------------------ the row
+   As Browse Stores: a hairline 4px between covers, the same number in view
+   (2 on a phone, 3.2 / 4.25 / 5 wider), the rest a swipe or arrow away. */
+
+.strip { position: relative; }
+.track {
+  display: flex;
+  gap: 4px;
+  margin: 0;
+  padding: 6px 0 16px;
+  list-style: none;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.track::-webkit-scrollbar { display: none; }
+
+/* Prev / next: desktop only (touch scrolls) - as .nav in Browse Stores. */
+.nav {
+  position: absolute;
+  z-index: 2;
+  top: 40%;
+  display: none;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid rgba(231, 229, 228, .9);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .92);
+  color: var(--hst-ink);
+  box-shadow: 0 4px 14px rgba(28, 25, 23, .08);
+  cursor: pointer;
+  transform: translateY(-50%);
+  transition: background-color .2s ease, transform .2s ease;
+}
+.nav:hover { background: #fff; transform: translateY(-50%) scale(1.04); }
+.nav:focus-visible { outline: 1px solid var(--hst-ink); outline-offset: 3px; }
+.nav svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.root[dir="rtl"] .nav svg { transform: scaleX(-1); }
+.navPrev { inset-inline-start: -14px; }
+.navNext { inset-inline-end: -14px; }
+@media (min-width: 900px) and (hover: hover) { .nav { display: grid; } }
+
+.card {
+  flex: none;
+  width: min(62vw, 240px);
+  scroll-snap-align: start;
+}
+.card article { display: block; }
+@media (min-width: 600px) { .card { width: calc((100% - 3 * 4px) / 3.2); } }
+@media (min-width: 900px) { .card { width: calc((100% - 4 * 4px) / 4.25); } }
+@media (min-width: 1280px) { .card { width: calc((100% - 4 * 4px) / 5); } }
+
+/* ------------------------------------------------------------ a card */
+
+.media {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 5;
+  overflow: hidden;
+  border-radius: 0;
+  background: #e7e5e4;
+}
+.root .img {
+  object-fit: cover;
+  border-radius: 0;
+  transition: transform .5s ease-out;
+}
+@media (hover: hover) {
+  .card:hover .img { transform: scale(1.03); }
+}
+
+/* The caption keeps the stores' inner padding, so neighbouring captions
+   never meet now that the covers sit flush. */
+.caption { display: block; margin-top: 12px; padding: 0 8px; }
+
+/* The label's line box fits its glyphs (Latin caps and Arabic marks both),
+   so nothing presses into the headline below. */
+.root .cat {
+  margin: 0;
+  color: var(--hst-muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.75;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+}
+.root[data-lang="ar"] .cat { font-size: 12px; line-height: 1.75; letter-spacing: 0; }
+
+/* Two lines reserved: every caption block is the same height, whether
+   its headline wraps or not. */
+.root .headline {
+  margin: 4px 0 0;
+  color: var(--hst-ink);
+  font-weight: 400;
+  text-wrap: balance;
+  min-height: calc(2 * 1lh);
+}
+.root[data-lang="en"] .headline {
+  font-family: var(--hst-en-display), "Cormorant Garamond", Georgia, serif !important;
+  font-size: clamp(18px, 1.35vw, 20px);
+  font-weight: 500;
+  line-height: 1.25;
+}
+.root[data-lang="ar"] .headline {
+  font-family: var(--hst-ar-display), "Noto Naskh Arabic", serif !important;
+  font-size: clamp(16px, 1.2vw, 18px);
+  line-height: 1.6;
+}
+
+/* Phones: as Browse Stores - two covers in view, 3:4, the row running to
+   the screen edge and snapping to the gutter line; the rest a swipe away
+   in the reading direction. */
+@media (max-width: 599px) {
+  .root { padding-top: 12px; padding-bottom: 28px; }
+  .track {
+    margin-inline: calc(-1 * var(--hst-gutter));
+    padding: 0 var(--hst-gutter) 4px;
+    scroll-padding-inline: var(--hst-gutter);
+  }
+  .card { width: calc((100vw - 2 * var(--hst-gutter) - 4px) / 2); }
+  .media { aspect-ratio: 3 / 4; }
+  .caption { margin-top: 10px; }
+  .root .cat { font-size: 10.5px; letter-spacing: .14em; }
+  .root[data-lang="ar"] .cat { font-size: 11.5px; letter-spacing: 0; }
+  .root .headline { margin-top: 2px; }
+  .root[data-lang="en"] .headline { font-size: 16px; line-height: 1.25; }
+  .root[data-lang="ar"] .headline { font-size: 14.5px; line-height: 1.6; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .root .img, .nav { transition: none; }
+  .card:hover .img { transform: none; }
+}

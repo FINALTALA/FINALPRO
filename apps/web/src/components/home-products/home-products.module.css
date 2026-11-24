@@ -24,32 +24,8 @@
 .root[data-lang="ar"] { font-family: "Finalpro Noto", "Segoe UI", sans-serif; }
 .root[data-lang="en"] { font-family: var(--hp-en-text), "Inter", sans-serif; }
 
-.head {
-  margin: 0 0 clamp(18px, 2vw, 28px);
-  text-align: center;
-}
-.root .title {
-  margin: 0;
-  color: var(--hp-ink);
-  font-weight: 400;
-}
-.root[data-lang="ar"] .title {
-  font-family: var(--hp-ar-display), "Noto Naskh Arabic", serif !important;
-  font-size: clamp(28px, 2.6vw, 42px);
-  line-height: 1.45;
-}
-.root[data-lang="en"] .title {
-  font-family: var(--hp-en-display), "Cormorant Garamond", Georgia, serif !important;
-  font-size: clamp(32px, 3vw, 48px);
-  font-weight: 500;
-  line-height: 1.08;
-}
-.root .subtitle {
-  margin: 8px 0 0;
-  color: var(--hp-muted);
-  font-size: 14px;
-  line-height: 1.6;
-}
+/* The heading (title + subtitle): HomeSectionHead, shared by every
+   homepage section. */
 
 /* ---------------------------------------------------------- filter bar */
 
@@ -129,21 +105,67 @@
 .grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 22px 12px;
+  /* A hairline 4px between cards side by side (each body keeps its own
+     12px inner padding); rows keep their spacing. */
+  gap: 22px 4px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
-@media (min-width: 600px) { .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 26px 16px; } }
+/* Square product photos on the homepage only (the shared ProductCard
+   stays rounded everywhere else). */
+.root .grid :global(.product-card-media) { border-radius: 0; }
+/* The info under the photo (homepage only): a solid cream panel, cut
+   square, set off from the photo by one quiet rule - name, then rating /
+   price, then availability, in small type so the product leads. Every card
+   in a row ends on the same line. */
+.root .grid > li > :global(.product-card) { height: 100%; }
+.root .grid :global(.product-card-body) {
+  flex: 1 1 auto;
+  gap: 4px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid #ded3c4;
+  border-radius: 0;
+  background: #fffaf2;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+.root .grid :global(.product-card-name) { color: var(--hp-ink); }
+.root .grid :global(.women-product-card-price-row),
+.root .grid :global(.women-product-card-actions) { min-height: 18px; }
+/* Nothing to show on the price row (no price, no rating yet): no empty band. */
+.root .grid :global(.women-product-card-price-row:not(:has(.women-product-card-price, .women-product-card-rating:not([aria-label="لا يوجد تقييم بعد"])))) { display: none; }
+/* One quiet frame round the whole card (photo + info read as one piece):
+   a layer over the card's edge - above the photo, which would otherwise
+   paint over it - so the photo and card keep their exact size. */
+.root .grid :global(.product-card) { position: relative; border-radius: 0; }
+.root .grid :global(.product-card)::after {
+  content: "";
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  border: 1px solid #ded3c4;
+  pointer-events: none;
+}
+/* The price: the second thing to read, after the name. */
+.root .grid :global(.women-product-card-price) {
+  color: var(--hp-ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+/* No rating yet: no empty star and dash. (ProductCard always labels an
+   unrated card with this exact text.) */
+.root .grid :global(.women-product-card-rating[aria-label="لا يوجد تقييم بعد"]) { display: none; }
+@media (min-width: 600px) { .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 26px 4px; } }
 @media (min-width: 900px) { .grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-@media (min-width: 1200px) { .grid { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 30px 18px; } }
+@media (min-width: 1200px) { .grid { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 30px 4px; } }
 @media (min-width: 1600px) { .grid { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
 
 /* Discover and Following - one shopping grid: smaller cards, 5 from 1100px,
    6 from 1400px (as SHOP_COLUMN_TIERS in HomeProducts.tsx); a touch more
    air between rows than columns so the denser grid still reads as calm. */
-@media (min-width: 1100px) { .grid[data-view="shop"] { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 30px 16px; } }
-@media (min-width: 1400px) { .grid[data-view="shop"] { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 32px 16px; } }
+@media (min-width: 1100px) { .grid[data-view="shop"] { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 30px 4px; } }
+@media (min-width: 1400px) { .grid[data-view="shop"] { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 32px 4px; } }
 
 .item { min-width: 0; }
 

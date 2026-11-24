@@ -16,6 +16,7 @@ import { CURATED_PIECES, type CuratedPiece } from "./curatedPieces";
 import { FOLLOWING_DEMO_PIECES } from "./followingDemo";
 import { reelForPiece, type ProductReel } from "./productReels";
 import "@/app/women/women.css";
+import HomeSectionHead from "@/components/home-section-head/HomeSectionHead";
 import styles from "./home-products.module.css";
 
 // The hero's editorial faces (same next/font settings, so the same files).
@@ -141,8 +142,8 @@ const completeRows = (count: number, cols: number, more: boolean) =>
 function catalogPath(d: Discovery, scope: Scope | null, size: number, page: { cursor?: string | null; n?: number }): string | null {
   const p = new URLSearchParams({ page_size: String(size) });
   // Audience = the store segment; shoes / bags = the catalogue's own
-  // category classification (the product taxonomy's codes: SHOES, BAGS).
-  if (scope === "shoes" || scope === "bags") p.set("category", scope.toUpperCase());
+  // category classification.
+  if (scope === "shoes" || scope === "bags") p.set("category", scope);
   else if (scope) p.set("segment", scope);
   if (d === "following") {
     if (scope) return null;
@@ -398,10 +399,7 @@ export default function HomeProducts() {
 
   return (
     <section className={`${styles.root} ${FONT_VARS}`} data-lang={lang} dir={lang === "ar" ? "rtl" : "ltr"} aria-labelledby="home-products-title">
-      <header className={styles.head}>
-        <h2 id="home-products-title" className={styles.title}>{t("hp.title")}</h2>
-        <p className={styles.subtitle}>{t("hp.subtitle")}</p>
-      </header>
+      <HomeSectionHead id="home-products-title" title={t("hp.title")} aside={t("hp.subtitle")} />
 
       {/* One line: what to show | whose / what kind (independent choices). */}
       <div className={styles.bar} role="toolbar" aria-label={t("hp.filters")}>
