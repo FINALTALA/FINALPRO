@@ -225,6 +225,19 @@ export async function placeAndPickUpOrder(
     `/vendors/${vendorId}/branches/${branchId}/orders/${branchOrderId}/start-preparation`,
     { method: "POST", token: owner, idempotencyKey: unique("staff") },
   );
+  // «إدارة طلبات الفرع v2» phase 2: the mandatory checklist and «جاهز» before the hand-over
+  for (const item of ["ITEMS_VERIFIED", "PACKED"]) {
+    await call(`/vendors/${vendorId}/branches/${branchId}/orders/${branchOrderId}/prep-checklist/${item}`, {
+      method: "PATCH",
+      token: owner,
+      body: { done: true },
+    });
+  }
+  await call(`/vendors/${vendorId}/branches/${branchId}/orders/${branchOrderId}/mark-ready`, {
+    method: "POST",
+    token: owner,
+    idempotencyKey: unique("staff"),
+  });
   await call(
     `/vendors/${vendorId}/branches/${branchId}/orders/${branchOrderId}/pickup-handover`,
     {

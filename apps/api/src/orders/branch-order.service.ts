@@ -81,9 +81,13 @@ export class BranchOrderService {
       });
     }
 
+    // «إدارة طلبات الفرع v2» phase 2 (2026-11-24): the moment an order is
+    // finally completed, on every path (they all pass here) - no backfill.
+    const completed: Prisma.BranchOrderUpdateInput =
+      to === 'COMPLETED' ? { completedAt: new Date() } : {};
     const updated = await tx.branchOrder.update({
       where: { id: branchOrderId },
-      data: { ...extraData, status: to },
+      data: { ...completed, ...extraData, status: to },
     });
     await this.auditLog.record(
       {

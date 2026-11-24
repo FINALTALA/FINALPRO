@@ -31,6 +31,9 @@ registerTranslations({
   ar: {
     "ord.status.PLACED": "قيد الانتظار",
     "ord.status.PREPARING": "قيد التجهيز",
+    // «إدارة طلبات الفرع v2» phase 2: her pickup order is ready at the branch
+    "ord.ready_for_pickup": "جاهز للاستلام",
+    "ord.ready_for_pickup_hint": "طلبكِ جاهز في الفرع - اعرضي رمز الاستلام عند الوصول.",
     "ord.status.SENT": "أُرسل",
     "ord.status.DELIVERED": "تم التوصيل - بانتظار تأكيدك",
     "ord.status.PICKED_UP": "تم الاستلام",
@@ -100,6 +103,8 @@ registerTranslations({
   en: {
     "ord.status.PLACED": "Placed",
     "ord.status.PREPARING": "Being prepared",
+    "ord.ready_for_pickup": "Ready for pickup",
+    "ord.ready_for_pickup_hint": "Your order is ready at the branch - show your pickup code when you arrive.",
     "ord.status.SENT": "Sent",
     "ord.status.DELIVERED": "Delivered - awaiting your confirmation",
     "ord.status.PICKED_UP": "Picked up",
@@ -229,6 +234,8 @@ interface OrderDto {
   branch_id: string;
   branch_name: string;
   status: string;
+  /** phase 2: her PICKUP order is ready at the branch (a flag only) */
+  ready_for_pickup?: boolean;
   fulfilment_method: string;
   payment_method: string;
   delivery_attempt_count: number;
@@ -494,8 +501,13 @@ export default function OrdersPage({ embedded = false, context = "profile" }: { 
                   <div style={{ fontWeight: 600 }}>{o.vendor_display_name}</div>
                   <div className="muted">{fmt(t("ord.branch"), { name: o.branch_name })}</div>
                 </div>
-                <span className="badge badge-active">{t(`ord.status.${o.status}`) === `ord.status.${o.status}` ? o.status : t(`ord.status.${o.status}`)}</span>
+                {o.ready_for_pickup ? (
+                  <span className="badge badge-active customer-order-ready" data-testid="customer-order-ready">{t("ord.ready_for_pickup")}</span>
+                ) : (
+                  <span className="badge badge-active">{t(`ord.status.${o.status}`) === `ord.status.${o.status}` ? o.status : t(`ord.status.${o.status}`)}</span>
+                )}
               </div>
+              {o.ready_for_pickup && <p className="customer-order-ready-hint" role="note">{t("ord.ready_for_pickup_hint")}</p>}
 
               <div className="customer-order-overview">
               <div className="customer-order-items" style={{ marginTop: 10 }}>

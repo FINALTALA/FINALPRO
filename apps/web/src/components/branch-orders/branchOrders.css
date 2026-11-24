@@ -163,6 +163,24 @@ html[dir="rtl"] .bo-row-link.is-selected, [dir="rtl"] .bo-row-link.is-selected {
 }
 .bo-chip.is-placed { background: #e8eefb; color: #23468f; }
 .bo-chip.is-preparing { background: var(--wz-sand-soft); color: var(--wz-sand-ink); }
+/* phase 2: «جاهز للاستلام» / «جاهز للإرسال» (PREPARING with readyAt) */
+.bo-chip.is-ready { background: #e3f1e8; color: #1f5c3a; box-shadow: inset 0 0 0 1px rgba(31, 92, 58, 0.25); }
+
+/* phase 2: the preparation section - the saved checklist, who and when */
+.bo-prep-meta, .bo-prep-ready { margin: 0 0 8px; font-size: 0.88rem; }
+.bo-prep-ready { color: #1f5c3a; font-weight: 700; }
+.bo-prep-list { margin: 0; padding: 0; border: 0; display: grid; gap: 4px; }
+.bo-prep-list legend { padding: 0; }
+.bo-prep-item { display: grid; gap: 0; padding: 6px 10px; border-radius: 10px; border: 1px solid var(--wz-line); background: var(--wz-paper); }
+.bo-prep-item.is-done { background: #f3f8f4; border-color: rgba(31, 92, 58, 0.25); }
+.bo-prep-check { display: flex; align-items: center; gap: 10px; min-block-size: 40px; cursor: pointer; font-weight: 600; }
+.bo-prep-check input { inline-size: 20px; block-size: 20px; flex: none; accent-color: #1f5c3a; }
+.bo-prep-list:disabled .bo-prep-check { cursor: default; }
+.bo-prep-tag { margin-inline-start: auto; padding: 0 8px; border-radius: 999px; font-size: 0.74rem; font-weight: 700; color: var(--wz-muted); border: 1px solid var(--wz-line); white-space: nowrap; }
+.bo-prep-tag.is-required { color: var(--wz-wine); border-color: rgba(100, 40, 59, 0.3); }
+.bo-prep-by { margin: 0 0 4px; padding-inline-start: 30px; font-size: 0.8rem; }
+.bo-ready-hint { margin: 0 0 8px; font-size: 0.86rem; color: var(--wz-sand-ink); }
+.bo-ready-hint.is-ok { color: #1f5c3a; }
 .bo-chip.is-sent { background: #e6f2f1; color: #1e5c56; }
 .bo-chip.is-delivered, .bo-chip.is-picked_up { background: #e9f4ec; color: #2f6b49; }
 .bo-chip.is-completed { background: #e3efe7; color: #245a3c; }

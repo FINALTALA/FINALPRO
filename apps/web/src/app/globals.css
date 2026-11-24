@@ -6751,6 +6751,11 @@ html[data-embed="management"] .mypage-back { display: none; }
 .cart-orders .customer-order-fulfilment { align-self: flex-start; padding: 6px 10px; border: 1px solid rgba(255,221,191,.22); border-radius: 999px; background: rgba(255,250,244,.08); color: #f0d8bc; font-size: .82rem; }
 .cart-orders .customer-order-detail { padding-inline: 2px; font-size: .85rem; line-height: 1.55; }
 .cart-orders .customer-order-pickup-code { align-self: flex-start; padding: 8px 12px; border: 1px dashed rgba(240,201,130,.52); border-radius: 10px; background: rgba(240,201,130,.1); color: #ffe1a3; letter-spacing: .03em; }
+/* «إدارة طلبات الفرع v2» phase 2: «جاهز للاستلام» on the shopper's own pickup order */
+.customer-order-ready { background: #e3f1e8 !important; color: #1f5c3a !important; box-shadow: inset 0 0 0 1px rgba(31, 92, 58, .3); }
+.customer-order-ready-hint { margin: 6px 0 0; font-size: .88rem; color: #1f5c3a; font-weight: 600; }
+.cart-orders .customer-order-ready { background: rgba(128, 214, 160, .16) !important; color: #c9f0d6 !important; box-shadow: inset 0 0 0 1px rgba(128, 214, 160, .45); }
+.cart-orders .customer-order-ready-hint { color: #c9f0d6; }
 .cart-orders .customer-order-total { align-items: center; margin-top: 4px !important; padding-top: 12px; border-top: 1px solid rgba(255,224,207,.18); }.cart-orders .customer-order-total .product-card-price { color: #f2ca80; font-size: 1.25rem; font-weight: 900; }
 .cart-orders .customer-order-actions { padding-top: 3px; }.cart-orders .customer-order-actions .button-secondary { border-color: rgba(255,221,191,.34); background: rgba(255,250,244,.08); color: #fffaf3; }
 @media (max-width: 760px) { .cart-orders .customer-order-card { padding: 17px; }.cart-orders .customer-order-head { align-items: flex-start !important; gap: 10px; }.cart-orders .customer-order-item { align-items: flex-start !important; flex-direction: column; } }

@@ -8,6 +8,7 @@ import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
 import { PrismaService } from './../src/prisma/prisma.service';
 import { createUniquePhone } from './helpers/e2e-phone-lanes';
+import { readyAfterStartPreparation } from './helpers/prep-ready-fixture';
 
 type Res = { status: number; body: any };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -237,13 +238,22 @@ describe('Sprint 23 - reviews and the verification badge (e2e)', () => {
     action: string,
     body: Record<string, unknown> = {},
   ) =>
-    request(app.getHttpServer())
-      .post(
-        `/api/v1/vendors/${vendorId}/branches/${branchId}/orders/${branchOrderId}/${action}`,
-      )
-      .set('Authorization', `Bearer ${token}`)
-      .set('Idempotency-Key', unique('staff-action'))
-      .send(body);
+    // phase 2 fixture (see prep-ready-fixture.ts): started = prepared and ready
+    readyAfterStartPreparation(
+      request(app.getHttpServer())
+        .post(
+          `/api/v1/vendors/${vendorId}/branches/${branchId}/orders/${branchOrderId}/${action}`,
+        )
+        .set('Authorization', `Bearer ${token}`)
+        .set('Idempotency-Key', unique('staff-action'))
+        .send(body),
+      action,
+      () =>
+        prisma.branchOrder.update({
+          where: { id: branchOrderId },
+          data: { readyAt: new Date() },
+        }),
+    );
 
   /** Places a PICKUP BranchOrder and drives it all the way through
    * PICKED_UP -> COMPLETED (pickup-handover does both transitions

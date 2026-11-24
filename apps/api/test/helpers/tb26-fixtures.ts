@@ -213,6 +213,36 @@ export function tb26Fixtures(getApp: () => INestApplication) {
       .set(staffHeaders(who, workspace))
       .send(body);
 
+  /** Ticks / un-ticks one prep checklist item of a branch-A order. */
+  const prepCheck = (
+    s: Store,
+    who: { token: string },
+    branchOrderId: string,
+    item: string,
+    done = true,
+    workspace?: string,
+  ) =>
+    http()
+      .patch(
+        `/api/v1/vendors/${s.vendorId}/branches/${s.branchA}/orders/${branchOrderId}/prep-checklist/${item}`,
+      )
+      .set(staffHeaders(who, workspace))
+      .send({ done });
+
+  /** «إدارة طلبات الفرع v2» phase 2: the two mandatory items, then «جاهز» -
+   * through the real endpoints, as `who`. */
+  async function prepareAndReady(
+    s: Store,
+    who: { token: string },
+    branchOrderId: string,
+    workspace?: string,
+  ) {
+    for (const item of ['ITEMS_VERIFIED', 'PACKED']) {
+      await prepCheck(s, who, branchOrderId, item, true, workspace).expect(200);
+    }
+    await staff(s, who, branchOrderId, 'mark-ready', {}, workspace).expect(201);
+  }
+
   /** Buys one unit for pickup from branch A as `buyer` (a SHOPPING call -
    * the session alone). `complete` hands it over (staff `by`, with their
    * workspace token when given). */
@@ -261,6 +291,9 @@ export function tb26Fixtures(getApp: () => INestApplication) {
         {},
         complete.workspace,
       ).expect(201);
+      // «إدارة طلبات الفرع v2» phase 2: the mandatory checklist and «جاهز»
+      // (the real endpoints) before the hand-over
+      await prepareAndReady(s, complete.by, order.id, complete.workspace);
       await staff(
         s,
         complete.by,
@@ -288,6 +321,8 @@ export function tb26Fixtures(getApp: () => INestApplication) {
     enter,
     staffHeaders,
     staff,
+    prepCheck,
+    prepareAndReady,
     buy,
   };
 }

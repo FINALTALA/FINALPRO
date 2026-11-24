@@ -2,6 +2,7 @@ import {
   Body,
   ConflictException,
   Controller,
+  ForbiddenException,
   Get,
   NotFoundException,
   Param,
@@ -27,8 +28,16 @@ import { PrismaService } from '../prisma/prisma.service';
 import { BranchOrderCancellationService } from './branch-order-cancellation.service';
 import { computeAmountDue } from './branch-order-money.util';
 import { BranchOrderService } from './branch-order.service';
+import {
+  assertReadyIfRequired,
+  BranchOrderPrepService,
+  PREP_ITEM_KEYS,
+  PrepActor,
+  PrepItemKey,
+} from './branch-order-prep.service';
 import { MarkDeliveryFailedDto } from './dto/mark-delivery-failed.dto';
 import { PickupHandoverDto } from './dto/pickup-handover.dto';
+import { PrepCheckDto } from './dto/prep-check.dto';
 import { StaffCancelBranchOrderDto } from './dto/staff-cancel-branch-order.dto';
 import { UpdateInternalOrderNoteDto } from './dto/update-internal-order-note.dto';
 import { FulfilmentReconciliationService } from './fulfilment-reconciliation.service';
@@ -223,7 +232,19 @@ export class BranchOrdersStaffController {
     private readonly cancellation: BranchOrderCancellationService,
     private readonly reconciliation: FulfilmentReconciliationService,
     private readonly outbox: OutboxEventService,
+    private readonly prep: BranchOrderPrepService,
   ) {}
+
+  /** The acting person and their store role (from VendorMembershipGuard). */
+  private prepActor(req: Request, user: AuthenticatedUser): PrepActor {
+    return {
+      userId: user.id,
+      role:
+        req.vendorMembership?.role === 'BRANCH_EMPLOYEE'
+          ? 'BRANCH_EMPLOYEE'
+          : 'OWNER',
+    };
+  }
 
   // PDR-009: "An employee controls only the assigned branch's orders."
   // VendorMembershipGuard itself already 403s a BRANCH_EMPLOYEE whose
@@ -324,6 +345,51 @@ export class BranchOrdersStaffController {
     return { id: order.id };
   }
 
+  /**
+   * «إدارة طلبات الفرع v2» (2026-11-24, approved policy): a BRANCH EMPLOYEE
+   * never runs an operational action on her OWN order (one she placed as a
+   * customer) - start preparation, the checklist, «جاهز», send, deliver,
+   * delivery failed, hand-over, re-request confirmation, cancel (whole or one
+   * item), approve refund, the internal note - old orders and new alike.
+   * Called FIRST in every such handler, right after the branch check (an
+   * order of another branch stays 404, never a hint), before any lock, read
+   * of the code or write: 403 OWN_ORDER_FORBIDDEN, nothing changes. The
+   * OWNER may still fulfil her own order (TB-28), recorded as a
+   * self-fulfilment; money decisions on her own order stay forbidden to her
+   * too (TB-27, unchanged).
+   */
+  private async requireActionableOrder(
+    vendorId: string,
+    branchId: string,
+    branchOrderId: string,
+    req: Request,
+    user: AuthenticatedUser,
+  ): Promise<{ id: string }> {
+    const { id } = await this.requireBranchOrderInBranch(
+      vendorId,
+      branchId,
+      branchOrderId,
+    );
+    if (req.vendorMembership?.role === 'BRANCH_EMPLOYEE') {
+      const o = await this.prisma.branchOrder.findUniqueOrThrow({
+        where: { id },
+        select: {
+          customerOrder: {
+            select: { customer: { select: { userId: true } } },
+          },
+        },
+      });
+      if (o.customerOrder.customer.userId === user.id) {
+        throw new ForbiddenException({
+          code: 'OWN_ORDER_FORBIDDEN',
+          message:
+            'You placed this order - another member of the team must handle it',
+        });
+      }
+    }
+    return { id };
+  }
+
   // PDR-025: "The branch employee explicitly starts preparation."
   @Post('branches/:branchId/orders/:branchOrderId/start-preparation')
   async startPreparation(
@@ -333,10 +399,12 @@ export class BranchOrdersStaffController {
     @CurrentUser() user: AuthenticatedUser,
     @Req() req: Request,
   ) {
-    const { id } = await this.requireBranchOrderInBranch(
+    const { id } = await this.requireActionableOrder(
       vendorId,
       branchId,
       branchOrderId,
+      req,
+      user,
     );
     const updated = await this.prisma.$transaction(async (tx) => {
       // TB-28: fulfilling one's own order is allowed, but recorded.
@@ -348,15 +416,84 @@ export class BranchOrdersStaffController {
         'START_PREPARATION',
         req.correlationId,
       );
+      // «إدارة طلبات الفرع v2» phase 2: who started and when, in the same
+      // atomic write as the status - and with it, this order is on the new
+      // path (mark it ready before sending / handing it over).
+      const actor = this.prepActor(req, user);
       return this.branchOrderService.transition(
         tx,
         id,
         'PREPARING',
         user.id,
         req.correlationId,
+        {
+          preparationStartedAt: new Date(),
+          preparationStartedBy: { connect: { id: user.id } },
+          preparationStartedByRole: actor.role,
+        },
       );
     });
     return { id: updated.id, status: updated.status };
+  }
+
+  // «إدارة طلبات الفرع v2» phase 2: tick / un-tick one prep checklist item
+  // (closed keys). PREPARING and not ready only; an employee never on her
+  // own order. Every change audited with who, role and branch.
+  @Patch('branches/:branchId/orders/:branchOrderId/prep-checklist/:item')
+  async setPrepCheck(
+    @Param('vendorId') vendorId: string,
+    @Param('branchId') branchId: string,
+    @Param('branchOrderId') branchOrderId: string,
+    @Param('item') item: string,
+    @Body() dto: PrepCheckDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
+  ) {
+    const { id } = await this.requireActionableOrder(
+      vendorId,
+      branchId,
+      branchOrderId,
+      req,
+      user,
+    );
+    if (!PREP_ITEM_KEYS.includes(item)) {
+      throw new NotFoundException({
+        code: 'PREP_ITEM_NOT_FOUND',
+        message: 'There is no such checklist item',
+      });
+    }
+    return this.prep.setCheck(
+      id,
+      item as PrepItemKey,
+      dto.done,
+      this.prepActor(req, user),
+      req.correlationId,
+    );
+  }
+
+  // «إعلان الطلب جاهزًا»: the mandatory checklist must be done (checked
+  // here, not by the screen). PICKUP: the customer is told it is ready.
+  @Post('branches/:branchId/orders/:branchOrderId/mark-ready')
+  @UseInterceptors(IdempotencyInterceptor)
+  async markReady(
+    @Param('vendorId') vendorId: string,
+    @Param('branchId') branchId: string,
+    @Param('branchOrderId') branchOrderId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
+  ) {
+    const { id } = await this.requireActionableOrder(
+      vendorId,
+      branchId,
+      branchOrderId,
+      req,
+      user,
+    );
+    return this.prep.markReady(
+      id,
+      this.prepActor(req, user),
+      req.correlationId,
+    );
   }
 
   // PDR-026: "A branch employee marks Sent at hand-off." DELIVERY
@@ -371,10 +508,12 @@ export class BranchOrdersStaffController {
     @CurrentUser() user: AuthenticatedUser,
     @Req() req: Request,
   ) {
-    const { id } = await this.requireBranchOrderInBranch(
+    const { id } = await this.requireActionableOrder(
       vendorId,
       branchId,
       branchOrderId,
+      req,
+      user,
     );
     const updated = await this.prisma.$transaction(async (tx) => {
       // TB-28: fulfilling one's own order is allowed, but recorded.
@@ -386,13 +525,39 @@ export class BranchOrdersStaffController {
         'MARK_SENT',
         req.correlationId,
       );
-      return this.branchOrderService.transition(
+      // phase 2: an order on the new path is sent only once ready
+      await assertReadyIfRequired(tx, id);
+      const sent = await this.branchOrderService.transition(
         tx,
         id,
         'SENT',
         user.id,
         req.correlationId,
       );
+      // phase 2: the customer is told her order is on its way (ORDER_SENT -
+      // the order id only)
+      const order = await tx.branchOrder.findUniqueOrThrow({
+        where: { id },
+        select: {
+          customerOrder: {
+            select: { customer: { select: { userId: true } } },
+          },
+        },
+      });
+      await this.outbox.enqueue(
+        {
+          eventType: 'branch_order.sent',
+          audience: 'CUSTOMER',
+          payload: {
+            branch_order_id: id,
+            vendor_id: vendorId,
+            branch_id: branchId,
+            recipient_user_id: order.customerOrder.customer.userId,
+          },
+        },
+        tx,
+      );
+      return sent;
     });
     return { id: updated.id, status: updated.status };
   }
@@ -451,10 +616,12 @@ export class BranchOrdersStaffController {
     @CurrentUser() user: AuthenticatedUser,
     @Req() req: Request,
   ) {
-    const { id } = await this.requireBranchOrderInBranch(
+    const { id } = await this.requireActionableOrder(
       vendorId,
       branchId,
       branchOrderId,
+      req,
+      user,
     );
     const deliveredAt = new Date();
     const updated = await this.prisma.$transaction(async (tx) => {
@@ -522,10 +689,12 @@ export class BranchOrdersStaffController {
     @CurrentUser() user: AuthenticatedUser,
     @Req() req: Request,
   ) {
-    const { id } = await this.requireBranchOrderInBranch(
+    const { id } = await this.requireActionableOrder(
       vendorId,
       branchId,
       branchOrderId,
+      req,
+      user,
     );
     const updated = await this.prisma.$transaction(async (tx) => {
       // TB-28: fulfilling one's own order is allowed, but recorded.
@@ -544,6 +713,9 @@ export class BranchOrdersStaffController {
           message: 'This is not a PICKUP order',
         });
       }
+      // phase 2: an order on the new path is handed over only once ready -
+      // checked before the code, so a not-ready order says nothing about it
+      await assertReadyIfRequired(tx, id);
       if (!order.pickupCode || order.pickupCode !== dto.pickup_code) {
         throw new ConflictException({
           code: 'WRONG_PICKUP_CODE',
@@ -586,10 +758,12 @@ export class BranchOrdersStaffController {
     @CurrentUser() user: AuthenticatedUser,
     @Req() req: Request,
   ) {
-    const { id } = await this.requireBranchOrderInBranch(
+    const { id } = await this.requireActionableOrder(
       vendorId,
       branchId,
       branchOrderId,
+      req,
+      user,
     );
     return this.prisma.$transaction(async (tx) => {
       // TB-28: fulfilling one's own order is allowed, but recorded.
@@ -741,6 +915,14 @@ export class BranchOrdersStaffController {
     @CurrentUser() user: AuthenticatedUser,
     @Req() req: Request,
   ) {
+    // the employee's own order: refused before anything (see requireActionableOrder)
+    await this.requireActionableOrder(
+      vendorId,
+      branchId,
+      branchOrderId,
+      req,
+      user,
+    );
     const result = await this.prisma.$transaction(async (tx) => {
       const order = await this.lockAndRequireStatus(
         tx,
@@ -790,6 +972,14 @@ export class BranchOrdersStaffController {
     @CurrentUser() user: AuthenticatedUser,
     @Req() req: Request,
   ) {
+    // the employee's own order: refused before anything (see requireActionableOrder)
+    await this.requireActionableOrder(
+      vendorId,
+      branchId,
+      branchOrderId,
+      req,
+      user,
+    );
     const result = await this.prisma.$transaction(async (tx) => {
       const order = await this.lockAndRequireStatus(
         tx,
@@ -859,6 +1049,14 @@ export class BranchOrdersStaffController {
     @CurrentUser() user: AuthenticatedUser,
     @Req() req: Request,
   ) {
+    // the employee's own order: refused before anything (see requireActionableOrder)
+    await this.requireActionableOrder(
+      vendorId,
+      branchId,
+      branchOrderId,
+      req,
+      user,
+    );
     const outcome = await this.prisma.$transaction(async (tx) => {
       const order = await this.lockAndRequireStatus(
         tx,
@@ -946,6 +1144,14 @@ export class BranchOrdersStaffController {
     @CurrentUser() user: AuthenticatedUser,
     @Req() req: Request,
   ) {
+    // the employee's own order: refused before anything (see requireActionableOrder)
+    await this.requireActionableOrder(
+      vendorId,
+      branchId,
+      branchOrderId,
+      req,
+      user,
+    );
     const result = await this.prisma.$transaction(async (tx) => {
       const order = await this.lockAndRequireStatus(
         tx,
@@ -998,6 +1204,14 @@ export class BranchOrdersStaffController {
     @CurrentUser() user: AuthenticatedUser,
     @Req() req: Request,
   ) {
+    // the employee's own order: refused before anything (see requireActionableOrder)
+    await this.requireActionableOrder(
+      vendorId,
+      branchId,
+      branchOrderId,
+      req,
+      user,
+    );
     return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM branch_orders WHERE id = ${branchOrderId} FOR UPDATE`;
       const order = await tx.branchOrder.findUnique({

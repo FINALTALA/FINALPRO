@@ -79,6 +79,11 @@ model User {
   vendorReactivationsMade      VendorSuspension[]              @relation("ReactivationActor")
   sentStaffInvites             StaffInvite[]                   @relation("StaffInviter")
   stockMovements               StockMovement[]
+  /// 2026-11-24: branch orders this person started preparing / marked ready,
+  /// and the prep checklist items they completed
+  branchOrdersPrepStarted      BranchOrder[]                   @relation("BranchOrderPreparationStartedBy")
+  branchOrdersMarkedReady      BranchOrder[]                   @relation("BranchOrderReadyBy")
+  branchOrderPrepChecks        BranchOrderPrepCheck[]          @relation("BranchOrderPrepCheckDoneBy")
   decidedNameChangeRequests    CanonicalNameChangeRequest[]
   storeFollows                 StoreFollow[]
   priceChangesMade             PriceHistory[]
@@ -1338,6 +1343,11 @@ enum NotificationType {
   RETURN_PLATFORM_APPROVED
   RETURN_PLATFORM_REJECTED
   RETURN_CANCELLED_BY_CUSTOMER
+  /// «إدارة طلبات الفرع v2» phase 2 (2026-11-24): to the customer - her
+  /// PICKUP order was marked ready at the branch (never the pickup code).
+  READY_FOR_PICKUP
+  /// To the customer - her DELIVERY order was handed to the courier.
+  ORDER_SENT
 }
 
 /// TB-12.2: the kinds of platform alert an administrator can subscribe to.
@@ -3229,10 +3239,34 @@ model BranchOrder {
   returnPolicySnapshotExchangeFeeIls Decimal?    @db.Decimal(10, 2)
   returnPolicySnapshotVersion        DateTime?
 
+  /// «إدارة طلبات الفرع v2» phase 2 (2026-11-24, additive): when and by whom
+  /// the order started preparing (PLACED -> PREPARING) - written by
+  /// start-preparation from this release on only; NO backfill (older orders
+  /// stay null). A non-null value is also what puts the order on the new
+  /// path: it must be marked ready before it can be sent / handed over.
+  /// The role is the actor's store role at that moment (OWNER |
+  /// BRANCH_EMPLOYEE; CHECK in SQL).
+  preparationStartedAt               DateTime?
+  preparationStartedById             String?
+  preparationStartedBy               User?       @relation("BranchOrderPreparationStartedBy", fields: [preparationStartedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  preparationStartedByRole           String?
+  /// «جاهز»: a sub-state of PREPARING (no new status) - set by mark-ready,
+  /// only once the mandatory prep checks are done (server-checked).
+  readyAt                            DateTime?
+  readyById                          String?
+  readyBy                            User?       @relation("BranchOrderReadyBy", fields: [readyById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  readyByRole                        String?
+  /// When the order became COMPLETED (any path: hand-over, the customer's
+  /// confirmation, the 72h auto-confirm) - written by the one transition
+  /// service; null on older orders (no backfill).
+  completedAt                        DateTime?
+
   items   BranchOrderItem[]
   refunds BranchOrderRefund[]
   /// 2026-11-22: its stock log lines (ORDER_SALE / ORDER_CANCEL_RESTOCK)
   stockMovements StockMovement[]
+  /// 2026-11-24: the saved prep checklist (one row per completed item)
+  prepChecks     BranchOrderPrepCheck[]
 
   /// Backs BranchOrderItem's own composite FK (vendorId,
   /// branchOrderId) -> (vendorId, id).
@@ -3244,6 +3278,26 @@ model BranchOrder {
   @@index([deliveryWindowId, scheduledDate])
   @@index([paymentTransactionId])
   @@map("branch_orders")
+}
+
+/// «إدارة طلبات الفرع v2» phase 2 (2026-11-24): one completed item of an
+/// order's saved prep checklist - who did it, when, and their store role
+/// then. Closed item keys (CHECK in SQL): ITEMS_VERIFIED (pieces, colour,
+/// size - mandatory), PACKED (mandatory), INVOICE_ATTACHED (optional).
+/// Un-ticking (before «جاهز» only) deletes the row; both are audited.
+model BranchOrderPrepCheck {
+  id            String      @id @default(uuid())
+  vendorId      String
+  branchOrderId String
+  branchOrder   BranchOrder @relation(fields: [vendorId, branchOrderId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  itemKey       String
+  doneAt        DateTime    @default(now())
+  doneById      String
+  doneBy        User        @relation("BranchOrderPrepCheckDoneBy", fields: [doneById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  doneByRole    String
+
+  @@unique([branchOrderId, itemKey])
+  @@map("branch_order_prep_checks")
 }
 
 model BranchOrderItem {

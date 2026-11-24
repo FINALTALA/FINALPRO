@@ -629,8 +629,10 @@ export default function BranchOrdersBoard({ vendorId, branchId }: { vendorId: st
             const hours = r.window ? `${clock(r.window.start_minute, lang)}–${clock(r.window.end_minute, lang)}` : "";
             const slot = r.scheduled_date && r.window ? `${shortDay(r.scheduled_date, lang)} · ${hours}` : null;
             const slotFull = r.scheduled_date && r.window ? `${dayLabel(r.scheduled_date, lang)} · ${hours}` : undefined;
-            const statusFull = t(statusKey(r.status));
-            const statusShort = SHORT_STATUS.has(r.status) ? t(`bo.short.${r.status}`) : null;
+            // phase 2: a ready order says so - «جاهز للاستلام» / «جاهز للإرسال»
+            const ready = r.is_ready === true;
+            const statusFull = ready ? t(`bo.ready.${r.fulfilment_method}`) : t(statusKey(r.status));
+            const statusShort = !ready && SHORT_STATUS.has(r.status) ? t(`bo.short.${r.status}`) : null;
             // cash on delivery, still open: what to collect (both roles); otherwise
             // the owner sees the order's total, the employee no amount at all
             const collect = r.payment_method === "COD" && r.bucket !== "done" && r.amount_due !== null ? r.amount_due : null;
@@ -654,7 +656,7 @@ export default function BranchOrdersBoard({ vendorId, branchId }: { vendorId: st
                     <span className="bo-row-num" dir="ltr">#{r.number}</span>
                     {/* never cut: a long status has a short, clear name in the row; the full
                         one is read by screen readers, shown as a tooltip and in the details */}
-                    <span className={`bo-chip bo-row-status is-${r.status.toLowerCase()}`} title={statusShort ? statusFull : undefined} data-testid="bo-row-status">
+                    <span className={`bo-chip bo-row-status ${ready ? "is-ready" : `is-${r.status.toLowerCase()}`}`} title={statusShort ? statusFull : undefined} data-testid="bo-row-status">
                       {statusShort ? (
                         <>
                           <span aria-hidden="true" data-testid="bo-row-status-short">{statusShort}</span>

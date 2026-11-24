@@ -79,6 +79,15 @@ export const NOTIFICATION_TYPES_AFTER_TB26: Record<
     audience: 'CUSTOMER',
     migration: '20261124120000_variant_availability_subscriptions',
   },
+  // «إدارة طلبات الفرع v2» phase 2: her pickup order is ready / her delivery order was sent
+  READY_FOR_PICKUP: {
+    audience: 'CUSTOMER',
+    migration: '20261201120000_order_readiness',
+  },
+  ORDER_SENT: {
+    audience: 'CUSTOMER',
+    migration: '20261201120000_order_readiness',
+  },
 };
 
 /** Every type of the CURRENT schema: TB-26's, plus the ones added after it. */

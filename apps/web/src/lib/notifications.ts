@@ -69,7 +69,11 @@ export type NotificationType =
   // return, and a customer cancelling a return request.
   | "RETURN_PLATFORM_APPROVED"
   | "RETURN_PLATFORM_REJECTED"
-  | "RETURN_CANCELLED_BY_CUSTOMER";
+  | "RETURN_CANCELLED_BY_CUSTOMER"
+  // «إدارة طلبات الفرع v2» phase 2: to the customer - her pickup order is
+  // ready / her delivery order was sent (the order id only, never a code).
+  | "READY_FOR_PICKUP"
+  | "ORDER_SENT";
 
 type Words = { ar: string; en: string };
 
@@ -123,6 +127,8 @@ export const NOTIFICATION_TITLES: Record<NotificationType, Words> = {
     en: "The platform made a final rejection of a return at your branch",
   },
   RETURN_CANCELLED_BY_CUSTOMER: { ar: "ألغى العميل طلب إرجاع في فرعك", en: "A customer cancelled a return request at your branch" },
+  READY_FOR_PICKUP: { ar: "طلبكِ جاهز للاستلام من الفرع", en: "Your order is ready for pickup at the branch" },
+  ORDER_SENT: { ar: "طلبكِ في الطريق إليكِ", en: "Your order is on its way" },
 };
 
 export const NOTIFICATION_TYPES = Object.keys(NOTIFICATION_TITLES) as NotificationType[];
@@ -415,6 +421,9 @@ export function notificationHref(
     case "DELIVERY_CONFIRM_REQUESTED":
     case "ORDER_AUTO_CONFIRMED":
     case "DELIVERY_CONFIRM_REMINDER":
+    // phase 2: her own orders (where «جاهز للاستلام» shows)
+    case "READY_FOR_PICKUP":
+    case "ORDER_SENT":
     default:
       return "/orders";
   }

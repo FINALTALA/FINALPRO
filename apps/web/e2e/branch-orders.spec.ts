@@ -170,7 +170,7 @@ test.describe("Branch orders v1", () => {
     await page.locator(".bo-results").evaluate((el) => el.scrollTo(0, 0));
     await page.locator(".bo-detail-scroll").evaluate((el) => el.scrollTo(0, 0));
   }
-  const TABS_AR = ["النشطة", "جديدة", "قيد التجهيز", "مع الناقل", "بانتظار تأكيد العميلة", "تحتاج متابعة", "منتهية"];
+  const TABS_AR = ["النشطة", "جديدة", "قيد التجهيز", "جاهزة", "مع الناقل", "بانتظار تأكيد العميلة", "تحتاج متابعة", "منتهية"];
 
   test("desktop: a dense queue beside the order - one line between them, no buttons on the rows, the late one first", async ({ page }) => {
     await asOwner(page);
@@ -292,10 +292,30 @@ test.describe("Branch orders v1", () => {
     await expect(first).toContainText("قيد التجهيز");
   });
 
-  test("pickup hand-over: the code is typed, never shown; a wrong one changes nothing, the right one completes", async ({ page }) => {
+  test("checklist and «جاهز» (phase 2), then the pickup hand-over: the code is typed, never shown; a wrong one changes nothing, the right one completes", async ({ page }) => {
     await asOwner(page);
     await page.goto(url(branchA, `?order=${orders.pickupOld.id}`));
     const bar = page.getByTestId("bo-actionbar");
+    // started in the first test: no hand-over before «جاهز» - the one step is «إعلان الطلب جاهزًا», blocked with what is missing
+    const readyBtn = bar.getByTestId("bo-action-mark_ready");
+    await expect(readyBtn).toBeDisabled({ timeout: 30_000 });
+    await expect(bar.getByTestId("bo-action-pickup_handover")).toHaveCount(0);
+    await expect(page.getByTestId("bo-ready-hint")).toHaveText("لإعلان الجاهزية أكملي: تأكيد القطع واللون والمقاس، التغليف.");
+    await expect(page.getByTestId("bo-prep-started")).toContainText("المالكة");
+    await page.getByTestId("bo-prep-ITEMS_VERIFIED").check();
+    await expect(page.getByTestId("bo-prep-by-ITEMS_VERIFIED")).toContainText("المالكة", { timeout: 30_000 });
+    await expect(page.getByTestId("bo-ready-hint")).toHaveText("لإعلان الجاهزية أكملي: التغليف.");
+    await expect(readyBtn).toBeDisabled();
+    await page.getByTestId("bo-prep-PACKED").check();
+    await expect(page.getByTestId("bo-ready-hint")).toHaveText("اكتملت البنود الإلزامية - يمكن إعلان الطلب جاهزًا.", { timeout: 30_000 });
+    await expect(readyBtn).toBeEnabled();
+    await readyBtn.click();
+    await expect(page.getByTestId("bo-detail-status")).toHaveText("جاهز للاستلام", { timeout: 30_000 });
+    await expect(page.getByTestId("bo-notice")).toHaveText("أُعلن الطلب جاهزًا.");
+    await expect(page.getByTestId("bo-prep-ready")).toContainText("جاهز للاستلام");
+    await expect(page.getByTestId("bo-prep-PACKED")).toBeDisabled();
+    await expect(page.getByTestId(`branch-order-${orders.pickupOld.id}`).getByTestId("bo-row-status")).toHaveText("جاهز للاستلام");
+    await expect(page.getByTestId("bo-count-ready")).toHaveText("1");
     await bar.getByTestId("bo-action-pickup_handover").click({ timeout: 30_000 });
     const dlg = page.getByTestId("bo-handover");
     await expect(dlg).toBeVisible();
@@ -736,6 +756,126 @@ test.describe("Branch orders v1", () => {
     }
   });
 
+  test("«جاهز» (phase 2): the employee prepares with the keyboard - who and when on each item, the «جاهزة» tab; her own order is someone else's; the shopper sees «جاهز للاستلام» and its notice; phone; English; axe", async ({ page, browser }) => {
+    const axePath = localRequire.resolve("axe-core/axe.min.js");
+    const axe = async (p: Page, sel: string) => {
+      await p.addScriptTag({ content: readFileSync(axePath, "utf8") });
+      return p.evaluate(async (s) => {
+        const a = (window as unknown as { axe: { run: (ctx: unknown, opts: unknown) => Promise<{ violations: { id: string; nodes: unknown[] }[] }> } }).axe;
+        const r = await a.run({ include: [[s]] }, { runOnly: { type: "tag", values: ["wcag2a", "wcag2aa"] } });
+        return r.violations.map((v) => `${v.id} (${v.nodes.length})`);
+      }, sel);
+    };
+    const target = await order({ name: "جنى حداد", method: "PICKUP" });
+    const emp = await account("سدرة موظفة");
+    await prisma.vendorUser.create({ data: { userId: emp.id, vendorId, role: "BRANCH_EMPLOYEE", branchId: branchA } });
+    await page.setViewportSize({ width: 1360, height: 1000 });
+    await loginAs(page, emp.token);
+    await enterWorkspace(page, emp.token, { type: "vendor", vendor_id: vendorId });
+    await page.goto(url(branchA, `?order=${target.id}`));
+    const bar = page.getByTestId("bo-actionbar");
+    await bar.getByTestId("bo-action-start_preparation").click({ timeout: 30_000 });
+    await expect(page.getByTestId("bo-prep-ITEMS_VERIFIED")).toBeEnabled({ timeout: 30_000 });
+    await expect(page.getByTestId("bo-prep-started")).toContainText("سدرة موظفة · موظفة");
+    await expect(page.getByTestId("bo-prep-item-INVOICE_ATTACHED")).toContainText("اختياري");
+    await expect(page.getByTestId("bo-prep-item-PACKED")).toContainText("إلزامي");
+    expect(await axe(page, '[data-testid="branch-orders"]')).toEqual([]);
+    // the keyboard: Space ticks a checklist item, Enter readies
+    await page.getByTestId("bo-prep-ITEMS_VERIFIED").focus();
+    await page.keyboard.press("Space");
+    await expect(page.getByTestId("bo-prep-by-ITEMS_VERIFIED")).toContainText("سدرة موظفة · موظفة", { timeout: 30_000 });
+    await page.getByTestId("bo-prep-PACKED").focus();
+    await page.keyboard.press("Space");
+    await expect(page.getByTestId("bo-prep-by-PACKED")).toBeVisible({ timeout: 30_000 });
+    // the optional item never blocks
+    await expect(page.getByTestId("bo-prep-INVOICE_ATTACHED")).not.toBeChecked();
+    const readyBtn = bar.getByTestId("bo-action-mark_ready");
+    await expect(readyBtn).toBeEnabled();
+    await readyBtn.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("bo-detail-status")).toHaveText("جاهز للاستلام", { timeout: 30_000 });
+    await expect(page.getByTestId("bo-prep-ready")).toContainText("سدرة موظفة");
+    // the timeline names each step
+    await expect(page.getByTestId("bo-timeline").locator('[data-kind="ready"]')).toContainText("أُعلن الطلب جاهزًا");
+    await expect(page.getByTestId("bo-timeline").locator('[data-kind="prep_check"]').first()).toContainText("التغليف");
+    // the «جاهزة» tab holds it, with a real count
+    await page.getByTestId("bo-tab-ready").click();
+    await expect(page).toHaveURL(/tab=ready/);
+    await expect(page.getByTestId(`branch-order-${target.id}`).getByTestId("bo-row-status")).toHaveText("جاهز للاستلام", { timeout: 30_000 });
+    expect(Number(await page.getByTestId("bo-count-ready").textContent())).toBeGreaterThanOrEqual(1);
+    expect(await page.locator("body").innerText()).not.toContain(target.code!);
+    expect(await axe(page, '[data-testid="branch-orders"]')).toEqual([]);
+
+    // her own order: no checklist, no «جاهز» for her - a colleague prepares it
+    const own = await order({ name: "تخص الموظفة", method: "PICKUP" });
+    const ownCo = await prisma.branchOrder.findUniqueOrThrow({ where: { id: own.id }, select: { customerOrderId: true } });
+    await prisma.customerOrder.update({ where: { id: ownCo.customerOrderId }, data: { customerId: emp.profileId } });
+    await prisma.branchOrder.update({ where: { id: own.id }, data: { status: "PREPARING", preparationStartedAt: new Date() } });
+    await page.goto(url(branchA, `?order=${own.id}`));
+    await expect(page.getByTestId("bo-prep-own")).toHaveText("هذا طلبكِ الشخصي - تجهّزه زميلة أخرى أو المالكة.", { timeout: 30_000 });
+    await expect(page.getByTestId("bo-prep-ITEMS_VERIFIED")).toBeDisabled();
+    await expect(bar.getByTestId("bo-action-mark_ready")).toHaveCount(0);
+    await expect(bar.getByTestId("bo-action-pickup_handover")).toHaveCount(0);
+    // 2026-11-24 policy: no action of any kind on her own order - a clear note instead
+    await expect(bar.getByTestId("bo-own-blocked")).toHaveText("هذا طلبكِ الشخصي - لا يمكنكِ تنفيذ أي إجراء عليه. تتولّاه زميلة أخرى أو المالكة.");
+    await expect(bar.locator("button")).toHaveCount(0);
+    // the same on a new one: no «بدء التجهيز», no «إجراءات أخرى»
+    await prisma.branchOrder.update({ where: { id: own.id }, data: { status: "PLACED", preparationStartedAt: null } });
+    await page.reload();
+    await expect(bar.getByTestId("bo-own-blocked")).toBeVisible({ timeout: 30_000 });
+    await expect(bar.getByTestId("bo-action-start_preparation")).toHaveCount(0);
+    await expect(bar.getByTestId("bo-more")).toHaveCount(0);
+    expect(await axe(page, '[data-testid="branch-orders"]')).toEqual([]);
+
+    // a phone: the checklist fits, no sideways scroll, the bar stays reachable
+    await page.setViewportSize({ width: 390, height: 844 });
+    const another = await order({ name: "ريم سالم", method: "PICKUP" });
+    await prisma.branchOrder.update({ where: { id: another.id }, data: { status: "PREPARING", preparationStartedAt: new Date() } });
+    await page.goto(url(branchA, `?order=${another.id}`));
+    await expect(page.getByTestId("bo-prep-list")).toBeVisible({ timeout: 30_000 });
+    await expectNoHorizontalOverflow(page);
+    for (const k of ["ITEMS_VERIFIED", "PACKED", "INVOICE_ATTACHED"]) {
+      expect((await page.getByTestId(`bo-prep-item-${k}`).boundingBox())!.height).toBeGreaterThanOrEqual(40);
+    }
+    await expect(page.getByTestId("bo-ready-hint")).toBeVisible();
+
+    // English (LTR)
+    await prisma.user.update({ where: { id: emp.id }, data: { languagePref: "en" } });
+    await page.setViewportSize({ width: 1360, height: 1000 });
+    await page.evaluate(() => localStorage.setItem("finalpro_lang_pref", "en"));
+    await page.goto(url(branchA, `?order=${another.id}`));
+    await expect(page.locator("html")).toHaveAttribute("dir", "ltr", { timeout: 30_000 });
+    await expect(page.getByTestId("bo-prep-list")).toContainText("Preparation checklist");
+    await expect(page.getByTestId("bo-prep-item-ITEMS_VERIFIED")).toContainText("Pieces, colour and size checked");
+    await expect(page.getByTestId("bo-ready-hint")).toHaveText("To mark it ready, complete: Pieces, colour and size checked, Packed.");
+    await expect(bar.getByTestId("bo-action-mark_ready")).toHaveText("Mark the order ready");
+    expect(await axe(page, '[data-testid="branch-orders"]')).toEqual([]);
+
+    // the shopper: «جاهز للاستلام» on her order, and the notice (no code in it, no internal detail)
+    const ctx = await browser.newContext({ viewport: { width: 1360, height: 900 } });
+    const sp = await ctx.newPage();
+    await loginAs(sp, target.buyerToken);
+    await sp.goto("/cart?tab=orders");
+    await expect(sp.getByTestId("customer-order-ready")).toHaveText("جاهز للاستلام", { timeout: 30_000 });
+    await expect(sp.locator(".customer-order-ready-hint")).toBeVisible();
+    expect(await sp.locator("body").innerText()).not.toContain("سدرة");
+    await expect
+      .poll(
+        async () => {
+          const r = await call<{ items: { type: string; data: unknown }[] }>("/me/notifications", { token: target.buyerToken });
+          return r.body.items?.filter((n) => n.type === "READY_FOR_PICKUP").length ?? 0;
+        },
+        { timeout: 60_000 },
+      )
+      .toBe(1);
+    const inbox = await call<{ items: { type: string; data: unknown }[] }>("/me/notifications", { token: target.buyerToken });
+    expect(JSON.stringify(inbox.body)).not.toContain(target.code!);
+    await sp.goto("/notifications");
+    await expect(sp.getByText("طلبكِ جاهز للاستلام من الفرع").first()).toBeVisible({ timeout: 30_000 });
+    expect(await axe(sp, "main")).toEqual([]);
+    await ctx.close();
+  });
+
   test("keyboard, English (LTR) and axe", async ({ page }) => {
     await asOwner(page);
     const owner = await prisma.user.findUniqueOrThrow({ where: { phone: fixtures.ownerPhone }, select: { id: true } });
@@ -772,7 +912,7 @@ test.describe("Branch orders v1", () => {
       await expectNoHorizontalOverflow(page);
       await expect(page.locator("#bo-queue-title")).toHaveText("Orders");
       await expect(page.getByTestId("bo-detail-pane-title")).toHaveText("Order details");
-      await expectDesktopLayout(page, ["Active", "New", "Preparing", "With courier", "Awaiting confirmation", "Needs follow-up", "Finished"]);
+      await expectDesktopLayout(page, ["Active", "New", "Preparing", "Ready", "With courier", "Awaiting confirmation", "Needs follow-up", "Finished"]);
       expect(await axe()).toEqual([]);
     } finally {
       await prisma.user.update({ where: { id: owner.id }, data: { languagePref: "ar" } });

@@ -10,6 +10,7 @@ import { CURRENT_PLATFORM_TERMS_VERSION } from './../src/checkout/checkout.servi
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
 import { PrismaService } from './../src/prisma/prisma.service';
 import { uniqueTestPhone } from './helpers/test-phone';
+import { readyAfterStartPreparation } from './helpers/prep-ready-fixture';
 
 // PD-3 (docs/srs/10-product-detail-enhancement-roadmap.md, PD-FR-002):
 // enriched, purchase-verified product reviews - purchase snapshot,
@@ -183,13 +184,22 @@ describe('PD-3 enriched reviews (e2e)', () => {
   }
 
   const staff = (s: Store, branchOrderId: string, action: string, body = {}) =>
-    request(http())
-      .post(
-        `/api/v1/vendors/${s.vendor.id}/branches/${s.branch.id}/orders/${branchOrderId}/${action}`,
-      )
-      .set('Authorization', `Bearer ${s.owner.token}`)
-      .set('Idempotency-Key', unique('staff'))
-      .send(body);
+    // phase 2 fixture (see prep-ready-fixture.ts): started = prepared and ready
+    readyAfterStartPreparation(
+      request(http())
+        .post(
+          `/api/v1/vendors/${s.vendor.id}/branches/${s.branch.id}/orders/${branchOrderId}/${action}`,
+        )
+        .set('Authorization', `Bearer ${s.owner.token}`)
+        .set('Idempotency-Key', unique('staff'))
+        .send(body),
+      action,
+      () =>
+        prisma.branchOrder.update({
+          where: { id: branchOrderId },
+          data: { readyAt: new Date() },
+        }),
+    );
 
   /** Buys one unit of `variantId` from `s` for pickup; `complete` hands it over. */
   async function buy(

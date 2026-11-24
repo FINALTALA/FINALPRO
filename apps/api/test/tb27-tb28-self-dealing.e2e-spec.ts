@@ -380,7 +380,9 @@ describe('TB-27/TB-28 no self-review, no self-decision (e2e)', () => {
             'approve-refund',
           ).expect(403),
         ),
-      ).toBe('SELF_DECISION_FORBIDDEN');
+        // 2026-11-24: an employee is refused EVERY action on her own order,
+        // before anything else (see the own-order block below)
+      ).toBe('OWN_ORDER_FORBIDDEN');
       expect(
         (
           await prisma.branchOrder.findUniqueOrThrow({
@@ -411,6 +413,9 @@ describe('TB-27/TB-28 no self-review, no self-decision (e2e)', () => {
       await f
         .staff(s, s.owner, own.branchOrderId, 'start-preparation')
         .expect(201);
+      // «إدارة طلبات الفرع v2» phase 2: the owner may tick and ready her own
+      // order too (TB-28) - both recorded as self-fulfilment steps
+      await f.prepareAndReady(s, s.owner, own.branchOrderId);
       await f
         .staff(s, s.owner, own.branchOrderId, 'pickup-handover', {
           pickup_code: order.pickupCode,
@@ -429,19 +434,154 @@ describe('TB-27/TB-28 no self-review, no self-decision (e2e)', () => {
         ]),
       ).toEqual([
         [s.owner.userId, 'START_PREPARATION', true],
+        [s.owner.userId, 'PREP_CHECK', true],
+        [s.owner.userId, 'PREP_CHECK', true],
+        [s.owner.userId, 'MARK_READY', true],
         [s.owner.userId, 'PICKUP_HANDOVER', true],
       ]);
     });
 
-    it('the same rule for an employee; fulfilling another customer order writes no self-fulfilment record', async () => {
+    it('2026-11-24 policy: an employee runs NO operational action on her own order - every one refused first (OWN_ORDER_FORBIDDEN), nothing changes, nothing offered; a colleague or the owner handles it; her work on other orders writes no self-fulfilment record', async () => {
       const sh = await shop();
+      const colleague = await f.member(
+        sh.s.vendorId,
+        await f.account(),
+        'BRANCH_EMPLOYEE',
+        sh.s.branchA,
+      );
       const own = await f.buy(sh.employee, sh.s, sh.variant);
-      await f
-        .staff(sh.s, sh.employee, own.branchOrderId, 'start-preparation')
-        .expect(201);
+      const id = own.branchOrderId;
+      const code = (
+        await prisma.branchOrder.findUniqueOrThrow({ where: { id } })
+      ).pickupCode!;
+      const snapshot = async () => {
+        const o = await prisma.branchOrder.findUniqueOrThrow({
+          where: { id },
+          include: { items: true, prepChecks: true },
+        });
+        return {
+          status: o.status,
+          preparationStartedAt: o.preparationStartedAt,
+          readyAt: o.readyAt,
+          internalStoreNote: o.internalStoreNote,
+          items: o.items.map((i) => i.cancelledAt),
+          checks: o.prepChecks.length,
+          audit: await prisma.auditLog.count({ where: { entityId: id } }),
+          stock: (
+            await prisma.branchStock.findFirstOrThrow({
+              where: { branchId: sh.s.branchA, offerVariantId: sh.variant },
+            })
+          ).quantity,
+        };
+      };
+      const refused = async (res: { status: number; body: unknown }) => {
+        expect(res.status).toBe(403);
+        expect(code_(res)).toBe('OWN_ORDER_FORBIDDEN');
+      };
+      const code_ = (res: { body: unknown }) =>
+        (res.body as { error: { code: string } }).error.code;
+      const patch = (path: string, body: object) =>
+        f
+          .http()
+          .patch(
+            `/api/v1/vendors/${sh.s.vendorId}/branches/${sh.s.branchA}/orders/${id}/${path}`,
+          )
+          .set(f.staffHeaders(sh.employee))
+          .send(body);
+      // PLACED: start, cancel (whole / one item), the note
+      const before = await snapshot();
+      await refused(await f.staff(sh.s, sh.employee, id, 'start-preparation'));
+      await refused(
+        await f.staff(sh.s, sh.employee, id, 'cancel', {
+          reason: 'سبب إلغاء للاختبار هنا',
+        }),
+      );
+      await refused(
+        await f.staff(sh.s, sh.employee, id, `items/${own.itemId}/cancel`, {
+          reason: 'سبب إلغاء للاختبار هنا',
+        }),
+      );
+      await refused(await patch('internal-note', { note: 'ملاحظة' }));
+      expect(await snapshot()).toEqual(before);
+      // she is offered nothing on it
+      const view = await f
+        .http()
+        .get(
+          `/api/v1/vendors/${sh.s.vendorId}/branches/${sh.s.branchA}/order-queue/${id}`,
+        )
+        .set(f.bearer(sh.employee.token))
+        .expect(200);
+      expect(view.body.actions).toEqual([]);
+      expect(view.body.is_own_order).toBe(true);
+
+      // a colleague starts it (no self-fulfilment record); PREPARING: the checklist, «جاهز», the hand-over - even with the right code
+      await f.staff(sh.s, colleague, id, 'start-preparation').expect(201);
+      const preparing = await snapshot();
+      await refused(await f.prepCheck(sh.s, sh.employee, id, 'PACKED'));
+      await refused(await f.staff(sh.s, sh.employee, id, 'mark-ready'));
+      await refused(
+        await f.staff(sh.s, sh.employee, id, 'pickup-handover', {
+          pickup_code: code,
+        }),
+      );
+      expect(await snapshot()).toEqual(preparing);
+      await f.prepareAndReady(sh.s, colleague, id);
+      await refused(
+        await f.staff(sh.s, sh.employee, id, 'pickup-handover', {
+          pickup_code: code,
+        }),
+      );
+      // ... and as a delivery order: sent, delivered, delivery failed, re-request
+      const w = await prisma.deliveryWindow.create({
+        data: {
+          vendorId: sh.s.vendorId,
+          branchId: sh.s.branchA,
+          dayOfWeek: 0,
+          startMinute: 600,
+          endMinute: 720,
+          capacity: 5,
+        },
+      });
+      await prisma.branchOrder.update({
+        where: { id },
+        data: {
+          fulfilmentMethod: 'DELIVERY',
+          pickupCode: null,
+          deliveryWindowId: w.id,
+        },
+      });
+      await refused(await f.staff(sh.s, sh.employee, id, 'mark-sent'));
+      await prisma.branchOrder.update({
+        where: { id },
+        data: { status: 'SENT' },
+      });
+      await refused(await f.staff(sh.s, sh.employee, id, 'mark-delivered'));
+      await refused(
+        await f.staff(sh.s, sh.employee, id, 'mark-delivery-failed', {}),
+      );
+      await prisma.branchOrder.update({
+        where: { id },
+        data: {
+          status: 'DELIVERED',
+          deliveredAt: new Date(),
+          notReceivedReportedAt: new Date(),
+          notReceivedReason: 'لم يصل الطلب حتى الآن',
+        },
+      });
+      await refused(
+        await f.staff(sh.s, sh.employee, id, 'rerequest-confirmation'),
+      );
       expect(
-        (await selfAudits(own.branchOrderId)).map((a) => a.actorId),
-      ).toEqual([sh.employee.userId]);
+        (await prisma.branchOrder.findUniqueOrThrow({ where: { id } })).status,
+      ).toBe('DELIVERED');
+      // none of her refused attempts wrote a self-fulfilment record
+      expect(
+        (await selfAudits(id)).filter((a) => a.actorId === sh.employee.userId),
+      ).toEqual([]);
+      // the owner may act on it (not her own order: no self-fulfilment record either)
+      await f.staff(sh.s, sh.s.owner, id, 'rerequest-confirmation').expect(201);
+
+      // her work on another customer's order: allowed, no self-fulfilment record
       const customer = await f.account();
       const theirs = await f.buy(customer, sh.s, sh.variant);
       await f

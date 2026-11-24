@@ -126,6 +126,19 @@ const EVENT_TYPE_MAP: Record<string, EventMapping> = {
     targetType: 'BRANCH_ORDER',
     targetIdField: 'branch_order_id',
   },
+  // «إدارة طلبات الفرع v2» phase 2 (2026-11-24): to the customer - her
+  // PICKUP order is ready / her DELIVERY order was sent. The order id only
+  // (no data: buildSafeData's default) - never the pickup code.
+  'branch_order.ready_for_pickup': {
+    type: 'READY_FOR_PICKUP',
+    targetType: 'BRANCH_ORDER',
+    targetIdField: 'branch_order_id',
+  },
+  'branch_order.sent': {
+    type: 'ORDER_SENT',
+    targetType: 'BRANCH_ORDER',
+    targetIdField: 'branch_order_id',
+  },
   'branch_order.confirm_rerequested': {
     type: 'DELIVERY_CONFIRM_REQUESTED',
     targetType: 'BRANCH_ORDER',

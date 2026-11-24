@@ -133,6 +133,9 @@ export const SUSPENDED_ALLOW_ROUTES: readonly string[] = [
   // 2026-11-24: the internal prep sheet of one order (read).
   'GET vendors/:vendorId/branches/:branchId/order-queue/:branchOrderId/prep-sheet',
   'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/start-preparation',
+  // 2026-11-24 (XII phase 2): the prep checklist and «جاهز» of an in-flight order
+  'PATCH vendors/:vendorId/branches/:branchId/orders/:branchOrderId/prep-checklist/:item',
+  'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/mark-ready',
   'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/mark-sent',
   'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/mark-delivered',
   'POST vendors/:vendorId/branches/:branchId/orders/:branchOrderId/pickup-handover',

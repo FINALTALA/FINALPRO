@@ -6,6 +6,7 @@ import { SmsService } from './../src/auth/sms.service';
 import { HttpExceptionFilter } from './../src/common/filters/http-exception.filter';
 import { PrismaService } from './../src/prisma/prisma.service';
 import { createUniquePhone } from './helpers/e2e-phone-lanes';
+import { readyAfterStartPreparation } from './helpers/prep-ready-fixture';
 
 type Res = { status: number; body: any };
 const run = (t: PromiseLike<Res>): Promise<Res> => Promise.resolve(t);
@@ -239,13 +240,22 @@ describe('Sprint 25 - admin audit logs, feature flags, vendor performance (e2e)'
     action: string,
     body: Record<string, unknown> = {},
   ) =>
-    request(http())
-      .post(
-        `/api/v1/vendors/${vendorId}/branches/${branchId}/orders/${branchOrderId}/${action}`,
-      )
-      .set('Authorization', `Bearer ${token}`)
-      .set('Idempotency-Key', unique('staff-action'))
-      .send(body);
+    // phase 2 fixture (see prep-ready-fixture.ts): started = prepared and ready
+    readyAfterStartPreparation(
+      request(http())
+        .post(
+          `/api/v1/vendors/${vendorId}/branches/${branchId}/orders/${branchOrderId}/${action}`,
+        )
+        .set('Authorization', `Bearer ${token}`)
+        .set('Idempotency-Key', unique('staff-action'))
+        .send(body),
+      action,
+      () =>
+        prisma.branchOrder.update({
+          where: { id: branchOrderId },
+          data: { readyAt: new Date() },
+        }),
+    );
 
   async function placeAndStartPreparing(
     owner: string,

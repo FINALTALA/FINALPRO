@@ -63,7 +63,11 @@ export type SelfFulfilmentStep =
   | 'MARK_DELIVERED'
   | 'PICKUP_HANDOVER'
   | 'MARK_DELIVERY_FAILED'
-  | 'RE_REQUEST_CONFIRMATION';
+  | 'RE_REQUEST_CONFIRMATION'
+  // 2026-11-24 (XII phase 2): the owner ticking the prep checklist of, or
+  // readying, her own order (an employee may not - OWN_ORDER_FORBIDDEN)
+  | 'PREP_CHECK'
+  | 'MARK_READY';
 
 /**
  * TB-28 (product decision, 2026-11-15): a store member MAY fulfil their

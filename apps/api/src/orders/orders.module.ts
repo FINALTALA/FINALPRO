@@ -6,6 +6,7 @@ import { PlatformAlertsModule } from '../platform-alerts/platform-alerts.module'
 import { BranchOrderAddressChangeService } from './branch-order-address-change.service';
 import { BranchOrderCancellationService } from './branch-order-cancellation.service';
 import { BranchOrderIntegrityService } from './branch-order-integrity.service';
+import { BranchOrderPrepService } from './branch-order-prep.service';
 import {
   BranchOrderQueueController,
   VendorOrderQueueController,
@@ -47,6 +48,8 @@ import { FulfilmentSweepService } from './fulfilment-sweep.service';
   ],
   providers: [
     BranchOrderQueueService,
+    // 2026-11-24: the prep checklist and «جاهز»
+    BranchOrderPrepService,
     OrderActorContextInterceptor,
     BranchOrderService,
     BranchOrderCancellationService,

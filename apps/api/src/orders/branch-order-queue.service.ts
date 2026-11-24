@@ -13,6 +13,11 @@ import {
   computeAmountRefunded,
 } from './branch-order-money.util';
 import { FulfilmentReconciliationService } from './fulfilment-reconciliation.service';
+import {
+  missingRequired,
+  PREP_ITEM_KEYS,
+  PREP_ITEMS,
+} from './branch-order-prep.service';
 
 /**
  * «إدارة طلبات الفرع v1» (2026-11-22): the branch's order queue, one order's
@@ -38,6 +43,8 @@ export const QUEUE_TABS = [
   'active',
   'new',
   'preparing',
+  // «إدارة طلبات الفرع v2» phase 2: PREPARING with readyAt (a sub-state)
+  'ready',
   'with_courier',
   'awaiting_confirmation',
   'attention',
@@ -85,6 +92,7 @@ const ORDER_STATUSES = new Set([
 
 const BUCKET = Prisma.sql`CASE
     WHEN bo.status = 'PLACED' THEN 'new'
+    WHEN bo.status = 'PREPARING' AND bo."readyAt" IS NOT NULL THEN 'ready'
     WHEN bo.status = 'PREPARING' THEN 'preparing'
     WHEN bo.status = 'SENT' THEN 'with_courier'
     WHEN bo.status = 'DELIVERED' AND bo."notReceivedReportedAt" IS NULL THEN 'awaiting_confirmation'
@@ -95,7 +103,7 @@ const DUE_AT = Prisma.sql`CASE
     WHEN bo."scheduledDate" IS NOT NULL AND dw.id IS NOT NULL
     THEN (bo."scheduledDate" AT TIME ZONE 'UTC') + (dw."startMinute" || ' minutes')::interval
   END`;
-const IS_LATE = Prisma.sql`(q.bucket IN ('new', 'preparing') AND q.due_at IS NOT NULL AND q.due_at < now())`;
+const IS_LATE = Prisma.sql`(q.bucket IN ('new', 'preparing', 'ready') AND q.due_at IS NOT NULL AND q.due_at < now())`;
 
 /** «سارة أحمد» -> «سارة أ.»: the list never shows a full name. */
 export function shortName(name: string | null | undefined): string | null {
@@ -143,6 +151,82 @@ export function searchCondition(raw: string | undefined): Prisma.Sql | null {
  * The timestamp columns hold UTC without a zone, hence the double AT TIME ZONE. */
 const ZONE = 'Asia/Hebron';
 const CREATED_TODAY = Prisma.sql`((bo."createdAt" AT TIME ZONE 'UTC') AT TIME ZONE ${ZONE})::date = (now() AT TIME ZONE ${ZONE})::date`;
+
+/** A person as the order screen names them: the display name only. */
+const PERSON = {
+  customerProfile: { select: { displayName: true } },
+} as const;
+type Person = { customerProfile: { displayName: string | null } | null };
+const nameOf = (p: Person | null | undefined) =>
+  p?.customerProfile?.displayName ?? null;
+
+/**
+ * «إدارة طلبات الفرع v2» phase 2: the order's preparation as the screen
+ * shows it - started / ready (when, by whom and their role then), the saved
+ * checklist (each item done or not, when, by whom), what is still missing,
+ * and whether this viewer may change it (PREPARING, not ready yet, and
+ * never an employee on her own order). requires_ready: the order is on the
+ * new path (started from the release on) - older ones show none of it.
+ */
+function preparationView(
+  o: {
+    status: string;
+    preparationStartedAt: Date | null;
+    preparationStartedByRole: string | null;
+    preparationStartedBy: Person | null;
+    readyAt: Date | null;
+    readyByRole: string | null;
+    readyBy: Person | null;
+    prepChecks: {
+      itemKey: string;
+      doneAt: Date;
+      doneByRole: string;
+      doneBy: Person;
+    }[];
+  },
+  ownOrder: boolean,
+  viewer: Viewer,
+) {
+  const byKey = new Map(o.prepChecks.map((c) => [c.itemKey, c]));
+  const preparing = o.status === 'PREPARING';
+  const ready = o.readyAt !== null;
+  const ownBlocked = ownOrder && viewer.membership.role === 'BRANCH_EMPLOYEE';
+  return {
+    requires_ready: o.preparationStartedAt !== null,
+    started_at: o.preparationStartedAt?.toISOString() ?? null,
+    started_by: o.preparationStartedAt
+      ? {
+          name: nameOf(o.preparationStartedBy),
+          role: o.preparationStartedByRole,
+        }
+      : null,
+    is_ready: preparing && ready,
+    ready_at: o.readyAt?.toISOString() ?? null,
+    ready_by: o.readyAt
+      ? { name: nameOf(o.readyBy), role: o.readyByRole }
+      : null,
+    checklist: PREP_ITEMS.map((i) => {
+      const c = byKey.get(i.key);
+      return {
+        key: i.key,
+        required: i.required,
+        done: Boolean(c),
+        done_at: c ? c.doneAt.toISOString() : null,
+        done_by: c ? { name: nameOf(c.doneBy), role: c.doneByRole } : null,
+      };
+    }),
+    missing: missingRequired(byKey.keys()),
+    can_edit: preparing && !ready && !ownBlocked,
+    own_order_blocked: preparing && !ready && ownBlocked,
+  };
+}
+
+/** The checklist item of a prep_check audit row (a closed key, else null). */
+function prepItemOf(state: unknown): string | null {
+  if (!state || typeof state !== 'object') return null;
+  const k = (state as Record<string, unknown>).item;
+  return typeof k === 'string' && PREP_ITEM_KEYS.includes(k) ? k : null;
+}
 
 function isoDate(d: Date | null): string | null {
   return d ? d.toISOString().slice(0, 10) : null;
@@ -296,6 +380,7 @@ export class BranchOrderQueueService {
       active: 0,
       new: 0,
       preparing: 0,
+      ready: 0,
       with_courier: 0,
       awaiting_confirmation: 0,
       attention: 0,
@@ -361,10 +446,12 @@ export class BranchOrderQueueService {
           branch_id: o.branchId,
           branch_name: o.branch.name,
           status: o.status,
-          bucket: bucketOf(o.status, o.notReceivedReportedAt),
+          bucket: bucketOf(o.status, o.notReceivedReportedAt, o.readyAt),
           fulfilment_method: o.fulfilmentMethod,
           payment_method: o.paymentMethod,
           created_at: o.createdAt.toISOString(),
+          // phase 2: «جاهز» (PREPARING with readyAt)
+          is_ready: o.status === 'PREPARING' && o.readyAt !== null,
           scheduled_date: isoDate(o.scheduledDate),
           window: o.deliveryWindow
             ? {
@@ -437,6 +524,17 @@ export class BranchOrderQueueService {
         deliveryWindow: {
           select: { startMinute: true, endMinute: true, dayOfWeek: true },
         },
+        // phase 2: who started / readied it, and the saved checklist
+        preparationStartedBy: { select: PERSON },
+        readyBy: { select: PERSON },
+        prepChecks: {
+          select: {
+            itemKey: true,
+            doneAt: true,
+            doneByRole: true,
+            doneBy: { select: PERSON },
+          },
+        },
       },
     });
     // the same rule as every staff action: an order of another vendor or
@@ -498,7 +596,7 @@ export class BranchOrderQueueService {
       id: o.id,
       number: o.id.slice(0, 8),
       status: o.status,
-      bucket: bucketOf(o.status, o.notReceivedReportedAt),
+      bucket: bucketOf(o.status, o.notReceivedReportedAt, o.readyAt),
       fulfilment_method: o.fulfilmentMethod,
       payment_method: o.paymentMethod,
       created_at: o.createdAt.toISOString(),
@@ -555,7 +653,9 @@ export class BranchOrderQueueService {
       ...(owner ? { cancellation_reason: o.cancellationReason } : {}),
       delivery_attempt_count: o.deliveryAttemptCount,
       is_own_order: ownOrder,
-      actions: allowedActions(o, ownOrder),
+      // «إدارة طلبات الفرع v2» phase 2: preparation, the saved checklist, «جاهز»
+      preparation: preparationView(o, ownOrder, viewer),
+      actions: allowedActions(o, ownOrder, viewer.membership.role),
     };
   }
 
@@ -704,6 +804,10 @@ export class BranchOrderQueueService {
             branchName,
           }),
           ...(reason ? { reason } : {}),
+          // phase 2: which checklist item (a closed key)
+          ...(kind === 'prep_check' || kind === 'prep_uncheck'
+            ? { item: prepItemOf(r.afterState) }
+            : {}),
         },
       ];
     });
@@ -718,12 +822,13 @@ export class BranchOrderQueueService {
 function bucketOf(
   status: string,
   notReceivedReportedAt: Date | null,
+  readyAt: Date | null,
 ): QueueTab {
   switch (status) {
     case 'PLACED':
       return 'new';
     case 'PREPARING':
-      return 'preparing';
+      return readyAt ? 'ready' : 'preparing';
     case 'SENT':
       return 'with_courier';
     case 'DELIVERED':
@@ -793,8 +898,11 @@ export interface QueueAction {
     | 'rerequest_confirmation'
     | 'approve_refund'
     | 'cancel'
-    | 'internal_note';
+    | 'internal_note'
+    | 'mark_ready';
   primary?: boolean;
+  /** mark_ready: the mandatory checklist items still missing (none = it can be done) */
+  missing?: string[];
   /** cancel: whether the server requires a reason (after preparation started). */
   reason?: 'optional' | 'required';
   /** mark_delivery_failed: this attempt closes the order (COD, second failure). */
@@ -815,22 +923,51 @@ export function allowedActions(
     paymentMethod: string;
     deliveryAttemptCount: number;
     notReceivedReportedAt: Date | null;
+    preparationStartedAt?: Date | null;
+    readyAt?: Date | null;
+    prepChecks?: { itemKey: string }[];
   },
   ownOrder: boolean,
+  viewerRole: string = 'OWNER',
 ): QueueAction[] {
+  // 2026-11-24 (approved policy): an employee runs no operational action on
+  // her own order - the server refuses every one (OWN_ORDER_FORBIDDEN), so
+  // none is offered
+  if (ownOrder && viewerRole === 'BRANCH_EMPLOYEE') return [];
   const a: QueueAction[] = [];
   switch (o.status) {
     case 'PLACED':
       a.push({ key: 'start_preparation', primary: true });
       if (!ownOrder) a.push({ key: 'cancel', reason: 'optional' });
       break;
-    case 'PREPARING':
-      if (o.fulfilmentMethod === 'DELIVERY')
-        a.push({ key: 'mark_sent', primary: true });
-      if (o.fulfilmentMethod === 'PICKUP')
-        a.push({ key: 'pickup_handover', primary: true });
+    case 'PREPARING': {
+      // phase 2: an order on the new path is sent / handed over only once
+      // ready; until then its one step is «إعلان الطلب جاهزًا» (with what is
+      // still missing - the server checks again). An employee never readies
+      // her own order. Older orders (started before the release) keep the
+      // old path.
+      const gated =
+        (o.preparationStartedAt ?? null) !== null &&
+        (o.readyAt ?? null) === null;
+      if (gated) {
+        if (!(ownOrder && viewerRole === 'BRANCH_EMPLOYEE')) {
+          a.push({
+            key: 'mark_ready',
+            primary: true,
+            missing: missingRequired(
+              (o.prepChecks ?? []).map((c) => c.itemKey),
+            ),
+          });
+        }
+      } else {
+        if (o.fulfilmentMethod === 'DELIVERY')
+          a.push({ key: 'mark_sent', primary: true });
+        if (o.fulfilmentMethod === 'PICKUP')
+          a.push({ key: 'pickup_handover', primary: true });
+      }
       if (!ownOrder) a.push({ key: 'cancel', reason: 'required' });
       break;
+    }
     case 'SENT':
       a.push({ key: 'mark_delivered', primary: true });
       a.push({
@@ -862,7 +999,10 @@ type EventKind =
   | 'converted_to_pickup'
   | 'item_cancelled'
   | 'self_fulfilment'
-  | 'integrity';
+  | 'integrity'
+  | 'prep_check'
+  | 'prep_uncheck'
+  | 'ready';
 
 /** A closed list: an audit action not named here is never shown. */
 function eventKind(action: string): EventKind | null {
@@ -885,6 +1025,13 @@ function eventKind(action: string): EventKind | null {
       return 'item_cancelled';
     case 'branch_order.self_fulfilment':
       return 'self_fulfilment';
+    // phase 2
+    case 'branch_order.prep_check_done':
+      return 'prep_check';
+    case 'branch_order.prep_check_undone':
+      return 'prep_uncheck';
+    case 'branch_order.ready':
+      return 'ready';
     default:
       return action.startsWith('branch_order.integrity') ? 'integrity' : null;
   }

@@ -117,6 +117,13 @@ function orderDto(o: OrderRow) {
     branch_id: o.branchId,
     branch_name: o.branch.name,
     status: o.status,
+    // «إدارة طلبات الفرع v2» phase 2: her PICKUP order is ready at the
+    // branch - a flag only (never who prepared it, the checklist or any
+    // internal note)
+    ready_for_pickup:
+      o.fulfilmentMethod === 'PICKUP' &&
+      o.status === 'PREPARING' &&
+      o.readyAt !== null,
     fulfilment_method: o.fulfilmentMethod,
     payment_method: o.paymentMethod,
     delivery_attempt_count: o.deliveryAttemptCount,

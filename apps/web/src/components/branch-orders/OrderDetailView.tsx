@@ -14,10 +14,13 @@ import {
   relativeTime,
   runOrderAction,
   saveInternalNote,
+  setPrepCheck,
   statusKey,
   windowLabel,
   type ActionKey,
   type OrderDetail,
+  type PrepItemKey,
+  type PrepPerson,
   type QueueAction,
   type TimelineEvent,
 } from "@/lib/branchOrders";
@@ -198,6 +201,9 @@ export default function OrderDetailView({
   const [note, setNote] = useState(order.internal_store_note ?? "");
   const menuRef = useRef<HTMLDivElement>(null);
   const noteRef = useRef<HTMLTextAreaElement>(null);
+  /** phase 2: the checklist item being saved, and the value it shows meanwhile (the server's answer then replaces it) */
+  const [savingItem, setSavingItem] = useState<PrepItemKey | null>(null);
+  const [pendingDone, setPendingDone] = useState<boolean | null>(null);
 
   // (a different order mounts a new view - the parent keys it by the order id)
   useEffect(() => {
@@ -222,6 +228,36 @@ export default function OrderDetailView({
   const failedAction = order.actions.find((a) => a.key === "mark_delivery_failed") ?? null;
   const due = windowLabel(order.scheduled_date, order.window, lang);
   const n = order.number;
+  // phase 2: «جاهز» is a sub-state of «قيد التجهيز»
+  const prep = order.preparation ?? null;
+  const ready = prep?.is_ready === true;
+  const statusText = ready ? t(`bo.ready.${order.fulfilment_method}`) : t(statusKey(order.status));
+  const person = (p: PrepPerson | null, at: string | null) => {
+    if (!p || !at) return null;
+    const role = p.role === "OWNER" ? t("bo.actor.owner") : p.role === "BRANCH_EMPLOYEE" ? t("bo.actor.employee") : null;
+    const who = [p.name, role].filter(Boolean).join(" · ") || t("bo.actor.unrecorded");
+    return fillBo(t("bo.prep.by"), { who, when: exactTime(at, lang) });
+  };
+  const readyAction = primary?.key === "mark_ready" ? primary : null;
+  const readyMissing = readyAction?.missing ?? [];
+
+  async function toggleCheck(item: PrepItemKey, done: boolean) {
+    setSavingItem(item);
+    setPendingDone(done);
+    setError(null);
+    try {
+      await setPrepCheck(vendorId, branchId, order.id, item, done);
+      await onChanged();
+    } catch (err) {
+      if (isUnauthorized(err)) return onExpired();
+      const k = actionErrorKey(err);
+      setError(t(k));
+      if (k === "bo.err.changed") await onChanged();
+    } finally {
+      setSavingItem(null);
+      setPendingDone(null);
+    }
+  }
 
   async function run(key: ActionKey, body: Record<string, unknown> = {}) {
     setBusy(key);
@@ -297,7 +333,7 @@ export default function OrderDetailView({
             <h2 id="bo-detail-title" ref={headingRef} tabIndex={-1} className="bo-detail-title">
               {fillBo(t("bo.order_n"), { n })}
             </h2>
-            <span className={`bo-chip is-${order.status.toLowerCase()}`} data-testid="bo-detail-status">{t(statusKey(order.status))}</span>
+            <span className={`bo-chip ${ready ? "is-ready" : `is-${order.status.toLowerCase()}`}`} data-testid="bo-detail-status">{statusText}</span>
           </div>
           <dl className="bo-facts">
             <div>
@@ -330,8 +366,61 @@ export default function OrderDetailView({
           {order.status === "DELIVERY_FAILED" && <p className="bo-warn">{t("bo.failed_wait")}</p>}
           {order.delivery_attempt_count > 0 && <p className="bo-muted">{fillBo(t("bo.attempts"), { n: order.delivery_attempt_count })}</p>}
           {order.cancellation_reason && <p className="bo-muted" dir="auto">{fillBo(t("bo.cancellation_reason"), { r: order.cancellation_reason })}</p>}
-          {order.is_own_order && <p className="bo-muted">{t("bo.own_order")}</p>}
+          {/* the owner's own order: no cancel / refund (TB-27); an employee's own order: the action bar says she can do nothing */}
+          {order.is_own_order && isOwner && <p className="bo-muted">{t("bo.own_order")}</p>}
         </section>
+
+        {/* التجهيز (phase 2): who started, the saved checklist, «جاهز» */}
+        {prep && (prep.started_at || ready || order.status === "PREPARING") && (
+          <section className="bo-sec" aria-labelledby="bo-sec-prep" data-testid="bo-prep">
+            <h3 id="bo-sec-prep" className="bo-sec-title">{t("bo.sec.prep")}</h3>
+            {prep.started_by && (
+              <p className="bo-prep-meta" data-testid="bo-prep-started">
+                <span className="bo-muted">{t("bo.prep.started")}: </span>
+                <span dir="auto">{person(prep.started_by, prep.started_at)}</span>
+              </p>
+            )}
+            {prep.requires_ready ? (
+              <fieldset className="bo-prep-list" disabled={!prep.can_edit || savingItem !== null || busy !== null} data-testid="bo-prep-list">
+                <legend className="bo-label">{t("bo.prep.list")}</legend>
+                {prep.checklist.map((c) => {
+                  const by = c.done ? person(c.done_by, c.done_at) : null;
+                  return (
+                    <div key={c.key} className={`bo-prep-item${c.done ? " is-done" : ""}`} data-testid={`bo-prep-item-${c.key}`}>
+                      <label className="bo-prep-check">
+                        <input
+                          type="checkbox"
+                          checked={savingItem === c.key && pendingDone !== null ? pendingDone : c.done}
+                          aria-busy={savingItem === c.key}
+                          aria-describedby={by ? `bo-prep-by-${c.key}` : undefined}
+                          onChange={(e) => void toggleCheck(c.key, e.target.checked)}
+                          data-testid={`bo-prep-${c.key}`}
+                        />
+                        <span>{t(`bo.prep.item.${c.key}`)}</span>
+                        <span className={`bo-prep-tag${c.required ? " is-required" : ""}`}>{t(c.required ? "bo.prep.required" : "bo.prep.optional")}</span>
+                      </label>
+                      {by && (
+                        <p id={`bo-prep-by-${c.key}`} className="bo-prep-by bo-muted" dir="auto" data-testid={`bo-prep-by-${c.key}`}>
+                          {by}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </fieldset>
+            ) : (
+              !ready && order.status === "PREPARING" && <p className="bo-muted" data-testid="bo-prep-legacy">{t("bo.prep.legacy")}</p>
+            )}
+            {savingItem && <p className="visually-hidden" role="status">{t("bo.prep.saving")}</p>}
+            {prep.own_order_blocked && <p className="bo-warn" data-testid="bo-prep-own">{t("bo.prep.own_blocked")}</p>}
+            {ready && prep.ready_by && (
+              <p className="bo-prep-ready" data-testid="bo-prep-ready">
+                {t(`bo.ready.${order.fulfilment_method}`)} · <span dir="auto">{person(prep.ready_by, prep.ready_at)}</span>
+              </p>
+            )}
+            {ready && prep.requires_ready && <p className="bo-muted">{t("bo.prep.locked")}</p>}
+          </section>
+        )}
 
         {/* العناصر */}
         <section className="bo-sec" aria-labelledby="bo-sec-items">
@@ -491,18 +580,30 @@ export default function OrderDetailView({
       {/* شريط الإجراءات: خطوة واحدة أساسية، والباقي في قائمة */}
       <div className="bo-actionbar" role="group" aria-label={t("bo.actions")} data-testid="bo-actionbar">
         {!dialog && !editingNote && error && <p className="bo-error" role="alert">{error}</p>}
+        {/* phase 2: what «جاهز» still needs, said plainly (the server checks again) */}
+        {readyAction && (
+          <p id="bo-ready-hint" className={`bo-ready-hint${readyMissing.length === 0 ? " is-ok" : ""}`} data-testid="bo-ready-hint">
+            {readyMissing.length > 0
+              ? fillBo(t("bo.prep.missing"), { items: readyMissing.map((k) => t(`bo.prep.item.${k}`)).join(lang === "en" ? ", " : "، ") })
+              : t("bo.prep.all_set")}
+          </p>
+        )}
         <div className="bo-actionbar-row">
           {primary ? (
             <button
               type="button"
               className="bo-btn bo-btn-primary bo-btn-wide"
-              disabled={busy !== null}
+              disabled={busy !== null || savingItem !== null || readyMissing.length > 0}
+              aria-describedby={readyAction ? "bo-ready-hint" : undefined}
               aria-busy={busy === primary.key}
               onClick={() => choose(primary)}
               data-testid={`bo-action-${primary.key}`}
             >
               {t(`bo.a.${primary.key}`)}
             </button>
+          ) : order.is_own_order && !isOwner ? (
+            // 2026-11-24 policy: an employee runs no action on her own order (the server refuses every one)
+            <p className="bo-warn bo-no-action" data-testid="bo-own-blocked">{t("bo.own_blocked")}</p>
           ) : (
             <p className="bo-muted bo-no-action">{t("bo.no_action")}</p>
           )}

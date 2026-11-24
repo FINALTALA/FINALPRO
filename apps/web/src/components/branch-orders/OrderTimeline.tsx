@@ -63,6 +63,10 @@ export default function OrderTimeline({
               <div className="bo-tl-body">
                 <p className="bo-tl-what">
                   <strong>{t(`bo.tl.${e.kind}`)}</strong>
+                  {/* phase 2: which checklist item */}
+                  {(e.kind === "prep_check" || e.kind === "prep_uncheck") && e.item && (
+                    <span className="bo-muted" data-testid="bo-tl-item-name">{t(`bo.prep.item.${e.item}`)}</span>
+                  )}
                   {e.kind === "status" && e.from_status && e.to_status && (
                     <span className="bo-tl-change">
                       <span className="visually-hidden">

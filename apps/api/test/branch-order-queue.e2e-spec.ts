@@ -302,7 +302,7 @@ describe('Branch order queue, details and timeline (e2e)', () => {
     ]);
     const l = await get(queue(s, s.branchA, '?late=true'), empA).expect(200);
     expect(l.body.items.map((i: { id: string }) => i.id)).toEqual([o.late]);
-    await get(queue(s, s.branchA, '?tab=ready'), empA).expect(400);
+    await get(queue(s, s.branchA, '?tab=dispatched'), empA).expect(400);
     await get(queue(s, s.branchA, '?method=SHIP'), empA).expect(400);
   });
 
@@ -560,6 +560,9 @@ describe('Branch order queue, details and timeline (e2e)', () => {
     await f.staff(t, emp, id, 'start-preparation', {}).expect(201);
     const prep = await get(queue(t, t.branchA, sheet), emp).expect(200);
     expect(prep.body.status).toBe('PREPARING');
+    // phase 2: still a sheet once ready; gone after the hand-over
+    await f.prepareAndReady(t, emp, id);
+    await get(queue(t, t.branchA, sheet), emp).expect(200);
     await f
       .staff(t, emp, id, 'pickup-handover', { pickup_code: code })
       .expect(201);
@@ -663,11 +666,28 @@ describe('Branch order queue, details and timeline (e2e)', () => {
     const d = await get(queue(s, s.branchA, `/${o.pickupOld}`), empA).expect(
       200,
     );
+    // phase 2: started from now on -> «جاهز» first (with what is missing)
     expect(d.body.actions).toEqual([
+      {
+        key: 'mark_ready',
+        primary: true,
+        missing: ['ITEMS_VERIFIED', 'PACKED'],
+      },
+      { key: 'cancel', reason: 'required' },
+      { key: 'internal_note' },
+    ]);
+    await f.prepareAndReady(s, empA, o.pickupOld);
+    const ready = await get(
+      queue(s, s.branchA, `/${o.pickupOld}`),
+      empA,
+    ).expect(200);
+    expect(ready.body.actions).toEqual([
       { key: 'pickup_handover', primary: true },
       { key: 'cancel', reason: 'required' },
       { key: 'internal_note' },
     ]);
+    const counts = await get(queue(s, s.branchA), empA).expect(200);
+    expect(counts.body.counts).toMatchObject({ preparing: 0, ready: 1 });
   });
 
   it('pickup code: checked by the server as before - a wrong one changes nothing, the right one completes', async () => {
@@ -935,6 +955,8 @@ describe('Branch order queue, details and timeline (e2e)', () => {
     const refused = await f
       .staff(s, empA2, id, 'start-preparation')
       .expect(201)
+      // phase 2: the mandatory checklist and «جاهز» before the hand-over
+      .then(() => f.prepareAndReady(s, empA2, id))
       .then(() =>
         f.staff(s, empA2, id, 'pickup-handover', { pickup_code: wrong }),
       );
@@ -985,13 +1007,17 @@ describe('Branch order queue, details and timeline (e2e)', () => {
     }
   });
 
-  it('own order: the employee who bought it cannot be offered a cancel', async () => {
+  it('own order (2026-11-24 policy): the employee who bought it is offered no action at all; the owner sees the usual ones', async () => {
     const buyer = await employee(s, s.branchA, 'سلمى موظفة');
     const own = (await f.buy(buyer, s, variant)).branchOrderId;
     const d = await get(queue(s, s.branchA, `/${own}`), buyer).expect(200);
     expect(d.body.is_own_order).toBe(true);
-    expect(d.body.actions).toEqual([
+    expect(d.body.actions).toEqual([]);
+    const o = await get(queue(s, s.branchA, `/${own}`), s.owner).expect(200);
+    expect(o.body.is_own_order).toBe(false);
+    expect(o.body.actions).toEqual([
       { key: 'start_preparation', primary: true },
+      { key: 'cancel', reason: 'optional' },
       { key: 'internal_note' },
     ]);
   });

@@ -10,7 +10,8 @@ import "./branchOrdersText";
  * state: the server returns which steps are allowed now, and checks again.
  */
 
-export const QUEUE_TABS = ["active", "new", "preparing", "with_courier", "awaiting_confirmation", "attention", "done"] as const;
+// phase 2: «جاهز» = PREPARING with readyAt (a sub-state, its own bucket)
+export const QUEUE_TABS = ["active", "new", "preparing", "ready", "with_courier", "awaiting_confirmation", "attention", "done"] as const;
 export type QueueTab = (typeof QUEUE_TABS)[number];
 export type QueueSort = "priority" | "newest";
 export type Method = "PICKUP" | "DELIVERY";
@@ -36,6 +37,8 @@ export interface QueueRow {
   total?: number;
   amount_due: number | null;
   has_open_not_received_report: boolean;
+  /** phase 2: «جاهز» (PREPARING with readyAt) */
+  is_ready?: boolean;
 }
 export type QueueCounts = Record<QueueTab | "late", number>;
 export interface QueuePage {
@@ -58,10 +61,13 @@ export type ActionKey =
   | "rerequest_confirmation"
   | "approve_refund"
   | "cancel"
-  | "internal_note";
+  | "internal_note"
+  | "mark_ready";
 export interface QueueAction {
   key: ActionKey;
   primary?: boolean;
+  /** mark_ready: the mandatory checklist items still missing (empty = it can be done) */
+  missing?: string[];
   reason?: "optional" | "required";
   closes_order?: boolean;
 }
@@ -109,7 +115,27 @@ export interface OrderDetail {
   cancellation_reason?: string | null;
   delivery_attempt_count: number;
   is_own_order: boolean;
+  /** phase 2: preparation, the saved checklist, «جاهز» */
+  preparation?: Preparation;
   actions: QueueAction[];
+}
+export type PrepItemKey = "ITEMS_VERIFIED" | "PACKED" | "INVOICE_ATTACHED";
+export interface PrepPerson {
+  name: string | null;
+  role: "OWNER" | "BRANCH_EMPLOYEE" | string | null;
+}
+export interface Preparation {
+  /** started from the release on: «جاهز» comes before sending / handing over */
+  requires_ready: boolean;
+  started_at: string | null;
+  started_by: PrepPerson | null;
+  is_ready: boolean;
+  ready_at: string | null;
+  ready_by: PrepPerson | null;
+  checklist: { key: PrepItemKey; required: boolean; done: boolean; done_at: string | null; done_by: PrepPerson | null }[];
+  missing: PrepItemKey[];
+  can_edit: boolean;
+  own_order_blocked: boolean;
 }
 export type TimelineActor =
   | { kind: "system" }
@@ -127,6 +153,8 @@ export interface TimelineEvent {
   to_status: string | null;
   actor: TimelineActor;
   reason?: string;
+  /** phase 2: prep_check / prep_uncheck - which item */
+  item?: string | null;
 }
 
 export interface QueueFilters {
@@ -219,6 +247,7 @@ const ACTION_PATH: Partial<Record<ActionKey, string>> = {
   rerequest_confirmation: "rerequest-confirmation",
   approve_refund: "approve-refund",
   cancel: "cancel",
+  mark_ready: "mark-ready",
 };
 export function runOrderAction(vendorId: string, branchId: string, id: string, action: ActionKey, body: Record<string, unknown> = {}) {
   const path = ACTION_PATH[action];
@@ -228,6 +257,13 @@ export function runOrderAction(vendorId: string, branchId: string, id: string, a
     body,
     idempotencyKey: newIdempotencyKey(`staff-${path}`),
   });
+}
+/** phase 2: tick / un-tick one prep checklist item (the server keeps who and when). */
+export function setPrepCheck(vendorId: string, branchId: string, id: string, item: PrepItemKey, done: boolean) {
+  return apiFetch<{ id: string; item: PrepItemKey; done: boolean; missing: PrepItemKey[] }>(
+    `${base(vendorId, branchId)}/orders/${encodeURIComponent(id)}/prep-checklist/${item}`,
+    { method: "PATCH", body: { done } },
+  );
 }
 export function saveInternalNote(vendorId: string, branchId: string, id: string, note: string) {
   return apiFetch(`${base(vendorId, branchId)}/orders/${encodeURIComponent(id)}/internal-note`, {
@@ -246,7 +282,15 @@ export function actionErrorKey(err: unknown): string {
       case "CANCELLATION_REASON_REQUIRED":
         return "bo.err.reason_required";
       case "SELF_DECISION_FORBIDDEN":
+      case "OWN_ORDER_FORBIDDEN":
         return "bo.err.own_order";
+      // phase 2
+      case "ORDER_NOT_READY":
+        return "bo.err.not_ready";
+      case "PREP_CHECKLIST_INCOMPLETE":
+        return "bo.err.checklist_incomplete";
+      case "ORDER_ALREADY_READY":
+      case "ORDER_NOT_PREPARING":
       case "INVALID_BRANCH_ORDER_TRANSITION":
       case "NO_PENDING_NOT_RECEIVED_REPORT":
       case "PICKUP_HANDOVER_NOT_APPLICABLE":
