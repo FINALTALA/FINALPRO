@@ -6,6 +6,7 @@ import { EmptyState, ErrorBanner } from "@/components/States";
 import { ApiError, apiFetch, authHeadersFor } from "@/lib/api";
 import { adminErrorMessage, formatDateTime, isForbidden } from "@/lib/admin";
 import { useAdminGate } from "@/lib/useAdminGate";
+import styles from "./audit-logs.module.css";
 
 interface AuditLogRow {
   id: string;
@@ -197,55 +198,79 @@ export default function AdminAuditLogsPage() {
           <Link href="/admin" className="button-link">إدارة المنصة</Link>
         </div>
 
-        <form onSubmit={applyFilters} style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
-          <input
-            aria-label="نوع الكيان"
-            placeholder="نوع الكيان (مثل BranchOrder)"
-            value={draft.entity_type}
-            onChange={(e) => setDraft({ ...draft, entity_type: e.target.value })}
-            style={{ minWidth: 150 }}
-          />
-          <input
-            aria-label="معرّف الكيان"
-            placeholder="معرّف الكيان"
-            value={draft.entity_id}
-            onChange={(e) => setDraft({ ...draft, entity_id: e.target.value })}
-            style={{ minWidth: 150 }}
-          />
-          <input
-            aria-label="معرّف الفاعل"
-            placeholder="معرّف الفاعل (المستخدم)"
-            value={draft.actor_id}
-            onChange={(e) => setDraft({ ...draft, actor_id: e.target.value })}
-            style={{ minWidth: 150 }}
-          />
-          <input
-            aria-label="الإجراء"
-            placeholder="الإجراء (مثل branch_order.status_changed)"
-            value={draft.action}
-            onChange={(e) => setDraft({ ...draft, action: e.target.value })}
-            style={{ minWidth: 220 }}
-          />
-          <input
-            aria-label="معرّف الطلب (correlation id)"
-            placeholder="معرّف الطلب (correlation id)"
-            value={draft.correlation_id}
-            onChange={(e) => setDraft({ ...draft, correlation_id: e.target.value })}
-            dir="ltr"
-            style={{ minWidth: 220 }}
-          />
-          <input
-            aria-label="من تاريخ"
-            type="datetime-local"
-            value={draft.from}
-            onChange={(e) => setDraft({ ...draft, from: e.target.value })}
-          />
-          <input
-            aria-label="إلى تاريخ"
-            type="datetime-local"
-            value={draft.to}
-            onChange={(e) => setDraft({ ...draft, to: e.target.value })}
-          />
+        <form onSubmit={applyFilters} className={styles.filters}>
+          <div className="field">
+            <label htmlFor="audit-entity-type">نوع الكيان</label>
+            <input
+              id="audit-entity-type"
+              aria-label="نوع الكيان"
+              placeholder="مثل BranchOrder"
+              value={draft.entity_type}
+              onChange={(e) => setDraft({ ...draft, entity_type: e.target.value })}
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="audit-entity-id">معرّف الكيان</label>
+            <input
+              id="audit-entity-id"
+              aria-label="معرّف الكيان"
+              placeholder="UUID"
+              value={draft.entity_id}
+              onChange={(e) => setDraft({ ...draft, entity_id: e.target.value })}
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="audit-actor-id">معرّف الفاعل (المستخدم)</label>
+            <input
+              id="audit-actor-id"
+              aria-label="معرّف الفاعل"
+              placeholder="UUID"
+              value={draft.actor_id}
+              onChange={(e) => setDraft({ ...draft, actor_id: e.target.value })}
+            />
+          </div>
+          <div className={`field ${styles.wide}`}>
+            <label htmlFor="audit-action">الإجراء</label>
+            <input
+              id="audit-action"
+              aria-label="الإجراء"
+              placeholder="مثل branch_order.status_changed"
+              value={draft.action}
+              onChange={(e) => setDraft({ ...draft, action: e.target.value })}
+            />
+          </div>
+          <div className={`field ${styles.wide}`}>
+            <label htmlFor="audit-correlation-id">معرّف الطلب (correlation id)</label>
+            <input
+              id="audit-correlation-id"
+              aria-label="معرّف الطلب (correlation id)"
+              placeholder="correlation id"
+              value={draft.correlation_id}
+              onChange={(e) => setDraft({ ...draft, correlation_id: e.target.value })}
+              dir="ltr"
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="audit-from">من تاريخ</label>
+            <input
+              id="audit-from"
+              aria-label="من تاريخ"
+              type="datetime-local"
+              value={draft.from}
+              onChange={(e) => setDraft({ ...draft, from: e.target.value })}
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="audit-to">إلى تاريخ</label>
+            <input
+              id="audit-to"
+              aria-label="إلى تاريخ"
+              type="datetime-local"
+              value={draft.to}
+              onChange={(e) => setDraft({ ...draft, to: e.target.value })}
+            />
+          </div>
+          <div className={styles.actions}>
           <button className="button" type="submit">تصفية</button>
           <button
             className="button button-secondary"
@@ -262,14 +287,14 @@ export default function AdminAuditLogsPage() {
             إلغاء التصفية
           </button>
           <button
-            className="button-link"
+            className={`button-link ${styles.export}`}
             type="button"
             onClick={exportCsv}
             disabled={exporting}
-            style={{ marginInlineStart: "auto" }}
           >
             {exporting ? "جارٍ التصدير..." : "تصدير CSV"}
           </button>
+          </div>
         </form>
 
         {error && <ErrorBanner message={error} />}

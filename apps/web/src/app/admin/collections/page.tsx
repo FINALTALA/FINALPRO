@@ -6,15 +6,11 @@ import { useCallback, useEffect, useState } from "react";
 import { EmptyState, ErrorBanner } from "@/components/States";
 import { apiFetch, newIdempotencyKey } from "@/lib/api";
 import { isForbidden } from "@/lib/admin";
-import {
-  AdminCollection,
-  AUDIENCE_LABEL,
-  collectionError,
-  formatWindow,
-  liveLabel,
-  STATUS_LABEL,
-} from "@/lib/platformCollections";
+import { collAudience, collError, collLive, collStatus, collWindow } from "@/lib/adminCollectionsText";
+import { fillMp } from "@/lib/adminMarketplaceText";
+import { AdminCollection } from "@/lib/platformCollections";
 import { useAdminGate } from "@/lib/useAdminGate";
+import { useLang, useT } from "@/lib/useLang";
 
 // PD-5b.3: the PLATFORM_ADMIN's platform collections - list, create a
 // draft, lifecycle actions and display order. Every rule (transitions,
@@ -22,6 +18,8 @@ import { useAdminGate } from "@/lib/useAdminGate";
 // returns and words its refusals.
 export default function AdminCollectionsPage() {
   const gate = useAdminGate("ADMIN");
+  const lang = useLang();
+  const t = useT();
   const router = useRouter();
   const [list, setList] = useState<AdminCollection[] | null>(null);
   const [order, setOrder] = useState<string[] | null>(null);
@@ -40,9 +38,9 @@ export default function AdminCollectionsPage() {
       })
       .catch((err) => {
         if (isForbidden(err)) setForbidden(true);
-        setError(collectionError(err));
+        setError(collError(err, lang));
       });
-  }, []);
+  }, [lang]);
 
   useEffect(() => {
     if (gate.status !== "ok") return;
@@ -50,7 +48,7 @@ export default function AdminCollectionsPage() {
   }, [gate.status, load]);
 
   async function act(id: string, action: "publish" | "archive" | "reopen" | "delete", done: string) {
-    if (action === "delete" && !window.confirm("حذف هذه المسودة نهائياً؟")) return;
+    if (action === "delete" && !window.confirm(t("mpa.col.confirmDelete"))) return;
     setBusy(id);
     setError(null);
     setNotice(null);
@@ -62,7 +60,7 @@ export default function AdminCollectionsPage() {
       setNotice(done);
       await load();
     } catch (err) {
-      setError(collectionError(err));
+      setError(collError(err, lang));
     } finally {
       setBusy(null);
     }
@@ -80,7 +78,7 @@ export default function AdminCollectionsPage() {
       });
       router.push(`/admin/collections/${c.id}`);
     } catch (err) {
-      setError(collectionError(err));
+      setError(collError(err, lang));
       setBusy(null);
     }
   }
@@ -107,9 +105,9 @@ export default function AdminCollectionsPage() {
       });
       setList(rows);
       setOrder(rows.map((r) => r.id));
-      setNotice("تم حفظ ترتيب المجموعات");
+      setNotice(t("mpa.col.orderSaved"));
     } catch (err) {
-      setError(collectionError(err));
+      setError(collError(err, lang));
     } finally {
       setBusy(null);
     }
@@ -125,7 +123,7 @@ export default function AdminCollectionsPage() {
   if (gate.status === "forbidden" || forbidden) {
     return (
       <div className="page-shell">
-        <EmptyState title="هذه الصفحة لمدير المنصة فقط" actionHref="/account" actionLabel="حسابي" />
+        <EmptyState title={t("mpa.col.forbidden")} actionHref="/account" actionLabel={t("mpa.col.myAccount")} />
       </div>
     );
   }
@@ -138,55 +136,54 @@ export default function AdminCollectionsPage() {
     <div className="page-shell">
       <div className="wide-shell admin-collections" style={{ maxWidth: 1000 }}>
         <div className="top-bar">
-          <h1 className="page-title" style={{ margin: 0 }}>مجموعات المنصة</h1>
-          <Link href="/admin" className="button-link">إدارة المنصة</Link>
+          <h1 className="page-title" style={{ margin: 0 }}>{t("mpa.col.title")}</h1>
+          <Link href="/admin" className="button-link">{t("mpa.col.dashboard")}</Link>
         </div>
         <p className="muted">
-          مجموعات تحريرية من المنتجات الموحّدة. تظهر للعملاء المجموعة المنشورة ضمن نافذة نشرها فقط، ويظهر منها فقط ما يمكن شراؤه
-          لحظة العرض وفق منطقة العميل.
+          {t("mpa.col.lead")}
         </p>
 
         {error && <ErrorBanner message={error} />}
         {notice && <p className="muted" role="status">{notice}</p>}
 
         <section className="card" style={{ maxWidth: 560, marginBottom: 16 }}>
-          <h3 style={{ marginTop: 0 }}>مسودة جديدة</h3>
+          <h3 style={{ marginTop: 0 }}>{t("mpa.col.newDraft")}</h3>
           <form onSubmit={create}>
             <div className="field">
-              <label htmlFor="col-slug">الرابط (حروف إنجليزية صغيرة وأرقام وشرطات)</label>
+              <label htmlFor="col-slug">{t("mpa.col.slugHint")}</label>
               <input id="col-slug" dir="ltr" required pattern="[a-z0-9][a-z0-9\-]{1,59}" value={form.slug} onChange={(e) => setForm({ ...form, slug: e.target.value })} placeholder="new-in" />
             </div>
             <div className="field">
-              <label htmlFor="col-title-ar">العنوان بالعربية</label>
+              <label htmlFor="col-title-ar">{t("mpa.col.titleAr")}</label>
               <input id="col-title-ar" required maxLength={80} value={form.title_ar} onChange={(e) => setForm({ ...form, title_ar: e.target.value })} />
             </div>
             <div className="field">
-              <label htmlFor="col-title-en">العنوان بالإنجليزية</label>
+              <label htmlFor="col-title-en">{t("mpa.col.titleEn")}</label>
               <input id="col-title-en" dir="ltr" required maxLength={80} value={form.title_en} onChange={(e) => setForm({ ...form, title_en: e.target.value })} />
             </div>
-            <button type="submit" className="button" disabled={busy !== null}>إنشاء مسودة</button>
+            <button type="submit" className="button" disabled={busy !== null}>{t("mpa.col.createDraft")}</button>
           </form>
         </section>
 
         <section className="card">
           <div className="top-bar" style={{ marginBottom: 8 }}>
-            <h3 style={{ margin: 0 }}>المجموعات</h3>
+            <h3 style={{ margin: 0 }}>{t("mpa.col.collections")}</h3>
             {orderChanged && (
-              <button type="button" className="button" onClick={saveOrder} disabled={busy !== null}>حفظ الترتيب</button>
+              <button type="button" className="button" onClick={saveOrder} disabled={busy !== null}>{t("mpa.col.saveOrder")}</button>
             )}
           </div>
           {!list ? (
             error ? (
-              <button type="button" className="button button-secondary" onClick={() => void load()}>إعادة المحاولة</button>
+              <button type="button" className="button button-secondary" onClick={() => void load()}>{t("mpa.col.retry")}</button>
             ) : (
               <div className="skeleton" style={{ height: 60, width: "100%" }} aria-busy="true" />
             )
           ) : ordered.length === 0 ? (
-            <p className="muted">لا توجد مجموعات بعد.</p>
+            <p className="muted">{t("mpa.col.empty")}</p>
           ) : (
             <ol className="admin-collection-list">
               {ordered.map((c, index) => {
-                const live = liveLabel(c);
+                const live = collLive(lang, c);
                 return (
                   <li key={c.id} className="admin-collection-row">
                     <div className="admin-collection-main">
@@ -195,29 +192,29 @@ export default function AdminCollectionsPage() {
                         <span className="muted" dir="ltr">{c.title_en}</span>
                       </div>
                       <div className="admin-collection-meta">
-                        <span className={`badge${c.status === "PUBLISHED" ? " badge-active" : ""}`}>{STATUS_LABEL[c.status]}</span>
+                        <span className={`badge${c.status === "PUBLISHED" ? " badge-active" : ""}`}>{collStatus(lang, c.status)}</span>
                         {live && <span className={`admin-collection-live${c.live ? " is-live" : ""}`}>{live}</span>}
-                        <span>{c.audience ? AUDIENCE_LABEL[c.audience] : "بلا قسم"}</span>
-                        <span>{c.show_on_home ? "في الرئيسية" : "ليست في الرئيسية"}</span>
-                        <span>{c.item_count ?? 0} / 24 منتجاً</span>
-                        <span>{formatWindow(c)}</span>
+                        <span>{c.audience ? collAudience(lang, c.audience) : t("mpa.col.noAudience")}</span>
+                        <span>{t(c.show_on_home ? "mpa.col.onHome" : "mpa.col.notOnHome")}</span>
+                        <span>{fillMp(t("mpa.col.itemCount"), { n: c.item_count ?? 0 })}</span>
+                        <span>{collWindow(c, lang)}</span>
                       </div>
                     </div>
                     <div className="admin-collection-actions">
-                      <button type="button" className="button-link" aria-label={`تقديم ${c.title_ar}`} onClick={() => move(index, -1)} disabled={busy !== null || index === 0}>↑</button>
-                      <button type="button" className="button-link" aria-label={`تأخير ${c.title_ar}`} onClick={() => move(index, 1)} disabled={busy !== null || index === ordered.length - 1}>↓</button>
-                      <Link href={`/admin/collections/${c.id}`} className="button-link">فتح/تعديل</Link>
+                      <button type="button" className="button-link" aria-label={fillMp(t("mpa.col.moveUp"), { name: lang === "en" ? c.title_en : c.title_ar })} onClick={() => move(index, -1)} disabled={busy !== null || index === 0}>↑</button>
+                      <button type="button" className="button-link" aria-label={fillMp(t("mpa.col.moveDown"), { name: lang === "en" ? c.title_en : c.title_ar })} onClick={() => move(index, 1)} disabled={busy !== null || index === ordered.length - 1}>↓</button>
+                      <Link href={`/admin/collections/${c.id}`} className="button-link">{t("mpa.col.openEdit")}</Link>
                       {c.status === "DRAFT" && (
-                        <button type="button" className="button-link" disabled={busy !== null} onClick={() => act(c.id, "publish", "تم النشر")}>نشر</button>
+                        <button type="button" className="button-link" disabled={busy !== null} onClick={() => act(c.id, "publish", t("mpa.col.published"))}>{t("mpa.col.publish")}</button>
                       )}
                       {(c.status === "PUBLISHED" || (c.status === "DRAFT" && c.ever_published)) && (
-                        <button type="button" className="button-link" disabled={busy !== null} onClick={() => act(c.id, "archive", "تمت الأرشفة")}>أرشفة</button>
+                        <button type="button" className="button-link" disabled={busy !== null} onClick={() => act(c.id, "archive", t("mpa.col.archived"))}>{t("mpa.col.archive")}</button>
                       )}
                       {c.status === "ARCHIVED" && (
-                        <button type="button" className="button-link" disabled={busy !== null} onClick={() => act(c.id, "reopen", "أعيد فتحها كمسودة")}>إعادة فتح كمسودة</button>
+                        <button type="button" className="button-link" disabled={busy !== null} onClick={() => act(c.id, "reopen", t("mpa.col.reopened"))}>{t("mpa.col.reopen")}</button>
                       )}
                       {c.status === "DRAFT" && !c.ever_published && (
-                        <button type="button" className="button-link admin-collection-delete" disabled={busy !== null} onClick={() => act(c.id, "delete", "تم حذف المسودة")}>حذف</button>
+                        <button type="button" className="button-link admin-collection-delete" disabled={busy !== null} onClick={() => act(c.id, "delete", t("mpa.col.deleted"))}>{t("mpa.col.delete")}</button>
                       )}
                     </div>
                   </li>

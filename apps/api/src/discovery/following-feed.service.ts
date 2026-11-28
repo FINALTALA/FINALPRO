@@ -34,6 +34,7 @@ import {
   textMatch,
 } from './discovery-filters';
 import { comparisonCardDto } from './dto/comparison-card.dto';
+import { PUBLIC_OFFER } from '../offers/platform-hold.util';
 
 export const FEED_COLLECTIONS = ['ALL', 'TRENDING', 'NEW', 'DISCOUNT'] as const;
 export type FeedCollection = (typeof FEED_COLLECTIONS)[number];
@@ -402,7 +403,7 @@ export class FollowingFeedService {
         AND: [
           {
             canonicalVariant: { canonicalProductId: { in: ids } },
-            vendorOffer: { status: 'ACTIVE', audiences: { some: {} } },
+            vendorOffer: { ...PUBLIC_OFFER, audiences: { some: {} } },
             vendor: {
               AND: [
                 { storefrontPublished: true, status: 'ACTIVE' },
@@ -490,7 +491,7 @@ export class FollowingFeedService {
           AND: [
             {
               canonicalVariant: { canonicalProductId: { in: ids } },
-              vendorOffer: { status: 'ACTIVE' },
+              vendorOffer: PUBLIC_OFFER,
               vendor: {
                 AND: [
                   { storefrontPublished: true, status: 'ACTIVE' },

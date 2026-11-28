@@ -26,6 +26,8 @@ export interface CuratedPiece {
   audience: HomeAudience;
   category?: HomeCategory;
   canonicalProductId: string | null;
+  /** VIA phase 6: an Editorial Product Pick (a real public offer) - its card links to it. */
+  pick?: { vendorSlug: string; offerId: string };
 }
 
 const dir = "/images/home-products";

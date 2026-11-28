@@ -3,7 +3,9 @@
 import { IBM_Plex_Sans_Arabic, Inter_Tight } from "next/font/google";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FEATURED_FILMS, GALLERY, type GalleryItem } from "./collections";
+import { FEATURED_FILMS, GALLERY, type FeaturedFilm, type GalleryItem } from "./collections";
+import { linkOf, mediaOf, mediaUrl, overlayItems, pickText, refOf, useManagedSection } from "@/lib/contentStudio";
+import { useLang } from "@/lib/useLang";
 import "./trend-collections.css";
 
 // Same faces as the sections above (identical options share the font files).
@@ -18,7 +20,12 @@ const FADE = 0.8; // seconds of overlap between two clips (matches the CSS)
 // Tiles that span the whole row on tablet and phone.
 const WIDE = new Set<GalleryItem["tile"]>(["tall", "wide-xl"]);
 
-function FilmReel() {
+function FilmReel({ films, kicker }: { films: FeaturedFilm[]; kicker: string }) {
+  // VIA phase 6: the films (and kicker) may come from the Content Studio.
+  const filmCount = useRef(films.length);
+  useEffect(() => {
+    filmCount.current = films.length;
+  }, [films.length]);
   const rootRef = useRef<HTMLDivElement>(null);
   const vids = useRef<(HTMLVideoElement | null)[]>([]);
   const bars = useRef<(HTMLSpanElement | null)[]>([]);
@@ -52,7 +59,7 @@ function FilmReel() {
     if (v && v.duration) {
       const bar = bars.current[s.active];
       if (bar) bar.style.transform = `scaleX(${Math.min(v.currentTime / v.duration, 1)})`;
-      if (!s.reduced && v.currentTime >= v.duration - FADE) showRef.current((s.active + 1) % FEATURED_FILMS.length);
+      if (!s.reduced && v.currentTime >= v.duration - FADE) showRef.current((s.active + 1) % filmCount.current);
     }
     s.raf = requestAnimationFrame(() => loopRef.current());
   }, []);
@@ -97,11 +104,11 @@ function FilmReel() {
     v.currentTime = 0;
   };
 
-  const film = FEATURED_FILMS[active];
+  const film = films[active] ?? films[0];
 
   return (
     <div ref={rootRef} className="nc-reel" aria-roledescription="عرض أفلام" aria-label="مجموعات جديدة">
-      {FEATURED_FILMS.map((f, i) => (
+      {films.map((f, i) => (
         <video
           key={f.key}
           ref={(el) => { vids.current[i] = el; }}
@@ -121,7 +128,7 @@ function FilmReel() {
       <div className="nc-reel-shade" aria-hidden="true" />
 
       <div className="nc-reel-copy" key={film.key} aria-live="polite">
-        <span className="nc-kicker nc-latin">NEW COLLECTIONS · <bdi>{String(active + 1).padStart(2, "0")}/{String(FEATURED_FILMS.length).padStart(2, "0")}</bdi></span>
+        <span className="nc-kicker nc-latin">{kicker} · <bdi>{String(active + 1).padStart(2, "0")}/{String(films.length).padStart(2, "0")}</bdi></span>
         <h3 className="nc-reel-title nc-latin">{film.title}</h3>
         <span className="nc-reel-ar">{film.titleAr}{film.store && <> · {film.store}</>}</span>
         {film.href && (
@@ -130,7 +137,7 @@ function FilmReel() {
       </div>
 
       <div className="nc-dots" role="group" aria-label="اختيار الفيلم">
-        {FEATURED_FILMS.map((f, i) => (
+        {films.map((f, i) => (
           <button
             key={f.key}
             type="button"
@@ -154,8 +161,8 @@ function GalleryCard({ item }: { item: GalleryItem }) {
       <span className={`nc-media${native ? " is-native" : ""}`}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src={`${item.src}.webp`}
-          srcSet={item.half ? `${item.src}-half.webp ${Math.round(item.w / 2)}w, ${item.src}.webp ${item.w}w` : undefined}
+          src={item.fullSrc ?? `${item.src}.webp`}
+          srcSet={item.half && !item.fullSrc ? `${item.src}-half.webp ${Math.round(item.w / 2)}w, ${item.src}.webp ${item.w}w` : undefined}
           sizes={WIDE.has(item.tile) ? "(max-width: 1099px) 92vw, 54vw" : "(max-width: 1099px) 46vw, 36vw"}
           width={item.w}
           height={item.h}
@@ -205,18 +212,63 @@ export default function TrendCollections() {
     return () => io.disconnect();
   }, []);
 
+  // VIA phase 6: Reels & Videos (the film reel) and Discover Collections
+  // (the gallery) may come from the Content Studio - same reel, same tiles.
+  const lang = useLang();
+  const reels = useManagedSection("trend.reels");
+  const gallery = useManagedSection("trend.collections");
+  const films = overlayItems(reels, FEATURED_FILMS, (f) => f.key, (base, it) => {
+    const m = mediaOf(it.fields.video);
+    if (!m || m.kind !== "VIDEO") return null; // a reel needs its video
+    return {
+      ...base,
+      key: it.id,
+      title: pickText(it.fields.title, "en", base.title),
+      titleAr: pickText(it.fields.title, "ar", base.titleAr),
+      video: mediaUrl(it.fields.video)!,
+      store: null,
+    };
+  });
+  const tiles = overlayItems(gallery, GALLERY, (g) => g.key, (base, it) => {
+    const src = mediaUrl(it.fields.image, null);
+    if (!src) return null;
+    const col = refOf(it.fields.collection);
+    return {
+      ...base,
+      key: it.id,
+      title: pickText(it.fields.title, "en", base.title),
+      titleAr: pickText(it.fields.title, "ar", base.titleAr),
+      fullSrc: src === `${base.src}.webp` ? undefined : src,
+      alt: pickText(mediaOf(it.fields.image)?.alt, lang, base.alt),
+      href: col?.href ?? linkOf(it.fields.link, base.href),
+      store: null,
+    };
+  });
+  const kicker = reels.mode === "managed" ? pickText(reels.section.fields.heading, "en", "NEW COLLECTIONS") : "NEW COLLECTIONS";
+  const galleryTitle =
+    gallery.mode === "managed" ? pickText(gallery.section.fields.heading, "en", "DISCOVER THE COLLECTIONS") : "DISCOVER THE COLLECTIONS";
+  const galleryLead =
+    gallery.mode === "managed"
+      ? pickText(gallery.section.fields.heading, "ar", "مجموعات مختارة بحسب الأسلوب والمزاج، من الكتّان الهادئ إلى الذهب.")
+      : "مجموعات مختارة بحسب الأسلوب والمزاج، من الكتّان الهادئ إلى الذهب.";
+  if (films.length === 0 && tiles.length === 0) return null;
+
   return (
     <section ref={ref} className={`nc ${interTight.variable} ${plex.variable}`} aria-labelledby="nc-title">
-      <FilmReel />
+      {films.length > 0 && <FilmReel films={films} kicker={kicker} />}
 
-      <div className="nc-head">
-        <h2 id="nc-title" className="nc-title nc-latin">DISCOVER THE COLLECTIONS</h2>
-        <p className="nc-lead">مجموعات مختارة بحسب الأسلوب والمزاج، من الكتّان الهادئ إلى الذهب.</p>
-      </div>
+      {tiles.length > 0 && (
+        <>
+          <div className="nc-head">
+            <h2 id="nc-title" className="nc-title nc-latin">{galleryTitle}</h2>
+            <p className="nc-lead">{galleryLead}</p>
+          </div>
 
-      <ul className="nc-gallery">
-        {GALLERY.map((g) => <GalleryCard key={g.key} item={g} />)}
-      </ul>
+          <ul className="nc-gallery">
+            {tiles.map((g) => <GalleryCard key={g.key} item={g} />)}
+          </ul>
+        </>
+      )}
     </section>
   );
 }

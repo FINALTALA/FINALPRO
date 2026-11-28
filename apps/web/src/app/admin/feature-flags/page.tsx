@@ -6,6 +6,7 @@ import { EmptyState, ErrorBanner } from "@/components/States";
 import { apiFetch, newIdempotencyKey } from "@/lib/api";
 import { adminErrorMessage, isForbidden } from "@/lib/admin";
 import { useAdminGate } from "@/lib/useAdminGate";
+import styles from "./feature-flags.module.css";
 
 interface FeatureFlagRow {
   key: string;
@@ -96,8 +97,8 @@ export default function AdminFeatureFlagsPage() {
             {flags.map((flag) => (
               <div key={flag.key} className="card" style={{ maxWidth: "none" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
-                  <div>
-                    <div style={{ fontWeight: 600, fontFamily: "monospace" }}>{flag.key}</div>
+                  <div className={styles.flagText}>
+                    <div className={styles.flagKey} style={{ fontWeight: 600, fontFamily: "monospace" }}>{flag.key}</div>
                     <div className="muted" style={{ marginTop: 4 }}>{flag.description}</div>
                   </div>
                   <span className={`badge${flag.enabled ? " badge-active" : ""}`}>

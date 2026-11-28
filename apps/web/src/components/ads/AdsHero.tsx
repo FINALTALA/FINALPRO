@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useAdsLang } from "./adsCopy";
-import { HERO_SLIDES } from "./data/adsDemo";
+import { useAdsHero } from "./adsManaged";
 import { ArrowUpLeft, ArrowUpRight, ChevronLeft, ChevronRight } from "./icons";
 import "./ads-hero.css";
 
@@ -17,6 +17,8 @@ const SLIDE_MS = 3000;
 
 export default function AdsHero() {
   const { t, pick, isArabic, dir } = useAdsLang();
+  // VIA phase 6: the slides may come from the Content Studio (same design).
+  const { mode, slides: HERO_SLIDES } = useAdsHero();
   const n = HERO_SLIDES.length;
   const [i, setI] = useState(0);
   const [round, setRound] = useState(0);
@@ -53,7 +55,8 @@ export default function AdsHero() {
   }, []);
 
   const paused = hover || focus || away;
-  const slide = HERO_SLIDES[i];
+  const slide = HERO_SLIDES[Math.min(i, n - 1)];
+  if (mode.mode === "hidden" || !slide) return null;
   const store = slide.store;
   const Arrow = isArabic ? ArrowUpLeft : ArrowUpRight;
 
@@ -123,8 +126,8 @@ export default function AdsHero() {
                 </p>
                 <h2 className="ah-title">{pick(s.title)}</h2>
                 <p className="ah-sub">{pick(s.subtitle)}</p>
-                {s.store.slug ? (
-                  <a href={`/store/${s.store.slug}`} className="ah-cta">{t("ads.hero.cta")}</a>
+                {s.ctaHref || s.store.slug ? (
+                  <a href={s.ctaHref || `/store/${s.store.slug}`} className="ah-cta">{t("ads.hero.cta")}</a>
                 ) : (
                   <span className="ah-cta is-unavailable" role="link" aria-disabled="true" title={t("ads.unavailableDemo")}>{t("ads.hero.cta")}</span>
                 )}
@@ -171,7 +174,7 @@ export default function AdsHero() {
       <div className="ah-controls">
         <div className="ah-count" aria-label={t("ads.hero.counter", { n: i + 1, total: n })}>
           <bdi>
-            <b>0{i + 1}</b><i>/</i><span>0{n}</span>
+            <b>{String(i + 1).padStart(2, "0")}</b><i>/</i><span>{String(n).padStart(2, "0")}</span>
           </bdi>
         </div>
         <div className="ah-bars" role="group" aria-label={t("ads.hero.pick")}>

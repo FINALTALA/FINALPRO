@@ -1,3 +1,4 @@
+import { PUBLIC_CANONICAL_PRODUCT } from '../matching/public-canonical-product';
 import { compositionView } from '../offers/composition';
 import {
   colorLabel,
@@ -32,6 +33,11 @@ import {
   isEffectivelyDiscounted,
 } from '../offers/pricing/effective-price.util';
 import { SalesRankReadService } from '../sales-rank/sales-rank-read.service';
+import {
+  OFFER_NOT_HELD,
+  OPEN_HOLD_SELECT,
+  PUBLIC_OFFER,
+} from '../offers/platform-hold.util';
 
 // Sprint 8 (RB-STOREF-002, PDR-012 / RB-COMP-001, PDR-015): the public,
 // unauthenticated read side of a store's own catalog - deliberately NO
@@ -188,7 +194,8 @@ export class StoreOffersPublicController {
     }
 
     const offers = await this.prisma.vendorOffer.findMany({
-      where: { vendorId: vendor.id, status: 'ACTIVE' },
+      // VIA phase 2C: PUBLIC_OFFER = ACTIVE and not under a platform hold.
+      where: { vendorId: vendor.id, ...PUBLIC_OFFER },
       orderBy: { createdAt: 'desc' },
       include: {
         variants: {
@@ -219,6 +226,9 @@ export class StoreOffersPublicController {
       orderBy: { sortOrder: 'asc' },
       include: {
         offers: {
+          // VIA phase 2C: a held offer leaves every public collection too
+          // (its membership row is untouched).
+          where: { offer: OFFER_NOT_HELD },
           orderBy: { sortOrder: 'asc' },
           include: {
             offer: {
@@ -284,9 +294,24 @@ export class StoreOffersPublicController {
     @Req() req: Request,
   ) {
     const vendor = await this.requireAvailableVendor(slug);
-    const offer = await this.prisma.vendorOffer.findUnique({
-      where: { id: offerId },
+    const offer = await this.prisma.vendorOffer.findFirst({
+      where: {
+        id: offerId,
+        OR: [
+          { canonicalProductId: null },
+          { canonicalProduct: PUBLIC_CANONICAL_PRODUCT },
+        ],
+        variants: {
+          none: {
+            canonicalVariant: {
+              canonicalProduct: { NOT: PUBLIC_CANONICAL_PRODUCT },
+            },
+          },
+        },
+      },
       include: {
+        // VIA phase 2C: a held offer's page is "not found" to the public.
+        platformHolds: OPEN_HOLD_SELECT,
         sharedMedia: { orderBy: { sortOrder: 'asc' }, select: { url: true } },
         variants: {
           include: {
@@ -330,6 +355,7 @@ export class StoreOffersPublicController {
       !offer ||
       offer.vendorId !== vendor.id ||
       offer.status !== 'ACTIVE' ||
+      offer.platformHolds.length > 0 ||
       !isAvailable
     ) {
       throw new NotFoundException({

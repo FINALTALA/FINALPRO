@@ -1,5 +1,6 @@
 import { Prisma } from '../../generated/prisma/client';
 import { OutboxEventService } from '../outbox/outbox-event.service';
+import { PUBLIC_OFFER } from '../offers/platform-hold.util';
 
 export type FavoriteAlertType = 'PRICE_DROP' | 'BACK_IN_STOCK' | 'NEW_OFFER';
 
@@ -20,7 +21,7 @@ export async function enqueueVariantAvailabilityNotifications(
       id: params.offerVariantId,
       vendorId: params.vendorId,
       vendorOffer: {
-        status: 'ACTIVE',
+        ...PUBLIC_OFFER,
         vendor: { status: 'ACTIVE', storefrontPublished: true },
       },
     },
@@ -112,11 +113,14 @@ export async function enqueueFavoriteNotification(
   // notification - one place for every caller (stock movements, order
   // cancellation, returns).
   if (params.alertType === 'BACK_IN_STOCK' && params.offerVariantId) {
-    const rows = await tx.$queryRaw<{ status: string }[]>`
-      SELECT o.status::text AS status
+    // VIA phase 2C: nor one under an open platform hold.
+    const rows = await tx.$queryRaw<{ status: string; held: boolean }[]>`
+      SELECT o.status::text AS status,
+             EXISTS (SELECT 1 FROM offer_platform_holds h
+                      WHERE h."vendorOfferId" = o.id AND h."releasedAt" IS NULL) AS held
       FROM offer_variants v JOIN vendor_offers o ON o.id = v."vendorOfferId"
       WHERE v.id = ${params.offerVariantId}`;
-    if (rows[0]?.status !== 'ACTIVE') return null;
+    if (rows[0]?.status !== 'ACTIVE' || rows[0]?.held) return null;
   }
   const outboxEvent = await outbox.enqueue(
     {

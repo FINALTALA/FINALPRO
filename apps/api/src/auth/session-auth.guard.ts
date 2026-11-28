@@ -84,12 +84,20 @@ export class SessionAuthGuard implements CanActivate {
 
     const user = await this.prisma.user.findUnique({
       where: { id: session.userId },
-      select: { sessionVersion: true },
+      select: { sessionVersion: true, suspendedAt: true },
     });
     if (!user || user.sessionVersion !== session.sessionVersion) {
       throw new UnauthorizedException({
         code: 'SESSION_INVALID',
         message: 'Session is invalid or has expired',
+      });
+    }
+    // VIA phase 3: a suspended account is refused on every request, even
+    // with a session issued after the suspension by some other sign-in path.
+    if (user.suspendedAt) {
+      throw new UnauthorizedException({
+        code: 'ACCOUNT_SUSPENDED',
+        message: 'This account is suspended by the platform',
       });
     }
 

@@ -25,6 +25,7 @@ import { groupByVendorAndBranch, GroupingItem } from './checkout-grouping.util';
 import {
   assertItemsPurchasable,
   assertItemsPurchasableReadOnly,
+  isPlatformHoldRefusal,
 } from './purchase-eligibility.util';
 import {
   findExpiredReservationIdsForStockKeys,
@@ -117,6 +118,7 @@ import {
   FulfilmentEligibilityService,
   isBranchSellable,
 } from '../fulfilment/fulfilment-eligibility.service';
+import { warehouseApprovedVendorIds } from '../vendor-verification/store-verification-requirements';
 import { SizeGuidesService } from '../size-guides/size-guides.service';
 import { assertCartLinesWithinLimit } from '../cart/cart-line-limit';
 import { crossesIntoLowStock } from '../common/low-stock-alert.util';
@@ -640,8 +642,22 @@ export class CheckoutService {
         // reservation already created before a closure/archive stays
         // confirmable (product decision).
         // PD-2: the same predicate every public availability read uses.
+        // Phase 2A: a non-physical branch is verified by its store's
+        // latest warehouse review (isBranchVerifiedForSale). Once a store
+        // is ACTIVE that review no longer changes (warehouse evidence is
+        // submitted and decided only before activation).
+        const warehouseApproved =
+          !branch.isPhysical && branch.verificationStatus !== 'APPROVED'
+            ? (await warehouseApprovedVendorIds(tx, [branch.vendorId])).has(
+                branch.vendorId,
+              )
+            : false;
         if (
-          !isBranchSellable(branch, await hasActiveBranchClosure(tx, branch.id))
+          !isBranchSellable(
+            branch,
+            await hasActiveBranchClosure(tx, branch.id),
+            warehouseApproved,
+          )
         ) {
           throw new ConflictException({
             code: 'BRANCH_NOT_AVAILABLE_FOR_ORDERS',
@@ -1359,6 +1375,33 @@ export class CheckoutService {
       });
     }
 
+    // VIA phase 2C: a confirmation refused because an item is under a
+    // platform hold still releases this reservation's stock and slots -
+    // in its own transaction (the refused one rolled back), idempotently
+    // (cancelReservation; the hold's own cleanup may have done it first).
+    return this.confirmInTransaction(
+      customerId,
+      reservationId,
+      actorId,
+      correlationId,
+      idempotencyClaimId,
+      sandboxCardToken,
+    ).catch(async (err: unknown) => {
+      if (isPlatformHoldRefusal(err)) {
+        await this.cancelReservation(customerId, reservationId);
+      }
+      throw err;
+    });
+  }
+
+  private async confirmInTransaction(
+    customerId: string,
+    reservationId: string,
+    actorId: string,
+    correlationId: string,
+    idempotencyClaimId: string | undefined,
+    sandboxCardToken?: SandboxCardToken,
+  ) {
     return this.prisma.$transaction(async (tx) => {
       // Review-round requirement: the account-state lock is taken
       // FIRST, before even the reservation lock - the global fixed order

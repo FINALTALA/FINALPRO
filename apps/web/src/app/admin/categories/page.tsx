@@ -1,11 +1,14 @@
 "use client";
 
+import "@/lib/adminCatalogText";
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { EmptyState, ErrorBanner } from "@/components/States";
 import { ApiError, apiFetch, newIdempotencyKey } from "@/lib/api";
-import { adminErrorMessage, isForbidden, reasonProblem } from "@/lib/admin";
+import { isForbidden } from "@/lib/admin";
+import { fillMp, mpError, mpReasonProblem } from "@/lib/adminMarketplaceText";
 import { useAdminGate } from "@/lib/useAdminGate";
+import { useLang, useT } from "@/lib/useLang";
 
 interface CategoryRow {
   id: string;
@@ -13,6 +16,8 @@ interface CategoryRow {
   name_en: string;
   parent_id: string | null;
   is_restricted: boolean;
+  /** M-06: returned to platform admins only. */
+  restriction_reason?: string | null;
 }
 
 interface DuplicateCandidate {
@@ -50,19 +55,23 @@ function flatten(items: CategoryRow[]): { row: CategoryRow; depth: number }[] {
 // reference the category). PLATFORM_ADMIN only.
 export default function AdminCategoriesPage() {
   const gate = useAdminGate("ADMIN");
+  const lang = useLang();
+  const t = useT();
   const [items, setItems] = useState<CategoryRow[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // M-01: the failure itself is kept, so its message follows the UI language.
+  const [loadFailure, setLoadFailure] = useState<unknown>(null);
+  const error = loadFailure === null ? null : mpError(loadFailure, lang);
   const [forbidden, setForbidden] = useState(false);
 
   const load = useCallback(() => {
     apiFetch<CategoryRow[]>("/categories")
       .then((rows) => {
         setItems(rows);
-        setError(null);
+        setLoadFailure(null);
       })
       .catch((err) => {
         if (isForbidden(err)) setForbidden(true);
-        setError(adminErrorMessage(err));
+        setLoadFailure(err);
       });
   }, []);
 
@@ -103,7 +112,7 @@ export default function AdminCategoriesPage() {
       if (err instanceof ApiError && err.code === "POSSIBLE_DUPLICATE") {
         setDuplicates((err.details as DuplicateCandidate[]) ?? []);
       } else {
-        setCreateError(adminErrorMessage(err));
+        setCreateError(mpError(err, lang));
       }
     } finally {
       setCreateBusy(false);
@@ -167,7 +176,7 @@ export default function AdminCategoriesPage() {
       setEditId(null);
       load();
     } catch (err) {
-      setEditError(adminErrorMessage(err));
+      setEditError(mpError(err, lang));
     } finally {
       setEditBusy(false);
     }
@@ -178,7 +187,7 @@ export default function AdminCategoriesPage() {
   const [restrictReason, setRestrictReason] = useState("");
   const [restrictBusy, setRestrictBusy] = useState(false);
   const [restrictError, setRestrictError] = useState<string | null>(null);
-  const restrictProblem = reasonProblem(restrictReason);
+  const restrictProblem = mpReasonProblem(restrictReason, lang);
 
   function openRestrict(id: string, mode: "restrict" | "unrestrict") {
     setRestrictPanel({ id, mode });
@@ -201,7 +210,7 @@ export default function AdminCategoriesPage() {
       setRestrictReason("");
       load();
     } catch (err) {
-      setRestrictError(adminErrorMessage(err));
+      setRestrictError(mpError(err, lang));
     } finally {
       setRestrictBusy(false);
     }
@@ -220,7 +229,7 @@ export default function AdminCategoriesPage() {
       setDeleteConfirmId(null);
       load();
     } catch (err) {
-      setDeleteError(adminErrorMessage(err));
+      setDeleteError(mpError(err, lang));
     } finally {
       setDeleteBusy(false);
     }
@@ -236,7 +245,7 @@ export default function AdminCategoriesPage() {
   if (gate.status === "forbidden" || forbidden) {
     return (
       <div className="page-shell">
-        <EmptyState title="هذه الصفحة لمدير المنصة فقط" actionHref="/account" actionLabel="حسابي" />
+        <EmptyState title={t("mpa.cat.forbidden")} actionHref="/account" actionLabel={t("mpa.cat.myAccount")} />
       </div>
     );
   }
@@ -247,32 +256,32 @@ export default function AdminCategoriesPage() {
     <div className="page-shell">
       <div className="wide-shell" style={{ maxWidth: 1000 }}>
         <div className="top-bar">
-          <h1 className="page-title" style={{ margin: 0 }}>التصنيفات</h1>
-          <Link href="/admin" className="button-link">إدارة المنصة</Link>
+          <h1 className="page-title" style={{ margin: 0 }}>{t("mpa.cg.title")}</h1>
+          <Link href="/admin" className="button-link">{t("mpa.cat.dashboard")}</Link>
         </div>
 
         {error && <ErrorBanner message={error} />}
 
         <div className="card" style={{ maxWidth: "none", marginBottom: 16 }}>
-          <h3 style={{ marginTop: 0 }}>تصنيف جديد</h3>
+          <h3 style={{ marginTop: 0 }}>{t("mpa.cg.newTitle")}</h3>
           <form onSubmit={submitCreate}>
             <div className="form-row">
               <div className="field">
-                <label htmlFor="cat-name-ar">الاسم بالعربية</label>
+                <label htmlFor="cat-name-ar">{t("mpa.cat.nameAr")}</label>
                 <input id="cat-name-ar" value={nameAr} disabled={createBusy} onChange={(e) => setNameAr(e.target.value)} />
               </div>
               <div className="field">
-                <label htmlFor="cat-name-en">الاسم بالإنجليزية</label>
+                <label htmlFor="cat-name-en">{t("mpa.cat.nameEn")}</label>
                 <input id="cat-name-en" value={nameEn} disabled={createBusy} onChange={(e) => setNameEn(e.target.value)} />
               </div>
             </div>
             <div className="field">
-              <label htmlFor="cat-parent">التصنيف الأب (اختياري)</label>
+              <label htmlFor="cat-parent">{t("mpa.cg.parentOptional")}</label>
               <select id="cat-parent" value={parentId} disabled={createBusy} onChange={(e) => setParentId(e.target.value)}>
-                <option value="">بدون - تصنيف رئيسي</option>
+                <option value="">{t("mpa.cat.noParent")}</option>
                 {rows.map(({ row, depth }) => (
                   <option key={row.id} value={row.id}>
-                    {"— ".repeat(depth)}{row.name_ar}
+                    {"— ".repeat(depth)}{lang === "en" ? row.name_en || row.name_ar : row.name_ar}
                   </option>
                 ))}
               </select>
@@ -280,33 +289,33 @@ export default function AdminCategoriesPage() {
             {createError && <ErrorBanner message={createError} />}
             {duplicates && duplicates.length > 0 && (
               <div className="warning-banner">
-                <p style={{ marginTop: 0 }}>توجد تصنيفات مشابهة بالفعل، تأكدي أنّ هذا ليس تكراراً:</p>
+                <p style={{ marginTop: 0 }}>{t("mpa.cg.duplicates")}</p>
                 <ul style={{ margin: "0 0 10px", paddingInlineStart: 20 }}>
                   {duplicates.map((d) => (
                     <li key={d.id}>
-                      {d.name_ar} / {d.name_en} — تشابه {(d.similarity * 100).toFixed(0)}٪
+                      {d.name_ar} / {d.name_en} — {fillMp(t("mpa.cat.similarity"), { pct: (d.similarity * 100).toFixed(0) })}
                     </li>
                   ))}
                 </ul>
                 <button type="button" className="button" disabled={createBusy} onClick={() => createCategory(true)}>
-                  {createBusy ? "جارٍ الإنشاء..." : "إنشاء رغم التشابه"}
+                  {createBusy ? t("mpa.cat.creating") : t("mpa.cat.createAnyway")}
                 </button>
               </div>
             )}
             <button className="button" type="submit" disabled={createBusy || !nameAr.trim() || !nameEn.trim()}>
-              {createBusy ? "جارٍ الإنشاء..." : "إنشاء"}
+              {createBusy ? t("mpa.cat.creating") : t("mpa.cat.create")}
             </button>
           </form>
         </div>
 
         {!items && !error && (
-          <div aria-busy="true" aria-label="جارٍ التحميل">
+          <div aria-busy="true" aria-label={t("mpa.cat.loading")}>
             <div className="skeleton" style={{ height: 56, width: "100%", marginBottom: 8 }} />
             <div className="skeleton" style={{ height: 56, width: "100%" }} />
           </div>
         )}
         {items && items.length === 0 && (
-          <EmptyState title="لا توجد تصنيفات بعد" message="أنشئي أول تصنيف من النموذج أعلاه." />
+          <EmptyState title={t("mpa.cg.empty")} message={t("mpa.cg.emptyHint")} />
         )}
         {items && items.length > 0 && (
           <div className="card" style={{ maxWidth: "none" }}>
@@ -316,34 +325,34 @@ export default function AdminCategoriesPage() {
                   <div style={{ paddingInlineStart: depth * 20 }}>
                     <div className="form-row">
                       <div className="field">
-                        <label>الاسم بالعربية</label>
+                        <label>{t("mpa.cat.nameAr")}</label>
                         <input value={eNameAr} disabled={editBusy} onChange={(e) => setENameAr(e.target.value)} />
                       </div>
                       <div className="field">
-                        <label>الاسم بالإنجليزية</label>
+                        <label>{t("mpa.cat.nameEn")}</label>
                         <input value={eNameEn} disabled={editBusy} onChange={(e) => setENameEn(e.target.value)} />
                       </div>
                     </div>
                     <div className="field">
-                      <label>التصنيف الأب</label>
+                      <label>{t("mpa.cg.parent")}</label>
                       <select value={eParentId} disabled={editBusy} onChange={(e) => setEParentId(e.target.value)}>
-                        <option value="">بدون - تصنيف رئيسي</option>
+                        <option value="">{t("mpa.cat.noParent")}</option>
                         {rows
                           .filter(({ row: r }) => r.id !== row.id && !descendantIds(row.id).has(r.id))
                           .map(({ row: r, depth: d }) => (
                             <option key={r.id} value={r.id}>
-                              {"— ".repeat(d)}{r.name_ar}
+                              {"— ".repeat(d)}{lang === "en" ? r.name_en || r.name_ar : r.name_ar}
                             </option>
                           ))}
                       </select>
                     </div>
                     {editError && <ErrorBanner message={editError} />}
                     <div style={{ display: "flex", gap: 8 }}>
-                      <button className="button" disabled={editBusy} onClick={saveEdit}>
-                        {editBusy ? "جارٍ الحفظ..." : "حفظ"}
+                      <button className="button" disabled={editBusy || !eNameAr.trim() || !eNameEn.trim()} onClick={saveEdit}>
+                        {editBusy ? t("mpa.cat.saving") : t("mpa.cat.save")}
                       </button>
                       <button className="button-link" disabled={editBusy} onClick={() => setEditId(null)}>
-                        إلغاء
+                        {t("mpa.cat.cancel")}
                       </button>
                     </div>
                   </div>
@@ -360,28 +369,33 @@ export default function AdminCategoriesPage() {
                   >
                     <div>
                       <strong>{row.name_ar}</strong> <span className="muted">{row.name_en}</span>{" "}
-                      {row.is_restricted && <span className="badge">مقيَّد</span>}
+                      {row.is_restricted && <span className="badge">{t("mpa.cat.restricted")}</span>}
+                      {row.is_restricted && row.restriction_reason && (
+                        <div className="muted" style={{ fontSize: 13, marginTop: 2 }} data-testid="category-restriction-reason">
+                          {fillMp(t("mpa.cat.restrictReasonShown"), { reason: row.restriction_reason })}
+                        </div>
+                      )}
                     </div>
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                       <button className="button-link" onClick={() => openEdit(row)}>
-                        تعديل
+                        {t("mpa.cat.edit")}
                       </button>
                       {row.is_restricted ? (
                         <button className="button-link" onClick={() => openRestrict(row.id, "unrestrict")}>
-                          إلغاء التقييد
+                          {t("mpa.cat.unrestrict")}
                         </button>
                       ) : (
                         <button className="button-link" onClick={() => openRestrict(row.id, "restrict")}>
-                          تقييد
+                          {t("mpa.cat.restrict")}
                         </button>
                       )}
                       {deleteConfirmId === row.id ? (
                         <>
                           <button className="button-link" disabled={deleteBusy} onClick={() => confirmDelete(row.id)}>
-                            {deleteBusy ? "جارٍ الحذف..." : "تأكيد الحذف"}
+                            {deleteBusy ? t("mpa.cat.deleting") : t("mpa.cat.confirmDelete")}
                           </button>
                           <button className="button-link" disabled={deleteBusy} onClick={() => setDeleteConfirmId(null)}>
-                            إلغاء
+                            {t("mpa.cat.cancel")}
                           </button>
                         </>
                       ) : (
@@ -392,7 +406,7 @@ export default function AdminCategoriesPage() {
                             setDeleteError(null);
                           }}
                         >
-                          حذف
+                          {t("mpa.cat.delete")}
                         </button>
                       )}
                     </div>
@@ -402,7 +416,7 @@ export default function AdminCategoriesPage() {
                   <div style={{ marginTop: 10, paddingInlineStart: depth * 20 }}>
                     {restrictPanel.mode === "restrict" ? (
                       <div className="field">
-                        <label>سبب التقييد</label>
+                        <label>{t("mpa.cat.restrictReason")}</label>
                         <textarea
                           rows={3}
                           value={restrictReason}
@@ -415,7 +429,7 @@ export default function AdminCategoriesPage() {
                         )}
                       </div>
                     ) : (
-                      <p className="muted">هذا سيسمح بإنشاء منتجات مرجعية جديدة تحت هذا التصنيف.</p>
+                      <p className="muted">{t("mpa.cg.unrestrictHint")}</p>
                     )}
                     {restrictError && <ErrorBanner message={restrictError} />}
                     <div style={{ display: "flex", gap: 8 }}>
@@ -425,13 +439,13 @@ export default function AdminCategoriesPage() {
                         onClick={submitRestrict}
                       >
                         {restrictBusy
-                          ? "جارٍ الإرسال..."
+                          ? t("mpa.cat.sending")
                           : restrictPanel.mode === "restrict"
-                            ? "تأكيد التقييد"
-                            : "تأكيد إلغاء التقييد"}
+                            ? t("mpa.cat.confirmRestrict")
+                            : t("mpa.cat.confirmUnrestrict")}
                       </button>
                       <button className="button-link" disabled={restrictBusy} onClick={() => setRestrictPanel(null)}>
-                        إلغاء
+                        {t("mpa.cat.cancel")}
                       </button>
                     </div>
                   </div>

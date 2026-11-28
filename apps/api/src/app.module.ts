@@ -32,6 +32,9 @@ import { FulfilmentModule } from './fulfilment/fulfilment.module';
 import { SizeGuidesModule } from './size-guides/size-guides.module';
 import { SalesRankModule } from './sales-rank/sales-rank.module';
 import { OfferPairingsModule } from './offer-pairings/offer-pairings.module';
+import { OfferModerationModule } from './offer-moderation/offer-moderation.module';
+import { PlatformMediaModule } from './platform-media/platform-media.module';
+import { ContentStudioModule } from './content-studio/content-studio.module';
 import { PlatformCollectionsModule } from './platform-collections/platform-collections.module';
 import { VendorPerformanceModule } from './vendor-performance/vendor-performance.module';
 import { StorePosModule } from './store-pos/store-pos.module';
@@ -70,6 +73,9 @@ import { WarehouseVerificationModule } from './warehouse-verification/warehouse-
     SizeGuidesModule,
     SalesRankModule,
     OfferPairingsModule,
+    OfferModerationModule,
+    PlatformMediaModule,
+    ContentStudioModule,
     PlatformCollectionsModule,
     InventoryModule,
     DiscoveryModule,

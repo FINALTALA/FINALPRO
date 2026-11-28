@@ -181,7 +181,18 @@ describe('Sprint 15 - vendor onboarding: warehouse verification evidence, staff 
         address_note: 'Industrial zone, unit 4',
         status: 'PENDING',
         submitted_at: submitRes.body.submitted_at,
+        // Phase 2A: the store's status and remaining requirements -
+        // states only, never any evidence content (checked below).
+        store: expect.objectContaining({
+          vendor_id: vendorId,
+          vendor_status: 'UNDER_REVIEW',
+          store_type: 'ONLINE_ONLY',
+          next_step: 'REVIEW',
+        }),
       });
+      expect(JSON.stringify(getRes.body.store)).not.toMatch(
+        /Industrial zone|31\.9|35\.2|"lat"|"lng"|address/,
+      );
 
       const decideRes = await request(app.getHttpServer())
         .post(`/api/v1/vendors/${vendorId}/warehouse/verification-decision`)
@@ -297,7 +308,9 @@ describe('Sprint 15 - vendor onboarding: warehouse verification evidence, staff 
   });
 
   describe('validation and conflict failures', () => {
-    it('refuses submission for a PHYSICAL/HYBRID store', async () => {
+    // Phase 2A: HYBRID now verifies its warehouse here too (see
+    // vendor-verification-lifecycle-2a.e2e-spec.ts); PHYSICAL still cannot.
+    it('refuses submission for a PHYSICAL store', async () => {
       const owner = await signup(uniquePhone(), 'a-strong-password');
       const res = await request(app.getHttpServer())
         .post('/api/v1/vendors')

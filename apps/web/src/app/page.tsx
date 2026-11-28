@@ -1,9 +1,6 @@
 "use client";
 
-import Image from "next/image";
-import Link from "next/link";
 import CollectionShowcase from "@/components/CollectionShowcase";
-import promoStyles from "./home-page.module.css";
 import HomeHero from "@/components/home-hero/HomeHero";
 import HomeSteps from "@/components/home-steps/HomeSteps";
 import HomeCategories from "@/components/home-categories/HomeCategories";
@@ -15,6 +12,7 @@ import HomeFooter from "@/components/home-footer/HomeFooter";
 import { useHomeReveal } from "@/components/home-motion/useHomeReveal";
 import "@/components/home-motion/home-motion.css";
 import { useRef } from "react";
+import { ManagedContentProvider } from "@/lib/contentStudio";
 import styles from "./home-editorial.module.css";
 
 export default function Home() {
@@ -22,7 +20,10 @@ export default function Home() {
   const root = useRef<HTMLDivElement>(null);
   useHomeReveal(root);
 
+  // VIA phase 6: the editorial sections read their published Content Studio
+  // content (their built-in content until the page is managed).
   return (
+    <ManagedContentProvider page="HOMEPAGE">
     <div ref={root} className={`${styles.home} page-shell home-editorial`}>
       <HomeHero />
 
@@ -35,36 +36,7 @@ export default function Home() {
         <HomeStories />
         <HomeProducts />
 
-        {/* Static promo banner - placeholder pending a real CMS (FR-CMS-001, Phase 2). */}
-        <div className={`${promoStyles.promoFrame} ${promoStyles.trendingPromoFrame}`}>
-          <Link href="/trending" className={promoStyles.womenPromo}>
-            <div className={promoStyles.womenPromoCopy}>
-              <span className={promoStyles.womenPromoEyebrow}>الأكثر رواجًا</span>
-              <h2>قطع تخطف الأنظار</h2>
-              <p>اكتشفي التصاميم التي تتصدر اختيارات الموسم، حيث تلتقي الأناقة بالتفاصيل المميزة.</p>
-              <span className={promoStyles.womenPromoCta}><span aria-hidden="true">←</span> تصفّحي الأكثر رواجًا</span>
-            </div>
-            <div className={promoStyles.womenPromoFigures} aria-hidden="true">
-              <Image src="/images/Joyful Mother and Baby Portrait.png" alt="" fill sizes="(max-width: 760px) 82vw, 430px" />
-            </div>
-          </Link>
-        </div>
-
-        <div className={`${promoStyles.promoFrame} ${promoStyles.salesPromoFrame}`}>
-          <Link href="/sales" className={`${promoStyles.womenPromo} ${promoStyles.salesPromo}`}>
-            <div className={promoStyles.womenPromoCopy}>
-              <span className={promoStyles.womenPromoEyebrow}>تنزيلات الموسم</span>
-              <h2>أسعار أخف، اختيارات أجمل</h2>
-              <p>اكتشفي التخفيضات من المتاجر المحلية، وقارني الأسعار لتجدي ما يناسبك بسعرٍ أفضل.</p>
-              <span className={promoStyles.womenPromoCta}><span aria-hidden="true">←</span> تصفّحي التنزيلات</span>
-            </div>
-            <div className={promoStyles.womenPromoFigures} aria-hidden="true">
-              <Image src="/images/Seated Man in Keffiyeh and Olive Jacket (1).png" alt="" fill sizes="(max-width: 760px) 82vw, 430px" />
-            </div>
-          </Link>
-        </div>
-
-        {/* PD-5b: the platform's live home collections, right after the banners. */}
+        {/* PD-5b: the platform's live home collections. */}
         <CollectionShowcase placement="HOME" />
         <HomeStores />
         <HomeHowVia />
@@ -72,5 +44,6 @@ export default function Home() {
 
       <HomeFooter />
     </div>
+    </ManagedContentProvider>
   );
 }

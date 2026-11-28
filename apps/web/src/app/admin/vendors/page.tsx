@@ -7,10 +7,11 @@ import { apiFetch } from "@/lib/api";
 import {
   STORE_TYPE_LABEL,
   VENDOR_STATUS_LABEL,
-  adminErrorMessage,
   formatDateTime,
   isForbidden,
 } from "@/lib/admin";
+import { adminDirectoryError, adminDirectoryLabel } from "@/lib/adminStoreVerificationText";
+import { useLang, useT } from "@/lib/useLang";
 import { useAdminGate } from "@/lib/useAdminGate";
 
 interface VendorRow {
@@ -32,6 +33,8 @@ const STATUSES = Object.keys(VENDOR_STATUS_LABEL);
 // Sprint 16 (FR-VEND-009, G-AD-02): the platform admin's vendor list -
 // the entry point to suspend / reactivate a store. PLATFORM_ADMIN only.
 export default function AdminVendorsPage() {
+  const t = useT();
+  const lang = useLang();
   const gate = useAdminGate("ADMIN");
   const [status, setStatus] = useState("");
   const [draftQuery, setDraftQuery] = useState("");
@@ -40,7 +43,7 @@ export default function AdminVendorsPage() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ cause: unknown } | null>(null);
   const [forbidden, setForbidden] = useState(false);
 
   const fetchPage = useCallback(
@@ -68,7 +71,7 @@ export default function AdminVendorsPage() {
       .catch((err) => {
         if (cancelled) return;
         if (isForbidden(err)) setForbidden(true);
-        setError(adminErrorMessage(err));
+        setError({ cause: err });
         setLoading(false);
       });
     return () => {
@@ -93,7 +96,7 @@ export default function AdminVendorsPage() {
       setItems((prev) => [...prev, ...page.items]);
       setCursor(page.next_cursor);
     } catch (err) {
-      setError(adminErrorMessage(err));
+      setError({ cause: err });
     } finally {
       setLoadingMore(false);
     }
@@ -109,7 +112,7 @@ export default function AdminVendorsPage() {
   if (gate.status === "forbidden" || forbidden) {
     return (
       <div className="page-shell">
-        <EmptyState title="هذه الصفحة لمدير المنصة فقط" actionHref="/account" actionLabel="حسابي" />
+        <EmptyState title={t("adminDirectory.vendors.forbidden")} actionHref="/account" actionLabel={t("adminDirectory.shared.account")} />
       </div>
     );
   }
@@ -118,13 +121,13 @@ export default function AdminVendorsPage() {
     <div className="page-shell">
       <div className="wide-shell" style={{ maxWidth: 1000 }}>
         <div className="top-bar">
-          <h1 className="page-title" style={{ margin: 0 }}>المتاجر</h1>
-          <Link href="/admin" className="button-link">إدارة المنصة</Link>
+          <h1 className="page-title" style={{ margin: 0 }}>{t("adminDirectory.vendors.title")}</h1>
+          <Link href="/admin" className="button-link">{t("adminDirectory.shared.dashboard")}</Link>
         </div>
 
         <form onSubmit={applyFilters} style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
           <select
-            aria-label="تصفية حسب الحالة"
+            aria-label={t("adminDirectory.vendors.statusFilter")}
             value={status}
             onChange={(e) => {
               setLoading(true);
@@ -134,31 +137,31 @@ export default function AdminVendorsPage() {
               setStatus(e.target.value);
             }}
           >
-            <option value="">كل الحالات</option>
+            <option value="">{t("adminDirectory.vendors.allStatuses")}</option>
             {STATUSES.map((s) => (
-              <option key={s} value={s}>{VENDOR_STATUS_LABEL[s]}</option>
+              <option key={s} value={s}>{adminDirectoryLabel(lang, "storeStatus", VENDOR_STATUS_LABEL, s)}</option>
             ))}
           </select>
           <input
             type="search"
-            aria-label="بحث باسم المتجر"
-            placeholder="ابحثي باسم المتجر (حرفان على الأقل)"
+            aria-label={t("adminDirectory.vendors.searchLabel")}
+            placeholder={t("adminDirectory.vendors.searchPlaceholder")}
             value={draftQuery}
             onChange={(e) => setDraftQuery(e.target.value)}
             style={{ flex: 1, minWidth: 200 }}
           />
-          <button className="button" type="submit">بحث</button>
+          <button className="button" type="submit">{t("adminDirectory.vendors.search")}</button>
         </form>
 
-        {error && <ErrorBanner message={error} />}
+        {error && <ErrorBanner message={adminDirectoryError(lang, error.cause)} />}
         {loading && (
-          <div aria-busy="true" aria-label="جارٍ التحميل">
+          <div aria-busy="true" aria-label={t("adminDirectory.shared.loading")}>
             <div className="skeleton" style={{ height: 56, width: "100%", marginBottom: 8 }} />
             <div className="skeleton" style={{ height: 56, width: "100%" }} />
           </div>
         )}
         {!loading && !error && items.length === 0 && (
-          <EmptyState title="لا توجد متاجر مطابقة" message="غيّري الحالة أو نص البحث." />
+          <EmptyState title={t("adminDirectory.vendors.empty")} message={t("adminDirectory.vendors.emptyHint")} />
         )}
         {!loading && items.length > 0 && (
           <>
@@ -166,10 +169,10 @@ export default function AdminVendorsPage() {
 <table className="data-table">
               <thead>
                 <tr>
-                  <th>المتجر</th>
-                  <th>النوع</th>
-                  <th>الحالة</th>
-                  <th>تاريخ الإنشاء</th>
+                  <th>{t("adminDirectory.shared.store")}</th>
+                  <th>{t("adminDirectory.vendors.type")}</th>
+                  <th>{t("adminDirectory.shared.status")}</th>
+                  <th>{t("adminDirectory.vendors.created")}</th>
                   <th />
                 </tr>
               </thead>
@@ -178,17 +181,17 @@ export default function AdminVendorsPage() {
                   <tr key={v.id}>
                     <td>
                       {v.legal_name}
-                      {v.is_member && <span className="badge" style={{ marginInlineStart: 8 }}>أنتِ عضوة</span>}
+                      {v.is_member && <span className="badge" style={{ marginInlineStart: 8 }}>{t("adminDirectory.vendors.membership")}</span>}
                     </td>
-                    <td>{STORE_TYPE_LABEL[v.store_type] ?? v.store_type}</td>
+                    <td>{adminDirectoryLabel(lang, "storeType", STORE_TYPE_LABEL, v.store_type)}</td>
                     <td>
                       <span className={`badge${v.status === "ACTIVE" ? " badge-active" : ""}`}>
-                        {VENDOR_STATUS_LABEL[v.status] ?? v.status}
+                        {adminDirectoryLabel(lang, "storeStatus", VENDOR_STATUS_LABEL, v.status)}
                       </span>
                     </td>
-                    <td>{formatDateTime(v.created_at)}</td>
+                    <td>{formatDateTime(v.created_at, lang)}</td>
                     <td>
-                      <Link className="button-link" href={`/admin/vendors/${v.id}`}>التفاصيل</Link>
+                      <Link className="button-link" href={`/admin/vendors/${v.id}`}>{t("adminDirectory.vendors.details")}</Link>
                     </td>
                   </tr>
                 ))}
@@ -198,7 +201,7 @@ export default function AdminVendorsPage() {
             {cursor && (
               <div style={{ marginTop: 14 }}>
                 <button className="button button-secondary" onClick={loadMore} disabled={loadingMore}>
-                  {loadingMore ? "جارٍ التحميل..." : "تحميل المزيد"}
+                  {loadingMore ? t("adminDirectory.shared.loadingMore") : t("adminDirectory.shared.loadMore")}
                 </button>
               </div>
             )}

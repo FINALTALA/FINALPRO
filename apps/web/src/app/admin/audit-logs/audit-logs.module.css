@@ -1,0 +1,66 @@
+/* Audit log filters: each control in the site's own .field style (label
+   above, 44px input), laid out in a responsive grid, with the actions on
+   their own row. Layout only - the filters and their behaviour are the
+   page's own. */
+
+.filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 14px 16px;
+  margin-bottom: 18px;
+  padding: 18px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.filters :global(.field) {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.filters :global(.field) label {
+  font-size: 13.5px;
+}
+
+.filters :global(.field) input {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Long free-text values (actions, correlation ids) get two columns where
+   there is room. */
+@media (min-width: 720px) {
+  .wide {
+    grid-column: span 2;
+  }
+}
+
+.actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--color-border);
+}
+
+.export {
+  margin-inline-start: auto;
+}
+
+@media (max-width: 479px) {
+  .filters {
+    padding: 14px;
+  }
+
+  .actions :global(.button) {
+    flex: 1 1 auto;
+  }
+
+  .export {
+    margin-inline-start: 0;
+  }
+}

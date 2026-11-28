@@ -4,7 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useAdsLang } from "./adsCopy";
 import { FilterControls, FitTitle, rvDelay, Strip, StoreMark, useCategoryFilter, useReveal, type Feed } from "./AdsShared";
 import ReelsViewer from "./AdsReelsViewer";
-import { REELS, type AdsCategory, type Reel } from "./data/adsDemo";
+import { useAdsHeading, useAdsReels } from "./adsManaged";
+import type { AdsCategory, Reel } from "./data/adsDemo";
 import { Play } from "./icons";
 import "./ads-reels.css";
 
@@ -63,18 +64,22 @@ export default function AdsReels() {
   const intro = useReveal<HTMLDivElement>();
   const bar = useReveal<HTMLDivElement>();
 
+  // VIA phase 6: the reels may come from the Content Studio.
+  const { mode, reels: REELS } = useAdsReels();
+  const heading = useAdsHeading(mode, t("ads.reels.heading"));
   const reels = useMemo(
     () => REELS.filter((r) => (feed === "discover" || r.followingDemo) && cats.matches(r.categories)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [feed, cats.selected],
+    [REELS, feed, cats.selected],
   );
+  if (mode.mode === "hidden" || REELS.length === 0) return null;
 
   return (
     <section className="ads-section ar" aria-labelledby="reels-editorial-title">
       <div className="ads-wrap">
         <div ref={intro} className="ads-intro" dir={dir}>
           <span className="rv-mask"><span className="ads-kicker rv-up">{t("ads.reels.presents")}</span></span>
-          <FitTitle id="reels-editorial-title" text={t("ads.reels.heading")} mobileLines={["STYLE IN", "MOTION"]} />
+          <FitTitle id="reels-editorial-title" text={heading.text} mobileLines={heading.managed ? undefined : ["STYLE IN", "MOTION"]} />
           <span className="rv-mask"><p className="ads-intro-sub rv-up" style={rvDelay(0.3)} lang="ar">{t("ads.reels.sub")}</p></span>
         </div>
 

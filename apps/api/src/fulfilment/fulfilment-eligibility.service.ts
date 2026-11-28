@@ -20,6 +20,7 @@ import {
 } from '../checkout/slot-availability.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { SubscriptionGateService } from '../subscriptions/subscription-gate.service';
+import { warehouseApprovedVendorIds } from '../vendor-verification/store-verification-requirements';
 
 // PD-2 (docs/srs/10-product-detail-enhancement-roadmap.md, PD-FR-004):
 // the ONE server-side source of "can this variant be delivered / picked
@@ -32,16 +33,40 @@ import { SubscriptionGateService } from '../subscriptions/subscription-gate.serv
 export const ZONES: DeliveryZoneRegion[] = ['WEST_BANK', 'JERUSALEM', 'INSIDE'];
 
 /**
- * A branch can take a NEW order only while approved, not archived and
- * not under a temporary closure right now. Reserve applies this same
- * predicate under its branch lock.
+ * A branch is verified for selling when:
+ *  - physical: its own branch evidence is APPROVED;
+ *  - not physical: its store's latest warehouse evidence is APPROVED.
+ *    A non-physical branch cannot carry branch evidence
+ *    (BRANCH_NOT_PHYSICAL), so no branch decision can ever approve it -
+ *    without this an ONLINE_ONLY store that passed its warehouse review
+ *    could never sell (phase 2A). A non-physical branch already marked
+ *    APPROVED stays sellable, as before.
+ */
+export function isBranchVerifiedForSale(
+  branch: { isPhysical: boolean; verificationStatus: string },
+  warehouseApproved: boolean,
+): boolean {
+  if (branch.verificationStatus === 'APPROVED') return true;
+  return !branch.isPhysical && warehouseApproved;
+}
+
+/**
+ * A branch can take a NEW order only while verified for sale (see
+ * isBranchVerifiedForSale), not archived and not under a temporary
+ * closure right now. Reserve applies this same predicate under its
+ * branch lock.
  */
 export function isBranchSellable(
-  branch: { verificationStatus: string; archivedAt: Date | null },
+  branch: {
+    isPhysical: boolean;
+    verificationStatus: string;
+    archivedAt: Date | null;
+  },
   closedNow: boolean,
+  warehouseApproved = false,
 ): boolean {
   return (
-    branch.verificationStatus === 'APPROVED' &&
+    isBranchVerifiedForSale(branch, warehouseApproved) &&
     branch.archivedAt === null &&
     !closedNow
   );
@@ -156,6 +181,7 @@ export class FulfilmentEligibilityService {
       where: { offerVariantId: { in: ids } },
       select: {
         branchId: true,
+        vendorId: true,
         offerVariantId: true,
         quantity: true,
         branch: {
@@ -182,8 +208,23 @@ export class FulfilmentEligibilityService {
         })
       : [];
     const closed = new Set(closures.map((c) => c.branchId));
+    // Only stores with a non-physical branch not already APPROVED need
+    // their warehouse review read (see isBranchVerifiedForSale).
+    const warehouseApproved = await warehouseApprovedVendorIds(
+      db,
+      stocks
+        .filter(
+          (s) =>
+            !s.branch.isPhysical && s.branch.verificationStatus !== 'APPROVED',
+        )
+        .map((s) => s.vendorId),
+    );
     const sellable = stocks.filter((s) =>
-      isBranchSellable(s.branch, closed.has(s.branchId)),
+      isBranchSellable(
+        s.branch,
+        closed.has(s.branchId),
+        warehouseApproved.has(s.vendorId),
+      ),
     );
     const reserved = await liveReservedQuantityByKey(
       db,

@@ -1,18 +1,15 @@
 "use client";
 
+import "@/lib/adminCatalogText";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { EmptyState, ErrorBanner } from "@/components/States";
 import { ApiError, apiFetch, newIdempotencyKey } from "@/lib/api";
-import {
-  CANONICAL_PRODUCT_STATUS_LABEL,
-  PRODUCT_TYPE_LABEL,
-  adminErrorMessage,
-  reasonProblem,
-} from "@/lib/admin";
+import { fillMp, mpError, mpFetchError, mpLabel, mpLabelEntries, mpReasonProblem } from "@/lib/adminMarketplaceText";
 import { useAdminGate } from "@/lib/useAdminGate";
 import { useFetch } from "@/lib/useFetch";
+import { useLang, useT } from "@/lib/useLang";
 
 type ProductType = "PHYSICAL" | "BUNDLE" | "SERVICE";
 type ProductStatus = "DRAFT" | "PENDING_REVIEW" | "PUBLISHED" | "ARCHIVED" | "MERGED";
@@ -42,6 +39,8 @@ interface CanonicalProductDetailDto {
   seo_description_ar: string | null;
   seo_description_en: string | null;
   is_restricted: boolean;
+  /** M-06: returned to platform admins only. */
+  restriction_reason?: string | null;
   merged_into_id: string | null;
   variants: VariantDto[];
 }
@@ -54,12 +53,14 @@ interface BrandRow {
 interface CategoryRow {
   id: string;
   name_ar: string;
+  name_en?: string;
 }
 
 interface CanonicalProductListRow {
   id: string;
   model_name: string;
   canonical_name_ar: string | null;
+  canonical_name_en?: string | null;
   status: ProductStatus;
 }
 
@@ -75,17 +76,18 @@ interface BlockedVendorOffer {
 // The exact legal status_transition edges (canonical-products.
 // controller.ts's status-transition rules) - never a free dropdown of
 // every status, only the buttons that would actually succeed.
+// M-01: labels are translation keys (lib/adminCatalogText.ts); the edges are unchanged.
 const TRANSITIONS: Record<ProductStatus, { to: ProductStatus; label: string }[]> = {
   DRAFT: [
-    { to: "PENDING_REVIEW", label: "إرسال للمراجعة" },
-    { to: "ARCHIVED", label: "أرشفة" },
+    { to: "PENDING_REVIEW", label: "mpa.cpd.transition.PENDING_REVIEW" },
+    { to: "ARCHIVED", label: "mpa.cpd.transition.ARCHIVED" },
   ],
   PENDING_REVIEW: [
-    { to: "PUBLISHED", label: "نشر" },
-    { to: "DRAFT", label: "إرجاع لمسودة" },
+    { to: "PUBLISHED", label: "mpa.cpd.transition.PUBLISHED" },
+    { to: "DRAFT", label: "mpa.cpd.transition.DRAFT" },
   ],
-  PUBLISHED: [{ to: "ARCHIVED", label: "أرشفة" }],
-  ARCHIVED: [{ to: "PUBLISHED", label: "إعادة نشر" }],
+  PUBLISHED: [{ to: "ARCHIVED", label: "mpa.cpd.transition.ARCHIVED" }],
+  ARCHIVED: [{ to: "PUBLISHED", label: "mpa.cpd.transition.republish" }],
   MERGED: [],
 };
 
@@ -98,6 +100,8 @@ type Panel = "none" | "restrict" | "unrestrict" | "merge" | "split";
 // buttons at all, just a note pointing at the survivor.
 export default function AdminCanonicalProductDetailPage() {
   const gate = useAdminGate("ADMIN");
+  const lang = useLang();
+  const t = useT();
   const params = useParams<{ id: string }>();
   const [nonce, setNonce] = useState(0);
   const detail = useFetch<CanonicalProductDetailDto>(
@@ -152,7 +156,7 @@ export default function AdminCanonicalProductDetailPage() {
     try {
       const tags = tagsText
         .split(",")
-        .map((t) => t.trim())
+        .map((tag) => tag.trim())
         .filter(Boolean);
       await apiFetch(`/canonical-products/${params.id}`, {
         method: "PATCH",
@@ -167,10 +171,10 @@ export default function AdminCanonicalProductDetailPage() {
           seo_description_en: seoDescEn.trim() || null,
         },
       });
-      setFieldsNotice("تم حفظ التعديلات");
+      setFieldsNotice(t("mpa.cpd.saved"));
       reload();
     } catch (err) {
-      setFieldsError(adminErrorMessage(err));
+      setFieldsError(mpError(err, lang));
     } finally {
       setFieldsBusy(false);
     }
@@ -187,10 +191,10 @@ export default function AdminCanonicalProductDetailPage() {
         body: { to_status: to },
         idempotencyKey: newIdempotencyKey("canonical-product-status"),
       });
-      setNotice("تم تغيير حالة المنتج");
+      setNotice(t("mpa.cpd.statusChanged"));
       reload();
     } catch (err) {
-      setActionError(adminErrorMessage(err));
+      setActionError(mpError(err, lang));
     } finally {
       setBusy(false);
     }
@@ -199,7 +203,7 @@ export default function AdminCanonicalProductDetailPage() {
   // --- restrict / unrestrict ---
   const [panel, setPanel] = useState<Panel>("none");
   const [reason, setReason] = useState("");
-  const problem = reasonProblem(reason);
+  const problem = mpReasonProblem(reason, lang);
 
   function openPanel(next: Panel) {
     setPanel(next);
@@ -218,11 +222,11 @@ export default function AdminCanonicalProductDetailPage() {
         body: mode === "restrict" ? { reason: reason.trim() } : undefined,
         idempotencyKey: newIdempotencyKey(`canonical-product-${mode}`),
       });
-      setNotice(mode === "restrict" ? "تم تقييد المنتج" : "تم إلغاء تقييد المنتج");
+      setNotice(t(mode === "restrict" ? "mpa.cpd.restrictedDone" : "mpa.cpd.unrestrictedDone"));
       setPanel("none");
       reload();
     } catch (err) {
-      setActionError(adminErrorMessage(err));
+      setActionError(mpError(err, lang));
     } finally {
       setBusy(false);
     }
@@ -261,7 +265,7 @@ export default function AdminCanonicalProductDetailPage() {
       setGtin("");
       reload();
     } catch (err) {
-      setVariantError(adminErrorMessage(err));
+      setVariantError(mpError(err, lang));
     } finally {
       setVariantBusy(false);
     }
@@ -279,7 +283,7 @@ export default function AdminCanonicalProductDetailPage() {
     (p) =>
       p.id !== params.id &&
       p.status !== "MERGED" &&
-      (p.canonical_name_ar ?? p.model_name).toLowerCase().includes(mergeQuery.trim().toLowerCase()),
+      ((lang === "en" ? p.canonical_name_en : p.canonical_name_ar) ?? p.model_name).toLowerCase().includes(mergeQuery.trim().toLowerCase()),
   );
 
   async function submitMerge() {
@@ -293,7 +297,7 @@ export default function AdminCanonicalProductDetailPage() {
         body: { into_canonical_product_id: mergeTargetId },
         idempotencyKey: newIdempotencyKey("canonical-product-merge"),
       });
-      setNotice("تم دمج المنتج بنجاح");
+      setNotice(t("mpa.cpd.merged"));
       setPanel("none");
       setMergeConfirming(false);
       setMergeTargetId(null);
@@ -303,7 +307,7 @@ export default function AdminCanonicalProductDetailPage() {
       if (err instanceof ApiError && err.code === "MERGE_VARIANT_UNMATCHED") {
         setMergeUnmatched((err.details as UnmatchedVariant[]) ?? []);
       } else {
-        setMergeError(adminErrorMessage(err));
+        setMergeError(mpError(err, lang));
       }
     } finally {
       setMergeBusy(false);
@@ -341,7 +345,7 @@ export default function AdminCanonicalProductDetailPage() {
         },
         idempotencyKey: newIdempotencyKey("canonical-product-split"),
       });
-      setNotice("تم تقسيم المنتج بنجاح");
+      setNotice(t("mpa.cpd.split"));
       setPanel("none");
       setSplitVariantIds([]);
       setSplitBrandId("");
@@ -352,7 +356,7 @@ export default function AdminCanonicalProductDetailPage() {
       if (err instanceof ApiError && err.code === "SPLIT_WOULD_SPAN_VENDOR_OFFER") {
         setSplitBlocked((err.details as BlockedVendorOffer[]) ?? []);
       } else {
-        setSplitError(adminErrorMessage(err));
+        setSplitError(mpError(err, lang));
       }
     } finally {
       setSplitBusy(false);
@@ -369,14 +373,14 @@ export default function AdminCanonicalProductDetailPage() {
   if (gate.status === "forbidden" || detail.status === 403) {
     return (
       <div className="page-shell">
-        <EmptyState title="هذه الصفحة لمدير المنصة فقط" actionHref="/account" actionLabel="حسابي" />
+        <EmptyState title={t("mpa.cat.forbidden")} actionHref="/account" actionLabel={t("mpa.cat.myAccount")} />
       </div>
     );
   }
   if (detail.status === 404) {
     return (
       <div className="page-shell">
-        <EmptyState title="المنتج المرجعي غير موجود" actionHref="/admin/canonical-products" actionLabel="قائمة المنتجات المرجعية" />
+        <EmptyState title={t("mpa.cpd.notFound")} actionHref="/admin/canonical-products" actionLabel={t("mpa.cpd.list")} />
       </div>
     );
   }
@@ -386,16 +390,16 @@ export default function AdminCanonicalProductDetailPage() {
       <div className="wide-shell" style={{ maxWidth: 800 }}>
         <div className="top-bar">
           <h1 className="page-title" style={{ margin: 0 }}>
-            {d ? d.canonical_name_ar ?? d.model_name : "منتج مرجعي"}
+            {d ? (lang === "en" ? d.canonical_name_en : d.canonical_name_ar) ?? d.model_name : t("mpa.cpd.titleFallback")}
           </h1>
-          <Link href="/admin/canonical-products" className="button-link">قائمة المنتجات المرجعية</Link>
+          <Link href="/admin/canonical-products" className="button-link">{t("mpa.cpd.list")}</Link>
         </div>
 
-        {detail.error && <ErrorBanner message={detail.error} />}
+        {detail.error && <ErrorBanner message={mpFetchError(detail.error, detail.apiError, lang) ?? detail.error} />}
         {notice && <div className="notice-banner" role="status">{notice}</div>}
         {actionError && <ErrorBanner message={actionError} />}
         {detail.loading && !d && (
-          <div aria-busy="true" aria-label="جارٍ التحميل">
+          <div aria-busy="true" aria-label={t("mpa.cat.loading")}>
             <div className="skeleton" style={{ height: 160, width: "100%" }} />
           </div>
         )}
@@ -405,24 +409,29 @@ export default function AdminCanonicalProductDetailPage() {
             <div className="card" style={{ maxWidth: "none", marginBottom: 14 }}>
               <p>
                 <span className={`badge${d.status === "PUBLISHED" ? " badge-active" : ""}`}>
-                  {CANONICAL_PRODUCT_STATUS_LABEL[d.status] ?? d.status}
+                  {mpLabel(lang, "canonicalStatus", d.status)}
                 </span>{" "}
-                {d.is_restricted && <span className="badge">مقيَّد</span>}
+                {d.is_restricted && <span className="badge">{t("mpa.cat.restricted")}</span>}
               </p>
+              {d.is_restricted && d.restriction_reason && (
+                <p className="muted" data-testid="canonical-restriction-reason">
+                  {fillMp(t("mpa.cat.restrictReasonShown"), { reason: d.restriction_reason })}
+                </p>
+              )}
 
               {d.status === "MERGED" ? (
                 <div className="warning-banner">
-                  تم دمجه في منتج آخر.{" "}
+                  {t("mpa.cpd.mergedNote")}{" "}
                   {d.merged_into_id && (
-                    <Link href={`/admin/canonical-products/${d.merged_into_id}`}>عرض المنتج الناجي</Link>
+                    <Link href={`/admin/canonical-products/${d.merged_into_id}`}>{t("mpa.cpd.viewSurvivor")}</Link>
                   )}
                 </div>
               ) : (
                 <>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
-                    {TRANSITIONS[d.status].map((t) => (
-                      <button key={t.to} className="button" disabled={busy} onClick={() => transition(t.to)}>
-                        {t.label}
+                    {TRANSITIONS[d.status].map((tr) => (
+                      <button key={tr.to} className="button" disabled={busy} onClick={() => transition(tr.to)}>
+                        {t(tr.label)}
                       </button>
                     ))}
                   </div>
@@ -430,12 +439,12 @@ export default function AdminCanonicalProductDetailPage() {
                   {panel === "none" && (
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                       {d.is_restricted ? (
-                        <button className="button-link" onClick={() => openPanel("unrestrict")}>إلغاء التقييد</button>
+                        <button className="button-link" onClick={() => openPanel("unrestrict")}>{t("mpa.cat.unrestrict")}</button>
                       ) : (
-                        <button className="button-link" onClick={() => openPanel("restrict")}>تقييد</button>
+                        <button className="button-link" onClick={() => openPanel("restrict")}>{t("mpa.cat.restrict")}</button>
                       )}
-                      <button className="button-link" onClick={() => openPanel("merge")}>دمج هذا المنتج في...</button>
-                      <button className="button-link" onClick={() => openPanel("split")}>تقسيم هذا المنتج</button>
+                      <button className="button-link" onClick={() => openPanel("merge")}>{t("mpa.cpd.mergeInto")}</button>
+                      <button className="button-link" onClick={() => openPanel("split")}>{t("mpa.cpd.splitThis")}</button>
                     </div>
                   )}
 
@@ -443,7 +452,7 @@ export default function AdminCanonicalProductDetailPage() {
                     <div style={{ marginTop: 14 }}>
                       {panel === "restrict" ? (
                         <div className="field">
-                          <label htmlFor="restrict-reason">سبب التقييد</label>
+                          <label htmlFor="restrict-reason">{t("mpa.cat.restrictReason")}</label>
                           <textarea
                             id="restrict-reason"
                             rows={4}
@@ -455,7 +464,7 @@ export default function AdminCanonicalProductDetailPage() {
                           {problem && reason.length > 0 && <span className="field-error">{problem}</span>}
                         </div>
                       ) : (
-                        <p className="muted">هذا سيسمح بمطابقة عروض جديدة بهذا المنتج مجدداً.</p>
+                        <p className="muted">{t("mpa.cpd.unrestrictHint")}</p>
                       )}
                       <div style={{ display: "flex", gap: 8 }}>
                         <button
@@ -463,30 +472,30 @@ export default function AdminCanonicalProductDetailPage() {
                           disabled={busy || (panel === "restrict" && problem !== null)}
                           onClick={() => submitRestrict(panel === "restrict" ? "restrict" : "unrestrict")}
                         >
-                          {busy ? "جارٍ الإرسال..." : panel === "restrict" ? "تأكيد التقييد" : "تأكيد إلغاء التقييد"}
+                          {busy ? t("mpa.cat.sending") : t(panel === "restrict" ? "mpa.cat.confirmRestrict" : "mpa.cat.confirmUnrestrict")}
                         </button>
-                        <button className="button-link" disabled={busy} onClick={() => setPanel("none")}>إلغاء</button>
+                        <button className="button-link" disabled={busy} onClick={() => setPanel("none")}>{t("mpa.cat.cancel")}</button>
                       </div>
                     </div>
                   )}
 
                   {panel === "merge" && (
                     <div style={{ marginTop: 14 }}>
-                      <h3 style={{ marginTop: 0 }}>دمج هذا المنتج في منتج ناجٍ</h3>
-                      <p className="muted">هذا المنتج (الحالي) سيصبح &quot;المدموج&quot;؛ اختاري المنتج الناجي الذي ستُنقل متغيّراته وعروضه إليه.</p>
+                      <h3 style={{ marginTop: 0 }}>{t("mpa.cpd.mergeTitle")}</h3>
+                      <p className="muted">{t("mpa.cpd.mergeLead")}</p>
                       {!mergeConfirming ? (
                         <>
                           <div className="field">
-                            <label htmlFor="merge-search">بحث باسم الطراز</label>
+                            <label htmlFor="merge-search">{t("mpa.cpd.mergeSearch")}</label>
                             <input
                               id="merge-search"
                               value={mergeQuery}
                               onChange={(e) => setMergeQuery(e.target.value)}
-                              placeholder="ابحثي عن المنتج الناجي"
+                              placeholder={t("mpa.cpd.mergeSearchPlaceholder")}
                             />
                           </div>
                           <div style={{ maxHeight: 220, overflowY: "auto", border: "1px solid var(--color-border)", borderRadius: 10, marginBottom: 10 }}>
-                            {mergeCandidates.length === 0 && <p className="muted" style={{ padding: 10 }}>لا توجد نتائج</p>}
+                            {mergeCandidates.length === 0 && <p className="muted" style={{ padding: 10 }}>{t("mpa.cpd.noResults")}</p>}
                             {mergeCandidates.map((p) => (
                               <label
                                 key={p.id}
@@ -498,31 +507,30 @@ export default function AdminCanonicalProductDetailPage() {
                                   checked={mergeTargetId === p.id}
                                   onChange={() => setMergeTargetId(p.id)}
                                 />
-                                {p.canonical_name_ar ?? p.model_name}
+                                {(lang === "en" ? p.canonical_name_en : p.canonical_name_ar) ?? p.model_name}
                               </label>
                             ))}
                           </div>
                           {mergeError && <ErrorBanner message={mergeError} />}
                           <div style={{ display: "flex", gap: 8 }}>
                             <button className="button" disabled={!mergeTargetId} onClick={() => setMergeConfirming(true)}>
-                              متابعة
+                              {t("mpa.cpd.continue")}
                             </button>
-                            <button className="button-link" onClick={() => setPanel("none")}>إلغاء</button>
+                            <button className="button-link" onClick={() => setPanel("none")}>{t("mpa.cat.cancel")}</button>
                           </div>
                         </>
                       ) : (
                         <>
                           <div className="warning-banner">
-                            سيُدمَج هذا المنتج نهائياً في المنتج المحدَّد: متغيّراته وعروض المتاجر المرتبطة به ستُنقل إليه.
-                            هل تأكّدت؟
+                            {t("mpa.cpd.mergeConfirmText")}
                           </div>
                           {mergeUnmatched && mergeUnmatched.length > 0 && (
                             <div className="error-banner" role="alert">
-                              تعذّر الدمج: بعض المتغيّرات لا تقابلها متغيّرات في المنتج الناجي:
+                              {t("mpa.cpd.mergeUnmatched")}
                               <ul style={{ margin: "6px 0 0", paddingInlineStart: 20 }}>
                                 {mergeUnmatched.map((u) => (
                                   <li key={u.loser_variant_id}>
-                                    متغيّر {u.loser_variant_id} — عدد التطابقات المحتملة: {u.match_count}
+                                    {fillMp(t("mpa.cpd.mergeUnmatchedRow"), { id: u.loser_variant_id, n: u.match_count })}
                                   </li>
                                 ))}
                               </ul>
@@ -531,13 +539,13 @@ export default function AdminCanonicalProductDetailPage() {
                           {mergeError && <ErrorBanner message={mergeError} />}
                           <div style={{ display: "flex", gap: 8 }}>
                             <button className="button" disabled={mergeBusy} onClick={submitMerge}>
-                              {mergeBusy ? "جارٍ الدمج..." : "تأكيد الدمج"}
+                              {mergeBusy ? t("mpa.cpd.merging") : t("mpa.cpd.confirmMerge")}
                             </button>
                             <button className="button-link" disabled={mergeBusy} onClick={() => setMergeConfirming(false)}>
-                              رجوع
+                              {t("mpa.cpd.back")}
                             </button>
                             <button className="button-link" disabled={mergeBusy} onClick={() => setPanel("none")}>
-                              إلغاء
+                              {t("mpa.cat.cancel")}
                             </button>
                           </div>
                         </>
@@ -547,8 +555,8 @@ export default function AdminCanonicalProductDetailPage() {
 
                   {panel === "split" && (
                     <div style={{ marginTop: 14 }}>
-                      <h3 style={{ marginTop: 0 }}>تقسيم هذا المنتج</h3>
-                      <p className="muted">اختاري المتغيّرات التي ستُنقل إلى منتج مرجعي جديد، وعرّفي بيانات المنتج الجديد.</p>
+                      <h3 style={{ marginTop: 0 }}>{t("mpa.cpd.splitTitle")}</h3>
+                      <p className="muted">{t("mpa.cpd.splitLead")}</p>
                       <div style={{ marginBottom: 10 }}>
                         {d.variants.map((v) => (
                           <label key={v.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0" }}>
@@ -557,41 +565,41 @@ export default function AdminCanonicalProductDetailPage() {
                               checked={splitVariantIds.includes(v.id)}
                               onChange={() => toggleSplitVariant(v.id)}
                             />
-                            {Object.entries(v.structural_attributes ?? {}).map(([k, val]) => `${k}: ${val}`).join("، ") || v.id}
+                            {Object.entries(v.structural_attributes ?? {}).map(([k, val]) => `${k}: ${val}`).join(t("mpa.cpd.attrSeparator")) || v.id}
                             {v.mpn && <span className="muted"> - MPN: {v.mpn}</span>}
                           </label>
                         ))}
                       </div>
                       <div className="form-row">
                         <div className="field">
-                          <label htmlFor="split-brand">العلامة التجارية للمنتج الجديد</label>
+                          <label htmlFor="split-brand">{t("mpa.cpd.splitBrand")}</label>
                           <select id="split-brand" value={splitBrandId} onChange={(e) => setSplitBrandId(e.target.value)}>
-                            <option value="">اختاري علامة تجارية</option>
+                            <option value="">{t("mpa.cat.chooseBrand")}</option>
                             {(brandsForSplit.data ?? []).map((b) => (
                               <option key={b.id} value={b.id}>{b.name}</option>
                             ))}
                           </select>
                         </div>
                         <div className="field">
-                          <label htmlFor="split-category">التصنيف للمنتج الجديد</label>
+                          <label htmlFor="split-category">{t("mpa.cpd.splitCategory")}</label>
                           <select id="split-category" value={splitCategoryId} onChange={(e) => setSplitCategoryId(e.target.value)}>
-                            <option value="">اختاري تصنيفاً</option>
+                            <option value="">{t("mpa.cat.chooseCategory")}</option>
                             {(categoriesForSplit.data ?? []).map((c) => (
-                              <option key={c.id} value={c.id}>{c.name_ar}</option>
+                              <option key={c.id} value={c.id}>{lang === "en" ? c.name_en || c.name_ar : c.name_ar}</option>
                             ))}
                           </select>
                         </div>
                       </div>
                       <div className="field">
-                        <label htmlFor="split-model">اسم الطراز للمنتج الجديد</label>
+                        <label htmlFor="split-model">{t("mpa.cpd.splitModel")}</label>
                         <input id="split-model" value={splitModelName} onChange={(e) => setSplitModelName(e.target.value)} />
                       </div>
                       {splitBlocked && splitBlocked.length > 0 && (
                         <div className="error-banner" role="alert">
-                          تعذّر التقسيم: عروض متاجر مرتبطة بمتغيّرات ستُقسَّم بين منتجين مختلفين:
+                          {t("mpa.cpd.splitBlocked")}
                           <ul style={{ margin: "6px 0 0", paddingInlineStart: 20 }}>
                             {splitBlocked.map((b) => (
-                              <li key={b.vendor_offer_id}>عرض {b.vendor_offer_id}</li>
+                              <li key={b.vendor_offer_id}>{fillMp(t("mpa.cpd.splitBlockedRow"), { id: b.vendor_offer_id })}</li>
                             ))}
                           </ul>
                         </div>
@@ -603,9 +611,9 @@ export default function AdminCanonicalProductDetailPage() {
                           disabled={splitBusy || splitVariantIds.length === 0 || !splitBrandId || !splitCategoryId || !splitModelName.trim()}
                           onClick={submitSplit}
                         >
-                          {splitBusy ? "جارٍ التقسيم..." : "تأكيد التقسيم"}
+                          {splitBusy ? t("mpa.cpd.splitting") : t("mpa.cpd.confirmSplit")}
                         </button>
-                        <button className="button-link" disabled={splitBusy} onClick={() => setPanel("none")}>إلغاء</button>
+                        <button className="button-link" disabled={splitBusy} onClick={() => setPanel("none")}>{t("mpa.cat.cancel")}</button>
                       </div>
                     </div>
                   )}
@@ -616,63 +624,63 @@ export default function AdminCanonicalProductDetailPage() {
             {d.status !== "MERGED" && (
               <>
                 <div className="card" style={{ maxWidth: "none", marginBottom: 14 }}>
-                  <h3 style={{ marginTop: 0 }}>بيانات المنتج</h3>
+                  <h3 style={{ marginTop: 0 }}>{t("mpa.cpd.productData")}</h3>
                   <div className="field">
-                    <label htmlFor="product-type">نوع المنتج</label>
+                    <label htmlFor="product-type">{t("mpa.cpd.productType")}</label>
                     <select id="product-type" value={productType} disabled={fieldsBusy} onChange={(e) => setProductType(e.target.value as ProductType)}>
-                      {Object.entries(PRODUCT_TYPE_LABEL).map(([k, label]) => (
+                      {mpLabelEntries(lang, "productType").map(([k, label]) => (
                         <option key={k} value={k}>{label}</option>
                       ))}
                     </select>
                   </div>
                   <div className="form-row">
                     <div className="field">
-                      <label htmlFor="warranty-period">مدة الضمان</label>
+                      <label htmlFor="warranty-period">{t("mpa.cpd.warrantyPeriod")}</label>
                       <input id="warranty-period" type="number" value={warrantyPeriod} disabled={fieldsBusy} onChange={(e) => setWarrantyPeriod(e.target.value)} />
                     </div>
                     <div className="field">
-                      <label htmlFor="warranty-type">نوع الضمان</label>
+                      <label htmlFor="warranty-type">{t("mpa.cpd.warrantyType")}</label>
                       <input id="warranty-type" value={warrantyType} disabled={fieldsBusy} onChange={(e) => setWarrantyType(e.target.value)} />
                     </div>
                   </div>
                   <div className="field">
-                    <label htmlFor="tags">الكلمات الدلالية (مفصولة بفواصل)</label>
+                    <label htmlFor="tags">{t("mpa.cpd.tags")}</label>
                     <input id="tags" value={tagsText} disabled={fieldsBusy} onChange={(e) => setTagsText(e.target.value)} />
                   </div>
                   <div className="form-row">
                     <div className="field">
-                      <label htmlFor="seo-title-ar">عنوان SEO بالعربية</label>
+                      <label htmlFor="seo-title-ar">{t("mpa.cpd.seoTitleAr")}</label>
                       <input id="seo-title-ar" value={seoTitleAr} disabled={fieldsBusy} onChange={(e) => setSeoTitleAr(e.target.value)} />
                     </div>
                     <div className="field">
-                      <label htmlFor="seo-title-en">عنوان SEO بالإنجليزية</label>
+                      <label htmlFor="seo-title-en">{t("mpa.cpd.seoTitleEn")}</label>
                       <input id="seo-title-en" value={seoTitleEn} disabled={fieldsBusy} onChange={(e) => setSeoTitleEn(e.target.value)} />
                     </div>
                   </div>
                   <div className="field">
-                    <label htmlFor="seo-desc-ar">وصف SEO بالعربية</label>
+                    <label htmlFor="seo-desc-ar">{t("mpa.cpd.seoDescAr")}</label>
                     <textarea id="seo-desc-ar" rows={3} value={seoDescAr} disabled={fieldsBusy} onChange={(e) => setSeoDescAr(e.target.value)} />
                   </div>
                   <div className="field">
-                    <label htmlFor="seo-desc-en">وصف SEO بالإنجليزية</label>
+                    <label htmlFor="seo-desc-en">{t("mpa.cpd.seoDescEn")}</label>
                     <textarea id="seo-desc-en" rows={3} value={seoDescEn} disabled={fieldsBusy} onChange={(e) => setSeoDescEn(e.target.value)} />
                   </div>
                   {fieldsError && <ErrorBanner message={fieldsError} />}
                   {fieldsNotice && <p className="muted">{fieldsNotice}</p>}
                   <button className="button" disabled={fieldsBusy} onClick={saveFields}>
-                    {fieldsBusy ? "جارٍ الحفظ..." : "حفظ"}
+                    {fieldsBusy ? t("mpa.cat.saving") : t("mpa.cat.save")}
                   </button>
                 </div>
 
                 <div className="card" style={{ maxWidth: "none" }}>
-                  <h3 style={{ marginTop: 0 }}>المتغيّرات</h3>
+                  <h3 style={{ marginTop: 0 }}>{t("mpa.cpd.variants")}</h3>
                   {d.variants.length === 0 ? (
-                    <p className="muted">لا توجد متغيّرات لهذا المنتج بعد.</p>
+                    <p className="muted">{t("mpa.cpd.noVariants")}</p>
                   ) : (
                     <ul style={{ margin: "0 0 14px", paddingInlineStart: 20 }}>
                       {d.variants.map((v) => (
                         <li key={v.id} style={{ marginBottom: 6 }}>
-                          {Object.entries(v.structural_attributes ?? {}).map(([k, val]) => `${k}: ${val}`).join("، ") || "بلا خصائص"}
+                          {Object.entries(v.structural_attributes ?? {}).map(([k, val]) => `${k}: ${val}`).join(t("mpa.cpd.attrSeparator")) || t("mpa.cpd.noAttributes")}
                           {v.mpn && <span className="muted"> - MPN: {v.mpn}</span>}
                           {v.gtin && <span className="muted"> - GTIN: {v.gtin}</span>}
                         </li>
@@ -680,18 +688,18 @@ export default function AdminCanonicalProductDetailPage() {
                     </ul>
                   )}
 
-                  <h4>إضافة متغيّر</h4>
+                  <h4>{t("mpa.cpd.addVariant")}</h4>
                   {attrRows.map((row, i) => (
                     <div key={i} style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
                       <input
-                        placeholder="خاصية (مثل: اللون)"
+                        placeholder={t("mpa.cpd.attrKeyPlaceholder")}
                         value={row.key}
                         disabled={variantBusy}
                         onChange={(e) => updateAttrRow(i, "key", e.target.value)}
                         style={{ flex: 1, minWidth: 140 }}
                       />
                       <input
-                        placeholder="القيمة"
+                        placeholder={t("mpa.cpd.attrValuePlaceholder")}
                         value={row.value}
                         disabled={variantBusy}
                         onChange={(e) => updateAttrRow(i, "value", e.target.value)}
@@ -703,7 +711,7 @@ export default function AdminCanonicalProductDetailPage() {
                         disabled={variantBusy || attrRows.length === 1}
                         onClick={() => setAttrRows((rows) => rows.filter((_, idx) => idx !== i))}
                       >
-                        حذف
+                        {t("mpa.cat.delete")}
                       </button>
                     </div>
                   ))}
@@ -714,21 +722,21 @@ export default function AdminCanonicalProductDetailPage() {
                     onClick={() => setAttrRows((rows) => [...rows, { key: "", value: "" }])}
                     style={{ marginBottom: 10 }}
                   >
-                    + إضافة خاصية
+                    {t("mpa.cpd.addAttribute")}
                   </button>
                   <div className="form-row">
                     <div className="field">
-                      <label htmlFor="variant-mpn">MPN (اختياري)</label>
+                      <label htmlFor="variant-mpn">{t("mpa.cpd.mpnOptional")}</label>
                       <input id="variant-mpn" value={mpn} disabled={variantBusy} onChange={(e) => setMpn(e.target.value)} />
                     </div>
                     <div className="field">
-                      <label htmlFor="variant-gtin">GTIN (اختياري)</label>
+                      <label htmlFor="variant-gtin">{t("mpa.cpd.gtinOptional")}</label>
                       <input id="variant-gtin" value={gtin} disabled={variantBusy} onChange={(e) => setGtin(e.target.value)} />
                     </div>
                   </div>
                   {variantError && <ErrorBanner message={variantError} />}
                   <button className="button" disabled={variantBusy} onClick={addVariant}>
-                    {variantBusy ? "جارٍ الإضافة..." : "إضافة متغيّر"}
+                    {variantBusy ? t("mpa.cpd.adding") : t("mpa.cpd.addVariant")}
                   </button>
                 </div>
               </>

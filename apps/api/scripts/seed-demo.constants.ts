@@ -23,6 +23,13 @@ export const DEMO = {
     password: 'DemoCustomer#2026',
     displayName: 'زبون تجريبي',
   },
+  // The platform reviewer recorded as reviewedBy on every branch this
+  // seed creates already APPROVED. Platform staff only: no
+  // CustomerProfile and no store membership (conflict of interest).
+  reviewer: {
+    phone: '+970560000010',
+    password: 'DemoReviewer#2026',
+  },
 } as const;
 
 export const VENDOR_ONE = {

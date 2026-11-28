@@ -4,7 +4,8 @@ import Link from "next/link";
 import { useMemo } from "react";
 import { useAdsLang } from "./adsCopy";
 import { FilterControls, FitTitle, rvDelay, Strip, StoreMark, useCategoryFilter, useReveal } from "./AdsShared";
-import { DEMO_FEATURED_STORES, type AdsCategory, type FeaturedStore } from "./data/adsDemo";
+import { useAdsHeading, useAdsStores } from "./adsManaged";
+import type { AdsCategory, FeaturedStore } from "./data/adsDemo";
 import { STORE_COVER_OVERRIDES } from "./data/storeCovers";
 import { useViaFeaturedStores } from "./data/viaData";
 import { ArrowUpLeft, ArrowUpRight } from "./icons";
@@ -61,18 +62,28 @@ export default function AdsFeaturedStores() {
   const real = useViaFeaturedStores();
   const intro = useReveal<HTMLDivElement>();
   const bar = useReveal<HTMLDivElement>();
-  const list = useMemo(
-    () => [...real.stores, ...DEMO_FEATURED_STORES].filter((s) => cats.matches(s.categories)),
+  // VIA phase 6: the curated cards may come from the Content Studio. Picked
+  // Via stores lead (in the managed order), the other live Via stores
+  // follow, then the curated placeholder cards. Switched off / unpublished:
+  // the section leaves the page, as every managed section does.
+  const { mode, stores: curated } = useAdsStores();
+  const heading = useAdsHeading(mode, t("ads.stores.heading"));
+  const list = useMemo(() => {
+    const picked = curated.filter((s) => s.store.slug);
+    const slugs = new Set(picked.map((s) => s.store.slug));
+    return [...picked, ...real.stores.filter((s) => !slugs.has(s.store.slug)), ...curated.filter((s) => !s.store.slug)].filter((s) =>
+      cats.matches(s.categories),
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [real.stores, cats.selected],
-  );
+  }, [curated, real.stores, cats.selected]);
+  if (mode.mode === "hidden") return null;
 
   return (
     <section className="ads-section fs" aria-labelledby="discover-stores-heading">
       <div className="ads-wrap">
         <div ref={intro} className="ads-intro fs-intro" dir={dir}>
           <span className="rv-mask"><span className="ads-kicker rv-up">VIA / STORES</span></span>
-          <FitTitle id="discover-stores-heading" text={t("ads.stores.heading")} mobileLines={["DISCOVER", "STORES"]} />
+          <FitTitle id="discover-stores-heading" text={heading.text} mobileLines={heading.managed ? undefined : ["DISCOVER", "STORES"]} />
         </div>
         <div ref={bar} className="ads-filterbar fs-bar rv-fade" style={rvDelay(0.38)} dir={dir}>
           <FilterControls

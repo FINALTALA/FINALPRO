@@ -9,7 +9,14 @@ import { ReturnsModule } from '../returns/returns.module';
 import { ReviewsModule } from '../reviews/reviews.module';
 import { VendorPerformanceModule } from '../vendor-performance/vendor-performance.module';
 import { AdminAuditLogsController } from './admin-audit-logs.controller';
+import { ApprovalCenterController } from './approval-center.controller';
 import { AdminBranchOrdersController } from './admin-branch-orders.controller';
+import { AdminOrdersController } from './admin-orders.controller';
+import { AdminOrdersService } from './admin-orders.service';
+import { AdminUsersController } from './admin-users.controller';
+import { AdminUsersService } from './admin-users.service';
+import { AdminAnalyticsController } from './admin-analytics.controller';
+import { AdminAnalyticsService } from './admin-analytics.service';
 import { AdminFeatureFlagsController } from './admin-feature-flags.controller';
 import { AdminOutboxController } from './admin-outbox.controller';
 import { AdminReturnsController } from './admin-returns.controller';
@@ -44,8 +51,13 @@ import { VerificationQueueController } from './verification-queue.controller';
     FeatureFlagsModule,
     VendorPerformanceModule,
   ],
+  // VIA phase 2D: the read-only Admin Orders view.
+  // VIA phase 3: Users Management and the platform team.
+  // VIA phase 4: Dashboard and Analytics.
+  providers: [AdminOrdersService, AdminUsersService, AdminAnalyticsService],
   controllers: [
     VerificationQueueController,
+    ApprovalCenterController,
     // AdminVendorPerformanceController's literal 'admin/vendors/performance'
     // route must be registered before AdminVendorsController's
     // 'admin/vendors/:vendorId' - Express/Nest matches routes in
@@ -55,6 +67,9 @@ import { VerificationQueueController } from './verification-queue.controller';
     AdminVendorsController,
     AdminOutboxController,
     AdminBranchOrdersController,
+    AdminOrdersController,
+    AdminUsersController,
+    AdminAnalyticsController,
     AdminReturnsController,
     AdminReviewsController,
     AdminAuditLogsController,

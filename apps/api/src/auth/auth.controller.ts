@@ -383,6 +383,14 @@ export class AuthController {
           'This account is deactivated - use the reactivation flow to restore it',
       });
     }
+    // VIA phase 3: a platform suspension - no session is issued (the
+    // correct password is not enough); only an administrator lifts it.
+    if (user.suspendedAt !== null) {
+      throw new ForbiddenException({
+        code: 'ACCOUNT_SUSPENDED',
+        message: 'This account is suspended by the platform',
+      });
+    }
 
     const token = await this.sessions.create({
       userId: user.id,

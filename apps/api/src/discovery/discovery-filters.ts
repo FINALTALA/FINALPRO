@@ -8,6 +8,7 @@ import {
 import { FulfilmentEligibilityService } from '../fulfilment/fulfilment-eligibility.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TaxonomyFilterCodes } from '../taxonomy/taxonomy.service';
+import { PUBLIC_OFFER } from '../offers/platform-hold.util';
 
 // The query parsing and product filters shared by public discovery
 // (/discovery/all) and the signed-in following feed
@@ -89,7 +90,7 @@ export function textMatch(q: string): Prisma.CanonicalProductWhereInput {
           some: {
             confirmedOfferVariants: {
               some: {
-                vendorOffer: { status: 'ACTIVE' },
+                vendorOffer: PUBLIC_OFFER,
                 offerColor: {
                   OR: [
                     { nameAr: { contains: q, mode: 'insensitive' } },
@@ -149,7 +150,7 @@ export async function taxonomyOfferFilter(
         {
           isCombination: true,
           canonicalVariantId: { not: null },
-          vendorOffer: { status: 'ACTIVE' },
+          vendorOffer: PUBLIC_OFFER,
           vendor: {
             AND: [
               { storefrontPublished: true, status: 'ACTIVE' },

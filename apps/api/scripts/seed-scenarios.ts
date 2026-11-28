@@ -5,6 +5,7 @@ import * as bcrypt from 'bcryptjs';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../generated/prisma/client';
 import { requireLocalDatabase } from './local-db-guard';
+import { BRANCH_ONE_A_NAME, VENDOR_ONE } from './seed-demo.constants';
 
 const id = (key: string) => {
   const h = createHash('sha256')
@@ -48,10 +49,10 @@ async function main() {
           where: { user: { phone: accounts[2].phone } },
         });
         const vendor = await tx.vendor.findUniqueOrThrow({
-          where: { slug: 'demo-fashion-house' },
+          where: { slug: VENDOR_ONE.slug },
         });
         const branch = await tx.storeBranch.findFirstOrThrow({
-          where: { vendorId: vendor.id, name: 'الفرع الرئيسي' },
+          where: { vendorId: vendor.id, name: BRANCH_ONE_A_NAME },
         });
         const base = await tx.canonicalProduct.findFirstOrThrow({
           where: { modelName: { contains: 'Demo' } },
@@ -62,10 +63,18 @@ async function main() {
         const window = await tx.deliveryWindow.findFirstOrThrow({
           where: { branchId: branch.id },
         });
-        for (const [role, phone, label] of [
-          ['PLATFORM_ADMIN', '+970560000004', 'مدير المنصة'],
-          ['VERIFICATION_REVIEWER', '+970560000005', 'مراجع التحقق'],
-          [null, '+970560000006', 'زبون بسلة فارغة'],
+        // Created before any fixture that records a review decision, so
+        // `reviewer` can stand behind every reviewedBy below. It is a
+        // platform reviewer with no membership in any store.
+        const staff: Record<string, { id: string }> = {};
+        for (const [role, phone, label, withProfile] of [
+          ['PLATFORM_ADMIN', '+970560000004', 'مدير المنصة', true],
+          ['VERIFICATION_REVIEWER', '+970560000005', 'مراجع التحقق', true],
+          [null, '+970560000006', 'زبون بسلة فارغة', true],
+          // The second, equal platform admin. Created like an
+          // out-of-band staff account (seed-platform-staff.ts): no
+          // CustomerProfile, which the admin sign-in path must accept.
+          ['PLATFORM_ADMIN', '+970560000009', 'مدير المنصة الثاني', false],
         ] as const) {
           const user = await add('user', phone, {
             phone,
@@ -73,12 +82,30 @@ async function main() {
             phoneVerifiedAt: now,
             platformRole: role,
           });
-          await add('customerProfile', `profile:${phone}`, {
-            userId: user.id,
-            displayName: label,
-          });
+          if (withProfile)
+            await add('customerProfile', `profile:${phone}`, {
+              userId: user.id,
+              displayName: label,
+            });
+          staff[phone] = user;
           accounts.push({ role: label, phone, password: 'DemoTest#2026' });
         }
+        const reviewer = staff['+970560000005'];
+        // A decided review carries who decided it and when; a pending
+        // one leaves every decision field null.
+        const decided = (note?: string) => ({
+          reviewedBy: reviewer.id,
+          reviewedAt: now,
+          ...(note ? { reviewNote: note } : {}),
+        });
+        // An approved physical branch: the evidence it was approved on,
+        // plus that decision.
+        const approvedEvidence = {
+          verificationPhotoUrl: '/demo-assets/store-fashion-house-cover.svg',
+          evidenceRevision: 1,
+          evidenceSubmittedAt: now,
+          ...decided(),
+        };
         const productCases = [
           [
             'regular',
@@ -289,26 +316,68 @@ async function main() {
             status: subscription,
             periodEnd: subscription === 'EXPIRED' ? days(-1) : days(30),
           });
+          // APPROVED / ACTIVE / SUSPENDED all passed verification first.
+          const verified = ['APPROVED', 'ACTIVE', 'SUSPENDED'].includes(status);
+          const physical = type !== 'ONLINE_ONLY';
+          const branchStatus = verified
+            ? 'APPROVED'
+            : status === 'REJECTED'
+              ? 'REJECTED'
+              : 'PENDING';
+          // A physical branch's decision is recorded on the branch with
+          // its evidence. UNDER_REVIEW means evidence was submitted and
+          // waits for a decision. An ONLINE_ONLY store's branch is not
+          // physical and cannot carry branch evidence (BRANCH_NOT_PHYSICAL):
+          // its verification is the warehouse evidence below.
+          // No evidence on APPLIED (not submitted yet) or CANCELLED (out
+          // of review), so neither shows up as decidable work.
+          const submitted =
+            physical && status !== 'APPLIED' && status !== 'CANCELLED';
           await add('storeBranch', `branch:${key}`, {
             vendorId: store.id,
             name: `فرع اختبار ${key}`,
-            isPhysical: type !== 'ONLINE_ONLY',
+            isPhysical: physical,
             lat: 31.9,
             lng: 35.2,
-            verificationStatus:
-              status === 'ACTIVE' || status === 'SUSPENDED'
-                ? 'APPROVED'
-                : status === 'REJECTED'
-                  ? 'REJECTED'
-                  : 'PENDING',
+            verificationStatus: branchStatus,
+            ...(submitted
+              ? {
+                  verificationPhotoUrl:
+                    '/demo-assets/store-fashion-house-cover.svg',
+                  evidenceRevision: 1,
+                  evidenceSubmittedAt: now,
+                }
+              : {}),
+            ...(physical && branchStatus !== 'PENDING'
+              ? decided(
+                  branchStatus === 'REJECTED'
+                    ? 'صورة الفرع لا تطابق العنوان'
+                    : undefined,
+                )
+              : {}),
           });
           if (type !== 'PHYSICAL') {
-            await add('warehouse', `warehouse:${key}`, {
+            const warehouse = await add('warehouse', `warehouse:${key}`, {
               vendorId: store.id,
               lat: 31.9,
               lng: 35.2,
               addressNote: 'مستودع اختبار',
             });
+            if (verified)
+              await add(
+                'warehouseVerificationEvidence',
+                `warehouse-evidence:${key}`,
+                {
+                  vendorId: store.id,
+                  warehouseId: warehouse.id,
+                  lat: warehouse.lat,
+                  lng: warehouse.lng,
+                  addressNote: warehouse.addressNote,
+                  status: 'APPROVED',
+                  submittedAt: now,
+                  ...decided(),
+                },
+              );
             await add('pickupPoint', `pickup:${key}`, {
               vendorId: store.id,
               name: 'نقطة استلام تجريبية',
@@ -339,6 +408,15 @@ async function main() {
             verificationStatus: status,
             evidenceRevision: 1,
             evidenceSubmittedAt: now,
+            ...(status === 'PENDING'
+              ? {}
+              : decided(
+                  status === 'REJECTED'
+                    ? 'صورة الفرع لا تطابق العنوان'
+                    : status === 'RESUBMISSION_REQUESTED'
+                      ? 'الصورة غير واضحة، أعد رفعها'
+                      : undefined,
+                )),
           });
           cases.push({ kind: 'تحقق فرع', name: status, id: b.id });
         }
@@ -397,6 +475,7 @@ async function main() {
           lat: 31.9,
           lng: 35.2,
           verificationStatus: 'APPROVED',
+          ...approvedEvidence,
         });
         await add('branchClosure', 'closure', {
           vendorId: vendor.id,
@@ -412,6 +491,7 @@ async function main() {
           lat: 31.9,
           lng: 35.2,
           verificationStatus: 'APPROVED',
+          ...approvedEvidence,
           archivedAt: now,
         });
         cases.push(

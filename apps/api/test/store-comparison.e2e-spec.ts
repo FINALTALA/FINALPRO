@@ -276,6 +276,143 @@ describe('Store comparison (e2e)', () => {
   const slugs = (body: { stores: { vendor_slug: string }[] }) =>
     body.stores.map((s) => s.vendor_slug).sort();
 
+  it.each(['DRAFT', 'ARCHIVED'] as const)(
+    '%s with confirmed live offers is hidden from every public product endpoint',
+    async (status) => {
+      const { product } = await world();
+      const base = '/api/v1/canonical-products/' + product.id;
+      const discover = () => request(http())
+        .get('/api/v1/discovery/all').query({ q: product.modelName });
+      expect((await discover().expect(200)).body.items).toEqual(
+        expect.arrayContaining([expect.objectContaining({ canonical_product_id: product.id })]),
+      );
+      for (const suffix of ['', '/comparison-card', '/store-comparison']) {
+        await request(http()).get(base + suffix).expect(200);
+      }
+      await prisma.canonicalProduct.update({ where: { id: product.id }, data: { status } });
+      expect(JSON.stringify((await discover().expect(200)).body.items)).not.toContain(product.id);
+      for (const suffix of ['', '/variants', '/comparison-card', '/store-comparison']) {
+        await request(http()).get(base + suffix).expect(404);
+      }
+      const list = await request(http()).get('/api/v1/canonical-products').expect(200);
+      expect(list.body).not.toContainEqual(expect.objectContaining({ id: product.id }));
+      const admin = await platformAdmin();
+      await request(http()).get(base).set('Authorization', 'Bearer ' + admin).expect(200);
+      await request(http()).get(base + '/variants').set('Authorization', 'Bearer ' + admin).expect(200);
+    },
+  );
+
+  async function platformAdmin() {
+    const user = await prisma.user.create({ data: {
+      phone: uniqueTestPhone(), passwordHash: 'not-used', phoneVerifiedAt: new Date(),
+      platformRole: 'PLATFORM_ADMIN',
+    } });
+    return app.get(SessionService).create({
+      userId: user.id, phone: user.phone,
+      phoneVerifiedAt: user.phoneVerifiedAt!.toISOString(), sessionVersion: user.sessionVersion,
+    });
+  }
+
+  it('serializes duplicate canonical variant creates and compares JSON by value', async () => {
+    const [{ product }, admin] = await Promise.all([world(), platformAdmin()]);
+    const create = (attributes: Record<string, string>) => request(http())
+      .post('/api/v1/canonical-products/' + product.id + '/variants')
+      .set('Authorization', 'Bearer ' + admin)
+      .set('Idempotency-Key', unique('variant'))
+      .send({ structural_attributes: attributes });
+    const results = await Promise.all([
+      create({ size: 'L', color: 'BLACK' }),
+      create({ color: 'BLACK', size: 'L' }),
+    ]);
+    expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
+    expect(results.find((r) => r.status === 409)?.body.error.code).toBe('DUPLICATE_VARIANT');
+    expect(await prisma.canonicalProductVariant.count({ where: {
+      canonicalProductId: product.id,
+      structuralAttributes: { equals: { size: 'L', color: 'BLACK' } },
+    } })).toBe(1);
+    await create({ size: 'L', color: 'BLACK' }).expect(409);
+    await create({ size: 'M', color: 'BLACK' }).expect(201);
+  });
+
+  it('rejects blank category names and preserves a parent with children', async () => {
+    const token = await platformAdmin();
+    const base = '/api/v1/categories';
+    const bearer = 'Bearer ' + token;
+    const create = (body: Record<string, unknown>) => request(http()).post(base)
+      .set('Authorization', bearer).set('Idempotency-Key', unique('category'))
+      .send({ ...body, confirm_despite_duplicate_warning: true });
+    await create({ name_ar: '   ', name_en: 'Invalid' }).expect(400);
+    const parent = await create({ name_ar: '  Parent  ', name_en: unique('Parent') }).expect(201);
+    expect(parent.body.name_ar).toBe('Parent');
+    const child = await create({
+      name_ar: 'Child', name_en: unique('Child'), parent_id: parent.body.id,
+    }).expect(201);
+    await request(http()).patch(base + '/' + child.body.id).set('Authorization', bearer)
+      .send({ name_en: '\t ' }).expect(400);
+    await request(http()).patch(base + '/' + child.body.id).set('Authorization', bearer)
+      .send({ name_en: null }).expect(400);
+    const blocked = await request(http()).delete(base + '/' + parent.body.id)
+      .set('Authorization', bearer).expect(409);
+    expect(blocked.body.error.code).toBe('CATEGORY_HAS_CHILDREN');
+    const tree = await request(http()).get(base + '/' + parent.body.id).expect(200);
+    expect(tree.body.children).toEqual([expect.objectContaining({ id: child.body.id })]);
+  });
+
+  it('applies publication status to reviews, live offer details, cross-comparison, and both Following Feed modes', async () => {
+    const left = await world();
+    const right = await world();
+    const id = left.product.id;
+    const auth = await customer(null);
+    const admin = await platformAdmin();
+    const session = await app.get(SessionService).get(auth);
+    await prisma.storeFollow.create({ data: { userId: session!.userId, vendorId: left.a.vendor.id } });
+    const feed = () => request(http()).get('/api/v1/customers/me/following/feed')
+      .set('Authorization', 'Bearer ' + auth);
+    const cross = () => request(http()).get('/api/v1/comparison/cross')
+      .query({ products: [id, right.product.id].join(',') });
+    const reviews = '/api/v1/canonical-products/' + id + '/reviews';
+    const offerDetail = '/api/v1/storefronts/' + left.a.vendor.slug + '/offers/' + left.oa.offerByVariant['BLACK/M'];
+    const get = (url: string) => request(http()).get(url);
+    expect(JSON.stringify((await cross().expect(200)).body)).toContain(id);
+    for (const response of [await feed().expect(200), await feed().query({ q: left.product.modelName }).expect(200)]) {
+      expect(JSON.stringify(response.body.items)).toContain(id);
+    }
+    await get(reviews).expect(200);
+    await get(offerDetail).expect(200);
+    for (const status of ['DRAFT', 'PENDING_REVIEW', 'ARCHIVED', 'MERGED'] as const) {
+      await prisma.canonicalProduct.update({ where: { id }, data: {
+        status, mergedIntoId: status === 'MERGED' ? right.product.id : null,
+      } });
+      await cross().expect(404);
+      for (const response of [await feed().expect(200), await feed().query({ q: left.product.modelName }).expect(200)]) {
+        expect(response.body.items).toEqual([]);
+      }
+      await get(reviews).expect(404);
+      await get(reviews).set('Authorization', 'Bearer ' + auth).expect(404);
+      await get(reviews).set('Authorization', 'Bearer ' + admin).expect(200);
+      await get(offerDetail).expect(404);
+    }
+  });
+
+  it('keeps the legacy merged_into_id response only for a published destination', async () => {
+    const { product } = await world();
+    const { brandId, categoryId } = product;
+    const make = () => prisma.canonicalProduct.create({ data: {
+      brandId, categoryId, modelName: unique('Merged model'), status: 'MERGED',
+    } });
+    const [first, second] = await Promise.all([make(), make()]);
+    await prisma.canonicalProduct.update({ where: { id: first.id }, data: { mergedIntoId: second.id } });
+    await prisma.canonicalProduct.update({ where: { id: second.id }, data: { mergedIntoId: product.id } });
+    const get = () => request(http()).get('/api/v1/canonical-products/' + first.id);
+    expect((await get().expect(200)).body).toMatchObject({
+      id: first.id, status: 'MERGED', merged_into_id: product.id,
+    });
+    await prisma.canonicalProduct.update({ where: { id: product.id }, data: { status: 'DRAFT' } });
+    await get().expect(404);
+    const admin = await platformAdmin();
+    expect((await get().set('Authorization', 'Bearer ' + admin).expect(200)).body.merged_into_id).toBe(second.id);
+  });
+
   it('1/8. each store once, however many variants; logos and cards never repeat', async () => {
     const w = await world();
     const res = await compare(w.product.id).expect(200);

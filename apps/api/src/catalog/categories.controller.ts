@@ -17,6 +17,8 @@ import {
 import { Request } from 'express';
 import { AuditLogService } from '../audit/audit-log.service';
 import { CurrentUser } from '../auth/current-user.decorator';
+import { optionalSessionUserId } from '../auth/optional-session';
+import { SessionService } from '../auth/session.service';
 import { PlatformRole } from '../../generated/prisma/client';
 import { RequirePlatformRole } from '../auth/platform-role.decorator';
 import { PlatformRoleGuard } from '../auth/platform-role.guard';
@@ -43,7 +45,28 @@ export class CategoriesController {
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
     private readonly idempotencyCompletion: IdempotencyCompletionService,
+    private readonly sessions: SessionService,
   ) {}
+
+  /** M-06: a valid PLATFORM_ADMIN session (anonymous and everyone else: false). */
+  private async isPlatformAdmin(req: Request): Promise<boolean> {
+    const userId = await optionalSessionUserId(this.sessions, this.prisma, req);
+    if (!userId) return false;
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { platformRole: true },
+    });
+    return user?.platformRole === PlatformRole.PLATFORM_ADMIN;
+  }
+
+  /** M-06: the admin-only reason is added for an admin read only. */
+  private readDto(
+    category: Parameters<CategoriesController['toDto']>[0] & { restrictionReason: string | null },
+    admin: boolean,
+  ) {
+    const dto = this.toDto(category);
+    return admin ? { ...dto, restriction_reason: category.restrictionReason } : dto;
+  }
 
   private toDto(category: {
     id: string;
@@ -66,15 +89,17 @@ export class CategoriesController {
   }
 
   @Get()
-  async list() {
+  async list(@Req() req: Request) {
+    const admin = await this.isPlatformAdmin(req);
     const categories = await this.prisma.category.findMany({
       orderBy: { createdAt: 'asc' },
     });
-    return categories.map((c) => this.toDto(c));
+    return categories.map((c) => this.readDto(c, admin));
   }
 
   @Get(':id')
-  async get(@Param('id') id: string) {
+  async get(@Param('id') id: string, @Req() req: Request) {
+    const admin = await this.isPlatformAdmin(req);
     const category = await this.prisma.category.findUnique({
       where: { id },
       include: { children: true },
@@ -86,8 +111,8 @@ export class CategoriesController {
       });
     }
     return {
-      ...this.toDto(category),
-      children: category.children.map((c) => this.toDto(c)),
+      ...this.readDto(category, admin),
+      children: category.children.map((c) => this.readDto(c, admin)),
     };
   }
 
@@ -101,18 +126,6 @@ export class CategoriesController {
     @Body() dto: CreateCategoryDto,
     @Req() req: Request,
   ) {
-    if (dto.parent_id) {
-      const parent = await this.prisma.category.findUnique({
-        where: { id: dto.parent_id },
-      });
-      if (!parent) {
-        throw new NotFoundException({
-          code: 'PARENT_CATEGORY_NOT_FOUND',
-          message: 'parent_id does not reference an existing category',
-        });
-      }
-    }
-
     if (!dto.confirm_despite_duplicate_warning) {
       const similar = await findSimilarCategories(
         this.prisma,
@@ -135,6 +148,18 @@ export class CategoriesController {
     }
 
     return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('finalpro:category_tree'))`;
+      if (dto.parent_id) {
+        const parent = await tx.category.findUnique({
+          where: { id: dto.parent_id },
+        });
+        if (!parent) {
+          throw new NotFoundException({
+            code: 'PARENT_CATEGORY_NOT_FOUND',
+            message: 'parent_id does not reference an existing category',
+          });
+        }
+      }
       const category = await tx.category.create({
         data: {
           nameAr: dto.name_ar,
@@ -303,34 +328,48 @@ export class CategoriesController {
     @Param('id') id: string,
     @Req() req: Request,
   ) {
-    const existing = await this.prisma.category.findUnique({ where: { id } });
-    if (!existing) {
-      throw new NotFoundException({
-        code: 'CATEGORY_NOT_FOUND',
-        message: 'Category not found',
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('finalpro:category_tree'))`;
+      const existing = await tx.category.findUnique({ where: { id } });
+      if (!existing) {
+        throw new NotFoundException({
+          code: 'CATEGORY_NOT_FOUND',
+          message: 'Category not found',
+        });
+      }
+
+      const child = await tx.category.findFirst({
+        where: { parentId: id },
+        select: { id: true },
       });
-    }
+      if (child) {
+        throw new ConflictException({
+          code: 'CATEGORY_HAS_CHILDREN',
+          message: 'Category has subcategories and cannot be deleted',
+        });
+      }
 
-    const inUse = await this.prisma.canonicalProduct.findFirst({
-      where: { categoryId: id },
-      select: { id: true },
-    });
-    if (inUse) {
-      throw new ConflictException({
-        code: 'CATEGORY_IN_USE',
-        message: 'Category has canonical products and cannot be deleted',
+      const inUse = await tx.canonicalProduct.findFirst({
+        where: { categoryId: id },
+        select: { id: true },
       });
-    }
+      if (inUse) {
+        throw new ConflictException({
+          code: 'CATEGORY_IN_USE',
+          message: 'Category has canonical products and cannot be deleted',
+        });
+      }
 
-    await this.prisma.category.delete({ where: { id } });
+      await tx.category.delete({ where: { id } });
 
-    await this.auditLog.record({
-      actorId: user.id,
-      correlationId: req.correlationId,
-      action: 'category.deleted',
-      entityType: 'Category',
-      entityId: id,
-      beforeState: this.toDto(existing),
+      await this.auditLog.record({
+        actorId: user.id,
+        correlationId: req.correlationId,
+        action: 'category.deleted',
+        entityType: 'Category',
+        entityId: id,
+        beforeState: this.toDto(existing),
+      }, tx);
     });
   }
 

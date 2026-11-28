@@ -1,5 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable, Optional } from '@nestjs/common';
 import { randomBytes } from 'crypto';
+import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 
 const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days - a reasonable default; not specified by the SRS
@@ -32,9 +33,31 @@ export interface SessionData {
  */
 @Injectable()
 export class SessionService {
-  constructor(private readonly redis: RedisService) {}
+  constructor(
+    private readonly redis: RedisService,
+    // VIA phase 3: optional only so the Redis-only unit spec can build it
+    // by hand; Nest always injects the (global) PrismaService.
+    @Optional() private readonly prisma?: PrismaService,
+  ) {}
 
   async create(data: SessionData): Promise<string> {
+    // VIA phase 3: every sign-in path (login, sign-up, password reset,
+    // reactivation, phone change) issues its session here, so a platform
+    // suspension is refused at the one issuance point. A suspension that
+    // commits just after this check still ends the session: it bumps
+    // sessionVersion, and SessionAuthGuard re-checks both on each request.
+    if (this.prisma) {
+      const account = await this.prisma.user.findUnique({
+        where: { id: data.userId },
+        select: { suspendedAt: true },
+      });
+      if (account?.suspendedAt) {
+        throw new ForbiddenException({
+          code: 'ACCOUNT_SUSPENDED',
+          message: 'This account is suspended by the platform',
+        });
+      }
+    }
     const token = randomBytes(32).toString('base64url');
     await this.redis
       .multi()

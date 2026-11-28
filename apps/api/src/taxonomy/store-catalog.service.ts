@@ -9,6 +9,7 @@ import {
 } from '../offers/pricing/effective-price.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { CatalogOffer } from './store-catalog.util';
+import { PUBLIC_OFFER } from '../offers/platform-hold.util';
 
 /** Same rule as the store page's «وصل حديثاً» (the products and sections endpoints). */
 export const NEW_ARRIVALS_WINDOW_DAYS = 14;
@@ -30,7 +31,8 @@ export class StoreCatalogService {
   /** Every ACTIVE offer of the store, with live availability per variant. */
   async load(vendorId: string) {
     const offers = await this.prisma.vendorOffer.findMany({
-      where: { vendorId, status: 'ACTIVE' },
+      // VIA phase 2C: PUBLIC_OFFER = ACTIVE and not under a platform hold.
+      where: { vendorId, ...PUBLIC_OFFER },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       include: {
         audiences: { select: { audience: true } },

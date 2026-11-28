@@ -24,6 +24,7 @@ import { VendorMembershipGuard } from '../auth/vendor-membership.guard';
 import { RequireVendorRole } from '../auth/vendor-role.decorator';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { evaluateStoreVerification } from '../vendor-verification/store-verification-requirements';
 import { UpdateApplicableCategoriesDto } from './dto/update-applicable-categories.dto';
 import { UpdateStorefrontDto } from './dto/update-storefront.dto';
 import { ownUploadProblem } from '../uploads/uploads.util';
@@ -236,6 +237,32 @@ export class StorefrontController {
         message:
           'At least one applicable store category (Women/Men/Kids/Accessories) is required before publishing (PDR-013)',
       });
+    }
+    // Phase 2A: re-publishing a live (ACTIVE) store's storefront needs a
+    // verified way to sell - for PHYSICAL/HYBRID at least one approved,
+    // non-archived physical branch (a late branch still under review
+    // neither blocks nor counts), and for HYBRID also the latest warehouse
+    // evidence approved. Before activation the initial review already
+    // guarantees this, and the storefront is not public until ACTIVE.
+    if (vendor.status === 'ACTIVE') {
+      const verification = await evaluateStoreVerification(
+        this.prisma,
+        vendorId,
+      );
+      const physicalOk =
+        !verification.physical_required ||
+        verification.branches.some((b) => b.state === 'APPROVED');
+      const warehouseOk =
+        vendor.storeType !== 'HYBRID' ||
+        verification.warehouse?.state === 'APPROVED';
+      if (!physicalOk || !warehouseOk) {
+        throw new ForbiddenException({
+          code: 'STOREFRONT_VERIFICATION_REQUIRED',
+          message: !physicalOk
+            ? 'At least one approved physical branch is required to publish this storefront'
+            : 'An approved warehouse verification is required to publish this HYBRID storefront',
+        });
+      }
     }
     const updated = await this.prisma.vendor.update({
       where: { id: vendorId },

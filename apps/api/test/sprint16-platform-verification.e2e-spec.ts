@@ -305,7 +305,17 @@ describe('Sprint 16 - platform verification: queue, evidence reads, decisions (e
         photo_url: 'https://example.com/audit-canary-photo.jpg',
         status: 'PENDING',
         submitted_at: expect.any(String),
+        // Phase 2A: the store's status and remaining requirements -
+        // states only, never any evidence content (checked below).
+        store: expect.objectContaining({
+          vendor_id: vendorId,
+          vendor_status: 'UNDER_REVIEW',
+          next_step: 'REVIEW',
+        }),
       });
+      expect(JSON.stringify(res.body.store)).not.toMatch(
+        /32\.111111|35\.222222|audit-canary-photo|"lat"|"lng"|photo/,
+      );
 
       const rows = await ctx.prisma.auditLog.findMany({
         where: {

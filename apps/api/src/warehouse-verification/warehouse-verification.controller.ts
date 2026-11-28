@@ -29,6 +29,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { assertNoPlatformVendorConflict } from '../platform-admin/vendor-conflict.util';
 import { WarehouseVerificationDecisionDto } from './dto/warehouse-verification-decision.dto';
 import { isExpectedWarehouseEvidencePendingConflict } from './expected-warehouse-evidence-conflict';
+import {
+  evaluateStoreVerification,
+  needsWarehouseVerification,
+} from '../vendor-verification/store-verification-requirements';
 
 // Sprint 15 (PDR-035, OPEN-011 closed): the ONLINE_ONLY counterpart to
 // VendorVerificationController's branch-evidence endpoints, but
@@ -143,11 +147,15 @@ export class WarehouseVerificationController {
         message: 'Vendor not found',
       });
     }
-    if (vendor.storeType !== 'ONLINE_ONLY') {
+    // Phase 2A: HYBRID joins ONLINE_ONLY - a HYBRID store verifies its
+    // warehouse here AND its physical branch(es) through branch evidence,
+    // in either order (store-verification-requirements.ts). The error
+    // code is unchanged for a PHYSICAL store.
+    if (!needsWarehouseVerification(vendor.storeType)) {
       throw new BadRequestException({
         code: 'STORE_NOT_ONLINE_ONLY',
         message:
-          'Warehouse verification only applies to an ONLINE_ONLY store - a PHYSICAL/HYBRID store verifies via its physical branch(es) (PDR-035)',
+          'Warehouse verification only applies to an ONLINE_ONLY or HYBRID store - a PHYSICAL store verifies via its physical branch(es) (PDR-035)',
       });
     }
 
@@ -188,11 +196,11 @@ export class WarehouseVerificationController {
         // Fresh re-check, under the same vendor lock: storeType could
         // have changed (PUT :vendorId/store-type) between the
         // pre-transaction read above and this lock's acquisition.
-        if (freshVendor.storeType !== 'ONLINE_ONLY') {
+        if (!needsWarehouseVerification(freshVendor.storeType)) {
           throw new BadRequestException({
             code: 'STORE_NOT_ONLINE_ONLY',
             message:
-              'Warehouse verification only applies to an ONLINE_ONLY store - a PHYSICAL/HYBRID store verifies via its physical branch(es) (PDR-035)',
+              'Warehouse verification only applies to an ONLINE_ONLY or HYBRID store - a PHYSICAL store verifies via its physical branch(es) (PDR-035)',
           });
         }
 
@@ -375,7 +383,11 @@ export class WarehouseVerificationController {
       const evidence = await tx.warehouseVerificationEvidence.findFirst({
         where: { vendorId, status: 'PENDING' },
       });
-      if (!evidence) {
+      // Phase 2A: only decidable work is released - the same condition
+      // decide() accepts (vendor UNDER_REVIEW). A HYBRID store rejected
+      // on its branch keeps this row PENDING as history, but it is no
+      // longer anything to decide.
+      if (!evidence || vendor.status !== 'UNDER_REVIEW') {
         throw new NotFoundException({
           code: 'NO_PENDING_WAREHOUSE_EVIDENCE',
           message:
@@ -394,7 +406,12 @@ export class WarehouseVerificationController {
         },
         tx,
       );
-      return pendingEvidenceToDto(evidence);
+      return {
+        ...pendingEvidenceToDto(evidence),
+        // Phase 2A: the store's status and remaining requirements
+        // (states only, never a branch's evidence).
+        store: await evaluateStoreVerification(tx, vendorId),
+      };
     });
   }
 
@@ -402,9 +419,9 @@ export class WarehouseVerificationController {
   // evidence_id (from the GET above) rather than implicitly "whichever
   // row is PENDING" - see WarehouseVerificationDecisionDto's own
   // comment for why. Vendor-lifecycle mapping: approve -> vendor
-  // APPROVED directly (unlike the branch path, there is no "any other
-  // pending physical branch?" loop - an ONLINE_ONLY vendor has exactly
-  // one verification path); reject -> vendor REJECTED (same BR-026
+  // APPROVED when that completes the store's verification (always for
+  // ONLINE_ONLY; for HYBRID only once its physical branches are
+  // approved too - phase 2A); reject -> vendor REJECTED (same BR-026
   // "whole application" consequence as a branch rejection);
   // request_resubmission -> vendor stays UNDER_REVIEW, this row is
   // left RESUBMISSION_REQUESTED forever as a historical record, and a
@@ -505,8 +522,17 @@ export class WarehouseVerificationController {
         tx,
       );
 
+      // Phase 2A: approving the warehouse approves the vendor only when
+      // the shared evaluation is complete - always for ONLINE_ONLY (the
+      // warehouse is its only requirement); for HYBRID only once its
+      // physical branches are approved too, else it stays UNDER_REVIEW
+      // until the last branch decision completes it. Read under the
+      // vendor lock above, after this row's own update.
       let vendorApproved = false;
-      if (dto.decision === 'approve') {
+      const completesVerification =
+        dto.decision === 'approve' &&
+        (await evaluateStoreVerification(tx, vendorId)).complete;
+      if (completesVerification) {
         await tx.vendor.update({
           where: { id: vendorId },
           data: { status: 'APPROVED' },

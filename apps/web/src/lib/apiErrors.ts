@@ -227,6 +227,21 @@ export const API_ERROR_TEXT: Record<string, Text> = {
     ar: "هذا الحساب معطّل. يمكنك استعادته خلال 30 يوماً من تعطيله.",
     en: "This account is deactivated. You can recover it within 30 days of deactivation.",
   },
+  // VIA phase 3 - platform suspension and the Users admin.
+  ACCOUNT_SUSPENDED: {
+    ar: "هذا الحساب موقوف من إدارة المنصة. تواصلي مع الدعم.",
+    en: "This account is suspended by the platform. Please contact support.",
+  },
+  PROTECTED_ACCOUNT: {
+    ar: "حسابات مديري المنصة محمية ولا يمكن إيقافها أو إخراجها من هنا.",
+    en: "Platform administrator accounts are protected and cannot be suspended or signed out here.",
+  },
+  ALREADY_SUSPENDED: { ar: "هذا الحساب موقوف أصلًا.", en: "This account is already suspended." },
+  NOT_SUSPENDED: { ar: "هذا الحساب غير موقوف.", en: "This account is not suspended." },
+  SOLE_STORE_OWNER: {
+    ar: "هذا الحساب هو المالك المفعّل الوحيد لمتجر غير مغلق، فلا يمكن إيقافه.",
+    en: "This account is the only enabled owner of a store that is not closed, so it cannot be suspended.",
+  },
   ACCOUNT_NOT_DEACTIVATED: { ar: "هذا الحساب غير معطّل.", en: "This account isn't deactivated." },
   ACCOUNT_REACTIVATION_WRONG_ENDPOINT: {
     ar: "هذا الحساب معطّل؛ استعيديه من صفحة «استعادة الحساب».",

@@ -1,11 +1,16 @@
-import { IsBoolean, IsOptional, IsString, IsUUID } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsNotEmpty, IsBoolean, IsOptional, IsString, IsUUID } from 'class-validator';
 
 // FR-CAT-001: every category node carries both Arabic and English labels.
 export class CreateCategoryDto {
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
+  @IsNotEmpty()
   name_ar!: string;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
+  @IsNotEmpty()
   name_en!: string;
 
   @IsOptional()

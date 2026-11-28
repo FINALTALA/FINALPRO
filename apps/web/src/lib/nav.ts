@@ -180,6 +180,12 @@ export function ownerHubTiles(vendorId: string): HubTile[] {
  */
 export function adminTiles(role: PlatformRoleName): HubTile[] {
   const tiles: HubTile[] = [
+    // Phase 2B: the inbox over every approval source the role may decide.
+    {
+      href: "/admin/approvals",
+      title: "مركز الموافقات",
+      description: "كل ما ينتظر قرارك من كل المصادر، مع الأعداد والروابط",
+    },
     {
       href: "/admin/verification",
       title: "طابور التحقق",
@@ -188,15 +194,62 @@ export function adminTiles(role: PlatformRoleName): HubTile[] {
   ];
   if (role === "PLATFORM_ADMIN") {
     tiles.push(
+      // Phase 4: period reports with CSV / Excel exports.
+      {
+        href: "/admin/analytics",
+        title: "التحليلات",
+        description: "الطلبات والمبيعات والاسترداد والمتاجر والمنتجات والزبائن والكاشير، مع التصدير",
+      },
       {
         href: "/admin/vendors",
         title: "المتاجر",
         description: "قائمة المتاجر وتعليقها وإعادة تفعيلها",
       },
+      // Phase 2C: the platform's own hold on an offer (Marketplace).
+      {
+        href: "/admin/offers",
+        title: "إشراف العروض",
+        description: "إخفاء عرض أو طلب تعديلات عليه ومراجعة تعديل المتجر وإعادته",
+      },
+      // Phase 2D: every marketplace order, read-only (POS sales excluded).
+      {
+        href: "/admin/orders",
+        title: "الطلبات",
+        description: "طلبات المتجر الإلكتروني وتفاصيلها ومبالغها واستردادها وإرجاعها",
+      },
+      // Phase 5: the platform Media Library.
+      {
+        href: "/admin/media",
+        title: "مكتبة الوسائط",
+        description: "صور وفيديوهات المنصة للرئيسية والرائج والإعلانات والمجموعات",
+      },
+      // Phase 6: the Content Studio (Homepage, Trending, editorial Ads).
+      {
+        href: "/admin/content",
+        title: "استوديو المحتوى",
+        description: "محتوى الرئيسية والرائج والإعلانات: مسودة ومعاينة ونشر وجدولة ونسخ سابقة",
+      },
+      // Phase 3: Users Management and Settings & Team.
+      {
+        href: "/admin/users",
+        title: "المستخدمون",
+        description: "الحسابات وإيقافها ورفع إيقافها وإخراجها من كل الأجهزة",
+      },
+      {
+        href: "/admin/settings",
+        title: "الإعدادات والفريق",
+        description: "فريق المنصة، وأعلام الميزات، ومستلمو التنبيهات، وسجل التدقيق",
+      },
       {
         href: "/admin/name-change-requests",
         title: "طلبات تغيير الاسم",
         description: "طلبات تغيير أسماء المنتجات الأساسية",
+      },
+      // Phase 2B: brand requests had a decision endpoint but no screen.
+      {
+        href: "/admin/brands/requests",
+        title: "طلبات العلامات التجارية",
+        description: "علامات طلبها أصحاب المتاجر، باعتمادها أو رفضها",
       },
       // Sprint 17b: the platform catalog - categories/brands/canonical
       // products - PLATFORM_ADMIN only (a reviewer has no catalog-edit

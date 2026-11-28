@@ -13,7 +13,7 @@
   --ts-ease: cubic-bezier(0.22, 1, 0.36, 1);
   --ts-bar-h: 58px;
   --ts-ar: var(--ts-font-ar), "IBM Plex Sans Arabic", "Segoe UI", Tahoma, sans-serif;
-  --ts-latin: var(--ts-font-latin), "Syne", "Arial Black", sans-serif;
+  --ts-latin: var(--via-syne, "Syne"), "Syne", "Arial Black", sans-serif;
   position: relative;
   height: 100vh;
   height: 100dvh;

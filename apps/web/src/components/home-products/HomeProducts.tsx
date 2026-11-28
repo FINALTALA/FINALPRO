@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 
 import ProductCard from "@/components/ProductCard";
 import ProductReelViewer from "@/components/ProductReelViewer";
 import { apiFetch } from "@/lib/api";
+import { pickText, refOf, useManagedSection } from "@/lib/contentStudio";
 import { registerTranslations } from "@/lib/i18n";
 import type { ComparisonCardDto } from "@/lib/types";
 import { useLang, useT } from "@/lib/useLang";
@@ -198,7 +199,7 @@ function curatedCard(p: CuratedPiece, name: string): ComparisonCardDto {
     store_count: 0,
     colors: [],
     sizes: [],
-    cheapest_offer: { vendor_id: "", vendor_slug: "", offer_id: "", offer_variant_id: "" },
+    cheapest_offer: { vendor_id: "", vendor_slug: p.pick?.vendorSlug ?? "", offer_id: p.pick?.offerId ?? "", offer_variant_id: "" },
     store_logos: [],
   };
 }
@@ -277,7 +278,31 @@ export default function HomeProducts() {
     };
   }, [key, firstPath, isCurated, needsSignIn, hasPage, errorKey, discovery, batch]);
 
-  const curated = useMemo(() => CURATED_PIECES.filter((p) => matchesScope(p, scope)), [scope]);
+  // VIA phase 6: Editorial Product Picks from the Content Studio replace the
+  // built-in curated pieces of the Discover tab (same cards); a pick whose
+  // product is no longer public is dropped by the server.
+  const picks = useManagedSection("home.picks");
+  const curated = useMemo(() => {
+    if (picks.mode === "hidden") return [];
+    if (picks.mode === "managed" && picks.section.items.length > 0) {
+      return picks.section.items.flatMap((it): CuratedPiece[] => {
+        const ref = refOf(it.fields.product);
+        if (!ref) return [];
+        const m = /^\/store\/([^/]+)\/products\/([^/?#]+)/.exec(ref.href ?? "");
+        return [
+          {
+            ...CURATED_PIECES[0],
+            id: it.id,
+            name: { ar: ref.title?.ar ?? "", en: ref.title?.en ?? ref.title?.ar ?? "" },
+            image: { ...CURATED_PIECES[0].image, src: ref.image_url ?? CURATED_PIECES[0].image.src },
+            canonicalProductId: null,
+            pick: m ? { vendorSlug: m[1], offerId: m[2] } : undefined,
+          } as CuratedPiece,
+        ];
+      });
+    }
+    return CURATED_PIECES.filter((p) => matchesScope(p, scope));
+  }, [scope, picks]);
   const curatedLimit = shown ?? batch;
   const curatedMore = curated.length > curatedLimit;
   const curatedVisible = curated.slice(0, completeRows(Math.min(curatedLimit, curated.length), cols, curatedMore));
@@ -399,7 +424,11 @@ export default function HomeProducts() {
 
   return (
     <section className={`${styles.root} ${FONT_VARS}`} data-lang={lang} dir={lang === "ar" ? "rtl" : "ltr"} aria-labelledby="home-products-title">
-      <HomeSectionHead id="home-products-title" title={t("hp.title")} aside={t("hp.subtitle")} />
+      <HomeSectionHead
+        id="home-products-title"
+        title={picks.mode === "managed" ? pickText(picks.section.fields.heading, lang, t("hp.title")) : t("hp.title")}
+        aside={t("hp.subtitle")}
+      />
 
       {/* One line: what to show | whose / what kind (independent choices). */}
       <div className={styles.bar} role="toolbar" aria-label={t("hp.filters")}>

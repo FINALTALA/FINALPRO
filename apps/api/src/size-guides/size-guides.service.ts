@@ -31,6 +31,7 @@ import {
   OfferMeasurementsInput,
   offerMeasurementsDraft,
 } from './size-guide-rules';
+import { PUBLIC_OFFER } from '../offers/platform-hold.util';
 
 type Db = PrismaService | Prisma.TransactionClient;
 const AUDIENCE_ORDER: ProductAudience[] = ['WOMEN', 'MEN', 'KIDS'];
@@ -606,7 +607,7 @@ export class SizeGuidesService {
     const offer = await this.prisma.vendorOffer.findFirst({
       where: {
         id: offerId,
-        status: 'ACTIVE',
+        ...PUBLIC_OFFER,
         vendor: { slug, storefrontPublished: true, status: 'ACTIVE' },
       },
       select: { id: true },

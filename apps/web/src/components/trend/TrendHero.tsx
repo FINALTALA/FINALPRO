@@ -1,12 +1,12 @@
 "use client";
 
-import { IBM_Plex_Sans_Arabic, Syne } from "next/font/google";
+import { IBM_Plex_Sans_Arabic } from "next/font/google";
+import { syne } from "./syne";
 import { useEffect, useRef } from "react";
 import "./trend-hero.css";
 
 // The site's own header (the homepage bar, rendered by AppShell) sits on
 // top of this hero, so the hero has no header of its own.
-const syne = Syne({ subsets: ["latin"], weight: ["600", "700", "800"], variable: "--th-font-name" });
 const plex = IBM_Plex_Sans_Arabic({ subsets: ["arabic"], weight: ["300", "400", "500", "600", "700"], variable: "--th-font-ar" });
 
 export default function TrendHero() {

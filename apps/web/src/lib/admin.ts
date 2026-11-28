@@ -54,11 +54,11 @@ export const PRODUCT_TYPE_LABEL: Record<string, string> = {
   SERVICE: "خدمة",
 };
 
-export function formatDateTime(iso: string | null): string {
+export function formatDateTime(iso: string | null, locale = "ar"): string {
   if (!iso) return "-";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "-";
-  return d.toLocaleString("ar", { dateStyle: "medium", timeStyle: "short" });
+  return d.toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" });
 }
 
 /** The 10-1000 character rule the API applies after trimming. */
@@ -88,6 +88,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   CATEGORY_NOT_FOUND: "التصنيف غير موجود.",
   PARENT_CATEGORY_NOT_FOUND: "التصنيف الأب غير موجود.",
   CATEGORY_CYCLE: "لا يمكن اختيار هذا التصنيف الأب (يسبب حلقة في شجرة التصنيفات).",
+  CATEGORY_HAS_CHILDREN: "لا يمكن حذف تصنيف يحتوي على تصنيفات فرعية.",
   CATEGORY_IN_USE: "لا يمكن حذف هذا التصنيف لوجود منتجات مرجعية تابعة له.",
   BRAND_NOT_FOUND: "العلامة التجارية غير موجودة.",
   BRAND_ALREADY_EXISTS: "توجد علامة تجارية بهذا الاسم.",

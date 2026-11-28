@@ -1,5 +1,6 @@
+import { PUBLIC_CANONICAL_PRODUCT } from '../matching/public-canonical-product';
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, ReviewFit, ReviewTag } from '../../generated/prisma/client';
+import { PlatformRole, Prisma, ReviewFit, ReviewTag } from '../../generated/prisma/client';
 import {
   decodeCursor,
   encodeCursor,
@@ -54,8 +55,19 @@ export class ReviewReadsService {
     q: ProductReviewQuery,
     viewerUserId: string | null,
   ) {
-    const product = await this.prisma.canonicalProduct.findUnique({
-      where: { id: canonicalProductId },
+    const viewerAccount = viewerUserId
+      ? await this.prisma.user.findUnique({
+          where: { id: viewerUserId },
+          select: { platformRole: true },
+        })
+      : null;
+    const product = await this.prisma.canonicalProduct.findFirst({
+      where: {
+        id: canonicalProductId,
+        ...(viewerAccount?.platformRole === PlatformRole.PLATFORM_ADMIN
+          ? {}
+          : PUBLIC_CANONICAL_PRODUCT),
+      },
       select: { id: true },
     });
     if (!product) {

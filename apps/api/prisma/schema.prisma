@@ -65,6 +65,16 @@ model User {
   /// of what Sprint 22 builds for retention.
   deactivatedAt   DateTime?
   createdAt       DateTime      @default(now())
+  /// VIA phase 3: a platform administrator's suspension - separate from
+  /// the user's own deactivation above (lifting one never lifts the
+  /// other). While set, SessionAuthGuard and login refuse the account.
+  suspendedAt      DateTime?
+  suspensionReason String?
+  suspendedById    String?
+  suspendedBy      User?     @relation("UserSuspendedBy", fields: [suspendedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  usersSuspended   User[]    @relation("UserSuspendedBy")
+  mediaUploaded    MediaAsset[] @relation("MediaUploadedBy")
+  mediaArchived    MediaAsset[] @relation("MediaArchivedBy")
 
   customerProfile              CustomerProfile?
   vendorUsers                  VendorUser[]
@@ -129,6 +139,12 @@ model User {
 
   @@map("users")
   offerDraftsLastEdited OfferDraft[] @relation("OfferDraftLastEditor")
+
+  // VIA phase 2C: platform moderation holds on offers.
+  offerHoldsPlaced              OfferPlatformHold[] @relation("OfferHoldPlacedBy")
+  offerHoldsReleased            OfferPlatformHold[] @relation("OfferHoldReleasedBy")
+  offerHoldCorrectionsSubmitted OfferPlatformHold[] @relation("OfferHoldCorrectionBy")
+  offerHoldCorrectionsReturned  OfferPlatformHold[] @relation("OfferHoldCorrectionReturnedBy")
 }
 
 /// Part 3, G.3: one-to-one with User. Split out (rather than folding
@@ -1921,6 +1937,9 @@ model VendorOffer {
   /// offers that list this one.
   pairings                OfferPairing[]           @relation("OfferPairingPrimary")
   pairedIn                OfferPairing[]           @relation("OfferPairingPaired")
+  /// VIA phase 2C: platform moderation holds (at most one open). Separate
+  /// from `status`, which stays the owner's own - see OfferPlatformHold.
+  platformHolds           OfferPlatformHold[]
 
   /// Review-round fix (Sprint 7 round 3, Blocker 2): lets
   /// ImportIdentifierRecord.vendorOffer below be a composite FK on
@@ -5252,4 +5271,274 @@ model StoreSaleItem {
   @@index([vendorId, vendorOfferId])
   @@index([offerVariantId])
   @@map("store_sale_items")
+}
+
+/// VIA phase 2C: the platform's moderation hold on one offer - owned by
+/// platform administrators, entirely separate from VendorOffer.status
+/// (which stays the owner's). While a hold is OPEN (releasedAt null) the
+/// offer is out of every public surface and cannot be bought, whatever its
+/// status; the owner can still edit it, and republishing never lifts the
+/// hold - only an administrator's RESTORE does (releasedAt). At most one
+/// open hold per offer (partial unique index, migration). Closed holds
+/// stay as history.
+///  - HIDE: hidden until restored.
+///  - REQUEST_CHANGES: hidden until restored; the owner may submit one
+///    exact content revision (VendorOffer.contentRevision) as the
+///    correction. A later content edit raises the revision, so the
+///    submitted one is visibly stale; an administrator may also return a
+///    correction (the owner submits again).
+enum OfferPlatformHoldAction {
+  HIDE
+  REQUEST_CHANGES
+}
+
+model OfferPlatformHold {
+  id            String                  @id @default(uuid())
+  vendorId      String
+  vendorOfferId String
+  vendorOffer   VendorOffer             @relation(fields: [vendorId, vendorOfferId], references: [vendorId, id], onDelete: Restrict, onUpdate: Cascade)
+  action        OfferPlatformHoldAction
+  reason        String
+  placedById    String
+  placedBy      User                    @relation("OfferHoldPlacedBy", fields: [placedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  placedAt      DateTime                @default(now())
+
+  /// REQUEST_CHANGES only: the owner's submitted correction.
+  correctionRevision      Int?
+  correctionNote          String?
+  correctionSubmittedAt   DateTime?
+  correctionSubmittedById String?
+  correctionSubmittedBy   User?     @relation("OfferHoldCorrectionBy", fields: [correctionSubmittedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  /// The last time an administrator sent a correction back, and why.
+  correctionReturnedAt    DateTime?
+  correctionReturnNote    String?
+  correctionReturnedById  String?
+  correctionReturnedBy    User?     @relation("OfferHoldCorrectionReturnedBy", fields: [correctionReturnedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  /// RESTORE: the hold is closed (the offer's own rules apply again).
+  releasedAt         DateTime?
+  releasedById       String?
+  releasedBy         User?     @relation("OfferHoldReleasedBy", fields: [releasedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  releaseNote        String?
+  /// The offer content revision the administrator restored after reviewing.
+  releasedAtRevision Int?
+
+  @@index([vendorOfferId])
+  @@index([releasedAt, placedAt])
+  @@index([vendorId])
+  @@map("offer_platform_holds")
+}
+
+/// VIA phase 5 - the platform Media Library: platform-owned images and
+/// videos for the Homepage, Trending, the editorial Ads page and
+/// Collections. Stored apart from merchant uploads (PLATFORM_MEDIA_DIR),
+/// under a generated key - never the uploader's filename.
+enum MediaCategory {
+  HOMEPAGE
+  TRENDING
+  ADS
+  COLLECTIONS
+}
+
+enum PlatformMediaKind {
+  IMAGE
+  VIDEO
+}
+
+/// PENDING while the upload streams and is validated; VALID once the real
+/// content passed every check. A rejected or interrupted upload never
+/// stays (its row and temporary file are removed).
+enum MediaValidationState {
+  PENDING
+  VALID
+}
+
+/// ARCHIVED hides an asset from pickers (restorable); PURGING = permanent
+/// removal requested, the physical file deletion is retried until done,
+/// then the row is deleted.
+enum MediaStatus {
+  ACTIVE
+  ARCHIVED
+  PURGING
+}
+
+model MediaAsset {
+  id              String               @id @default(uuid())
+  name            String
+  category        MediaCategory
+  kind            PlatformMediaKind
+  mimeType        String?
+  storageKey      String?              @unique
+  sizeBytes       Int?
+  width           Int?
+  height          Int?
+  durationMs      Int?
+  videoCodec      String?
+  audioCodec      String?
+  sha256          String?
+  validationState MediaValidationState @default(PENDING)
+  status          MediaStatus          @default(ACTIVE)
+  uploadedById    String
+  uploadedBy      User                 @relation("MediaUploadedBy", fields: [uploadedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  archivedAt      DateTime?
+  archivedById    String?
+  archivedBy      User?                @relation("MediaArchivedBy", fields: [archivedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  purgeRequestedAt DateTime?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  usages MediaUsage[]
+
+  @@index([status, category, createdAt])
+  @@index([validationState, createdAt])
+  @@map("media_assets")
+}
+
+/// Where a media asset is referenced. Phase 6 (Content Studio) writes these
+/// rows for its drafts, scheduled, published and restorable revisions; any
+/// row blocks archiving and purging the asset, and a PUBLISHED row is what
+/// lets the asset's public immutable URL be served.
+enum MediaUsageState {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  REVISION
+}
+
+model MediaUsage {
+  id         String          @id @default(uuid())
+  assetId    String
+  asset      MediaAsset      @relation(fields: [assetId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  /// The content surface, e.g. HOMEPAGE_HERO, TRENDING_REEL, ADS_PAGE, COLLECTION.
+  ownerType  String
+  ownerId    String
+  /// The content revision (Phase 6) - "" when the surface has no revisions.
+  revisionId String          @default("")
+  state      MediaUsageState
+  label      String?
+  createdAt  DateTime        @default(now())
+
+  @@unique([assetId, ownerType, ownerId, revisionId, state])
+  @@index([ownerType, ownerId])
+  @@map("media_usages")
+}
+
+/// VIA phase 6 - Content Studio: one platform-owned content record per
+/// managed page (Homepage, Trending, the editorial Ads page).
+enum ContentPageKey {
+  HOMEPAGE
+  TRENDING
+  ADS
+  WOMEN
+  MEN
+  KIDS
+}
+
+enum ContentRevisionSource {
+  IMPORT
+  PUBLISH
+  SCHEDULE
+  RESTORE
+}
+
+enum ContentScheduleStatus {
+  PENDING
+  PUBLISHED
+  FAILED
+  CANCELLED
+  REPLACED
+}
+
+/// The working draft of a page (optimistically versioned: draftVersion)
+/// and its published-revision pointer. publishedRevisionId null means
+/// unpublished: the public page keeps its shell, managed placements hide.
+model ContentPage {
+  key                 ContentPageKey   @id
+  draft               Json
+  draftVersion        Int              @default(1)
+  draftUpdatedAt      DateTime         @default(now())
+  draftUpdatedById    String?
+  publishedRevisionId String?          @unique
+  publishedRevision   ContentRevision? @relation("ContentPagePublished", fields: [publishedRevisionId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  publishedAt         DateTime?
+  publishedById       String?
+  unpublishedAt       DateTime?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  revisions ContentRevision[] @relation("ContentPageRevisions")
+  schedules ContentSchedule[]
+  issues    ContentIssue[]
+
+  @@map("content_pages")
+}
+
+/// An immutable snapshot of a page (a database trigger refuses any change
+/// to its document); only the archive fields may be set.
+model ContentRevision {
+  id             String                @id @default(uuid())
+  pageKey        ContentPageKey
+  page           ContentPage           @relation("ContentPageRevisions", fields: [pageKey], references: [key], onDelete: Restrict, onUpdate: Cascade)
+  number         Int
+  document       Json
+  schemaVersion  Int
+  source         ContentRevisionSource
+  restoredFromId String?
+  createdById    String?
+  createdAt      DateTime              @default(now())
+  archivedAt     DateTime?
+  archivedById   String?
+
+  livePage  ContentPage?      @relation("ContentPagePublished")
+  schedules ContentSchedule[]
+
+  @@unique([pageKey, number])
+  @@map("content_revisions")
+}
+
+/// A scheduled publication of ONE immutable revision. At most one PENDING
+/// per page (a partial unique index). Executed exactly once by the worker.
+model ContentSchedule {
+  id             String                @id @default(uuid())
+  pageKey        ContentPageKey
+  page           ContentPage           @relation(fields: [pageKey], references: [key], onDelete: Restrict, onUpdate: Cascade)
+  revisionId     String
+  revision       ContentRevision       @relation(fields: [revisionId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  runAt          DateTime
+  localTime      String
+  status         ContentScheduleStatus @default(PENDING)
+  attempts       Int                   @default(0)
+  lastError      String?
+  failureDetails Json?
+  createdById    String?
+  createdAt      DateTime              @default(now())
+  executedAt     DateTime?
+  cancelledAt    DateTime?
+
+  @@index([status, runAt])
+  @@index([pageKey, createdAt])
+  @@map("content_schedules")
+}
+
+/// A dependency of PUBLISHED content that broke after publication (media
+/// no longer available, a store or collection or product no longer
+/// eligible). Recorded when the public page is served; resolvedAt once it
+/// renders again.
+model ContentIssue {
+  id         String         @id @default(uuid())
+  pageKey    ContentPageKey
+  page       ContentPage    @relation(fields: [pageKey], references: [key], onDelete: Restrict, onUpdate: Cascade)
+  revisionId String
+  sectionId  String
+  itemId     String         @default("")
+  field      String
+  kind       String
+  detail     String?
+  detectedAt DateTime       @default(now())
+  lastSeenAt DateTime       @default(now())
+  resolvedAt DateTime?
+
+  @@unique([revisionId, sectionId, itemId, field])
+  @@index([pageKey, resolvedAt])
+  @@map("content_issues")
 }

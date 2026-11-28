@@ -62,6 +62,7 @@ import LangEffect from "./LangEffect";
 import Toaster from "./Toaster";
 import NotificationsPanel from "./NotificationsPanel";
 import homeStyles from "./via-header.module.css";
+import adminStyles from "./admin-topbar.module.css";
 
 const TAB_ICONS: Record<NavLink["key"], ReactNode> = {
   home: <HomeIcon />,
@@ -232,6 +233,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
   // only: a workspace page without an entered workspace goes to the entry
   // confirmation - never entered on its own.
   const pageWorkspace = workspaceOfPage(pathname);
+  // VIA admin: the platform workspace (/admin, /admin/*) gets its own compact
+  // top bar instead of the customer header, and no customer bottom tabs. Its
+  // section navigation is the sidebar in app/admin/layout.tsx. Every other
+  // route keeps exactly the header it had.
+  const isAdminPage = pageWorkspace?.type === "platform";
   const pageWorkspaceKey = pageWorkspace
     ? pageWorkspace.type === "platform" ? "platform" : `vendor:${pageWorkspace.vendor_id}`
     : "";
@@ -759,6 +765,37 @@ export default function AppShell({ children }: { children: ReactNode }) {
         </header>
         <NotificationsPanel open={notificationsPanelOpen} onClose={closeNotificationsPanel} />
         </>
+      ) : isAdminPage ? (
+        <header className={adminStyles.topbar}>
+          <div className={adminStyles.topbarInner}>
+            <Link href="/admin" className={adminStyles.brand} aria-label="VIA - إدارة المنصة">
+              <Image className={adminStyles.brandLogo} src="/images/via-logo.svg" alt="" width={70} height={56} priority />
+              <span className={adminStyles.brandName} lang="en">ViA</span>
+            </Link>
+            <div className={adminStyles.actions}>
+              {workspaceMenu}
+              {token && (
+                <Link href={notificationsPagePath(pathname)} className="icon-button" aria-label={t("appshell.notifications_aria")}>
+                  <BellIcon />
+                  {unreadCount > 0 && <span className="badge-count">{unreadCount}</span>}
+                </Link>
+              )}
+              {token && (
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-haspopup="dialog"
+                  aria-expanded={accountModalOpen}
+                  aria-label={t("appshell.account_menu_aria")}
+                  onClick={() => openAccount()}
+                  data-testid="admin-header-account"
+                >
+                  <UserIcon />
+                </button>
+              )}
+            </div>
+          </div>
+        </header>
       ) : isStorePage || isComparisonPage || isAccountPage || isFavoritesPage || isEmployeeWorkspacePage ? null : (
       <header className={`app-header${isWomenPage ? " women-header" : ""}`}>
         {isWomenPage ? (
@@ -951,8 +988,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
       </header>
       )}
 
-      <main className={`app-main${usesViaHeader ? " home-main" : ""}${isWomenPage ? " women-main" : ""}${isKidsPage ? " kids-main" : ""}${isMenPage ? " men-main" : ""}${isAccountPage ? " account-main" : ""}${usesTrendChrome ? " trend-main" : ""}`}>{pageContent}</main>
+      <main className={`app-main${usesViaHeader ? " home-main" : ""}${isWomenPage ? " women-main" : ""}${isKidsPage ? " kids-main" : ""}${isMenPage ? " men-main" : ""}${isAccountPage ? " account-main" : ""}${usesTrendChrome ? " trend-main" : ""}${isAdminPage ? ` ${adminStyles.main}` : ""}`}>{pageContent}</main>
 
+      {!isAdminPage && (
       <nav className={`bottom-nav${usesViaHeader ? " home-bottom-nav" : ""}`} aria-label={t("appshell.nav.bottom_aria")}>
         {tabs.map((tab) => {
           const activeTab =
@@ -981,6 +1019,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
           );
         })}
       </nav>
+      )}
 
 <footer className="app-footer">
   <button

@@ -26,6 +26,7 @@ import { storeDepartments, trendScores } from './storefront-catalogue';
 import { AUDIENCES, SEASONS, TaxonomyService } from './taxonomy.service';
 import { SalesRankReadService } from '../sales-rank/sales-rank-read.service';
 import { StoreCatalogService } from './store-catalog.service';
+import { OPEN_HOLD_SELECT, PUBLIC_OFFER } from '../offers/platform-hold.util';
 
 const DEFAULT_PAGE_SIZE = 60;
 const MAX_PAGE_SIZE = 200;
@@ -396,7 +397,7 @@ export class StoreTaxonomyPublicController {
   ) {
     const { vendor, isAvailable } = await this.requireVendor(slug);
     const primary = await this.prisma.vendorOffer.findFirst({
-      where: { id: offerId, vendorId: vendor.id, status: 'ACTIVE' },
+      where: { id: offerId, vendorId: vendor.id, ...PUBLIC_OFFER },
       select: { id: true },
     });
     if (!isAvailable || !primary) {
@@ -473,12 +474,17 @@ export class StoreTaxonomyPublicController {
     const { vendor, isAvailable } = await this.requireVendor(slug);
     const offer = await this.prisma.vendorOffer.findUnique({
       where: { id: offerId },
-      select: { vendorId: true, status: true },
+      select: {
+        vendorId: true,
+        status: true,
+        platformHolds: OPEN_HOLD_SELECT,
+      },
     });
     if (
       !offer ||
       offer.vendorId !== vendor.id ||
       offer.status !== 'ACTIVE' ||
+      offer.platformHolds.length > 0 ||
       !isAvailable
     ) {
       throw new NotFoundException({

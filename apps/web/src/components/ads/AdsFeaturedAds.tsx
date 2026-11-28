@@ -2,7 +2,8 @@
 
 import { useAdsLang } from "./adsCopy";
 import { FitTitle, rvDelay, StoreMark, useReveal } from "./AdsShared";
-import { FEATURED_ADS, type FeaturedAd } from "./data/adsDemo";
+import { useAdsFeatured, useAdsHeading } from "./adsManaged";
+import type { FeaturedAd } from "./data/adsDemo";
 import { ArrowUpLeft, ArrowUpRight } from "./icons";
 import "./ads-featured.css";
 
@@ -77,7 +78,20 @@ function Row({ ads }: { ads: FeaturedAd[] }) {
 export default function AdsFeaturedAds() {
   const { t, dir } = useAdsLang();
   const intro = useReveal<HTMLDivElement>();
-  const rows = [1, 2].map((r) => FEATURED_ADS.filter((a) => a.row === r));
+  // VIA phase 6: the placements may come from the Content Studio. Managed
+  // ads fill the same mosaic in order: pairs of 60/40 then 40/60.
+  const { mode, ads } = useAdsFeatured();
+  const heading = useAdsHeading(mode, t("ads.featured.heading"));
+  if (mode.mode === "hidden" || ads.length === 0) return null;
+  const rows =
+    mode.mode === "managed"
+      ? Array.from({ length: Math.ceil(ads.length / 2) }, (_, p) =>
+          ads.slice(p * 2, p * 2 + 2).map((a, k, pair) => ({
+            ...a,
+            span: (pair.length === 1 ? 10 : (p % 2 === 0) === (k === 0) ? 6 : 4) as FeaturedAd["span"],
+          })),
+        )
+      : [1, 2].map((r) => ads.filter((a) => a.row === r));
   return (
     <section className="ads-section fa" aria-labelledby="featured-ads-title">
       <div className="ads-wrap">
@@ -86,7 +100,7 @@ export default function AdsFeaturedAds() {
             <span className="rv-mask"><span className="ads-kicker rv-up">{t("ads.featured.kicker")}</span></span>
             <span className="rv-mask"><span className="fa-issue rv-up">{t("ads.featured.issue")}</span></span>
           </div>
-          <FitTitle id="featured-ads-title" text={t("ads.featured.heading")} mobileLines={["THE FEATURED", "EDIT"]} />
+          <FitTitle id="featured-ads-title" text={heading.text} mobileLines={heading.managed ? undefined : ["THE FEATURED", "EDIT"]} />
           <span className="rv-mask">
             <p className="ads-intro-sub fa-sub-row rv-up" style={rvDelay(0.3)} lang="ar">
               {t("ads.featured.sub")}

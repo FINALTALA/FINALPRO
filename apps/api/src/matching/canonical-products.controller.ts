@@ -16,6 +16,8 @@ import {
 import { randomUUID } from 'crypto';
 import { Request } from 'express';
 import { AuditLogService } from '../audit/audit-log.service';
+import { optionalSessionUserId } from '../auth/optional-session';
+import { SessionService } from '../auth/session.service';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { PlatformRole, Prisma } from '../../generated/prisma/client';
 import { RequirePlatformRole } from '../auth/platform-role.decorator';
@@ -29,6 +31,7 @@ import { IdempotencyCompletionService } from '../common/idempotency/idempotency-
 import { IdempotencyInterceptor } from '../common/idempotency/idempotency.interceptor';
 import { PrismaService } from '../prisma/prisma.service';
 import { findSimilarCanonicalProducts } from '../catalog/duplicate-check.util';
+import { PUBLIC_CANONICAL_PRODUCT } from './public-canonical-product';
 import { CanonicalNamingService } from './canonical-naming.service';
 import { CanonicalProductLifecycleService } from './canonical-product-lifecycle.service';
 import { CanonicalProductMergeService } from './canonical-product-merge.service';
@@ -49,6 +52,7 @@ import { nameChangeRequestDto } from './match-review.controller';
 export class CanonicalProductsController {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly sessions: SessionService,
     private readonly auditLog: AuditLogService,
     private readonly canonicalNaming: CanonicalNamingService,
     private readonly lifecycle: CanonicalProductLifecycleService,
@@ -121,12 +125,36 @@ export class CanonicalProductsController {
     };
   }
 
+  private async readScope(req: Request): Promise<Prisma.CanonicalProductWhereInput> {
+    const userId = await optionalSessionUserId(this.sessions, this.prisma, req);
+    const user = userId
+      ? await this.prisma.user.findUnique({
+          where: { id: userId },
+          select: { platformRole: true },
+        })
+      : null;
+    return user?.platformRole === PlatformRole.PLATFORM_ADMIN
+      ? {}
+      : PUBLIC_CANONICAL_PRODUCT;
+  }
+
+  /** M-06: the restriction reason is admin-only - an admin read (empty scope) carries it. */
+  private withReason<T extends object>(
+    scope: Prisma.CanonicalProductWhereInput,
+    dto: T,
+    product: { restrictionReason: string | null },
+  ) {
+    return scope.status ? dto : { ...dto, restriction_reason: product.restrictionReason };
+  }
+
   @Get()
-  async list() {
+  async list(@Req() req: Request) {
+    const scope = await this.readScope(req);
     const products = await this.prisma.canonicalProduct.findMany({
+      where: scope,
       orderBy: { createdAt: 'asc' },
     });
-    return products.map((p) => this.toDto(p));
+    return products.map((p) => this.withReason(scope, this.toDto(p), p));
   }
 
   // Sprint 7 (RB-MATCH-003): the admin queue - every vendor's PENDING
@@ -263,20 +291,41 @@ export class CanonicalProductsController {
     return body;
   }
 
+  private async publishedMergeDestination(id: string | null, sourceId: string) {
+    const visited = new Set([sourceId]);
+    while (id && !visited.has(id)) {
+      visited.add(id);
+      const target = await this.prisma.canonicalProduct.findUnique({
+        where: { id },
+        select: { status: true, mergedIntoId: true },
+      });
+      if (target?.status === PUBLIC_CANONICAL_PRODUCT.status) return id;
+      if (target?.status !== 'MERGED') break;
+      id = target.mergedIntoId;
+    }
+    return null;
+  }
+
   @Get(':id')
-  async get(@Param('id') id: string) {
-    const product = await this.prisma.canonicalProduct.findUnique({
-      where: { id },
+  async get(@Param('id') id: string, @Req() req: Request) {
+    const scope = await this.readScope(req);
+    const product = await this.prisma.canonicalProduct.findFirst({
+      where: { id, ...(scope.status ? { status: { in: ['PUBLISHED', 'MERGED'] } } : {}) },
       include: { variants: true },
     });
-    if (!product) {
+    // Keep the existing 200/merged_into_id response for old product IDs.
+    const destination = product?.status === 'MERGED' && scope.status
+      ? await this.publishedMergeDestination(product.mergedIntoId, product.id)
+      : null;
+    if (!product || (scope.status && product.status === 'MERGED' && !destination)) {
       throw new NotFoundException({
         code: 'CANONICAL_PRODUCT_NOT_FOUND',
         message: 'Canonical product not found',
       });
     }
     return {
-      ...this.toDto(product),
+      ...this.withReason(scope, this.toDto(product), product),
+      ...(destination ? { merged_into_id: destination } : {}),
       variants: product.variants.map((v) => this.variantToDto(v)),
     };
   }
@@ -384,18 +433,32 @@ export class CanonicalProductsController {
     @Body() dto: CreateCanonicalVariantDto,
     @Req() req: Request,
   ) {
-    const product = await this.prisma.canonicalProduct.findUnique({
-      where: { id: productId },
-    });
-    if (!product) {
-      throw new NotFoundException({
-        code: 'CANONICAL_PRODUCT_NOT_FOUND',
-        message: 'Canonical product not found',
-      });
-    }
-
     try {
       return await this.prisma.$transaction(async (tx) => {
+        // Serialize creates for the same model before comparing JSON attributes.
+        const locked = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM canonical_products WHERE id = ${productId} FOR UPDATE`;
+        if (locked.length === 0) {
+          throw new NotFoundException({
+            code: 'CANONICAL_PRODUCT_NOT_FOUND',
+            message: 'Canonical product not found',
+          });
+        }
+        const duplicate = await tx.canonicalProductVariant.findFirst({
+          where: {
+            canonicalProductId: productId,
+            structuralAttributes: {
+              equals: dto.structural_attributes as Prisma.InputJsonValue,
+            },
+          },
+          select: { id: true },
+        });
+        if (duplicate) {
+          throw new ConflictException({
+            code: 'DUPLICATE_VARIANT',
+            message: 'A variant with these structural attributes already exists',
+          });
+        }
+
         // Sprint 5 (RB-INV-001): the id is generated up front (rather
         // than left to the column's own @default(uuid())) so
         // platformProductBarcode can be derived from it deterministically
@@ -449,9 +512,9 @@ export class CanonicalProductsController {
   }
 
   @Get(':id/variants')
-  async listVariants(@Param('id') productId: string) {
-    const product = await this.prisma.canonicalProduct.findUnique({
-      where: { id: productId },
+  async listVariants(@Param('id') productId: string, @Req() req: Request) {
+    const product = await this.prisma.canonicalProduct.findFirst({
+      where: { id: productId, ...(await this.readScope(req)) },
     });
     if (!product) {
       throw new NotFoundException({

@@ -5,7 +5,8 @@ import { Cormorant_Garamond, Inter, Noto_Naskh_Arabic } from "next/font/google";
 import { useRef } from "react";
 import { registerTranslations } from "@/lib/i18n";
 import { useLang, useT } from "@/lib/useLang";
-import { HOME_STORIES, type HomeStory } from "./storyData";
+import { HOME_STORIES } from "./storyData";
+import { mediaOf, mediaUrl, overlayItems, pickText, useManagedSection } from "@/lib/contentStudio";
 import HomeSectionHead from "@/components/home-section-head/HomeSectionHead";
 import styles from "./home-stories.module.css";
 
@@ -56,15 +57,18 @@ registerTranslations({
   },
 });
 
-function StoryCard({ story }: { story: HomeStory }) {
-  const t = useT();
+/** One card as rendered (built-in, or managed by the Content Studio). */
+type StoryView = { id: string; cat: string; title: string; src: string; focus: string; alt: string };
+
+function StoryCard({ story }: { story: StoryView }) {
   return (
     <li className={styles.card}>
       <article>
         <span className={styles.media}>
           <Image
-            src={story.image.src}
-            alt=""
+            src={story.src}
+            alt={story.alt}
+            unoptimized={/^https?:/.test(story.src)}
             fill
             sizes="(max-width: 599px) 50vw, (max-width: 899px) 32vw, (max-width: 1279px) 24vw, 20vw"
             style={{ objectPosition: story.focus }}
@@ -72,8 +76,8 @@ function StoryCard({ story }: { story: HomeStory }) {
           />
         </span>
         <div className={styles.caption}>
-          <p className={styles.cat}>{t(`${story.key}.cat`)}</p>
-          <h3 className={styles.headline}>{t(`${story.key}.title`)}</h3>
+          <p className={styles.cat}>{story.cat}</p>
+          <h3 className={styles.headline}>{story.title}</h3>
         </div>
       </article>
     </li>
@@ -92,7 +96,31 @@ export default function HomeStories() {
     el.scrollBy({ left: dir * ((card?.offsetWidth ?? 260) + 4) * (lang === "ar" ? -1 : 1), behavior: "smooth" });
   };
 
-  if (HOME_STORIES.length === 0) return null;
+  // VIA phase 6: the Content Studio may manage this section (same cards).
+  const managed = useManagedSection("home.stories");
+  const builtIn: StoryView[] = HOME_STORIES.map((s) => ({
+    id: s.id,
+    cat: t(`${s.key}.cat`),
+    title: t(`${s.key}.title`),
+    src: s.image.src,
+    focus: s.focus,
+    alt: "",
+  }));
+  const stories = overlayItems(managed, builtIn, (s) => s.id, (base, it) => {
+    const src = mediaUrl(it.fields.image, null);
+    if (!src) return null; // the picture is no longer available: omit the card
+    return {
+      ...base,
+      id: it.id,
+      cat: pickText(it.fields.label, lang, base.cat),
+      title: pickText(it.fields.title, lang, base.title),
+      src,
+      alt: pickText(mediaOf(it.fields.image)?.alt, lang, ""),
+    };
+  });
+  const heading =
+    managed.mode === "managed" ? pickText(managed.section.fields.heading, lang, t("hst.title")) : t("hst.title");
+  if (stories.length === 0) return null;
   return (
     <section
       className={`${styles.root} ${FONT_VARS}`}
@@ -100,13 +128,13 @@ export default function HomeStories() {
       dir={lang === "ar" ? "rtl" : "ltr"}
       aria-labelledby="home-stories-title"
     >
-      <HomeSectionHead id="home-stories-title" title={t("hst.title")} />
+      <HomeSectionHead id="home-stories-title" title={heading} />
       <div className={styles.strip}>
         <button type="button" className={`${styles.nav} ${styles.navPrev}`} onClick={() => step(-1)} aria-label={t("hst.prev")}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6" /></svg>
         </button>
         <ul ref={track} className={styles.track}>
-          {HOME_STORIES.map((s) => <StoryCard key={s.id} story={s} />)}
+          {stories.map((s) => <StoryCard key={s.id} story={s} />)}
         </ul>
         <button type="button" className={`${styles.nav} ${styles.navNext}`} onClick={() => step(1)} aria-label={t("hst.next")}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>

@@ -6,18 +6,17 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { EmptyState, ErrorBanner } from "@/components/States";
 import { apiFetch, ApiError, newIdempotencyKey } from "@/lib/api";
 import { isForbidden } from "@/lib/admin";
+import { collAudienceEntries, collError, collLive, collNote, collStatus } from "@/lib/adminCollectionsText";
+import { fillMp } from "@/lib/adminMarketplaceText";
 import {
   AdminCollectionDetail,
-  AUDIENCE_LABEL,
-  collectionError,
   fromLocalInput,
-  liveLabel,
   MAX_COLLECTION_ITEMS,
-  NOTE_LABEL,
-  STATUS_LABEL,
   toLocalInput,
 } from "@/lib/platformCollections";
+import type { Lang } from "@/lib/i18n";
 import { useAdminGate } from "@/lib/useAdminGate";
+import { useLang, useT } from "@/lib/useLang";
 
 interface CanonicalProductRow {
   id: string;
@@ -54,7 +53,7 @@ function toForm(c: AdminCollectionDetail): FormState {
   };
 }
 
-const productName = (p: CanonicalProductRow) => p.canonical_name_ar ?? p.model_name;
+const productName = (p: CanonicalProductRow, lang: Lang = "ar") => (lang === "en" ? p.canonical_name_en : p.canonical_name_ar) ?? p.model_name;
 
 // PD-5b.3: one platform collection - its fields, its canonical products
 // (search, add, remove, order, ≤24) and its lifecycle. The API decides
@@ -63,6 +62,8 @@ const productName = (p: CanonicalProductRow) => p.canonical_name_ar ?? p.model_n
 export default function AdminCollectionPage() {
   const params = useParams<{ id: string }>();
   const gate = useAdminGate("ADMIN");
+  const lang = useLang();
+  const t = useT();
   const router = useRouter();
   const [c, setC] = useState<AdminCollectionDetail | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
@@ -99,9 +100,9 @@ export default function AdminCollectionPage() {
       .catch((err) => {
         if (isForbidden(err)) setForbidden(true);
         else if (err instanceof ApiError && err.status === 404) setMissing(true);
-        setError(collectionError(err));
+        setError(collError(err, lang));
       });
-  }, [params.id, adopt]);
+  }, [params.id, adopt, lang]);
 
   useEffect(() => {
     if (gate.status !== "ok") return;
@@ -140,11 +141,11 @@ export default function AdminCollectionPage() {
         const survivor = detail?.merged_into_id ? productById.get(detail.merged_into_id) : undefined;
         setError(
           survivor
-            ? `هذا المنتج مدموج في «${productName(survivor)}» - أضيفي «${productName(survivor)}» بدلاً منه.`
-            : collectionError(err),
+            ? fillMp(t("mpa.col.mergedHint"), { name: productName(survivor, lang) })
+            : collError(err, lang),
         );
       } else {
-        setError(collectionError(err));
+        setError(collError(err, lang));
       }
     } finally {
       setBusy(false);
@@ -170,7 +171,7 @@ export default function AdminCollectionPage() {
         idempotencyKey: newIdempotencyKey("collection-fields"),
       });
       adopt(d);
-    }, "تم حفظ البيانات");
+    }, t("mpa.col.fieldsSaved"));
 
   const saveItems = () =>
     run(async () => {
@@ -180,7 +181,7 @@ export default function AdminCollectionPage() {
         idempotencyKey: newIdempotencyKey("collection-items"),
       });
       adopt(d);
-    }, "تم حفظ المنتجات");
+    }, t("mpa.col.itemsSaved"));
 
   const transition = (action: "publish" | "archive" | "reopen", done: string) =>
     run(async () => {
@@ -192,14 +193,14 @@ export default function AdminCollectionPage() {
     }, done);
 
   const remove = () => {
-    if (!window.confirm("حذف هذه المسودة نهائياً؟")) return;
+    if (!window.confirm(t("mpa.col.confirmDelete"))) return;
     void run(async () => {
       await apiFetch(`/admin/collections/${params.id}`, {
         method: "DELETE",
         idempotencyKey: newIdempotencyKey("collection-delete"),
       });
       router.push("/admin/collections");
-    }, "تم حذف المسودة");
+    }, t("mpa.col.deleted"));
   };
 
   function move(index: number, by: -1 | 1) {
@@ -215,7 +216,7 @@ export default function AdminCollectionPage() {
   if (gate.status === "forbidden" || forbidden) {
     return (
       <div className="page-shell">
-        <EmptyState title="هذه الصفحة لمدير المنصة فقط" actionHref="/account" actionLabel="حسابي" />
+        <EmptyState title={t("mpa.col.forbidden")} actionHref="/account" actionLabel={t("mpa.col.myAccount")} />
       </div>
     );
   }
@@ -229,138 +230,137 @@ export default function AdminCollectionPage() {
   if (!c || !form) {
     return (
       <div className="page-shell">
-        <ErrorBanner message={missing ? "المجموعة غير موجودة" : (error ?? "تعذّر تحميل المجموعة")} />
-        {!missing && <button type="button" className="button button-secondary" onClick={() => void load()}>إعادة المحاولة</button>}
-        <Link href="/admin/collections" className="button-link">مجموعات المنصة</Link>
+        <ErrorBanner message={missing ? t("mpa.col.notFound") : (error ?? t("mpa.col.loadFailed"))} />
+        {!missing && <button type="button" className="button button-secondary" onClick={() => void load()}>{t("mpa.col.retry")}</button>}
+        <Link href="/admin/collections" className="button-link">{t("mpa.col.title")}</Link>
       </div>
     );
   }
 
-  const live = liveLabel(c);
+  const live = collLive(lang, c);
 
   return (
     <div className="page-shell">
       <div className="wide-shell admin-collections" style={{ maxWidth: 1000 }}>
         <div className="top-bar">
           <div>
-            <h1 className="page-title" style={{ margin: 0 }}>{c.title_ar}</h1>
-            <span className={`badge${c.status === "PUBLISHED" ? " badge-active" : ""}`}>{STATUS_LABEL[c.status]}</span>{" "}
+            <h1 className="page-title" style={{ margin: 0 }}>{lang === "en" ? c.title_en : c.title_ar}</h1>
+            <span className={`badge${c.status === "PUBLISHED" ? " badge-active" : ""}`}>{collStatus(lang, c.status)}</span>{" "}
             {live && <span className={`admin-collection-live${c.live ? " is-live" : ""}`}>{live}</span>}
           </div>
-          <Link href="/admin/collections" className="button-link">مجموعات المنصة</Link>
+          <Link href="/admin/collections" className="button-link">{t("mpa.col.title")}</Link>
         </div>
 
         {error && <ErrorBanner message={error} />}
         {notice && <p className="muted" role="status">{notice}</p>}
 
         <section className="card admin-collection-lifecycle">
-          <h3 style={{ marginTop: 0 }}>الحالة</h3>
+          <h3 style={{ marginTop: 0 }}>{t("mpa.col.statusTitle")}</h3>
           <div className="admin-collection-actions">
             {c.status === "DRAFT" && (
-              <button type="button" className="button" disabled={busy || itemsDirty} onClick={() => transition("publish", "تم النشر")} title={itemsDirty ? "احفظي المنتجات أولاً" : undefined}>
-                نشر
+              <button type="button" className="button" disabled={busy || itemsDirty} onClick={() => transition("publish", t("mpa.col.published"))} title={itemsDirty ? t("mpa.col.saveItemsFirst") : undefined}>
+                {t("mpa.col.publish")}
               </button>
             )}
             {(c.status === "PUBLISHED" || (c.status === "DRAFT" && c.ever_published)) && (
-              <button type="button" className="button button-secondary" disabled={busy} onClick={() => transition("archive", "تمت الأرشفة")}>أرشفة</button>
+              <button type="button" className="button button-secondary" disabled={busy} onClick={() => transition("archive", t("mpa.col.archived"))}>{t("mpa.col.archive")}</button>
             )}
             {c.status === "ARCHIVED" && (
-              <button type="button" className="button" disabled={busy} onClick={() => transition("reopen", "أعيد فتحها كمسودة")}>إعادة فتح كمسودة</button>
+              <button type="button" className="button" disabled={busy} onClick={() => transition("reopen", t("mpa.col.reopened"))}>{t("mpa.col.reopen")}</button>
             )}
             {c.status === "DRAFT" && !c.ever_published && (
-              <button type="button" className="button-link admin-collection-delete" disabled={busy} onClick={remove}>حذف المسودة</button>
+              <button type="button" className="button-link admin-collection-delete" disabled={busy} onClick={remove}>{t("mpa.col.deleteDraft")}</button>
             )}
           </div>
-          {archived && <p className="muted">المجموعة مؤرشفة: أعيدي فتحها كمسودة لتعديلها.</p>}
-          {c.status === "PUBLISHED" && <p className="muted">لا تُعدَّل الحالة إلى مسودة من النشر مباشرة؛ أرشفيها ثم أعيدي فتحها.</p>}
+          {archived && <p className="muted">{t("mpa.col.archivedHint")}</p>}
+          {c.status === "PUBLISHED" && <p className="muted">{t("mpa.col.publishedHint")}</p>}
         </section>
 
         <section className="card">
-          <h3 style={{ marginTop: 0 }}>البيانات</h3>
+          <h3 style={{ marginTop: 0 }}>{t("mpa.col.dataTitle")}</h3>
           <fieldset disabled={busy || archived} className="admin-collection-fields">
             <div className="field">
-              <label htmlFor="col-slug">الرابط</label>
+              <label htmlFor="col-slug">{t("mpa.col.slug")}</label>
               <input id="col-slug" dir="ltr" value={form.slug} disabled={c.ever_published} onChange={(e) => setForm({ ...form, slug: e.target.value })} />
-              {c.ever_published && <span className="muted" style={{ fontSize: ".8rem" }}>لا يتغيّر رابط مجموعة سبق نشرها.</span>}
+              {c.ever_published && <span className="muted" style={{ fontSize: ".8rem" }}>{t("mpa.col.slugLocked")}</span>}
             </div>
             <div className="admin-collection-two">
               <div className="field">
-                <label htmlFor="col-title-ar">العنوان بالعربية</label>
+                <label htmlFor="col-title-ar">{t("mpa.col.titleAr")}</label>
                 <input id="col-title-ar" maxLength={80} value={form.title_ar} onChange={(e) => setForm({ ...form, title_ar: e.target.value })} />
               </div>
               <div className="field">
-                <label htmlFor="col-title-en">العنوان بالإنجليزية</label>
+                <label htmlFor="col-title-en">{t("mpa.col.titleEn")}</label>
                 <input id="col-title-en" dir="ltr" maxLength={80} value={form.title_en} onChange={(e) => setForm({ ...form, title_en: e.target.value })} />
               </div>
               <div className="field">
-                <label htmlFor="col-desc-ar">الوصف بالعربية (اختياري)</label>
+                <label htmlFor="col-desc-ar">{t("mpa.col.descAr")}</label>
                 <textarea id="col-desc-ar" rows={2} maxLength={280} value={form.description_ar} onChange={(e) => setForm({ ...form, description_ar: e.target.value })} />
               </div>
               <div className="field">
-                <label htmlFor="col-desc-en">الوصف بالإنجليزية (اختياري)</label>
+                <label htmlFor="col-desc-en">{t("mpa.col.descEn")}</label>
                 <textarea id="col-desc-en" dir="ltr" rows={2} maxLength={280} value={form.description_en} onChange={(e) => setForm({ ...form, description_en: e.target.value })} />
               </div>
               <div className="field">
-                <label htmlFor="col-audience">القسم</label>
+                <label htmlFor="col-audience">{t("mpa.col.audience")}</label>
                 <select id="col-audience" value={form.audience} onChange={(e) => setForm({ ...form, audience: e.target.value as FormState["audience"] })}>
-                  <option value="">بلا قسم</option>
-                  {Object.entries(AUDIENCE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                  <option value="">{t("mpa.col.noAudience")}</option>
+                  {collAudienceEntries(lang).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                 </select>
               </div>
               <label className="admin-collection-check">
                 <input type="checkbox" checked={form.show_on_home} onChange={(e) => setForm({ ...form, show_on_home: e.target.checked })} />
-                تظهر في الرئيسية
+                {t("mpa.col.showOnHome")}
               </label>
               <div className="field">
-                <label htmlFor="col-from">بداية النشر (اختياري)</label>
+                <label htmlFor="col-from">{t("mpa.col.from")}</label>
                 <input id="col-from" type="datetime-local" value={form.publish_from} onChange={(e) => setForm({ ...form, publish_from: e.target.value })} />
               </div>
               <div className="field">
-                <label htmlFor="col-until">نهاية النشر (اختياري)</label>
+                <label htmlFor="col-until">{t("mpa.col.until")}</label>
                 <input id="col-until" type="datetime-local" value={form.publish_until} onChange={(e) => setForm({ ...form, publish_until: e.target.value })} />
               </div>
             </div>
-            <button type="button" className="button" onClick={saveFields}>حفظ البيانات</button>
+            <button type="button" className="button" onClick={saveFields}>{t("mpa.col.saveFields")}</button>
           </fieldset>
         </section>
 
         <section className="card">
           <div className="top-bar" style={{ marginBottom: 6 }}>
-            <h3 style={{ margin: 0 }}>المنتجات ({items.length} / {MAX_COLLECTION_ITEMS})</h3>
-            {itemsDirty && <span className="muted">تغييرات غير محفوظة</span>}
+            <h3 style={{ margin: 0 }}>{fillMp(t("mpa.col.products"), { n: items.length, max: MAX_COLLECTION_ITEMS })}</h3>
+            {itemsDirty && <span className="muted">{t("mpa.col.unsaved")}</span>}
           </div>
           <p className="muted admin-collection-note">
-            يُفحص توفر كل منتج ومنطقة العميل لحظة عرض المجموعة: يظهر للعميل فقط ما يمكن شراؤه آنذاك، لذا قد لا يظهر كل منتج هنا دائماً.
-            لا تظهر المجموعة في الرئيسية أو الأقسام إلا بأربعة منتجات متاحة على الأقل.
+            {t("mpa.col.availabilityNote")}
           </p>
           {items.length === 0 ? (
-            <p className="muted">لا توجد منتجات بعد.</p>
+            <p className="muted">{t("mpa.col.noProducts")}</p>
           ) : (
             <ol className="admin-collection-items">
               {items.map((id, index) => {
                 const saved = itemById.get(id);
                 const p = productById.get(id);
-                const name = saved?.name ?? (p ? productName(p) : "منتج");
+                const name = saved?.name ?? (p ? productName(p, lang) : t("mpa.col.productFallback"));
                 const note = saved?.note ?? null;
                 const survivor = saved?.merged_into_id ? productById.get(saved.merged_into_id) : undefined;
                 const hiddenNow =
-                  saved && !note && shownNow !== null && !shownNow.has(id) ? "غير متاح للشراء الآن - لا يظهر للعملاء حالياً" : null;
+                  saved && !note && shownNow !== null && !shownNow.has(id) ? t("mpa.col.hiddenNow") : null;
                 return (
                   <li key={id}>
                     <span className="admin-collection-item-name">{name}</span>
                     {note && (
                       <span className={`admin-collection-flag is-${note.toLowerCase()}`}>
-                        {NOTE_LABEL[note]}
-                        {note === "MERGED" && survivor ? ` («${productName(survivor)}»)` : ""}
+                        {collNote(lang, note)}
+                        {note === "MERGED" && survivor ? ` («${productName(survivor, lang)}»)` : ""}
                       </span>
                     )}
                     {hiddenNow && <span className="admin-collection-flag is-unavailable">{hiddenNow}</span>}
-                    {!saved && <span className="muted">جديد - لم يُحفظ بعد</span>}
+                    {!saved && <span className="muted">{t("mpa.col.newUnsaved")}</span>}
                     {!archived && (
                       <span className="admin-collection-actions">
-                        <button type="button" className="button-link" aria-label={`تقديم ${name}`} disabled={busy || index === 0} onClick={() => move(index, -1)}>↑</button>
-                        <button type="button" className="button-link" aria-label={`تأخير ${name}`} disabled={busy || index === items.length - 1} onClick={() => move(index, 1)}>↓</button>
-                        <button type="button" className="button-link" disabled={busy} onClick={() => setItems(items.filter((x) => x !== id))}>إزالة</button>
+                        <button type="button" className="button-link" aria-label={fillMp(t("mpa.col.moveUp"), { name })} disabled={busy || index === 0} onClick={() => move(index, -1)}>↑</button>
+                        <button type="button" className="button-link" aria-label={fillMp(t("mpa.col.moveDown"), { name })} disabled={busy || index === items.length - 1} onClick={() => move(index, 1)}>↓</button>
+                        <button type="button" className="button-link" disabled={busy} onClick={() => setItems(items.filter((x) => x !== id))}>{t("mpa.col.remove")}</button>
                       </span>
                     )}
                   </li>
@@ -371,22 +371,22 @@ export default function AdminCollectionPage() {
           {!archived && (
             <>
               <div className="field" style={{ marginTop: 12 }}>
-                <label htmlFor="col-search">إضافة منتج (ابحثي بالاسم)</label>
+                <label htmlFor="col-search">{t("mpa.col.addProduct")}</label>
                 <input
                   id="col-search"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="حرفان على الأقل"
+                  placeholder={t("mpa.col.minChars")}
                   disabled={busy || items.length >= MAX_COLLECTION_ITEMS}
                 />
-                {items.length >= MAX_COLLECTION_ITEMS && <span className="muted">وصلتِ للحد الأقصى ({MAX_COLLECTION_ITEMS}).</span>}
+                {items.length >= MAX_COLLECTION_ITEMS && <span className="muted">{fillMp(t("mpa.col.maxReached"), { max: MAX_COLLECTION_ITEMS })}</span>}
               </div>
               {matches.length > 0 && (
-                <ul className="admin-collection-results" aria-label="نتائج البحث">
+                <ul className="admin-collection-results" aria-label={t("mpa.col.searchResults")}>
                   {matches.map((p) => (
                     <li key={p.id}>
-                      <span>{productName(p)}</span>
-                      {p.status !== "PUBLISHED" && <span className="muted">({p.status === "MERGED" ? "مدموج" : p.status === "ARCHIVED" ? "مؤرشف" : "غير منشور"})</span>}
+                      <span>{productName(p, lang)}</span>
+                      {p.status !== "PUBLISHED" && <span className="muted">({t(p.status === "MERGED" ? "mpa.col.statusMerged" : p.status === "ARCHIVED" ? "mpa.col.statusArchived" : "mpa.col.statusUnpublished")})</span>}
                       <button
                         type="button"
                         className="button-link"
@@ -396,14 +396,14 @@ export default function AdminCollectionPage() {
                           setQuery("");
                         }}
                       >
-                        إضافة
+                        {t("mpa.col.add")}
                       </button>
                     </li>
                   ))}
                 </ul>
               )}
               <button type="button" className="button" disabled={busy || !itemsDirty} onClick={saveItems} style={{ marginTop: 10 }}>
-                حفظ المنتجات
+                {t("mpa.col.saveItems")}
               </button>
             </>
           )}

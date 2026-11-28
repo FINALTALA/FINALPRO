@@ -8146,6 +8146,11 @@ button.pdp-link-inline { padding: 0; border: 0; background: none; font-family: i
 .admin-collection-delete { color: #9b1c12; }
 .admin-collection-two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
 .admin-collection-fields { margin: 0; padding: 0; border: 0; min-width: 0; }
+/* M-10: no field may push the editor wider than its card (datetime-local has a wide intrinsic width). */
+.admin-collection-fields .field { min-width: 0; }
+.admin-collection-fields input,
+.admin-collection-fields select,
+.admin-collection-fields textarea { max-width: 100%; min-width: 0; box-sizing: border-box; }
 .admin-collection-check { display: inline-flex; align-items: center; gap: 8px; align-self: center; font-weight: 600; }
 .admin-collection-note { margin-top: 0; line-height: 1.7; }
 .admin-collection-items li, .admin-collection-results li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 9px 12px; border: 1px solid rgba(0, 0, 0, .08); border-radius: 12px; }
@@ -8157,7 +8162,7 @@ button.pdp-link-inline { padding: 0; border: 0; background: none; font-family: i
 .admin-collection-flag.is-archived, .admin-collection-flag.is-merged { background: rgba(180, 35, 24, .08); color: #9b1c12; }
 .admin-collection-results { margin-top: 8px; }
 @media (max-width: 640px) {
-  .admin-collection-two { grid-template-columns: 1fr; }
+  .admin-collection-two { grid-template-columns: minmax(0, 1fr); }
   .admin-collection-row { padding: 10px; }
 }
 

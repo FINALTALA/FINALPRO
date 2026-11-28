@@ -8,10 +8,11 @@ import {
   KIND_LABEL,
   STORE_TYPE_LABEL,
   VERIFICATION_STATUS_LABEL,
-  adminErrorMessage,
   formatDateTime,
   isForbidden,
 } from "@/lib/admin";
+import { adminDirectoryError, adminDirectoryLabel } from "@/lib/adminStoreVerificationText";
+import { useLang, useT } from "@/lib/useLang";
 import { useAdminGate } from "@/lib/useAdminGate";
 
 interface QueueItem {
@@ -37,13 +38,15 @@ type Tab = "pending" | "decided";
 // only - no coordinates, photo or address ever appear in this list; they
 // are released one item at a time, audited, on the detail page.
 export default function VerificationQueuePage() {
+  const t = useT();
+  const lang = useLang();
   const gate = useAdminGate();
   const [tab, setTab] = useState<Tab>("pending");
   const [items, setItems] = useState<QueueItem[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ cause: unknown } | null>(null);
   const [forbidden, setForbidden] = useState(false);
 
   const fetchPage = useCallback(async (which: Tab, after: string | null) => {
@@ -66,7 +69,7 @@ export default function VerificationQueuePage() {
       .catch((err) => {
         if (cancelled) return;
         if (isForbidden(err)) setForbidden(true);
-        setError(adminErrorMessage(err));
+        setError({ cause: err });
         setLoading(false);
       });
     return () => {
@@ -91,7 +94,7 @@ export default function VerificationQueuePage() {
       setItems((prev) => [...prev, ...page.items]);
       setCursor(page.next_cursor);
     } catch (err) {
-      setError(adminErrorMessage(err));
+      setError({ cause: err });
     } finally {
       setLoadingMore(false);
     }
@@ -107,7 +110,7 @@ export default function VerificationQueuePage() {
   if (gate.status === "forbidden" || forbidden) {
     return (
       <div className="page-shell">
-        <EmptyState title="هذه الصفحة لموظفي المنصة فقط" actionHref="/account" actionLabel="حسابي" />
+        <EmptyState title={t("adminDirectory.verification.forbidden")} actionHref="/account" actionLabel={t("adminDirectory.shared.account")} />
       </div>
     );
   }
@@ -116,8 +119,8 @@ export default function VerificationQueuePage() {
     <div className="page-shell">
       <div className="wide-shell" style={{ maxWidth: 1000 }}>
         <div className="top-bar">
-          <h1 className="page-title" style={{ margin: 0 }}>طابور التحقق</h1>
-          <Link href="/admin" className="button-link">إدارة المنصة</Link>
+          <h1 className="page-title" style={{ margin: 0 }}>{t("adminDirectory.verification.title")}</h1>
+          <Link href="/admin" className="button-link">{t("adminDirectory.shared.dashboard")}</Link>
         </div>
 
         <div style={{ display: "flex", gap: 8, marginBottom: 14 }} role="tablist">
@@ -127,7 +130,7 @@ export default function VerificationQueuePage() {
             className={`button${tab === "pending" ? "" : " button-secondary"}`}
             onClick={() => switchTab("pending")}
           >
-            بانتظار القرار
+            {t("adminDirectory.verification.pending")}
           </button>
           <button
             role="tab"
@@ -135,13 +138,13 @@ export default function VerificationQueuePage() {
             className={`button${tab === "decided" ? "" : " button-secondary"}`}
             onClick={() => switchTab("decided")}
           >
-            تم البتّ فيها
+            {t("adminDirectory.verification.decided")}
           </button>
         </div>
 
-        {error && <ErrorBanner message={error} />}
+        {error && <ErrorBanner message={adminDirectoryError(lang, error.cause)} />}
         {loading && (
-          <div aria-busy="true" aria-label="جارٍ التحميل">
+          <div aria-busy="true" aria-label={t("adminDirectory.shared.loading")}>
             <div className="skeleton" style={{ height: 56, width: "100%", marginBottom: 8 }} />
             <div className="skeleton" style={{ height: 56, width: "100%", marginBottom: 8 }} />
             <div className="skeleton" style={{ height: 56, width: "100%" }} />
@@ -149,8 +152,8 @@ export default function VerificationQueuePage() {
         )}
         {!loading && !error && items.length === 0 && (
           <EmptyState
-            title={tab === "pending" ? "لا توجد أدلة بانتظار القرار" : "لم يُبتّ في أي دليل بعد"}
-            message={tab === "pending" ? "ستظهر هنا الأدلة فور تقديمها من أصحاب المتاجر." : undefined}
+            title={tab === "pending" ? t("adminDirectory.verification.pendingEmpty") : t("adminDirectory.verification.decidedEmpty")}
+            message={tab === "pending" ? t("adminDirectory.verification.pendingHint") : undefined}
           />
         )}
         {!loading && items.length > 0 && (
@@ -159,12 +162,12 @@ export default function VerificationQueuePage() {
 <table className="data-table">
               <thead>
                 <tr>
-                  <th>النوع</th>
-                  <th>المتجر</th>
-                  <th>نوع المتجر</th>
-                  <th>تاريخ التقديم</th>
-                  {tab === "decided" && <th>الحالة</th>}
-                  {tab === "decided" && <th>تاريخ القرار</th>}
+                  <th>{t("adminDirectory.verification.kind")}</th>
+                  <th>{t("adminDirectory.shared.store")}</th>
+                  <th>{t("adminDirectory.verification.storeType")}</th>
+                  <th>{t("adminDirectory.verification.submitted")}</th>
+                  {tab === "decided" && <th>{t("adminDirectory.shared.status")}</th>}
+                  {tab === "decided" && <th>{t("adminDirectory.verification.reviewed")}</th>}
                   <th />
                 </tr>
               </thead>
@@ -172,27 +175,27 @@ export default function VerificationQueuePage() {
                 {items.map((i) => (
                   <tr key={`${i.kind}:${i.item_id}`}>
                     <td>
-                      {KIND_LABEL[i.kind] ?? i.kind}
+                      {adminDirectoryLabel(lang, "evidenceKind", KIND_LABEL, i.kind)}
                       {i.kind === "BRANCH" && i.branch_name ? ` - ${i.branch_name}` : ""}
                     </td>
                     <td>{i.legal_name}</td>
-                    <td>{STORE_TYPE_LABEL[i.store_type] ?? i.store_type}</td>
-                    <td>{formatDateTime(i.submitted_at)}</td>
+                    <td>{adminDirectoryLabel(lang, "storeType", STORE_TYPE_LABEL, i.store_type)}</td>
+                    <td>{formatDateTime(i.submitted_at, lang)}</td>
                     {tab === "decided" && (
                       <td>
                         <span className="badge">
-                          {VERIFICATION_STATUS_LABEL[i.status ?? ""] ?? i.status}
+                          {i.status && adminDirectoryLabel(lang, "verificationStatus", VERIFICATION_STATUS_LABEL, i.status)}
                         </span>
                       </td>
                     )}
-                    {tab === "decided" && <td>{formatDateTime(i.reviewed_at ?? null)}</td>}
+                    {tab === "decided" && <td>{formatDateTime(i.reviewed_at ?? null, lang)}</td>}
                     <td>
                       {tab === "pending" ? (
                         <Link
                           className="button-link"
                           href={`/admin/verification/${i.vendor_id}?kind=${i.kind}&item=${i.item_id}`}
                         >
-                          مراجعة
+                          {t("adminDirectory.verification.review")}
                         </Link>
                       ) : null}
                     </td>
@@ -204,7 +207,7 @@ export default function VerificationQueuePage() {
             {cursor && (
               <div style={{ marginTop: 14 }}>
                 <button className="button button-secondary" onClick={loadMore} disabled={loadingMore}>
-                  {loadingMore ? "جارٍ التحميل..." : "تحميل المزيد"}
+                  {loadingMore ? t("adminDirectory.shared.loadingMore") : t("adminDirectory.shared.loadMore")}
                 </button>
               </div>
             )}

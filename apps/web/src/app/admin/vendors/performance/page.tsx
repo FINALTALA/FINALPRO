@@ -1,11 +1,14 @@
 "use client";
 
+import "@/lib/adminReviewsPerformanceText";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { EmptyState, ErrorBanner } from "@/components/States";
 import { ApiError, apiFetch } from "@/lib/api";
-import { adminErrorMessage, isForbidden } from "@/lib/admin";
+import { isForbidden } from "@/lib/admin";
+import { fillMp, mpError } from "@/lib/adminMarketplaceText";
 import { useAdminGate } from "@/lib/useAdminGate";
+import { useLang, useT } from "@/lib/useLang";
 
 interface VendorPerformanceRow {
   display_name: string;
@@ -26,9 +29,9 @@ function formatPercent(v: number | null): string {
   return `${(v * 100).toFixed(1)}%`;
 }
 
-function formatHours(v: number | null): string {
+function formatHours(v: number | null, hoursText: string): string {
   if (v === null) return "-";
-  return `${v.toFixed(1)} ساعة`;
+  return fillMp(hoursText, { n: v.toFixed(1) });
 }
 
 // Sprint 25 (FR-VEND-011): PLATFORM_ADMIN's view of every vendor's
@@ -38,6 +41,8 @@ function formatHours(v: number | null): string {
 // one clear message here instead of a confusing empty list.
 export default function AdminVendorPerformancePage() {
   const gate = useAdminGate("ADMIN");
+  const lang = useLang();
+  const t = useT();
   const [items, setItems] = useState<VendorPerformanceRow[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -69,13 +74,14 @@ export default function AdminVendorPerformancePage() {
         if (err instanceof ApiError && err.code === "FEATURE_DISABLED") {
           setDisabled(true);
         } else {
-          setError(adminErrorMessage(err));
+          setError(mpError(err, lang));
         }
         setLoading(false);
       });
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gate.status, fetchPage]);
 
   async function loadMore() {
@@ -86,7 +92,7 @@ export default function AdminVendorPerformancePage() {
       setItems((prev) => [...prev, ...page.items]);
       setCursor(page.next_cursor);
     } catch (err) {
-      setError(adminErrorMessage(err));
+      setError(mpError(err, lang));
     } finally {
       setLoadingMore(false);
     }
@@ -102,7 +108,7 @@ export default function AdminVendorPerformancePage() {
   if (gate.status === "forbidden" || forbidden) {
     return (
       <div className="page-shell">
-        <EmptyState title="هذه الصفحة لمدير المنصة فقط" actionHref="/account" actionLabel="حسابي" />
+        <EmptyState title={t("mpa.vp.forbidden")} actionHref="/account" actionLabel={t("mpa.rv.myAccount")} />
       </div>
     );
   }
@@ -111,27 +117,27 @@ export default function AdminVendorPerformancePage() {
     <div className="page-shell">
       <div className="wide-shell" style={{ maxWidth: 1000 }}>
         <div className="top-bar">
-          <h1 className="page-title" style={{ margin: 0 }}>أداء المتاجر</h1>
-          <Link href="/admin" className="button-link">إدارة المنصة</Link>
+          <h1 className="page-title" style={{ margin: 0 }}>{t("mpa.vp.title")}</h1>
+          <Link href="/admin" className="button-link">{t("mpa.rv.dashboard")}</Link>
         </div>
 
         {disabled && (
           <EmptyState
-            title="ميزة لوحة أداء المتاجر غير مفعّلة حالياً"
-            message="يمكن تفعيلها من صفحة أعلام الميزات."
+            title={t("mpa.vp.disabled")}
+            message={t("mpa.vp.disabledHint")}
             actionHref="/admin/feature-flags"
-            actionLabel="أعلام الميزات"
+            actionLabel={t("mpa.vp.flags")}
           />
         )}
         {!disabled && error && <ErrorBanner message={error} />}
         {!disabled && loading && (
-          <div aria-busy="true" aria-label="جارٍ التحميل">
+          <div aria-busy="true" aria-label={t("mpa.rv.loading")}>
             <div className="skeleton" style={{ height: 56, width: "100%", marginBottom: 8 }} />
             <div className="skeleton" style={{ height: 56, width: "100%" }} />
           </div>
         )}
         {!disabled && !loading && !error && items.length === 0 && (
-          <EmptyState title="لا توجد متاجر حالياً" />
+          <EmptyState title={t("mpa.vp.empty")} />
         )}
         {!disabled && !loading && items.length > 0 && (
           <>
@@ -139,11 +145,11 @@ export default function AdminVendorPerformancePage() {
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>المتجر</th>
-                    <th>معدّل الإلغاء</th>
-                    <th>زمن الاستجابة</th>
-                    <th>عدد الطلبات المستجاب لها</th>
-                    <th>التقييم</th>
+                    <th>{t("mpa.vp.colStore")}</th>
+                    <th>{t("mpa.vp.colCancellation")}</th>
+                    <th>{t("mpa.vp.colResponse")}</th>
+                    <th>{t("mpa.vp.colResponded")}</th>
+                    <th>{t("mpa.vp.colRating")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -151,7 +157,7 @@ export default function AdminVendorPerformancePage() {
                     <tr key={`${v.display_name}-${i}`}>
                       <td>{v.display_name}</td>
                       <td>{formatPercent(v.cancellation_rate)}</td>
-                      <td>{formatHours(v.average_response_time_hours)}</td>
+                      <td>{formatHours(v.average_response_time_hours, t("mpa.vp.hours"))}</td>
                       <td>{v.responded_orders_count}</td>
                       <td>
                         {v.rating_average === null
@@ -166,7 +172,7 @@ export default function AdminVendorPerformancePage() {
             {cursor && (
               <div style={{ marginTop: 14 }}>
                 <button className="button button-secondary" onClick={loadMore} disabled={loadingMore}>
-                  {loadingMore ? "جارٍ التحميل..." : "تحميل المزيد"}
+                  {loadingMore ? t("mpa.vp.loadingMore") : t("mpa.vp.loadMore")}
                 </button>
               </div>
             )}

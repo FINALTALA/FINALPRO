@@ -5,7 +5,9 @@ import Link from "next/link";
 import ProductCard from "@/components/ProductCard";
 import type { ComparisonCardDto } from "@/lib/types";
 import TrendEditorialHead from "./TrendEditorialHead";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { mediaOf, mediaUrl, overlayItems, pickText, refOf, useManagedSection } from "@/lib/contentStudio";
+import { useLang } from "@/lib/useLang";
 // The /women stylesheet (all of it is scoped under .women-*), so the cards
 // below are the women page's cards with the women page's styles.
 import "@/app/women/women.css";
@@ -41,10 +43,14 @@ type Piece = {
   h: number;
   half?: boolean;  // a -half.webp exists
   alt: string;
+  // VIA phase 6 (Content Studio): a managed piece may bring its own image
+  // and product (the card then opens that product).
+  imgUrl?: string;
+  href?: string;
 };
 
 // Sorted by t. Two pieces at the same second are offset by 0.5 s.
-const PIECES: Piece[] = [
+export const PIECES: Piece[] = [
   {
     key: "jeans", t: 0, match: "styled",
     name: "جينز أبيض واسع بخصر عالٍ", cat: "بناطيل", color: "أبيض",
@@ -78,7 +84,7 @@ const PIECES: Piece[] = [
 ];
 
 const MATCH_LABEL: Record<Match, string> = { exact: "EXACT MATCH", styled: "STYLED WITH" };
-const src = (p: Piece, half = false) => `/trend/look/${p.img}${half ? "-half" : ""}.webp`;
+const src = (p: Piece, half = false) => p.imgUrl ?? `/trend/look/${p.img}${half ? "-half" : ""}.webp`;
 
 /** The piece as a women-page card. No offer yet: no price, sizes or stores. */
 const toCard = (p: Piece): ComparisonCardDto => ({
@@ -96,18 +102,55 @@ const toCard = (p: Piece): ComparisonCardDto => ({
   cheapest_offer: { vendor_id: "", vendor_slug: "", offer_id: "", offer_variant_id: "" },
   store_logos: [],
 });
-const CARDS = PIECES.map(toCard);
 
-/** The active piece: the last cue at or before t (the film loops to 0). */
-const activeAt = (t: number) => {
-  let a = 0;
-  PIECES.forEach((p, i) => {
-    if (p.t <= t + 0.001) a = i;
+/** The active piece: the latest cue at or before t (the film loops to 0). */
+const activeAt = (pieces: Piece[], t: number) => {
+  let a = -1;
+  pieces.forEach((p, i) => {
+    if (p.t <= t + 0.001 && (a < 0 || p.t >= pieces[a].t)) a = i;
   });
-  return a;
+  return Math.max(a, 0);
 };
 
 export default function TrendLook() {
+  // VIA phase 6: Look of the Week may come from the Content Studio. A managed
+  // piece with a built-in key keeps its film cue and match label; a new piece
+  // has no cue in the film (never "on screen") and is shown as styled-with.
+  const lang = useLang();
+  const managed = useManagedSection("trend.look");
+  const pieces = useMemo(
+    () =>
+      overlayItems(managed, PIECES, (p) => p.key, (base, it, isNew) => {
+        const img = mediaUrl(it.fields.image, null);
+        const product = refOf(it.fields.product);
+        const own = img ?? product?.image_url ?? null;
+        if (isNew && !own) return null;
+        return {
+          ...base,
+          ...(isNew ? { t: Number.MAX_SAFE_INTEGER, match: "styled" as Match, cat: "", color: "" } : {}),
+          key: it.id,
+          name: pickText(it.fields.title, lang, base.name),
+          alt: pickText(mediaOf(it.fields.image)?.alt, lang, isNew ? "" : base.alt),
+          // The bundled built-in photo keeps its -half variant.
+          imgUrl: own && own !== `/trend/look/${base.img}.webp` ? own : undefined,
+          half: own && own !== `/trend/look/${base.img}.webp` ? false : base.half,
+          href: product?.href,
+        };
+      }),
+    [managed, lang],
+  );
+  const cards = useMemo(() => pieces.map(toCard), [pieces]);
+  const piecesRef = useRef(pieces);
+  useEffect(() => {
+    piecesRef.current = pieces;
+  }, [pieces]);
+  const head =
+    managed.mode === "managed"
+      ? {
+          words: pickText(managed.section.fields.heading, "en", "LOOK OF THE WEEK").split(/\s+/).filter(Boolean),
+          ar: pickText(managed.section.fields.heading, "ar", "إطلالة الأسبوع"),
+        }
+      : { words: ["LOOK", "OF", "THE", "WEEK"], ar: "إطلالة الأسبوع" };
   const rootRef = useRef<HTMLElement>(null);
   const filmRef = useRef<HTMLElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -123,7 +166,7 @@ export default function TrendLook() {
   const sync = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
-    setActive(activeAt(v.currentTime));
+    setActive(activeAt(piecesRef.current, v.currentTime));
     setTime(v.currentTime);
   }, []);
 
@@ -254,17 +297,19 @@ export default function TrendLook() {
     window.scrollTo({ top: grid.getBoundingClientRect().top + window.scrollY - 24, behavior: smooth ? "smooth" : "auto" });
   };
 
-  const now = PIECES[active];
+  const now = pieces[Math.min(active, pieces.length - 1)];
   const total = duration || 7.5;
+  // Unpublished / switched off: the section leaves the page (the shell stays).
+  if (managed.mode === "hidden" || !now) return null;
 
   return (
     <section ref={rootRef} className={`tl ${interTight.variable} ${plex.variable}`} aria-labelledby="tl-title">
       <TrendEditorialHead
         id="tl-title"
-        words={["LOOK", "OF", "THE", "WEEK"]}
-        label="Look of the week - إطلالة الأسبوع"
-        arTitle="إطلالة الأسبوع"
-        count={PIECES.length}
+        words={head.words}
+        label={`${head.words.join(" ")} - ${head.ar}`}
+        arTitle={head.ar}
+        count={pieces.length}
         link={{ href: "#tl-grid", label: "تسوّقي الإطلالة", onClick: toGrid }}
         fit
       />
@@ -340,12 +385,12 @@ export default function TrendLook() {
         <div className="tl-main">
           <div id="tl-grid" className="women-page tl-women">
             <ul className="tl-grid">
-              {PIECES.map((p, i) => (
+              {pieces.map((p, i) => (
                 <li key={p.key} data-active={i === active ? "" : undefined}>
                   <ProductCard
-                    card={CARDS[i]}
+                    card={cards[i]}
                     presentation="women"
-                    href="/women"
+                    href={p.href ?? "/women"}
                     overlay={
                       <>
                         {i === active && <span className="tl-badge tl-badge-scene tl-latin"><i aria-hidden="true" />IN SCENE</span>}
@@ -359,7 +404,7 @@ export default function TrendLook() {
           </div>
 
           <div className="tl-foot">
-            <span className="tl-foot-count"><bdi className="tl-latin">{PIECES.length}</bdi> قطع في هذه الإطلالة</span>
+            <span className="tl-foot-count"><bdi className="tl-latin">{pieces.length}</bdi> قطع في هذه الإطلالة</span>
             <Link href="/women" className="tl-cta">
               تصفّحي مجموعة النساء
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5M10 7l-5 5 5 5" /></svg>

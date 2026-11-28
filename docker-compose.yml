@@ -30,5 +30,26 @@ services:
       timeout: 5s
       retries: 10
 
+  # VIA phase 5: the platform Media Library volume (platform-owned images
+  # and videos, never merchant uploads). A named Docker volume bound to the
+  # host directory the API reads as PLATFORM_MEDIA_DIR, so a host-run API
+  # and any container see the same files. This tools service is opt-in
+  # (`docker compose --profile media-tools run --rm media-tools`) and
+  # mounts it read-only for inspection; the coordinated database + media
+  # backup is apps/api/scripts/platform-media-backup.ts.
+  media-tools:
+    image: postgis/postgis:16-3.4-alpine
+    profiles: ["media-tools"]
+    entrypoint: ["sh"]
+    volumes:
+      - platform_media:/platform-media:ro
+
 volumes:
   postgres_data:
+  platform_media:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      # An absolute host path - the same value as the API's PLATFORM_MEDIA_DIR.
+      device: ${PLATFORM_MEDIA_HOST_DIR:-/var/lib/via/platform-media}

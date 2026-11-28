@@ -32,7 +32,7 @@ class FakeSmsService {
 // that bundle (already found and documented once, in sprint4-roles.
 // e2e-spec.ts's own uniquePhone() comment). Fixed, disjoint lane -
 // see ./helpers/e2e-phone-lanes.ts.
-const uniquePhone = createUniquePhone(
+const nextFixturePhone = createUniquePhone(
   'sprint8-storefront-discovery-comparison',
   '56',
 );
@@ -46,6 +46,18 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
   let app: INestApplication;
   let fakeSms: FakeSmsService;
   let prisma: PrismaService;
+
+  async function uniquePhone(): Promise<string> {
+    // The acceptance clone retains fixtures from previous runs.
+    for (;;) {
+      const phone = nextFixturePhone();
+      const [user, otp] = await Promise.all([
+        prisma.user.findUnique({ where: { phone }, select: { id: true } }),
+        prisma.otpCode.findFirst({ where: { phone }, select: { id: true } }),
+      ]);
+      if (!user && !otp) return phone;
+    }
+  }
 
   beforeEach(async () => {
     fakeSms = new FakeSmsService();
@@ -91,7 +103,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
   async function signupWithPlatformRole(
     role: 'PLATFORM_ADMIN' | 'VERIFICATION_REVIEWER',
   ): Promise<string> {
-    const phone = uniquePhone();
+    const phone = await uniquePhone();
     const token = await signup(phone, 'a-strong-password');
     await prisma.user.update({
       where: { phone },
@@ -157,10 +169,10 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
   }
 
   async function setupVendorWithTwoBranchesAndEmployee() {
-    const owner = await signup(uniquePhone(), 'a-strong-password');
+    const owner = await signup(await uniquePhone(), 'a-strong-password');
     const { vendorId, branchAId, branchBId } =
       await createVendorWithTwoBranches(owner);
-    const employeePhone = uniquePhone();
+    const employeePhone = await uniquePhone();
     const accepted = await inviteAndAcceptAsNewUser(
       owner,
       vendorId,
@@ -193,7 +205,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
   let cachedReviewerToken: string | null = null;
   async function getOrCreateReviewer(): Promise<string> {
     if (!cachedReviewerToken) {
-      const reviewerPhone = uniquePhone();
+      const reviewerPhone = await uniquePhone();
       cachedReviewerToken = await signup(reviewerPhone, 'reviewer-password');
       await prisma.user.update({
         where: { phone: reviewerPhone },
@@ -276,6 +288,11 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
       .set('Idempotency-Key', unique('cpv'))
       .send({ structural_attributes: structuralAttributes })
       .expect(201);
+    // Public discovery and comparison fixtures represent published products.
+    await prisma.canonicalProduct.update({
+      where: { id: productRes.body.id },
+      data: { status: 'PUBLISHED' },
+    });
     return {
       canonicalProductId: productRes.body.id,
       variantId: variantRes.body.id,
@@ -461,7 +478,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         { color: 'Red' },
       );
     const owner =
-      ownerToken ?? (await signup(uniquePhone(), 'a-strong-password'));
+      ownerToken ?? (await signup(await uniquePhone(), 'a-strong-password'));
     const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
     await activateVendorSubscription(owner, vendorId);
     const gtin = unique('gtin').slice(0, 20);
@@ -491,7 +508,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
 
   describe('RB-STOREF-002: store sections (owner CRUD)', () => {
     it('an owner can create, rename, and delete a custom section', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
 
       const created = await request(app.getHttpServer())
@@ -539,7 +556,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
     });
 
     it("BOLA: an owner cannot rename or delete a DIFFERENT vendor's section", async () => {
-      const owner1 = await signup(uniquePhone(), 'a-strong-password');
+      const owner1 = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: vendor1Id } = await createVendorWithTwoBranches(owner1);
       const section = await request(app.getHttpServer())
         .post(`/api/v1/vendors/${vendor1Id}/sections`)
@@ -547,7 +564,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         .send({ name: 'قسم المتجر الأول' })
         .expect(201);
 
-      const owner2 = await signup(uniquePhone(), 'a-strong-password');
+      const owner2 = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: vendor2Id } = await createVendorWithTwoBranches(owner2);
 
       const renameRes = await request(app.getHttpServer())
@@ -571,7 +588,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
     });
 
     it('enforces the 20-custom-section limit, including under concurrency', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
 
       for (let i = 0; i < 20; i += 1) {
@@ -594,7 +611,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
     });
 
     it('two concurrent creates at the 19-section mark never both succeed past the 20 cap', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
       for (let i = 0; i < 19; i += 1) {
         await request(app.getHttpServer())
@@ -622,7 +639,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
     });
 
     it("reorder rejects a set that does not exactly match this vendor's own custom sections", async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
       const a = await request(app.getHttpServer())
         .post(`/api/v1/vendors/${vendorId}/sections`)
@@ -644,7 +661,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
     });
 
     it('reorder reassigns sort_order to match the submitted order', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
       const a = await request(app.getHttpServer())
         .post(`/api/v1/vendors/${vendorId}/sections`)
@@ -669,7 +686,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
     });
 
     it('PDR-012: deleting a section removes only the grouping - the offer itself is untouched', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
       await activateVendorSubscription(owner, vendorId);
       const offerRes = await request(app.getHttpServer())
@@ -706,7 +723,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
     });
 
     it('PDR-012: a single offer can belong to several custom sections at once', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
       await activateVendorSubscription(owner, vendorId);
       const offerRes = await request(app.getHttpServer())
@@ -754,7 +771,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
     });
 
     it("BOLA: cannot add a DIFFERENT vendor's offer to a section", async () => {
-      const owner1 = await signup(uniquePhone(), 'a-strong-password');
+      const owner1 = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: vendor1Id } = await createVendorWithTwoBranches(owner1);
       const section = await request(app.getHttpServer())
         .post(`/api/v1/vendors/${vendor1Id}/sections`)
@@ -762,7 +779,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         .send({ name: 'قسم' })
         .expect(201);
 
-      const owner2 = await signup(uniquePhone(), 'a-strong-password');
+      const owner2 = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: vendor2Id } = await createVendorWithTwoBranches(owner2);
       await activateVendorSubscription(owner2, vendor2Id);
       const foreignOffer = await request(app.getHttpServer())
@@ -916,7 +933,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         matched.canonicalProductId,
       );
 
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId, branchAId } = await createVendorWithTwoBranches(owner);
       await activateVendorSubscription(owner, vendorId);
       const unmatchedOffer = await request(app.getHttpServer())
@@ -1009,7 +1026,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
 
   describe('RB-STOREF-004: applicable categories', () => {
     it('owner-only get/put; a vendor is registered WITH a category already (PDR-013 requires it at registration, not just before publish), and can edit WHICH categories apply', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
 
       // createVendorWithTwoBranches() already registers with ['WOMEN'] -
@@ -1051,7 +1068,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
     // stay published with none (publish()'s own >=1 check only ever
     // runs at the moment of publishing, not continuously).
     it('rejects clearing applicable_categories to empty via the edit endpoint - the previous categories are left unchanged in the database', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
       await request(app.getHttpServer())
         .put(`/api/v1/vendors/${vendorId}/applicable-categories`)
@@ -1075,7 +1092,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
     });
 
     it('the publish-time >=1 check still backstops a vendor with zero categories (e.g. historical data predating the registration-time requirement)', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
       // Simulate pre-existing data from before this requirement existed
       // - direct DB manipulation, not reachable through any endpoint
@@ -1106,7 +1123,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
     });
 
     it('PDR-013 round 2: registering WITHOUT applicable_categories is refused with a clear 400, registering WITH them persists exactly that set, and duplicates/invalid values are refused', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
 
       const missingLegalName = unique('Vendor');
       const missingRes = await request(app.getHttpServer())
@@ -1284,7 +1301,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
     });
 
     it("BOLA: cannot update a DIFFERENT vendor's offer status", async () => {
-      const owner1 = await signup(uniquePhone(), 'a-strong-password');
+      const owner1 = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: vendor1Id } = await createVendorWithTwoBranches(owner1);
       await activateVendorSubscription(owner1, vendor1Id);
       const offer = await request(app.getHttpServer())
@@ -1294,7 +1311,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         .send({ title_ar: 'منتج', title_en: 'Product', ...TEST_CLASSIFICATION })
         .expect(201);
 
-      const owner2 = await signup(uniquePhone(), 'a-strong-password');
+      const owner2 = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: vendor2Id } = await createVendorWithTwoBranches(owner2);
 
       const res = await request(app.getHttpServer())
@@ -1330,7 +1347,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
       // one user owning several vendors) and necessary to stay under
       // the 5/60s OTP-request throttle (FR-AUTH-011) this many vendor
       // setups would otherwise exceed.
-      const sharedOwner = await signup(uniquePhone(), 'a-strong-password');
+      const sharedOwner = await signup(await uniquePhone(), 'a-strong-password');
       const prices = [500, 100, 300, 200, 400, 600, 700];
       const slugs: string[] = [];
       for (const price of prices) {
@@ -1379,7 +1396,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
       // immediately depletes it back to zero - the offer is genuinely
       // sold out by the time the comparison card reads it, exactly as
       // this test needs, without violating the gate.
-      const soldOutOwner = await signup(uniquePhone(), 'a-strong-password');
+      const soldOutOwner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: soldOutVendorId, branchAId: soldOutBranchId } =
         await createVendorWithTwoBranches(soldOutOwner);
       await activateVendorSubscription(soldOutOwner, soldOutVendorId);
@@ -1409,7 +1426,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
       await publishStorefront(soldOutOwner, soldOutVendorId);
 
       // Pricier but actually available.
-      const availableOwner = await signup(uniquePhone(), 'a-strong-password');
+      const availableOwner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: availableVendorId, branchAId } =
         await createVendorWithTwoBranches(availableOwner);
       await activateVendorSubscription(availableOwner, availableVendorId);
@@ -1468,7 +1485,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         await createCanonicalVariant(admin, unique('Brand'), unique('Model'));
 
       // Proposed, never confirmed.
-      const proposer = await signup(uniquePhone(), 'a-strong-password');
+      const proposer = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: proposerVendorId } =
         await createVendorWithTwoBranches(proposer);
       await activateVendorSubscription(proposer, proposerVendorId);
@@ -1511,7 +1528,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
 
       // Now a second vendor confirms a match but leaves the offer
       // DRAFT (never activated) - still not eligible.
-      const draftOwner = await signup(uniquePhone(), 'a-strong-password');
+      const draftOwner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: draftVendorId } =
         await createVendorWithTwoBranches(draftOwner);
       await activateVendorSubscription(draftOwner, draftVendorId);
@@ -1570,7 +1587,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
       const admin = await getOrCreatePlatformAdmin();
       const { canonicalProductId, variantId: canonicalVariantId } =
         await createCanonicalVariant(admin, unique('Brand'), unique('Model'));
-      const sharedOwner = await signup(uniquePhone(), 'a-strong-password');
+      const sharedOwner = await signup(await uniquePhone(), 'a-strong-password');
       for (const price of [300, 100, 200]) {
         const owner = sharedOwner;
         const { vendorId, branchAId } =
@@ -1613,7 +1630,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         .expect(201);
       const blueVariantId = blueVariantRes.body.id;
 
-      const sharedOwner = await signup(uniquePhone(), 'a-strong-password');
+      const sharedOwner = await signup(await uniquePhone(), 'a-strong-password');
       const redOwner = sharedOwner;
       const { vendorId: redVendorId, branchAId: redBranchId } =
         await createVendorWithTwoBranches(redOwner);
@@ -1679,7 +1696,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
         { qty: 2, expected: 'low_stock' },
         { qty: 0, expected: 'sold_out' },
       ];
-      const sharedOwner = await signup(uniquePhone(), 'a-strong-password');
+      const sharedOwner = await signup(await uniquePhone(), 'a-strong-password');
       for (const b of buckets) {
         const owner = sharedOwner;
         const { vendorId, branchAId } =
@@ -1744,7 +1761,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
       // global first page failed twice: products other files created
       // meanwhile filled the first 50 and pushed `older` off it.
       const model = unique('NewestModel');
-      const sharedOwner = await signup(uniquePhone(), 'a-strong-password');
+      const sharedOwner = await signup(await uniquePhone(), 'a-strong-password');
       const older = await setupEligibleOffer(100, sharedOwner, `${model}-a`);
       // Ensure a strictly later createdAt for deterministic ordering.
       await prisma.canonicalProduct.update({
@@ -1795,7 +1812,7 @@ describe('Sprint 8 - store sections, public discovery, comparison (e2e)', () => 
       // share a model name no other product has, and every page is asked
       // with q=<that name> - pagination is checked on exactly them.
       const model = unique('PageModel');
-      const sharedOwner = await signup(uniquePhone(), 'a-strong-password');
+      const sharedOwner = await signup(await uniquePhone(), 'a-strong-password');
       const createdIds: string[] = [];
       for (let i = 0; i < 3; i += 1) {
         const setup = await setupEligibleOffer(

@@ -1,20 +1,23 @@
 "use client";
 
+import "@/lib/adminStoreDetailText";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 import { EmptyState, ErrorBanner } from "@/components/States";
 import { apiFetch, newIdempotencyKey } from "@/lib/api";
 import {
-  STORE_TYPE_LABEL,
-  SUSPENSION_REASON_LABEL,
-  VENDOR_STATUS_LABEL,
-  adminErrorMessage,
-  formatDateTime,
-  reasonProblem,
-} from "@/lib/admin";
+  fillMp,
+  mpDate,
+  mpError,
+  mpFetchError,
+  mpLabel,
+  mpLabelEntries,
+  mpReasonProblem,
+} from "@/lib/adminMarketplaceText";
 import { useAdminGate } from "@/lib/useAdminGate";
 import { useFetch } from "@/lib/useFetch";
+import { useLang, useT } from "@/lib/useLang";
 
 interface SuspensionRow {
   id: string;
@@ -43,8 +46,11 @@ type Panel = "none" | "suspend" | "reactivate";
 // Sprint 16 (FR-VEND-009, L-23): vendor detail with suspend / reactivate.
 // Suspension hides the store and blocks new orders and catalog edits, but
 // already-placed orders keep being fulfilled - the confirm step says so.
+// M-01: every label follows the UI language (lib/adminStoreDetailText.ts).
 export default function AdminVendorDetailPage() {
   const gate = useAdminGate("ADMIN");
+  const lang = useLang();
+  const t = useT();
   const params = useParams<{ vendorId: string }>();
   const [nonce, setNonce] = useState(0);
   const vendor = useFetch<VendorDetail>(
@@ -57,7 +63,7 @@ export default function AdminVendorDetailPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const problem = reasonProblem(reason);
+  const problem = mpReasonProblem(reason, lang);
 
   function openPanel(next: Panel) {
     setPanel(next);
@@ -79,12 +85,12 @@ export default function AdminVendorDetailPage() {
             : { reason: reason.trim() },
         idempotencyKey: newIdempotencyKey(`vendor-${kind}`),
       });
-      setNotice(kind === "suspend" ? "تم تعليق المتجر." : "تمت إعادة تفعيل المتجر.");
+      setNotice(t(kind === "suspend" ? "mpa.sd.vendor.suspended" : "mpa.sd.vendor.reactivated"));
       setPanel("none");
       setReason("");
       setNonce((n) => n + 1);
     } catch (err) {
-      setError(adminErrorMessage(err));
+      setError(mpError(err, lang));
     } finally {
       setBusy(false);
     }
@@ -100,31 +106,32 @@ export default function AdminVendorDetailPage() {
   if (gate.status === "forbidden" || vendor.status === 403) {
     return (
       <div className="page-shell">
-        <EmptyState title="هذه الصفحة لمدير المنصة فقط" actionHref="/account" actionLabel="حسابي" />
+        <EmptyState title={t("mpa.sd.forbiddenAdmin")} actionHref="/account" actionLabel={t("mpa.sd.myAccount")} />
       </div>
     );
   }
   if (vendor.status === 404) {
     return (
       <div className="page-shell">
-        <EmptyState title="المتجر غير موجود" actionHref="/admin/vendors" actionLabel="قائمة المتاجر" />
+        <EmptyState title={t("mpa.sd.vendor.notFound")} actionHref="/admin/vendors" actionLabel={t("mpa.sd.vendor.list")} />
       </div>
     );
   }
 
   const v = vendor.data;
+  const loadError = mpFetchError(vendor.error, vendor.apiError, lang);
   return (
     <div className="page-shell">
       <div className="wide-shell" style={{ maxWidth: 800 }}>
         <div className="top-bar">
-          <h1 className="page-title" style={{ margin: 0 }}>{v ? v.legal_name : "تفاصيل المتجر"}</h1>
-          <Link href="/admin/vendors" className="button-link">قائمة المتاجر</Link>
+          <h1 className="page-title" style={{ margin: 0 }}>{v ? v.legal_name : t("mpa.sd.vendor.titleFallback")}</h1>
+          <Link href="/admin/vendors" className="button-link">{t("mpa.sd.vendor.list")}</Link>
         </div>
 
-        {vendor.error && <ErrorBanner message={vendor.error} />}
+        {loadError && <ErrorBanner message={loadError} />}
         {notice && <div className="notice-banner" role="status">{notice}</div>}
         {vendor.loading && !v && (
-          <div aria-busy="true" aria-label="جارٍ التحميل">
+          <div aria-busy="true" aria-label={t("mpa.sd.loading")}>
             <div className="skeleton" style={{ height: 160, width: "100%" }} />
           </div>
         )}
@@ -134,28 +141,29 @@ export default function AdminVendorDetailPage() {
             <div className="card" style={{ maxWidth: "none", marginBottom: 14 }}>
               <p>
                 <span className={`badge${v.status === "ACTIVE" ? " badge-active" : ""}`}>
-                  {VENDOR_STATUS_LABEL[v.status] ?? v.status}
+                  {mpLabel(lang, "storeStatus", v.status)}
                 </span>{" "}
                 <span className="muted">
-                  {STORE_TYPE_LABEL[v.store_type] ?? v.store_type} - أُنشئ في {formatDateTime(v.created_at)}
+                  {fillMp(t("mpa.sd.vendor.meta"), {
+                    type: mpLabel(lang, "storeType", v.store_type),
+                    date: mpDate(v.created_at, lang),
+                  })}
                 </span>
               </p>
-              <p className="muted">الطلبات الجارية لهذا المتجر: {v.active_branch_orders_count}</p>
+              <p className="muted">{fillMp(t("mpa.sd.vendor.activeOrders"), { n: v.active_branch_orders_count })}</p>
 
               {v.is_member ? (
-                <div className="warning-banner">
-                  أنتِ عضوة في هذا المتجر، لذلك لا يمكنك تعليقه أو إعادة تفعيله.
-                </div>
+                <div className="warning-banner">{t("mpa.sd.vendor.isMember")}</div>
               ) : (
                 <>
                   {v.status === "ACTIVE" && panel === "none" && (
-                    <button className="button" onClick={() => openPanel("suspend")}>تعليق المتجر</button>
+                    <button className="button" onClick={() => openPanel("suspend")}>{t("mpa.sd.vendor.suspend")}</button>
                   )}
                   {v.status === "SUSPENDED" && panel === "none" && (
-                    <button className="button" onClick={() => openPanel("reactivate")}>إعادة تفعيل المتجر</button>
+                    <button className="button" onClick={() => openPanel("reactivate")}>{t("mpa.sd.vendor.reactivate")}</button>
                   )}
                   {v.status !== "ACTIVE" && v.status !== "SUSPENDED" && (
-                    <p className="muted">لا يمكن تعليق إلا متجر نشط.</p>
+                    <p className="muted">{t("mpa.sd.vendor.onlyActive")}</p>
                   )}
                 </>
               )}
@@ -164,16 +172,15 @@ export default function AdminVendorDetailPage() {
                 <div style={{ marginTop: 14 }}>
                   {panel === "suspend" && (
                     <div className="warning-banner">
-                      التعليق يُخفي المتجر ويمنع الطلبات الجديدة وتعديل المنتجات، لكن الطلبات الجارية
-                      ({v.active_branch_orders_count}) يستمر تنفيذها.
+                      {fillMp(t("mpa.sd.vendor.suspendWarning"), { n: v.active_branch_orders_count })}
                     </div>
                   )}
                   {error && <ErrorBanner message={error} />}
                   {panel === "suspend" && (
                     <div className="field">
-                      <label htmlFor="reason-code">نوع السبب</label>
+                      <label htmlFor="reason-code">{t("mpa.sd.vendor.reasonCode")}</label>
                       <select id="reason-code" value={reasonCode} disabled={busy} onChange={(e) => setReasonCode(e.target.value)}>
-                        {Object.entries(SUSPENSION_REASON_LABEL).map(([k, label]) => (
+                        {mpLabelEntries(lang, "suspensionReason").map(([k, label]) => (
                           <option key={k} value={k}>{label}</option>
                         ))}
                       </select>
@@ -181,7 +188,7 @@ export default function AdminVendorDetailPage() {
                   )}
                   <div className="field">
                     <label htmlFor="reason">
-                      {panel === "suspend" ? "سبب التعليق (يراه المالك)" : "سبب إعادة التفعيل"}
+                      {t(panel === "suspend" ? "mpa.sd.vendor.suspendReason" : "mpa.sd.vendor.reactivateReason")}
                     </label>
                     <textarea id="reason" rows={4} value={reason} disabled={busy} onChange={(e) => setReason(e.target.value)} />
                     <span className="muted">{reason.trim().length} / 1000</span>
@@ -189,10 +196,12 @@ export default function AdminVendorDetailPage() {
                   </div>
                   <div style={{ display: "flex", gap: 8 }}>
                     <button className="button" disabled={busy || problem !== null} onClick={() => submit(panel)}>
-                      {busy ? "جارٍ الإرسال..." : panel === "suspend" ? "تأكيد التعليق" : "تأكيد إعادة التفعيل"}
+                      {busy
+                        ? t("mpa.sd.sending")
+                        : t(panel === "suspend" ? "mpa.sd.vendor.confirmSuspend" : "mpa.sd.vendor.confirmReactivate")}
                     </button>
                     <button className="button button-secondary" disabled={busy} onClick={() => openPanel("none")}>
-                      إلغاء
+                      {t("mpa.sd.cancel")}
                     </button>
                   </div>
                 </div>
@@ -200,37 +209,37 @@ export default function AdminVendorDetailPage() {
             </div>
 
             <div className="card" style={{ maxWidth: "none" }}>
-              <h2 style={{ marginTop: 0 }}>سجل التعليق</h2>
+              <h2 style={{ marginTop: 0 }}>{t("mpa.sd.vendor.history")}</h2>
               {v.suspensions.length === 0 ? (
-                <p className="muted">لم يُعلَّق هذا المتجر من قبل.</p>
+                <p className="muted">{t("mpa.sd.vendor.neverSuspended")}</p>
               ) : (
                 <div style={{ overflowX: "auto" }}>
 <table className="data-table">
                   <thead>
                     <tr>
-                      <th>السبب</th>
-                      <th>التعليق</th>
-                      <th>إعادة التفعيل</th>
+                      <th>{t("mpa.sd.vendor.colReason")}</th>
+                      <th>{t("mpa.sd.vendor.colSuspended")}</th>
+                      <th>{t("mpa.sd.vendor.colReactivated")}</th>
                     </tr>
                   </thead>
                   <tbody>
                     {v.suspensions.map((s) => (
                       <tr key={s.id}>
                         <td>
-                          <strong>{SUSPENSION_REASON_LABEL[s.reason_code] ?? s.reason_code}</strong>
+                          <strong>{mpLabel(lang, "suspensionReason", s.reason_code)}</strong>
                           <br />
                           <span className="muted">{s.reason}</span>
                         </td>
-                        <td>{formatDateTime(s.suspended_at)}</td>
+                        <td>{mpDate(s.suspended_at, lang)}</td>
                         <td>
                           {s.reactivated_at ? (
                             <>
-                              {formatDateTime(s.reactivated_at)}
+                              {mpDate(s.reactivated_at, lang)}
                               <br />
                               <span className="muted">{s.reactivation_reason}</span>
                             </>
                           ) : (
-                            <span className="badge">ما زال معلَّقاً</span>
+                            <span className="badge">{t("mpa.sd.vendor.stillSuspended")}</span>
                           )}
                         </td>
                       </tr>

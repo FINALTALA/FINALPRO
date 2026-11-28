@@ -1,3 +1,4 @@
+import { PUBLIC_CANONICAL_PRODUCT } from '../matching/public-canonical-product';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import { AvailabilityBucket } from '../common/availability.util';
@@ -16,6 +17,7 @@ import { TaxonomyService } from '../taxonomy/taxonomy.service';
 import { primaryMediaUrl } from './comparison.service';
 import { parseBoolean, parsePrice } from './discovery-filters';
 import { isPriceStale } from './price-staleness.util';
+import { PUBLIC_OFFER } from '../offers/platform-hold.util';
 
 export { ZONES };
 const FULFILMENTS = ['ALL', 'DELIVERY', 'PICKUP'] as const;
@@ -126,8 +128,11 @@ export class StoreComparisonService {
     const rows = await this.prisma.offerVariant.findMany({
       where: {
         canonicalVariantId: { not: null },
-        canonicalVariant: { canonicalProductId: product.id },
-        vendorOffer: { status: 'ACTIVE' },
+        canonicalVariant: {
+          canonicalProductId: product.id,
+          canonicalProduct: PUBLIC_CANONICAL_PRODUCT,
+        },
+        vendorOffer: PUBLIC_OFFER,
         vendor: { storefrontPublished: true, status: 'ACTIVE' },
       },
       include: {

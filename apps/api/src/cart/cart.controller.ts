@@ -1,7 +1,9 @@
 import {
   Body,
+  ConflictException,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   NotFoundException,
   Param,
@@ -27,6 +29,7 @@ import {
 import { FulfilmentEligibilityService } from '../fulfilment/fulfilment-eligibility.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { assertItemsPurchasable } from '../checkout/purchase-eligibility.util';
+import { heldOfferIds, OPEN_HOLD_SELECT } from '../offers/platform-hold.util';
 import { SubscriptionGateService } from '../subscriptions/subscription-gate.service';
 import { AddCartItemDto } from './dto/add-cart-item.dto';
 import { UpdateCartItemDto } from './dto/update-cart-item.dto';
@@ -95,11 +98,29 @@ export class CartController {
     private readonly fulfilment: FulfilmentEligibilityService,
   ) {}
 
-  private async requireCustomerId(user: AuthenticatedUser): Promise<string> {
-    const profile = await this.prisma.customerProfile.findUniqueOrThrow({
+  // A platform staff account made out of band (seed-platform-staff.ts)
+  // has no CustomerProfile. It is never given one here: reading its
+  // cart answers empty (see list()), and changing it is refused with a
+  // typed 403 rather than a 500.
+  private async findCustomerId(
+    user: AuthenticatedUser,
+  ): Promise<string | null> {
+    const profile = await this.prisma.customerProfile.findUnique({
       where: { userId: user.id },
+      select: { id: true },
     });
-    return profile.id;
+    return profile?.id ?? null;
+  }
+
+  private async requireCustomerId(user: AuthenticatedUser): Promise<string> {
+    const customerId = await this.findCustomerId(user);
+    if (!customerId) {
+      throw new ForbiddenException({
+        code: 'CUSTOMER_PROFILE_REQUIRED',
+        message: 'This account has no customer profile, so it has no cart',
+      });
+    }
+    return customerId;
   }
 
   private itemInclude() {
@@ -135,7 +156,11 @@ export class CartController {
   // quote/reserve/confirm.
   @Get()
   async list(@CurrentUser() user: AuthenticatedUser) {
-    const customerId = await this.requireCustomerId(user);
+    // AppShell reads this on every page for the cart badge. Without a
+    // CustomerProfile there can be no cart rows (CartItem.customerId
+    // references the profile), so the cart is empty.
+    const customerId = await this.findCustomerId(user);
+    if (!customerId) return [];
     const items = await this.prisma.cartItem.findMany({
       where: { customerId },
       orderBy: { createdAt: 'desc' },
@@ -160,7 +185,12 @@ export class CartController {
               },
             },
             vendorOffer: {
-              select: { titleAr: true, titleEn: true, status: true },
+              select: {
+                titleAr: true,
+                titleEn: true,
+                status: true,
+                platformHolds: OPEN_HOLD_SELECT,
+              },
             },
             vendor: { select: { storefrontPublished: true, status: true } },
             branchStocks: { select: { branchId: true, quantity: true } },
@@ -176,7 +206,12 @@ export class CartController {
     );
     const pickupOpening = await this.pickupOpenings(items);
     return items.map((item) => {
+      // VIA phase 2C: a line whose offer is under a platform hold stays in
+      // the cart (removable) but is not purchasable; `unavailable_reason`
+      // tells the page why.
+      const held = item.offerVariant.vendorOffer.platformHolds.length > 0;
       const purchasable =
+        !held &&
         item.offerVariant.vendorOffer.status === 'ACTIVE' &&
         (available.get(item.offerVariantId)?.purchasable ?? false);
       const stock = purchasable
@@ -190,6 +225,7 @@ export class CartController {
         max_quantity:
           purchasable && stock > 0 && item.quantity > canGet ? canGet : null,
         purchasable,
+        unavailable_reason: held ? 'PLATFORM_HOLD' : null,
         pickup_opening: purchasable
           ? (pickupOpening.get(item.id) ?? null)
           : null,
@@ -361,6 +397,26 @@ export class CartController {
     const item = await this.prisma.$transaction(async (tx) => {
       // TB-1: same per-variant limit as add, under the same lock.
       await lockCartVariant(tx, customerId, existing.offerVariantId);
+      // VIA phase 2C: a held offer's line may shrink or be removed, never
+      // grow.
+      if (dto.quantity > existing.quantity) {
+        const variant = await tx.offerVariant.findUniqueOrThrow({
+          where: { id: existing.offerVariantId },
+          select: { vendorOfferId: true },
+        });
+        if ((await heldOfferIds(tx, [variant.vendorOfferId])).size > 0) {
+          throw new ConflictException({
+            code: 'ITEM_NOT_PURCHASABLE',
+            message: 'This item is no longer available for purchase',
+            details: [
+              {
+                offer_variant_id: existing.offerVariantId,
+                reason: 'PLATFORM_HOLD',
+              },
+            ],
+          });
+        }
+      }
       await assertWithinCartLineLimit(
         tx,
         customerId,

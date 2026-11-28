@@ -5,10 +5,13 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { EmptyState, ErrorBanner } from "@/components/States";
 import { apiFetch, newIdempotencyKey } from "@/lib/api";
-import { adminErrorMessage, isForbidden } from "@/lib/admin";
-import { AdminSizeGuideSummary, AUDIENCE_LABEL_AR, sizeGuideAdminError } from "@/lib/sizeGuides";
+import { isForbidden } from "@/lib/admin";
+import { fillMp } from "@/lib/adminMarketplaceText";
+import { sgAudience, sgError } from "@/lib/adminSizeGuidesText";
+import { AdminSizeGuideSummary } from "@/lib/sizeGuides";
 import { useTaxonomy } from "@/lib/taxonomy";
 import { useAdminGate } from "@/lib/useAdminGate";
+import { useLang, useT } from "@/lib/useLang";
 
 interface Coverage {
   pairs: {
@@ -33,12 +36,16 @@ interface CanonicalProductRow {
 // category/audience pairs in use and offers whose sizes the guide lacks.
 export default function AdminSizeGuidesPage() {
   const gate = useAdminGate("ADMIN");
+  const lang = useLang();
+  const t = useT();
   const router = useRouter();
   const taxonomy = useTaxonomy();
   const [guides, setGuides] = useState<AdminSizeGuideSummary[] | null>(null);
   const [coverage, setCoverage] = useState<Coverage | null>(null);
   const [products, setProducts] = useState<CanonicalProductRow[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  // M-01: the failure itself is kept, so its message follows the UI language.
+  const [failure, setFailure] = useState<unknown>(null);
+  const error = failure === null ? null : sgError(failure, lang);
   const [forbidden, setForbidden] = useState(false);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ code: "", name_ar: "", name_en: "", kind: "STANDARD" as "STANDARD" | "PRODUCT", canonical_product_id: "", basis: "BODY" as "BODY" | "GARMENT" });
@@ -58,7 +65,7 @@ export default function AdminSizeGuidesPage() {
       .catch((err) => {
         if (cancelled) return;
         if (isForbidden(err)) setForbidden(true);
-        setError(adminErrorMessage(err));
+        setFailure(err);
       });
     apiFetch<CanonicalProductRow[]>("/canonical-products")
       .then((rows) => !cancelled && setProducts(rows.filter((p) => p.status !== "ARCHIVED" && p.status !== "MERGED")))
@@ -68,12 +75,15 @@ export default function AdminSizeGuidesPage() {
     };
   }, [gate.status]);
 
-  const categoryName = (code: string) => taxonomy.data?.categories.find((c) => c.code === code)?.name_ar ?? code;
+  const categoryName = (code: string) => {
+    const c = taxonomy.data?.categories.find((x) => x.code === code);
+    return (lang === "en" ? c?.name_en || c?.name_ar : c?.name_ar) ?? code;
+  };
 
   async function create(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
-    setError(null);
+    setFailure(null);
     try {
       const created = await apiFetch<{ id: string }>("/admin/size-guides", {
         method: "POST",
@@ -88,7 +98,7 @@ export default function AdminSizeGuidesPage() {
       });
       router.push(`/admin/size-guides/${created.id}`);
     } catch (err) {
-      setError(sizeGuideAdminError(err));
+      setFailure(err);
       setBusy(false);
     }
   }
@@ -103,7 +113,7 @@ export default function AdminSizeGuidesPage() {
   if (gate.status === "forbidden" || forbidden) {
     return (
       <div className="page-shell">
-        <EmptyState title="هذه الصفحة لمدير المنصة فقط" actionHref="/account" actionLabel="حسابي" />
+        <EmptyState title={t("mpa.sg.forbidden")} actionHref="/account" actionLabel={t("mpa.sg.myAccount")} />
       </div>
     );
   }
@@ -112,34 +122,34 @@ export default function AdminSizeGuidesPage() {
     <div className="page-shell">
       <div className="wide-shell" style={{ maxWidth: 1000 }}>
         <div className="top-bar">
-          <h1 className="page-title" style={{ margin: 0 }}>أدلة المقاسات</h1>
+          <h1 className="page-title" style={{ margin: 0 }}>{t("mpa.sg.title")}</h1>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <Link href="/admin/size-guides/requests" className="button-link">طلبات المتاجر</Link>
-            <Link href="/admin" className="button-link">إدارة المنصة</Link>
+            <Link href="/admin/size-guides/requests" className="button-link">{t("mpa.sg.storeRequests")}</Link>
+            <Link href="/admin" className="button-link">{t("mpa.sg.dashboard")}</Link>
           </div>
         </div>
         <p className="muted">
-          لا يظهر للعميل أي رابط لدليل المقاسات قبل نشر دليل حقيقي ينطبق على المنتج. القياسات تُدخَل وتُراجَع هنا فقط، بالسنتيمتر.
+          {t("mpa.sg.lead")}
         </p>
 
         {error && <ErrorBanner message={error} />}
 
         <section className="card" style={{ marginBottom: 16 }}>
-          <h3 style={{ marginTop: 0 }}>الأدلة</h3>
+          <h3 style={{ marginTop: 0 }}>{t("mpa.sg.guides")}</h3>
           {!guides ? (
             <div className="skeleton" style={{ height: 56, width: "100%" }} aria-busy="true" />
           ) : guides.length === 0 ? (
-            <p className="muted">لا توجد أدلة بعد.</p>
+            <p className="muted">{t("mpa.sg.noGuides")}</p>
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>الدليل</th>
-                    <th>النوع</th>
-                    <th>المنشور</th>
-                    <th>مسودة</th>
-                    <th>يطبَّق على</th>
+                    <th>{t("mpa.sg.colGuide")}</th>
+                    <th>{t("mpa.sg.colKind")}</th>
+                    <th>{t("mpa.sg.colPublished")}</th>
+                    <th>{t("mpa.sg.colDraft")}</th>
+                    <th>{t("mpa.sg.colAppliesTo")}</th>
                     <th />
                   </tr>
                 </thead>
@@ -147,31 +157,31 @@ export default function AdminSizeGuidesPage() {
                   {guides.map((g) => (
                     <tr key={g.id}>
                       <td>
-                        <strong>{g.name_ar}</strong>
+                        <strong>{lang === "en" ? g.name_en : g.name_ar}</strong>
                         <div className="muted" dir="ltr" style={{ fontSize: 12 }}>{g.code}</div>
                       </td>
-                      <td>{g.kind === "STANDARD" ? "قياسي" : `منتج: ${g.canonical_product?.name ?? ""}`}</td>
+                      <td>{g.kind === "STANDARD" ? t("mpa.sg.standard") : fillMp(t("mpa.sg.productKind"), { name: g.canonical_product?.name ?? "" })}</td>
                       <td>
                         {g.published_version ? (
                           <span className="badge badge-active">
-                            الإصدار {g.published_version.version}
+                            {fillMp(t("mpa.sg.version"), { n: g.published_version.version })}
                           </span>
                         ) : (
-                          <span className="muted">غير منشور</span>
+                          <span className="muted">{t("mpa.sg.unpublished")}</span>
                         )}
                       </td>
-                      <td>{g.draft_version ? `الإصدار ${g.draft_version.version}` : "—"}</td>
+                      <td>{g.draft_version ? fillMp(t("mpa.sg.version"), { n: g.draft_version.version }) : "—"}</td>
                       <td>
                         {g.kind === "PRODUCT"
-                          ? "منتجه المرجعي"
+                          ? t("mpa.sg.itsProduct")
                           : g.applicability.length === 0
-                            ? <span className="muted">لا شيء بعد</span>
+                            ? <span className="muted">{t("mpa.sg.nothingYet")}</span>
                             : g.applicability
-                                .map((p) => `${categoryName(p.category_code)} - ${AUDIENCE_LABEL_AR[p.audience] ?? p.audience}${p.is_default ? " (افتراضي)" : ""}`)
-                                .join("، ")}
+                                .map((p) => fillMp(t("mpa.sg.pairText"), { category: categoryName(p.category_code), audience: sgAudience(lang, p.audience) }) + (p.is_default ? t("mpa.sg.defaultSuffix") : ""))
+                                .join(t("mpa.sg.listSeparator"))}
                       </td>
                       <td>
-                        <Link href={`/admin/size-guides/${g.id}`} className="button-link">فتح</Link>
+                        <Link href={`/admin/size-guides/${g.id}`} className="button-link">{t("mpa.sg.open")}</Link>
                       </td>
                     </tr>
                   ))}
@@ -182,82 +192,82 @@ export default function AdminSizeGuidesPage() {
         </section>
 
         <section className="card" style={{ marginBottom: 16, maxWidth: 560 }}>
-          <h3 style={{ marginTop: 0 }}>دليل جديد</h3>
+          <h3 style={{ marginTop: 0 }}>{t("mpa.sg.newGuide")}</h3>
           <form onSubmit={create}>
             <div className="field">
-              <label htmlFor="sg-kind">النوع</label>
+              <label htmlFor="sg-kind">{t("mpa.sg.kind")}</label>
               <select id="sg-kind" value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value as "STANDARD" | "PRODUCT" })}>
-                <option value="STANDARD">قياسي (لتصنيف وفئة)</option>
-                <option value="PRODUCT">خاص بمنتج مرجعي</option>
+                <option value="STANDARD">{t("mpa.sg.kindStandard")}</option>
+                <option value="PRODUCT">{t("mpa.sg.kindProduct")}</option>
               </select>
             </div>
             {form.kind === "PRODUCT" && (
               <>
                 <div className="field">
-                  <label htmlFor="sg-product">المنتج المرجعي</label>
+                  <label htmlFor="sg-product">{t("mpa.sg.canonicalProduct")}</label>
                   <select id="sg-product" required value={form.canonical_product_id} onChange={(e) => setForm({ ...form, canonical_product_id: e.target.value })}>
-                    <option value="">— اختاري —</option>
+                    <option value="">{t("mpa.sg.choose")}</option>
                     {products.map((p) => (
                       <option key={p.id} value={p.id}>{p.canonical_name_ar ?? p.model_name}</option>
                     ))}
                   </select>
                 </div>
                 <div className="field">
-                  <label htmlFor="sg-basis">أساس القياس</label>
+                  <label htmlFor="sg-basis">{t("mpa.sg.basis")}</label>
                   <select id="sg-basis" value={form.basis} onChange={(e) => setForm({ ...form, basis: e.target.value as "BODY" | "GARMENT" })}>
-                    <option value="BODY">قياسات الجسم</option>
-                    <option value="GARMENT">قياسات القطعة</option>
+                    <option value="BODY">{t("mpa.sg.basisBody")}</option>
+                    <option value="GARMENT">{t("mpa.sg.basisGarment")}</option>
                   </select>
                 </div>
               </>
             )}
             <div className="field">
-              <label htmlFor="sg-code">الرمز (حروف إنجليزية صغيرة وأرقام وشرطات)</label>
+              <label htmlFor="sg-code">{t("mpa.sg.codeHint")}</label>
               <input id="sg-code" dir="ltr" required pattern="[a-z0-9][a-z0-9\-]{1,59}" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="women-dresses" />
             </div>
             <div className="field">
-              <label htmlFor="sg-name-ar">الاسم بالعربية</label>
+              <label htmlFor="sg-name-ar">{t("mpa.sg.nameAr")}</label>
               <input id="sg-name-ar" required maxLength={120} value={form.name_ar} onChange={(e) => setForm({ ...form, name_ar: e.target.value })} />
             </div>
             <div className="field">
-              <label htmlFor="sg-name-en">الاسم بالإنجليزية</label>
+              <label htmlFor="sg-name-en">{t("mpa.sg.nameEn")}</label>
               <input id="sg-name-en" dir="ltr" required maxLength={120} value={form.name_en} onChange={(e) => setForm({ ...form, name_en: e.target.value })} />
             </div>
-            <button className="button" type="submit" disabled={busy}>إنشاء مسودة فارغة</button>
+            <button className="button" type="submit" disabled={busy}>{t("mpa.sg.createEmpty")}</button>
           </form>
         </section>
 
         <section className="card">
-          <h3 style={{ marginTop: 0 }}>التغطية</h3>
+          <h3 style={{ marginTop: 0 }}>{t("mpa.sg.coverage")}</h3>
           {!coverage ? (
             <div className="skeleton" style={{ height: 56, width: "100%" }} aria-busy="true" />
           ) : (
             <>
-              <p className="muted">التصنيفات والفئات المستخدمة في عروض منشورة لها مقاسات.</p>
+              <p className="muted">{t("mpa.sg.coverageLead")}</p>
               {coverage.pairs.length === 0 ? (
-                <p className="muted">لا توجد عروض منشورة بمقاسات.</p>
+                <p className="muted">{t("mpa.sg.noSizedOffers")}</p>
               ) : (
                 <div style={{ overflowX: "auto" }}>
                   <table className="data-table">
                     <thead>
                       <tr>
-                        <th>التصنيف</th>
-                        <th>الفئة</th>
-                        <th>عروض منشورة</th>
-                        <th>الدليل الافتراضي</th>
+                        <th>{t("mpa.sg.colCategory")}</th>
+                        <th>{t("mpa.sg.colAudience")}</th>
+                        <th>{t("mpa.sg.colOffers")}</th>
+                        <th>{t("mpa.sg.colDefault")}</th>
                       </tr>
                     </thead>
                     <tbody>
                       {coverage.pairs.map((p) => (
                         <tr key={`${p.category_code}|${p.audience}`}>
                           <td>{categoryName(p.category_code)}</td>
-                          <td>{AUDIENCE_LABEL_AR[p.audience] ?? p.audience}</td>
+                          <td>{sgAudience(lang, p.audience)}</td>
                           <td>{p.offers}</td>
                           <td>
                             {p.default_guide ? (
                               <Link href={`/admin/size-guides/${p.default_guide.id}`}>{p.default_guide.name_ar}</Link>
                             ) : (
-                              <span className="muted">بلا دليل منشور</span>
+                              <span className="muted">{t("mpa.sg.noPublishedGuide")}</span>
                             )}
                           </td>
                         </tr>
@@ -266,9 +276,9 @@ export default function AdminSizeGuidesPage() {
                   </table>
                 </div>
               )}
-              <h4>عروض منشورة مقاساتها غير موجودة في دليلها</h4>
+              <h4>{t("mpa.sg.mismatched")}</h4>
               {coverage.mismatched_offers.length === 0 ? (
-                <p className="muted">لا يوجد.</p>
+                <p className="muted">{t("mpa.sg.none")}</p>
               ) : (
                 <ul>
                   {coverage.mismatched_offers.map((o) => (

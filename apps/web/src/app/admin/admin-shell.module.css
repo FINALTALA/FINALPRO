@@ -1,0 +1,393 @@
+/* VIA Control Center - the /admin frame (app/admin/layout.tsx).
+   Every rule here sits under .root, which only the admin layout renders,
+   so customer, store and homepage screens are never touched. The admin
+   pages keep their shared building blocks (.page-shell, .card, .button,
+   .data-table, ...); inside .root they take VIA's identity instead of the
+   generic teal/navy: ink, cream, wine and gold - the same palette and
+   faces as the public VIA header (components/via-header.module.css). */
+
+.root {
+  --admin-ink: #241b20;
+  --admin-ink-soft: #3a2c33;
+  --admin-cream: #f7f2ea;
+  --admin-wine: #4a1626;
+  --admin-wine-deep: #3b1a1c;
+  --admin-gold: #cda55e;
+  --admin-gold-soft: #f4ead6;
+  --admin-line: #e6dac8;
+
+  /* The shared design tokens, re-pointed for this subtree only. */
+  --color-bg: var(--admin-cream);
+  --color-surface: #fffdf9;
+  --color-surface-2: #f2eadf;
+  --color-border: var(--admin-line);
+  --color-text: var(--admin-ink);
+  --color-text-muted: #6d5f65;
+  --color-navy: var(--admin-ink);
+  --color-navy-soft: var(--admin-ink-soft);
+  --color-primary: var(--admin-wine);
+  --color-primary-hover: var(--admin-wine-deep);
+  --color-primary-soft: #f3e7e5;
+  --shadow-sm: 0 1px 2px rgba(36, 27, 32, 0.06);
+  --shadow-md: 0 10px 28px rgba(36, 27, 32, 0.1);
+  --radius: 18px;
+  --radius-sm: 12px;
+
+  color: var(--admin-ink);
+  font-family: "Finalpro Noto", "Noto Sans Arabic", "Segoe UI", Tahoma, system-ui, sans-serif;
+}
+
+.root :global(:focus-visible) {
+  outline: 3px solid rgba(74, 22, 38, 0.38);
+}
+
+/* ---------- Frame: sidebar + content ---------- */
+
+.framed {
+  display: grid;
+  grid-template-columns: 256px minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+  width: 100%;
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 20px var(--gutter) 0;
+}
+
+.sidebar {
+  position: sticky;
+  top: calc(var(--header-h) + 16px);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-height: calc(100vh - var(--header-h) - 32px);
+  padding: 20px 14px;
+  overflow-y: auto;
+  border-radius: 22px;
+  background:
+    radial-gradient(120% 60% at 100% 0%, rgba(205, 165, 94, 0.16), transparent 60%),
+    linear-gradient(180deg, var(--admin-ink) 0%, #2d1a22 55%, var(--admin-wine-deep) 100%);
+  box-shadow: 0 18px 40px rgba(36, 27, 32, 0.18);
+  color: var(--admin-cream);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 6px 16px;
+  border-bottom: 1px solid rgba(205, 165, 94, 0.28);
+}
+
+.brandText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.brandText strong {
+  font-family: "Finalpro Amiri", Georgia, serif;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--admin-cream);
+}
+
+.brandText span {
+  font-size: 12.5px;
+  color: rgba(247, 242, 234, 0.66);
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.navLink {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 42px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  color: rgba(247, 242, 234, 0.82);
+  font-size: 14.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-decoration: none;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.navLink:hover {
+  background: rgba(247, 242, 234, 0.08);
+  color: var(--admin-cream);
+}
+
+.navLinkActive,
+.navLinkActive:hover {
+  background: var(--admin-cream);
+  color: var(--admin-wine);
+  font-weight: 700;
+}
+
+/* A gold mark on the reading-start edge of the current section. */
+.navLinkActive::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--admin-gold);
+}
+
+.navLink:focus-visible {
+  outline-color: var(--admin-gold);
+}
+
+.content {
+  min-width: 0;
+}
+
+/* Inside the frame the sidebar already supplies the side margin, and each
+   page keeps its own reading width (720-1100px), aligned to the sidebar. */
+.framed .content :global(.page-shell) {
+  align-items: flex-start;
+  padding: 0 0 40px;
+}
+
+/* ---------- Shared building blocks, VIA-styled ---------- */
+
+/* Amiri (already loaded site-wide for VIA headings): the display face
+   (Arslan Wessam) is too fine to read at admin title sizes. */
+.root :global(.page-title) {
+  font-family: "Finalpro Amiri", Georgia, serif;
+  font-size: clamp(24px, 2.2vw, 30px);
+  font-weight: 700;
+  line-height: 1.35;
+  color: var(--admin-ink);
+}
+
+.root :global(.top-bar) {
+  align-items: flex-end;
+  margin-bottom: 20px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--admin-line);
+}
+
+.root :global(.top-bar) > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.root :global(.card) {
+  border-color: var(--admin-line);
+  box-shadow: var(--shadow-sm);
+}
+
+.root :global(.button) {
+  background: var(--admin-wine);
+  box-shadow: 0 6px 16px rgba(74, 22, 38, 0.16);
+}
+
+.root :global(.button:hover) {
+  background: var(--admin-wine-deep);
+}
+
+.root :global(.button-secondary) {
+  background: transparent;
+  color: var(--admin-ink);
+  box-shadow: inset 0 0 0 1.5px var(--admin-ink);
+}
+
+.root :global(.button-secondary:hover) {
+  background: var(--admin-ink);
+  color: var(--admin-cream);
+}
+
+.root :global(.button-link) {
+  border-color: var(--admin-line);
+  color: var(--admin-ink);
+}
+
+.root :global(.button-link:hover) {
+  border-color: var(--admin-gold);
+  background: var(--admin-gold-soft);
+}
+
+.root :global(.field input),
+.root :global(.field select),
+.root :global(.field textarea) {
+  border-color: var(--admin-line);
+}
+
+.root :global(.field input:focus),
+.root :global(.field select:focus),
+.root :global(.field textarea:focus) {
+  border-color: var(--admin-wine);
+  box-shadow: 0 0 0 3px rgba(74, 22, 38, 0.12);
+}
+
+.root :global(.badge) {
+  background: var(--color-surface-2);
+  color: var(--admin-ink-soft);
+}
+
+.root :global(.badge-active) {
+  background: var(--admin-gold-soft);
+  color: #6f4f16;
+}
+
+.root :global(.data-table) {
+  border-color: var(--admin-line);
+  border-radius: 16px;
+}
+
+.root :global(.data-table th) {
+  background: #f2eadf;
+  color: var(--admin-ink-soft);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.root :global(.data-table tbody tr:hover td) {
+  background: #fbf6ef;
+}
+
+/* The hub's section cards. */
+.root :global(.hub-grid) {
+  max-width: none;
+  gap: 14px;
+}
+
+.root :global(.hub-tile) {
+  position: relative;
+  gap: 6px;
+  padding: 20px 20px 18px;
+  overflow: hidden;
+  border-color: var(--admin-line);
+  border-radius: 18px;
+  transition:
+    box-shadow 0.18s,
+    transform 0.18s,
+    border-color 0.18s;
+}
+
+.root :global(.hub-tile)::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: linear-gradient(90deg, var(--admin-gold), var(--admin-wine));
+  opacity: 0.85;
+}
+
+.root :global(.hub-tile:hover) {
+  border-color: rgba(205, 165, 94, 0.7);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+
+.root :global(.hub-tile strong) {
+  color: var(--admin-wine);
+  font-size: 17px;
+}
+
+/* ---------- Tablet and phone ---------- */
+
+@media (max-width: 959px) {
+  .framed {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+    padding-top: 12px;
+  }
+
+  /* The sidebar becomes a compact strip of sections that scrolls sideways
+     on its own (never the page). */
+  .sidebar {
+    position: static;
+    max-height: none;
+    gap: 10px;
+    padding: 12px;
+    overflow: hidden;
+    border-radius: 18px;
+  }
+
+  .brand {
+    padding: 0 4px 10px;
+  }
+
+  .brandText strong {
+    font-size: 16px;
+  }
+
+  .nav {
+    flex-direction: row;
+    gap: 6px;
+    margin: 0 -12px;
+    padding: 2px 12px 4px;
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+    overscroll-behavior-x: contain;
+  }
+
+  .nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .navLink {
+    flex: 0 0 auto;
+    min-height: 38px;
+    padding: 6px 14px;
+    border: 1px solid rgba(247, 242, 234, 0.16);
+    border-radius: 999px;
+    font-size: 13.5px;
+    white-space: nowrap;
+    scroll-snap-align: start;
+  }
+
+  .navLinkActive,
+  .navLinkActive:hover {
+    border-color: var(--admin-cream);
+  }
+
+  .navLinkActive::before {
+    display: none;
+  }
+}
+
+@media (max-width: 719px) {
+  /* Wide tables scroll inside themselves instead of widening the page. */
+  .root :global(.data-table) {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .root :global(.data-table th),
+  .root :global(.data-table td) {
+    white-space: nowrap;
+  }
+
+  .root :global(.top-bar) {
+    align-items: flex-start;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .navLink,
+  .root :global(.hub-tile) {
+    transition: none;
+  }
+
+  .root :global(.hub-tile:hover) {
+    transform: none;
+  }
+}

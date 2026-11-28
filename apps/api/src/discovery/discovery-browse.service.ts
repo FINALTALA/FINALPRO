@@ -5,6 +5,7 @@ import { FulfilmentEligibilityService } from '../fulfilment/fulfilment-eligibili
 import { PrismaService } from '../prisma/prisma.service';
 import { ComparisonCard, ComparisonService } from './comparison.service';
 import { comparisonCardDto } from './dto/comparison-card.dto';
+import { PUBLIC_OFFER } from '../offers/platform-hold.util';
 
 export type BrowseSort =
   | 'newest'
@@ -238,7 +239,7 @@ export class DiscoveryBrowseService {
           {
             canonicalVariant: { canonicalProductId: { in: productIds } },
             vendorOffer: {
-              status: 'ACTIVE',
+              ...PUBLIC_OFFER,
               categories: {
                 some: { categoryCode: { in: facets.categoryCodes } },
               },

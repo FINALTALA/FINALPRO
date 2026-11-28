@@ -31,6 +31,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { assertNoPlatformVendorConflict } from '../platform-admin/vendor-conflict.util';
 import { BranchVerificationDecisionDto } from './dto/branch-verification-decision.dto';
 import { SubmitBranchEvidenceDto } from './dto/submit-branch-evidence.dto';
+import { evaluateStoreVerification } from './store-verification-requirements';
 
 function branchToDto(branch: {
   id: string;
@@ -347,6 +348,11 @@ export class VendorVerificationController {
         photo_url: branch.verificationPhotoUrl,
         status: branch.verificationStatus,
         submitted_at: branch.evidenceSubmittedAt?.toISOString() ?? null,
+        // Phase 2A: the store's status and what its verification still
+        // needs (states only - never another item's evidence), so the
+        // reviewer sees e.g. "warehouse awaiting submission" or "owner
+        // activates next" outside any approval count.
+        store: await evaluateStoreVerification(tx, vendorId),
       };
     });
   }
@@ -548,18 +554,18 @@ export class VendorVerificationController {
       // subscribed vendor over one single branch's own decision. Only
       // this one branch's own verificationStatus ever changes here for
       // an ACTIVE vendor.
+      //
+      // Phase 2A (HYBRID): "nothing left" is the shared evaluation
+      // (store-verification-requirements.ts), read here under the vendor
+      // lock after this branch's own update: every non-archived physical
+      // branch approved AND, for a HYBRID store, the latest warehouse
+      // evidence approved. A HYBRID store whose warehouse is still open
+      // stays UNDER_REVIEW until the warehouse decision completes it.
       let vendorNextStatus: 'APPROVED' | 'REJECTED' | null = null;
       if (vendor.status === 'UNDER_REVIEW') {
         if (dto.decision === 'approve') {
-          const pendingPhysical = await tx.storeBranch.findFirst({
-            where: {
-              vendorId,
-              isPhysical: true,
-              verificationStatus: { not: 'APPROVED' },
-            },
-            select: { id: true },
-          });
-          if (!pendingPhysical) {
+          const requirements = await evaluateStoreVerification(tx, vendorId);
+          if (requirements.complete) {
             vendorNextStatus = 'APPROVED';
           }
         } else if (dto.decision === 'reject') {

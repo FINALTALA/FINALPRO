@@ -58,7 +58,7 @@ class FakeSmsService {
   }
 }
 
-const uniquePhone = createUniquePhone(
+const nextFixturePhone = createUniquePhone(
   'sprint24-favorites-comparison-alerts',
   '56',
 );
@@ -72,6 +72,17 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
   let app: INestApplication;
   let fakeSms: FakeSmsService;
   let prisma: PrismaService;
+
+  async function uniquePhone(): Promise<string> {
+    for (;;) {
+      const phone = nextFixturePhone();
+      const [user, otp] = await Promise.all([
+        prisma.user.findUnique({ where: { phone }, select: { id: true } }),
+        prisma.otpCode.findFirst({ where: { phone }, select: { id: true } }),
+      ]);
+      if (!user && !otp) return phone;
+    }
+  }
   let relay: OutboxRelayService;
   let sweep: DiscountActivationSweepService;
 
@@ -240,6 +251,10 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
       .set('Idempotency-Key', unique('cpv'))
       .send({ structural_attributes: structuralAttributes })
       .expect(201);
+    await prisma.canonicalProduct.update({
+      where: { id: productRes.body.id },
+      data: { status: 'PUBLISHED' },
+    });
     return {
       canonicalProductId: productRes.body.id,
       variantId: variantRes.body.id,
@@ -733,10 +748,10 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
   // ------------------------------------------------------------
   describe('Favorites', () => {
     it('favoriting an eligible PRODUCT and an eligible OFFER both succeed, idempotently, and list shows both', async () => {
-      const ownerPhone = uniquePhone();
+      const ownerPhone = await uniquePhone();
       const owner = await signup(ownerPhone, 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
-      const adminPhone = uniquePhone();
+      const adminPhone = await uniquePhone();
       const admin = await signup(adminPhone, 'a-strong-password');
       await prisma.user.update({
         where: { phone: adminPhone },
@@ -751,7 +766,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
         5,
       );
 
-      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const customer = await signup(await uniquePhone(), 'a-strong-password');
 
       const addProduct = await request(http())
         .post('/api/v1/favorites')
@@ -798,7 +813,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
     });
 
     it('favoriting an ineligible target (nonexistent product, unmatched/unpublished offer) is 404 FAVORITE_TARGET_NOT_FOUND', async () => {
-      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const customer = await signup(await uniquePhone(), 'a-strong-password');
       const res1 = await request(http())
         .post('/api/v1/favorites')
         .set('Authorization', `Bearer ${customer}`)
@@ -818,9 +833,9 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
     });
 
     it("BOLA: a user cannot remove another user's favorite - 404 either way, the favorite is untouched", async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
-      const adminPhone = uniquePhone();
+      const adminPhone = await uniquePhone();
       const admin = await signup(adminPhone, 'a-strong-password');
       await prisma.user.update({
         where: { phone: adminPhone },
@@ -834,8 +849,8 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
         100,
         5,
       );
-      const victim = await signup(uniquePhone(), 'a-strong-password');
-      const attacker = await signup(uniquePhone(), 'a-strong-password');
+      const victim = await signup(await uniquePhone(), 'a-strong-password');
+      const attacker = await signup(await uniquePhone(), 'a-strong-password');
       const added = await request(http())
         .post('/api/v1/favorites')
         .set('Authorization', `Bearer ${victim}`)
@@ -876,7 +891,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
     });
 
     it('FR-FAV-005: every alert type defaults to enabled=true with no row; set/get round-trips an opt-out', async () => {
-      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const customer = await signup(await uniquePhone(), 'a-strong-password');
       const initial = await request(http())
         .get('/api/v1/customers/me/notification-preferences')
         .set('Authorization', `Bearer ${customer}`)
@@ -911,10 +926,10 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
   // ------------------------------------------------------------
   describe('Comparison sets', () => {
     async function setupTwoEligibleProducts() {
-      const ownerPhone = uniquePhone();
+      const ownerPhone = await uniquePhone();
       const owner = await signup(ownerPhone, 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
-      const adminPhone = uniquePhone();
+      const adminPhone = await uniquePhone();
       const admin = await signup(adminPhone, 'a-strong-password');
       await prisma.user.update({
         where: { phone: adminPhone },
@@ -941,7 +956,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
 
     it('create validates 1-4 ids, then owner can list/get/add/remove/delete; the public share route exposes the same items by slug only', async () => {
       const { a, b } = await setupTwoEligibleProducts();
-      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const customer = await signup(await uniquePhone(), 'a-strong-password');
 
       await request(http())
         .post('/api/v1/customers/me/comparison-sets')
@@ -1004,8 +1019,8 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
 
     it("BOLA: another user cannot read, add to, remove from, or delete someone else's set - 404 either way, nothing changes", async () => {
       const { a, b } = await setupTwoEligibleProducts();
-      const owner2 = await signup(uniquePhone(), 'a-strong-password');
-      const attacker = await signup(uniquePhone(), 'a-strong-password');
+      const owner2 = await signup(await uniquePhone(), 'a-strong-password');
+      const attacker = await signup(await uniquePhone(), 'a-strong-password');
       const created = await request(http())
         .post('/api/v1/customers/me/comparison-sets')
         .set('Authorization', `Bearer ${owner2}`)
@@ -1062,10 +1077,10 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
     });
 
     it('a set sitting at 4 items refuses a 5th with 409 COMPARISON_SET_FULL', async () => {
-      const ownerPhone = uniquePhone();
+      const ownerPhone = await uniquePhone();
       const owner = await signup(ownerPhone, 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
-      const adminPhone = uniquePhone();
+      const adminPhone = await uniquePhone();
       const admin = await signup(adminPhone, 'a-strong-password');
       await prisma.user.update({
         where: { phone: adminPhone },
@@ -1084,7 +1099,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
           ),
         );
       }
-      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const customer = await signup(await uniquePhone(), 'a-strong-password');
       const created = await request(http())
         .post('/api/v1/customers/me/comparison-sets')
         .set('Authorization', `Bearer ${customer}`)
@@ -1103,10 +1118,10 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
     });
 
     it('CONCURRENCY: two simultaneous adds to a set sitting at 3 items - exactly one succeeds (201), the other is refused (409), the set never exceeds 4', async () => {
-      const ownerPhone = uniquePhone();
+      const ownerPhone = await uniquePhone();
       const owner = await signup(ownerPhone, 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
-      const adminPhone = uniquePhone();
+      const adminPhone = await uniquePhone();
       const admin = await signup(adminPhone, 'a-strong-password');
       await prisma.user.update({
         where: { phone: adminPhone },
@@ -1125,7 +1140,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
           ),
         );
       }
-      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const customer = await signup(await uniquePhone(), 'a-strong-password');
       const created = await request(http())
         .post('/api/v1/customers/me/comparison-sets')
         .set('Authorization', `Bearer ${customer}`)
@@ -1163,7 +1178,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
 
     it('an item that stops being eligible after being saved is never removed from the set, but is reported available:false on both the owner and public reads', async () => {
       const { owner, vendorId, a, b } = await setupTwoEligibleProducts();
-      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const customer = await signup(await uniquePhone(), 'a-strong-password');
       const created = await request(http())
         .post('/api/v1/customers/me/comparison-sets')
         .set('Authorization', `Bearer ${customer}`)
@@ -1208,10 +1223,10 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
   // ------------------------------------------------------------
   describe('Back-in-stock alerts and the lockOffersWideForRestock batch primitive', () => {
     it('restocking the ONLY branch that carries this offer (0 -> positive offer-wide) fires BACK_IN_STOCK for an OFFER favorite', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
       const variantId = await createOfferWithStock(vendorId, branchId, 50, 0);
-      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const customer = await signup(await uniquePhone(), 'a-strong-password');
       await request(http())
         .post('/api/v1/favorites')
         .set('Authorization', `Bearer ${customer}`)
@@ -1232,10 +1247,10 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
     });
 
     it('an exact colour × size availability subscription is independent of favourites, is consumed once, and creates a CUSTOMER notification only after restock', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
       const variantId = await createOfferWithStock(vendorId, branchId, 50, 0);
-      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const customer = await signup(await uniquePhone(), 'a-strong-password');
 
       await request(http())
         .post(`/api/v1/customers/me/availability-subscriptions/${variantId}`)
@@ -1272,10 +1287,10 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
     });
 
     it('rejects an availability subscription when that exact option is already in stock', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
       const variantId = await createOfferWithStock(vendorId, branchId, 50, 3);
-      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const customer = await signup(await uniquePhone(), 'a-strong-password');
       await request(http())
         .post(`/api/v1/customers/me/availability-subscriptions/${variantId}`)
         .set('Authorization', `Bearer ${customer}`)
@@ -1286,7 +1301,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
     });
 
     it('restocking branch A while branch B of the SAME offer already has stock never fires (no offer-wide 0 -> positive crossing)', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId, branchId: branchA } =
         await createVendorWithBranch(owner);
       await makeVendorEligible(vendorId);
@@ -1300,7 +1315,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
           quantity: 3,
         },
       });
-      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const customer = await signup(await uniquePhone(), 'a-strong-password');
       await request(http())
         .post('/api/v1/favorites')
         .set('Authorization', `Bearer ${customer}`)
@@ -1319,10 +1334,10 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
     });
 
     it('FR-FAV-005: an opted-out customer never receives the back-in-stock Notification row (checked at snapshot time)', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
       const variantId = await createOfferWithStock(vendorId, branchId, 50, 0);
-      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const customer = await signup(await uniquePhone(), 'a-strong-password');
       await request(http())
         .post('/api/v1/favorites')
         .set('Authorization', `Bearer ${customer}`)
@@ -1351,10 +1366,10 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
         status: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED',
         optOut = false,
       ) {
-        const owner = await signup(uniquePhone(), 'a-strong-password');
+        const owner = await signup(await uniquePhone(), 'a-strong-password');
         const { vendorId, branchId } = await createVendorWithBranch(owner);
         const variantId = await createOfferWithStock(vendorId, branchId, 50, 0);
-        const customer = await signup(uniquePhone(), 'a-strong-password');
+        const customer = await signup(await uniquePhone(), 'a-strong-password');
         await request(http())
           .post('/api/v1/favorites')
           .set('Authorization', `Bearer ${customer}`)
@@ -1424,7 +1439,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
     });
 
     it('NO PHANTOM ROWS: a restock with sibling branches read for BEFORE/AFTER never creates a branch_stock row in a sibling that never sold this offer', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId, branchId: branchA } =
         await createVendorWithBranch(owner);
       await makeVendorEligible(vendorId);
@@ -1478,7 +1493,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
     // branch-order-cancellation.service.ts's own qtyByOffer merge is a
     // separate, additional safeguard, never the only one.
     it('DUPLICATE TARGET: two mutations on the same key in one batch call are merged deterministically - quantityDelta summed, reservedQuantityDelta summed, before/after computed once, never last-write-wins', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId, branchId: branchA } =
         await createVendorWithBranch(owner);
       await makeVendorEligible(vendorId);
@@ -1508,7 +1523,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
           reservedQuantity: 4,
         },
       });
-      const customerPhone = uniquePhone();
+      const customerPhone = await uniquePhone();
       await signup(customerPhone, 'a-strong-password');
       const customerProfile = await prisma.customerProfile.findFirstOrThrow({
         where: { user: { phone: customerPhone } },
@@ -1617,7 +1632,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
       it('batch A [keyLow, keyHigh] vs batch B [keyHigh, keyLow] on the same two keys: both complete, neither deadlocks, both sweeps apply exactly once', async () => {
         const rHigh = R_HIGH();
         const rLow = R_LOW();
-        const owner = await signup(uniquePhone(), 'a-strong-password');
+        const owner = await signup(await uniquePhone(), 'a-strong-password');
         const { vendorId, branchId } = await createVendorWithBranch(owner);
         const variantX = await createOfferWithStock(vendorId, branchId, 50, 10);
         const variantY = await createOfferWithStock(vendorId, branchId, 60, 10);
@@ -1636,7 +1651,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
           data: { reservedQuantity: 1 },
         });
 
-        const customerPhone = uniquePhone();
+        const customerPhone = await uniquePhone();
         await signup(customerPhone, 'a-strong-password');
         const customerProfile = await prisma.customerProfile.findFirstOrThrow({
           where: { user: { phone: customerPhone } },
@@ -1724,7 +1739,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
       // would still be waiting on keyHigh alone and would never have
       // touched keyLow yet, so this probe would succeed immediately.
       it("actually acquires the row lock in the global sorted order (keyLow before keyHigh), proven by blocking a direct probe on keyLow - never inferred from the caller's own (reversed) array order", async () => {
-        const owner = await signup(uniquePhone(), 'a-strong-password');
+        const owner = await signup(await uniquePhone(), 'a-strong-password');
         const { vendorId, branchId } = await createVendorWithBranch(owner);
         const variantX = await createOfferWithStock(vendorId, branchId, 50, 10);
         const variantY = await createOfferWithStock(vendorId, branchId, 60, 10);
@@ -1800,7 +1815,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
   // ------------------------------------------------------------
   describe('Order cancellation stock restore (batched across every distinct offerVariant)', () => {
     it('cancelling a whole order with TWO distinct offerVariants restores both in ONE batch and fires BACK_IN_STOCK only for the one that crossed 0 -> positive', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
       // variantSoldOut: exactly 1 in stock, about to be fully sold by
       // this order - restoring it on cancel is a genuine 0 -> positive
@@ -1818,7 +1833,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
         60,
         10,
       );
-      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const customer = await signup(await uniquePhone(), 'a-strong-password');
       await request(http())
         .post('/api/v1/favorites')
         .set('Authorization', `Bearer ${customer}`)
@@ -1902,10 +1917,10 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
       // its snapshot once up front, so passing the same target key
       // twice in one batch would otherwise silently drop one item's
       // quantity).
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
       const variantId = await createOfferWithStock(vendorId, branchId, 50, 0);
-      const customerPhone = uniquePhone();
+      const customerPhone = await uniquePhone();
       await signup(customerPhone, 'a-strong-password');
       const customerProfile = await prisma.customerProfile.findFirstOrThrow({
         where: { user: { phone: customerPhone } },
@@ -1981,10 +1996,10 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
     });
 
     it('CONCURRENCY: a cancellation restoring stock races an independent staff DAMAGE movement on the SAME offer - both apply, never a deadlock, final quantity reflects both', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
       const variantId = await createOfferWithStock(vendorId, branchId, 50, 3);
-      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const customer = await signup(await uniquePhone(), 'a-strong-password');
       const item = await addToCart(customer, vendorId, variantId, 1);
       const { branchOrderId } = await placeOrder(customer, vendorId, branchId, [
         item,
@@ -2037,7 +2052,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
   // ------------------------------------------------------------
   describe('Exchange replacement leg vs a real expired reservation on the same key', () => {
     it('redeeming an exchange whose replacement stock ALSO carries a genuine expired checkout hold: both releases apply, reservedQuantity lands at exactly 0, no CHECK violation, no phantom rows', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranchAndPolicy(
         owner,
         {
@@ -2049,7 +2064,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
       );
       const { originalVariantId, replacementVariantId } =
         await createOfferWithTwoVariants(vendorId, branchId, 100, 10, 120, 10);
-      const customerPhone = uniquePhone();
+      const customerPhone = await uniquePhone();
       const customer = await signup(customerPhone, 'a-strong-password');
       const order = await placeAndPickUpOrder(
         owner,
@@ -2145,10 +2160,10 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
   // ------------------------------------------------------------
   describe('Price-drop alerts', () => {
     it('an immediate manual price cut (PUT .../variants/:id with a lower sale_price) fires PRICE_DROP for both a PRODUCT and an OFFER favorite of the same listing, deduped to one notification', async () => {
-      const ownerPhone = uniquePhone();
+      const ownerPhone = await uniquePhone();
       const owner = await signup(ownerPhone, 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
-      const adminPhone = uniquePhone();
+      const adminPhone = await uniquePhone();
       const admin = await signup(adminPhone, 'a-strong-password');
       await prisma.user.update({
         where: { phone: adminPhone },
@@ -2165,7 +2180,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
       // Favorites BOTH the product and the exact offer with the SAME
       // customer - enqueueFavoriteNotification's own dedup must still
       // deliver exactly one notification, never two.
-      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const customer = await signup(await uniquePhone(), 'a-strong-password');
       await request(http())
         .post('/api/v1/favorites')
         .set('Authorization', `Bearer ${customer}`)
@@ -2200,10 +2215,10 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
     });
 
     it('a SCHEDULED discount activating via the sweep (never the manual-PATCH check) also fires PRICE_DROP', async () => {
-      const ownerPhone = uniquePhone();
+      const ownerPhone = await uniquePhone();
       const owner = await signup(ownerPhone, 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
-      const adminPhone = uniquePhone();
+      const adminPhone = await uniquePhone();
       const admin = await signup(adminPhone, 'a-strong-password');
       await prisma.user.update({
         where: { phone: adminPhone },
@@ -2217,7 +2232,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
         100,
         5,
       );
-      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const customer = await signup(await uniquePhone(), 'a-strong-password');
       await request(http())
         .post('/api/v1/favorites')
         .set('Authorization', `Bearer ${customer}`)
@@ -2273,10 +2288,10 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
     });
 
     it('FR-FAV-005: an opted-out customer never receives a PRICE_DROP Notification row', async () => {
-      const ownerPhone = uniquePhone();
+      const ownerPhone = await uniquePhone();
       const owner = await signup(ownerPhone, 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
-      const adminPhone = uniquePhone();
+      const adminPhone = await uniquePhone();
       const admin = await signup(adminPhone, 'a-strong-password');
       await prisma.user.update({
         where: { phone: adminPhone },
@@ -2290,7 +2305,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
         100,
         5,
       );
-      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const customer = await signup(await uniquePhone(), 'a-strong-password');
       await request(http())
         .post('/api/v1/favorites')
         .set('Authorization', `Bearer ${customer}`)
@@ -2330,13 +2345,13 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
   // ------------------------------------------------------------
   describe('New-offer alerts', () => {
     it('a second vendor confirming a match to an already-favorited canonical product fires FAVORITE_NEW_OFFER exactly once', async () => {
-      const adminPhone = uniquePhone();
+      const adminPhone = await uniquePhone();
       const admin = await signup(adminPhone, 'a-strong-password');
       await prisma.user.update({
         where: { phone: adminPhone },
         data: { platformRole: 'PLATFORM_ADMIN' },
       });
-      const owner1 = await signup(uniquePhone(), 'a-strong-password');
+      const owner1 = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: vendor1, branchId: branch1 } =
         await createVendorWithBranch(owner1);
       const eligible = await createEligibleOffer(
@@ -2348,7 +2363,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
         5,
       );
 
-      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const customer = await signup(await uniquePhone(), 'a-strong-password');
       await request(http())
         .post('/api/v1/favorites')
         .set('Authorization', `Bearer ${customer}`)
@@ -2360,7 +2375,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
 
       // A SECOND, independent vendor also lists and confirms a match
       // to the SAME canonical variant - the genuinely new-offer event.
-      const owner2 = await signup(uniquePhone(), 'a-strong-password');
+      const owner2 = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: vendor2, branchId: branch2 } =
         await createVendorWithBranch(owner2);
       await makeVendorEligible(vendor2);
@@ -2386,13 +2401,13 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
     });
 
     it('FR-FAV-005: an opted-out customer never receives a NEW_OFFER Notification row', async () => {
-      const adminPhone = uniquePhone();
+      const adminPhone = await uniquePhone();
       const admin = await signup(adminPhone, 'a-strong-password');
       await prisma.user.update({
         where: { phone: adminPhone },
         data: { platformRole: 'PLATFORM_ADMIN' },
       });
-      const owner1 = await signup(uniquePhone(), 'a-strong-password');
+      const owner1 = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: vendor1, branchId: branch1 } =
         await createVendorWithBranch(owner1);
       const eligible = await createEligibleOffer(
@@ -2403,7 +2418,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
         100,
         5,
       );
-      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const customer = await signup(await uniquePhone(), 'a-strong-password');
       await request(http())
         .post('/api/v1/favorites')
         .set('Authorization', `Bearer ${customer}`)
@@ -2418,7 +2433,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
         .send({ alert_type: 'NEW_OFFER', enabled: false })
         .expect(200);
 
-      const owner2 = await signup(uniquePhone(), 'a-strong-password');
+      const owner2 = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: vendor2 } = await createVendorWithBranch(owner2);
       await makeVendorEligible(vendor2);
       await createConfirmedOffer(
@@ -2447,10 +2462,10 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
   // ------------------------------------------------------------
   describe('Comparison endpoint', () => {
     it('zone validation: an invalid zone is 400; omitting zone yields NO_ZONE_SELECTED; a zone with no delivery row is NOT_AVAILABLE_IN_ZONE; a zone with an enabled, fee-set row is AVAILABLE', async () => {
-      const ownerPhone = uniquePhone();
+      const ownerPhone = await uniquePhone();
       const owner = await signup(ownerPhone, 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
-      const adminPhone = uniquePhone();
+      const adminPhone = await uniquePhone();
       const admin = await signup(adminPhone, 'a-strong-password');
       await prisma.user.update({
         where: { phone: adminPhone },
@@ -2508,10 +2523,10 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
     });
 
     it('warranty falls back to "غير متوفر" when genuinely unset; the cheapest offer is tagged; diff reports all_same correctly', async () => {
-      const ownerPhone = uniquePhone();
+      const ownerPhone = await uniquePhone();
       const owner = await signup(ownerPhone, 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
-      const adminPhone = uniquePhone();
+      const adminPhone = await uniquePhone();
       const admin = await signup(adminPhone, 'a-strong-password');
       await prisma.user.update({
         where: { phone: adminPhone },
@@ -2520,7 +2535,7 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
       await makeVendorEligible(vendorId);
       const { canonicalProductId, variantId: canonicalVariantId } =
         await createCanonicalVariant(admin, unique('Brand'), unique('Model'));
-      const owner2 = await signup(uniquePhone(), 'a-strong-password');
+      const owner2 = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: vendor2, branchId: branch2 } =
         await createVendorWithBranch(owner2);
       await makeVendorEligible(vendor2);
@@ -2568,10 +2583,10 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
     });
 
     it('price staleness: a recently-listed offer is not stale; a PriceHistory row older than 30 days makes it stale', async () => {
-      const ownerPhone = uniquePhone();
+      const ownerPhone = await uniquePhone();
       const owner = await signup(ownerPhone, 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
-      const adminPhone = uniquePhone();
+      const adminPhone = await uniquePhone();
       const admin = await signup(adminPhone, 'a-strong-password');
       await prisma.user.update({
         where: { phone: adminPhone },
@@ -2611,10 +2626,10 @@ describe('Sprint 24 - favorites, saved comparison sets, cross-comparison, alerts
     });
 
     it('cross-comparison (mode 2): validates 2-4 distinct ids, 404s a missing product, tags the cheapest product, reports availability for a product with no eligible offers', async () => {
-      const ownerPhone = uniquePhone();
+      const ownerPhone = await uniquePhone();
       const owner = await signup(ownerPhone, 'a-strong-password');
       const { vendorId, branchId } = await createVendorWithBranch(owner);
-      const adminPhone = uniquePhone();
+      const adminPhone = await uniquePhone();
       const admin = await signup(adminPhone, 'a-strong-password');
       await prisma.user.update({
         where: { phone: adminPhone },

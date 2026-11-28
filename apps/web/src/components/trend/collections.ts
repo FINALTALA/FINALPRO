@@ -29,6 +29,8 @@ export type GalleryItem = {
   store: string | null;
   href: CollectionLink;
   src: string;
+  /** VIA phase 6: a Content Studio picture (a complete URL, no -half variant). */
+  fullSrc?: string;
   w: number;          // native pixels of src
   h: number;
   half?: boolean;     // a -half.webp exists

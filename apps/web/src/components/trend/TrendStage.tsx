@@ -1,9 +1,12 @@
 "use client";
 
-import { IBM_Plex_Sans_Arabic, Syne } from "next/font/google";
+import { IBM_Plex_Sans_Arabic } from "next/font/google";
+import { syne } from "./syne";
 import Link from "next/link";
 import gsap from "gsap";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { pickText, useManagedSection } from "@/lib/contentStudio";
+import { useLang } from "@/lib/useLang";
 import "./trend-chrome.css";
 import "./trend-stage.css";
 
@@ -21,7 +24,6 @@ import "./trend-stage.css";
 //   hold scene 3 >=0.8 s visible before the recording ends (1.4 s used)
 //   transition 3->1: only its last 0.85 s is recorded -> 2.6 s (estimate).
 
-const syne = Syne({ subsets: ["latin"], weight: ["700", "800"], variable: "--ts-font-latin" });
 const plex = IBM_Plex_Sans_Arabic({ subsets: ["arabic"], weight: ["400", "500", "600", "700"], variable: "--ts-font-ar" });
 
 export const TIMING = {
@@ -89,6 +91,8 @@ const isStacked = () => window.innerWidth < STACKED_BELOW;
 const framesFor = (s: number) => (isStacked() ? STACKED : DESKTOP)[s];
 
 export default function TrendStage() {
+  const managedHero = useManagedSection("trend.hero");
+  const lang = useLang();
   const [scene, setScene] = useState(0);
   const [playing, setPlaying] = useState(true);
   const [ready, setReady] = useState(false);
@@ -381,6 +385,14 @@ export default function TrendStage() {
     viewerRef.current?.showModal();
   };
 
+  // VIA phase 6: the Content Studio may manage the title panel's copy.
+  const titleLines =
+    managedHero.mode === "managed"
+      ? pickText(managedHero.section.fields.headline, lang, "").split("\n").map((l) => l.trim()).filter(Boolean)
+      : [];
+  const sub = managedHero.mode === "managed" ? pickText(managedHero.section.fields.subline, lang, "") : "";
+  if (managedHero.mode === "hidden") return null;
+
   return (
     <section
       ref={rootRef}
@@ -476,8 +488,10 @@ export default function TrendStage() {
         </div>
 
         <div ref={(el) => { panelRefs.current[2] = el; }} className="ts-panel ts-panel-title" inert={scene !== 2} aria-hidden={scene !== 2}>
-          <h1 className="ts-title"><span>الشتا</span><span>على طريقتك</span></h1>
-          <p className="ts-sub">الطقم الخمري، بطريقتك.</p>
+          <h1 className="ts-title">
+            {titleLines.length ? titleLines.map((l, i) => <span key={i}>{l}</span>) : <><span>الشتا</span><span>على طريقتك</span></>}
+          </h1>
+          <p className="ts-sub">{sub || "الطقم الخمري، بطريقتك."}</p>
           <Link href="/women" className="ts-collection-cta">
             اكتشفي المجموعة
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5M10 7l-5 5 5 5" /></svg>

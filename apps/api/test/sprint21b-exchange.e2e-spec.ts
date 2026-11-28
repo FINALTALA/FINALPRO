@@ -1916,4 +1916,112 @@ describe('Sprint 21b - exchange within a real branch (e2e)', () => {
       expect(res.status).toBe(404);
     });
   });
+
+  // VIA phase 2C: an exchange replacement never bypasses a platform hold.
+  describe('platform hold (VIA phase 2C)', () => {
+    async function holdOfferOf(variantId: string): Promise<void> {
+      const v = await prisma.offerVariant.findUniqueOrThrow({
+        where: { id: variantId },
+        select: { vendorId: true, vendorOfferId: true },
+      });
+      const admin = await prisma.user.create({
+        data: { phone: uniquePhone(), passwordHash: 'x' },
+      });
+      await prisma.offerPlatformHold.create({
+        data: {
+          vendorId: v.vendorId,
+          vendorOfferId: v.vendorOfferId,
+          action: 'HIDE',
+          reason: 'held for the exchange test',
+          placedById: admin.id,
+        },
+      });
+    }
+
+    it('a held listing offers no replacement and an exchange onto it is refused', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const { originalVariantId, replacementVariantId } =
+        await createOfferWithTwoVariants(vendorId, branchId, 100, 5, 120, 3);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const order = await placeAndPickUpOrder(
+        owner,
+        customer,
+        vendorId,
+        branchId,
+        originalVariantId,
+      );
+      await holdOfferOf(replacementVariantId);
+
+      const options = await request(app!.getHttpServer())
+        .get(
+          `/api/v1/customers/me/orders/${order.branchOrderId}/items/${order.itemId}/exchange-options`,
+        )
+        .set('Authorization', `Bearer ${customer}`)
+        .expect(200);
+      expect(options.body.variants).toEqual([]);
+
+      const submitted = await submitExchange(
+        customer,
+        order.branchOrderId,
+        order.itemId,
+        replacementVariantId,
+        branchId,
+      );
+      expect(submitted.status).toBe(409);
+      expect(submitted.body.error.code).toBe('REPLACEMENT_NOT_AVAILABLE');
+      expect(
+        await prisma.return.count({
+          where: { branchOrderItemId: order.itemId },
+        }),
+      ).toBe(0);
+    });
+
+    it('an exchange submitted before the hold cannot be approved after it: nothing is reserved', async () => {
+      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const { vendorId, branchId } = await createVendorWithBranch(owner);
+      const { originalVariantId, replacementVariantId } =
+        await createOfferWithTwoVariants(vendorId, branchId, 100, 5, 120, 3);
+      const customer = await signup(uniquePhone(), 'a-strong-password');
+      const order = await placeAndPickUpOrder(
+        owner,
+        customer,
+        vendorId,
+        branchId,
+        originalVariantId,
+      );
+      const submitted = await submitExchange(
+        customer,
+        order.branchOrderId,
+        order.itemId,
+        replacementVariantId,
+        branchId,
+      );
+      expect(submitted.status).toBe(201);
+      await holdOfferOf(replacementVariantId);
+
+      const decided = await decideReturn(
+        owner,
+        vendorId,
+        branchId,
+        submitted.body.id,
+        { decision: 'approve' },
+      );
+      expect(decided.status).toBe(409);
+      expect(decided.body.error.code).toBe('REPLACEMENT_NOT_AVAILABLE');
+      const stock = await prisma.branchStock.findUniqueOrThrow({
+        where: {
+          branchId_offerVariantId: {
+            branchId,
+            offerVariantId: replacementVariantId,
+          },
+        },
+      });
+      expect(stock.reservedQuantity).toBe(0);
+      const r = await prisma.return.findUniqueOrThrow({
+        where: { id: submitted.body.id },
+      });
+      expect(r.status).not.toBe('APPROVED_AWAITING_DROPOFF');
+    });
+  });
 });

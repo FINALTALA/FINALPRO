@@ -4,6 +4,7 @@ import {
   ConflictException,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   HttpCode,
   Logger,
@@ -12,6 +13,7 @@ import {
   Patch,
   Post,
   Req,
+  UnauthorizedException,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
@@ -56,20 +58,31 @@ export class CustomersController {
 
   @Get()
   async me(@CurrentUser() user: AuthenticatedUser) {
-    // Every account created via POST /auth/register also creates a
-    // CustomerProfile in the same transaction, so this can be trusted
-    // to exist for any authenticated user.
-    const profile = await this.prisma.customerProfile.findUniqueOrThrow({
-      where: { userId: user.id },
-      include: { user: true },
+    // Reads the account itself, not its CustomerProfile: a platform
+    // staff account created out of band (seed-platform-staff.ts) has no
+    // CustomerProfile, and AppShell asks for this on every page. The
+    // profile only supplies display_name, which is null without one.
+    const account = await this.prisma.user.findUnique({
+      where: { id: user.id },
+      select: {
+        id: true,
+        phone: true,
+        email: true,
+        languagePref: true,
+        phoneVerifiedAt: true,
+        customerProfile: { select: { displayName: true } },
+      },
     });
+    if (!account) {
+      throw new UnauthorizedException();
+    }
     return {
-      id: profile.user.id,
-      phone: profile.user.phone,
-      email: profile.user.email,
-      language_pref: profile.user.languagePref,
-      phone_verified_at: profile.user.phoneVerifiedAt?.toISOString() ?? null,
-      display_name: profile.displayName,
+      id: account.id,
+      phone: account.phone,
+      email: account.email,
+      language_pref: account.languagePref,
+      phone_verified_at: account.phoneVerifiedAt?.toISOString() ?? null,
+      display_name: account.customerProfile?.displayName ?? null,
     };
   }
 
@@ -93,6 +106,23 @@ export class CustomersController {
     @Body() dto: PatchMeDto,
     @Req() req: Request,
   ) {
+    // display_name lives on CustomerProfile. A platform staff account
+    // without one is refused before anything is written (and before a
+    // phone-change token is consumed), so the request never half-
+    // succeeds; it is never given a profile here. language_pref and
+    // phone are User fields and work without a profile.
+    if (dto.display_name !== undefined) {
+      const hasProfile = await this.prisma.customerProfile.count({
+        where: { userId: user.id },
+      });
+      if (!hasProfile) {
+        throw new ForbiddenException({
+          code: 'CUSTOMER_PROFILE_REQUIRED',
+          message: 'This account has no customer profile to name',
+        });
+      }
+    }
+
     if (dto.phone === undefined) {
       if (dto.language_pref !== undefined || dto.display_name !== undefined) {
         await this.prisma.$transaction(async (tx) => {
@@ -111,15 +141,23 @@ export class CustomersController {
         });
       }
 
-      const profile = await this.prisma.customerProfile.findUniqueOrThrow({
-        where: { userId: user.id },
-        include: { user: true },
+      const account = await this.prisma.user.findUnique({
+        where: { id: user.id },
+        select: {
+          id: true,
+          phone: true,
+          languagePref: true,
+          customerProfile: { select: { displayName: true } },
+        },
       });
+      if (!account) {
+        throw new UnauthorizedException();
+      }
       return {
-        id: profile.user.id,
-        phone: profile.user.phone,
-        language_pref: profile.user.languagePref,
-        display_name: profile.displayName,
+        id: account.id,
+        phone: account.phone,
+        language_pref: account.languagePref,
+        display_name: account.customerProfile?.displayName ?? null,
         session_token: null,
         session_status: null,
       };
@@ -319,7 +357,9 @@ export class CustomersController {
               vendorId,
               role: 'OWNER',
               status: 'ACTIVE',
-              user: { deactivatedAt: null },
+              // VIA phase 3: a co-owner suspended by the platform is not
+              // an enabled owner either (same rule as the suspension).
+              user: { deactivatedAt: null, suspendedAt: null },
             },
             select: { userId: true },
           });

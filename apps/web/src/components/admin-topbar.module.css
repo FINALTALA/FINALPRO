@@ -1,0 +1,89 @@
+/* VIA admin top bar - rendered by AppShell on /admin and /admin/* only (in
+   place of the customer header and bottom tabs). The brand, the platform
+   workspace menu, notifications and the account button; the admin's own
+   section navigation is the sidebar in app/admin/layout.tsx. Same palette
+   as app/admin/admin-shell.module.css and the public VIA header. */
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  height: var(--header-h);
+  background: rgba(247, 242, 234, 0.92);
+  border-bottom: 1px solid rgba(205, 165, 94, 0.35);
+  backdrop-filter: saturate(1.2) blur(10px);
+  -webkit-backdrop-filter: saturate(1.2) blur(10px);
+}
+
+.topbarInner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 100%;
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: #241b20;
+  text-decoration: none;
+}
+
+.brand:hover {
+  color: #4a1626;
+}
+
+.brandLogo {
+  display: block;
+  width: 46px;
+  height: 36px;
+  object-fit: contain;
+}
+
+.brandName {
+  font-family: "Via Birds of Paradise", Georgia, "Times New Roman", serif;
+  font-size: 22px;
+  line-height: 1;
+  letter-spacing: 0.06em;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.actions :global(.icon-button) {
+  border-color: #e6dac8;
+  background: #fffdf9;
+  color: #241b20;
+}
+
+.actions :global(.icon-button:hover) {
+  border-color: #cda55e;
+  background: #f4ead6;
+  color: #4a1626;
+}
+
+/* No customer bottom tabs here: the page only needs ordinary end space. */
+:global(.app-main).main {
+  padding-bottom: 32px;
+}
+
+@media (max-width: 480px) {
+  .brandLogo {
+    width: 40px;
+    height: 32px;
+  }
+
+  .brandName {
+    font-size: 19px;
+  }
+}

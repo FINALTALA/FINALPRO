@@ -165,6 +165,37 @@ async function preflightUser(
 }
 
 /**
+ * The demo's verification reviewer: an existing account on that phone
+ * must already be a VERIFICATION_REVIEWER with no store membership, or
+ * it cannot stand behind the branches' approval.
+ */
+async function preflightReviewer(prisma: PrismaClient): Promise<User | null> {
+  const existing = await preflightUser(
+    prisma,
+    DEMO.reviewer.phone,
+    DEMO.reviewer.password,
+    'reviewer',
+  );
+  if (!existing) return null;
+  if (existing.platformRole !== 'VERIFICATION_REVIEWER') {
+    conflict(
+      `reviewer user (${DEMO.reviewer.phone})`,
+      `expected platformRole "VERIFICATION_REVIEWER", found "${existing.platformRole}".`,
+    );
+  }
+  const memberships = await prisma.vendorUser.count({
+    where: { userId: existing.id },
+  });
+  if (memberships > 0) {
+    conflict(
+      `reviewer user (${DEMO.reviewer.phone})`,
+      'it is a member of a store, so it cannot review store branches.',
+    );
+  }
+  return existing;
+}
+
+/**
  * Every real account is also a customer account first (PDR-008: "One
  * account may be a customer and also hold store-owner or branch-
  * employee roles") - AuthController.register() already guarantees this
@@ -665,6 +696,7 @@ async function preflight(prisma: PrismaClient) {
     DEMO.customer.password,
     'customer',
   );
+  const reviewerUser = await preflightReviewer(prisma);
 
   const ownerProfile = await preflightCustomerProfile(
     prisma,
@@ -856,6 +888,7 @@ async function preflight(prisma: PrismaClient) {
     ownerUser,
     employeeUser,
     customerUser,
+    reviewerUser,
     ownerProfile,
     employeeProfile,
     customerProfile,
@@ -899,10 +932,11 @@ async function createUser(
   tx: Prisma.TransactionClient,
   phone: string,
   password: string,
+  platformRole: 'VERIFICATION_REVIEWER' | null = null,
 ): Promise<User> {
   const passwordHash = await bcrypt.hash(password, 10);
   return tx.user.create({
-    data: { phone, passwordHash, phoneVerifiedAt: new Date() },
+    data: { phone, passwordHash, phoneVerifiedAt: new Date(), platformRole },
   });
 }
 
@@ -934,6 +968,7 @@ async function createBranch(
   tx: Prisma.TransactionClient,
   vendorId: string,
   name: string,
+  reviewerId: string,
 ): Promise<StoreBranch> {
   return tx.storeBranch.create({
     data: {
@@ -943,6 +978,7 @@ async function createBranch(
       lat: 31.9,
       lng: 35.2,
       verificationStatus: 'APPROVED',
+      reviewedBy: reviewerId,
       reviewedAt: new Date(),
     },
   });
@@ -1052,6 +1088,21 @@ async function applyPlan(
       ? `  Customer: already exists (${DEMO.customer.phone}) - left untouched.`
       : `  Customer: created (${DEMO.customer.phone}).`,
   );
+  // Before any branch: every branch below is created APPROVED by it.
+  const reviewerUser =
+    plan.reviewerUser ??
+    (await createUser(
+      tx,
+      DEMO.reviewer.phone,
+      DEMO.reviewer.password,
+      'VERIFICATION_REVIEWER',
+    ));
+  note(
+    lines,
+    plan.reviewerUser
+      ? `  Reviewer: already exists (${DEMO.reviewer.phone}) - left untouched.`
+      : `  Reviewer: created (${DEMO.reviewer.phone}).`,
+  );
 
   await ensureProfile(
     tx,
@@ -1099,7 +1150,7 @@ async function applyPlan(
 
   const branchOneA =
     plan.branchOneA ??
-    (await createBranch(tx, vendorOne.id, BRANCH_ONE_A_NAME));
+    (await createBranch(tx, vendorOne.id, BRANCH_ONE_A_NAME, reviewerUser.id));
   note(
     lines,
     plan.branchOneA
@@ -1108,7 +1159,7 @@ async function applyPlan(
   );
   const branchOneB =
     plan.branchOneB ??
-    (await createBranch(tx, vendorOne.id, BRANCH_ONE_B_NAME));
+    (await createBranch(tx, vendorOne.id, BRANCH_ONE_B_NAME, reviewerUser.id));
   note(
     lines,
     plan.branchOneB
@@ -1182,7 +1233,7 @@ async function applyPlan(
   );
   const branchTwoA =
     plan.branchTwoA ??
-    (await createBranch(tx, vendorTwo.id, BRANCH_TWO_A_NAME));
+    (await createBranch(tx, vendorTwo.id, BRANCH_TWO_A_NAME, reviewerUser.id));
   note(
     lines,
     plan.branchTwoA
@@ -1375,6 +1426,10 @@ async function main() {
     note(
       lines,
       `  Customer: ${DEMO.customer.phone} / ${DEMO.customer.password}`,
+    );
+    note(
+      lines,
+      `  Reviewer: ${DEMO.reviewer.phone} / ${DEMO.reviewer.password}  (VERIFICATION_REVIEWER)`,
     );
 
     note(lines, '\n== Vendor / branch identifiers ==');

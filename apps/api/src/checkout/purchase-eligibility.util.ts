@@ -1,10 +1,21 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import { SubscriptionGateService } from '../subscriptions/subscription-gate.service';
+import { OPEN_HOLD_SELECT } from '../offers/platform-hold.util';
 
 export interface EligibilityItem {
   vendorId: string;
   offerVariantId: string;
+}
+
+/** VIA phase 2C: the refusal assertEligible gives for an offer under an open platform hold. */
+export function isPlatformHoldRefusal(err: unknown): boolean {
+  if (!(err instanceof ConflictException)) return false;
+  const body = err.getResponse() as { details?: { reason?: string }[] };
+  return (
+    Array.isArray(body?.details) &&
+    body.details.some((d) => d?.reason === 'PLATFORM_HOLD')
+  );
 }
 
 function sortedVendorIds(items: EligibilityItem[]): string[] {
@@ -31,7 +42,11 @@ async function loadEligibilityContext(
     tx.vendor.findMany({ where: { id: { in: vendorIds } } }),
     tx.offerVariant.findMany({
       where: { id: { in: variantIds } },
-      include: { vendorOffer: { select: { status: true } } },
+      include: {
+        vendorOffer: {
+          select: { status: true, platformHolds: OPEN_HOLD_SELECT },
+        },
+      },
     }),
   ]);
   return {
@@ -44,7 +59,10 @@ async function loadEligibilityContext(
 function assertEligible(
   items: EligibilityItem[],
   vendorById: Map<string, { storefrontPublished: boolean; status: string }>,
-  variantById: Map<string, { vendorOffer: { status: string } }>,
+  variantById: Map<
+    string,
+    { vendorOffer: { status: string; platformHolds: { id: string }[] } }
+  >,
   subscriptionStatusByVendor: Map<string, string>,
 ): void {
   for (const item of items) {
@@ -53,6 +71,19 @@ function assertEligible(
       throw new NotFoundException({
         code: 'OFFER_VARIANT_NOT_FOUND',
         message: 'Offer variant not found',
+      });
+    }
+    // VIA phase 2C: an open platform hold takes the offer out of every
+    // purchase step (add-to-cart, quote, reserve, confirm). Read after the
+    // vendor-row locks in assertItemsPurchasable, the same lock a new hold
+    // takes - so a hold and a confirmation never interleave.
+    if (variant.vendorOffer.platformHolds.length > 0) {
+      throw new ConflictException({
+        code: 'ITEM_NOT_PURCHASABLE',
+        message: `Offer variant ${item.offerVariantId} is no longer available for purchase`,
+        details: [
+          { offer_variant_id: item.offerVariantId, reason: 'PLATFORM_HOLD' },
+        ],
       });
     }
     const vendor = vendorById.get(item.vendorId);

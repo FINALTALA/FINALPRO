@@ -4,7 +4,8 @@ import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 import { useAdsLang } from "./adsCopy";
 import { FilterControls, FitTitle, rvDelay, Strip, StoreMark, useCategoryFilter, useReveal, type Feed } from "./AdsShared";
 import StoryViewer from "./AdsStoryViewer";
-import { STORY_GROUPS, type AdsCategory } from "./data/adsDemo";
+import { useAdsHeading, useAdsStories } from "./adsManaged";
+import type { AdsCategory } from "./data/adsDemo";
 import { Play } from "./icons";
 import "./ads-stories.css";
 
@@ -57,13 +58,17 @@ export default function AdsStories() {
   const intro = useReveal<HTMLDivElement>();
   const bar = useReveal<HTMLDivElement>();
 
+  // VIA phase 6: the story cards may come from the Content Studio.
+  const { mode, groups: STORY_GROUPS } = useAdsStories();
+  const heading = useAdsHeading(mode, t("ads.stories.title"));
   const groups = useMemo(
     () => STORY_GROUPS.filter((g) => (feed === "discover" || g.followingDemo) && cats.matches(g.categories)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [feed, cats.selected],
+    [STORY_GROUPS, feed, cats.selected],
   );
 
   const onSeen = useCallback((storyId: string) => markSeen(storyId), []);
+  if (mode.mode === "hidden" || STORY_GROUPS.length === 0) return null;
 
   return (
     <section className="ads-section as" aria-labelledby="stories-heading">
@@ -72,7 +77,7 @@ export default function AdsStories() {
             in English in both languages, the line under it is translated. */}
         <div ref={intro} className="ads-intro as-intro" dir={dir}>
           <span className="rv-mask"><span className="ads-kicker rv-up">VIA / STORIES</span></span>
-          <FitTitle id="stories-heading" text={t("ads.stories.title")} mobileLines={["STORIES", "TO DISCOVER"]} />
+          <FitTitle id="stories-heading" text={heading.text} mobileLines={heading.managed ? undefined : ["STORIES", "TO DISCOVER"]} />
           <span className="rv-mask">
             <p className="ads-intro-sub as-sub rv-up" style={rvDelay(0.3)}>
               {t("ads.stories.sub")}

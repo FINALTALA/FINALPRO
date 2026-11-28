@@ -1297,7 +1297,11 @@ describe('Sprint 17b - platform catalog administration (e2e)', () => {
       });
       expect(auditRow).not.toBeNull();
 
-      // Old merged-away id still resolves (the "redirect" guarantee).
+      // Old merged-away IDs resolve once their destination is public.
+      await prisma.canonicalProduct.update({
+        where: { id: survivor.id },
+        data: { status: 'PUBLISHED' },
+      });
       const getLoser = await request(app.getHttpServer())
         .get(`/api/v1/canonical-products/${loser.id}`)
         .expect(200);

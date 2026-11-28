@@ -1,0 +1,9 @@
+@media (max-width: 719px) {
+  .flagText {
+    min-inline-size: 0;
+  }
+
+  .flagKey {
+    overflow-wrap: anywhere;
+  }
+}

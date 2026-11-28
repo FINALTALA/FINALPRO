@@ -65,6 +65,7 @@ import {
   computeDiscountedPrice,
   computeEffectivePrice,
 } from './pricing/effective-price.util';
+import { OPEN_HOLD_SELECT } from './platform-hold.util';
 
 const MEDIA_LIMITS: Record<'IMAGE' | 'VIDEO', number> = { IMAGE: 10, VIDEO: 3 };
 
@@ -342,8 +343,13 @@ export class VendorOffersController {
     const offers = await this.prisma.vendorOffer.findMany({
       where: { vendorId },
       orderBy: { createdAt: 'asc' },
+      // VIA phase 2C: the owner sees which products the platform holds.
+      include: { platformHolds: OPEN_HOLD_SELECT },
     });
-    return offers.map((o) => this.offerToDto(o));
+    return offers.map(({ platformHolds, ...o }) => ({
+      ...this.offerToDto(o),
+      platform_hold: platformHolds[0]?.action ?? null,
+    }));
   }
 
   /**

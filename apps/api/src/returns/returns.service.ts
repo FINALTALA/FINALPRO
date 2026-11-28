@@ -42,6 +42,7 @@ import {
   assertNotOwnBranchOrder,
   assertNotOwnReturn,
 } from '../common/self-decision.util';
+import { OFFER_NOT_HELD, OPEN_HOLD_SELECT } from '../offers/platform-hold.util';
 
 const RETURN_CODE_MAX_ATTEMPTS = 10;
 const VENDOR_REVIEW_SLA_HOURS = 48;
@@ -509,9 +510,22 @@ export class ReturnsService {
           'The replacement must be a different variant than the original item',
       });
     }
+    // VIA phase 2C: a platform hold is placed under the vendor row's
+    // FOR UPDATE lock; FOR SHARE here makes this check and a concurrent
+    // hold serialize, so an exchange cannot slip past a hold being placed.
+    // (Vendor before stock - the same order as the hold and confirm.)
+    await tx.$queryRaw`SELECT 1 FROM vendors WHERE id = ${vendorId} FOR SHARE`;
     const replacementVariant = await tx.offerVariant.findFirst({
       where: { id: replacementOfferVariantId, vendorId },
-      include: { vendorOffer: { select: { status: true, vendorId: true } } },
+      include: {
+        vendorOffer: {
+          select: {
+            status: true,
+            vendorId: true,
+            platformHolds: OPEN_HOLD_SELECT,
+          },
+        },
+      },
     });
     if (
       !replacementVariant ||
@@ -523,7 +537,10 @@ export class ReturnsService {
           'The replacement must be another variant of the same product listing',
       });
     }
-    if (replacementVariant.vendorOffer.status !== 'ACTIVE') {
+    if (
+      replacementVariant.vendorOffer.status !== 'ACTIVE' ||
+      replacementVariant.vendorOffer.platformHolds.length > 0
+    ) {
       throw new ConflictException({
         code: 'REPLACEMENT_NOT_AVAILABLE',
         message: 'The replacement is not currently sellable',
@@ -760,6 +777,8 @@ export class ReturnsService {
       where: {
         vendorOfferId: item.offerVariant.vendorOfferId,
         id: { not: item.offerVariantId },
+        // VIA phase 2C: a held listing offers no replacement.
+        vendorOffer: OFFER_NOT_HELD,
       },
       include: {
         branchStocks: {

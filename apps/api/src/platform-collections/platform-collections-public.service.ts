@@ -12,6 +12,7 @@ import { ComparisonService } from '../discovery/comparison.service';
 import { comparisonCardDto } from '../discovery/dto/comparison-card.dto';
 import { FulfilmentEligibilityService } from '../fulfilment/fulfilment-eligibility.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { PUBLIC_OFFER } from '../offers/platform-hold.util';
 
 /** Collections shown at most, per placement (approved decision 3). */
 export const HOME_COLLECTIONS = 2;
@@ -123,7 +124,7 @@ export class PlatformCollectionsPublicService {
     const variants = await this.prisma.offerVariant.findMany({
       where: {
         canonicalVariant: { canonicalProductId: { in: productIds } },
-        vendorOffer: { status: 'ACTIVE' },
+        vendorOffer: PUBLIC_OFFER,
         vendor: { storefrontPublished: true, status: 'ACTIVE' },
       },
       select: {

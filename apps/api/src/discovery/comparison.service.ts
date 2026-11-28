@@ -1,3 +1,4 @@
+import { PUBLIC_CANONICAL_PRODUCT } from '../matching/public-canonical-product';
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import {
@@ -12,6 +13,7 @@ import {
   isEffectivelyDiscounted,
 } from '../offers/pricing/effective-price.util';
 import { MIN_REVIEWS_TO_DISPLAY } from '../reviews/rating-aggregate.util';
+import { PUBLIC_OFFER } from '../offers/platform-hold.util';
 
 export interface EligibleOffer {
   offerVariantId: string;
@@ -128,13 +130,14 @@ export function eligibleProductWhere(
   offerFilter: Prisma.OfferVariantWhereInput = {},
 ): Prisma.CanonicalProductWhereInput {
   return {
+    ...PUBLIC_CANONICAL_PRODUCT,
     variants: {
       some: {
         confirmedOfferVariants: {
           some: {
             AND: [
               {
-                vendorOffer: { status: 'ACTIVE' },
+                vendorOffer: PUBLIC_OFFER,
                 vendor: {
                   AND: [
                     { storefrontPublished: true, status: 'ACTIVE' },
@@ -192,8 +195,11 @@ export class ComparisonService {
     const variants = await this.prisma.offerVariant.findMany({
       where: {
         canonicalVariantId: { not: null },
-        canonicalVariant: { canonicalProductId },
-        vendorOffer: { status: 'ACTIVE' },
+        canonicalVariant: {
+          canonicalProductId,
+          canonicalProduct: PUBLIC_CANONICAL_PRODUCT,
+        },
+        vendorOffer: PUBLIC_OFFER,
         vendor: {
           AND: [{ storefrontPublished: true, status: 'ACTIVE' }, vendorFilter],
         },

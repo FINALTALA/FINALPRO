@@ -18,7 +18,7 @@
   --dark: #1A1917;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --font-ar: var(--th-font-ar), "IBM Plex Sans Arabic", "Segoe UI", Tahoma, sans-serif;
-  --font-name: var(--th-font-name), "Syne", "Arial Black", system-ui, sans-serif;
+  --font-name: var(--via-syne, "Syne"), "Syne", "Arial Black", system-ui, sans-serif;
   /* The editorial headline (Arabic). The info row above it follows its height. */
   --title-size: 6.2vw;
   --title-lh: 1.25;

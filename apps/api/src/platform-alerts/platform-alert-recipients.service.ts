@@ -19,6 +19,9 @@ export interface ResolvedAlertRecipients {
 const ACTIVE_ADMIN: Prisma.UserWhereInput = {
   platformRole: 'PLATFORM_ADMIN',
   deactivatedAt: null,
+  // VIA phase 3: never a suspended account (in-app suspension of an
+  // administrator is refused anyway; this keeps the rule self-contained).
+  suspendedAt: null,
 };
 
 /**

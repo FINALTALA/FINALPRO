@@ -28,7 +28,7 @@ class FakeSmsService {
 }
 
 // Fixed, disjoint lane - see ./helpers/e2e-phone-lanes.ts.
-const uniquePhone = createUniquePhone(
+const nextFixturePhone = createUniquePhone(
   'sprint7-canonical-import-storefront',
   '56',
 );
@@ -42,6 +42,17 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
   let app: INestApplication;
   let fakeSms: FakeSmsService;
   let prisma: PrismaService;
+
+  async function uniquePhone(): Promise<string> {
+    for (;;) {
+      const phone = nextFixturePhone();
+      const [user, otp] = await Promise.all([
+        prisma.user.findUnique({ where: { phone }, select: { id: true } }),
+        prisma.otpCode.findFirst({ where: { phone }, select: { id: true } }),
+      ]);
+      if (!user && !otp) return phone;
+    }
+  }
 
   beforeEach(async () => {
     fakeSms = new FakeSmsService();
@@ -87,7 +98,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
   async function signupWithPlatformRole(
     role: 'PLATFORM_ADMIN' | 'VERIFICATION_REVIEWER',
   ): Promise<string> {
-    const phone = uniquePhone();
+    const phone = await uniquePhone();
     const token = await signup(phone, 'a-strong-password');
     await prisma.user.update({
       where: { phone },
@@ -153,10 +164,10 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
   }
 
   async function setupVendorWithTwoBranchesAndEmployee() {
-    const owner = await signup(uniquePhone(), 'a-strong-password');
+    const owner = await signup(await uniquePhone(), 'a-strong-password');
     const { vendorId, branchAId, branchBId } =
       await createVendorWithTwoBranches(owner);
-    const employeePhone = uniquePhone();
+    const employeePhone = await uniquePhone();
     const accepted = await inviteAndAcceptAsNewUser(
       owner,
       vendorId,
@@ -177,7 +188,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
     ownerToken: string,
     vendorId: string,
   ): Promise<void> {
-    const reviewerPhone = uniquePhone();
+    const reviewerPhone = await uniquePhone();
     const reviewerToken = await signup(reviewerPhone, 'reviewer-password');
     await prisma.user.update({
       where: { phone: reviewerPhone },
@@ -324,7 +335,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
         data: { gtin },
       });
 
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
       await confirmExactMatch(
         owner,
@@ -355,7 +366,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
         data: { gtin },
       });
 
-      const owner1 = await signup(uniquePhone(), 'a-strong-password');
+      const owner1 = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: vendor1Id } = await createVendorWithTwoBranches(owner1);
       await confirmExactMatch(
         owner1,
@@ -366,7 +377,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
         'Apple iPhone 15',
       );
 
-      const owner2 = await signup(uniquePhone(), 'a-strong-password');
+      const owner2 = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: vendor2Id } = await createVendorWithTwoBranches(owner2);
       const { offerId: offer2Id } = await confirmExactMatch(
         owner2,
@@ -394,7 +405,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
         data: { gtin },
       });
 
-      const ownerA = await signup(uniquePhone(), 'a-strong-password');
+      const ownerA = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: vendorAId } = await createVendorWithTwoBranches(ownerA);
       await activateVendorSubscription(ownerA, vendorAId);
       const offerAres = await request(app.getHttpServer())
@@ -421,7 +432,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
       );
       expect(variantAres.status).toBe(201);
 
-      const ownerB = await signup(uniquePhone(), 'a-strong-password');
+      const ownerB = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: vendorBId } = await createVendorWithTwoBranches(ownerB);
       await activateVendorSubscription(ownerB, vendorBId);
       const offerBres = await request(app.getHttpServer())
@@ -498,7 +509,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
         data: { gtin },
       });
 
-      const owner1 = await signup(uniquePhone(), 'a-strong-password');
+      const owner1 = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: vendor1Id } = await createVendorWithTwoBranches(owner1);
       await confirmExactMatch(
         owner1,
@@ -508,7 +519,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
         'سوني هيدفون',
         'Sony Headphones',
       );
-      const owner2 = await signup(uniquePhone(), 'a-strong-password');
+      const owner2 = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: vendor2Id } = await createVendorWithTwoBranches(owner2);
       const { offerId: offer2Id } = await confirmExactMatch(
         owner2,
@@ -562,6 +573,10 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
       });
       expect(offer2.titleEn).toBe('Sony WH-1000XM5 (Official)');
 
+      await prisma.canonicalProduct.update({
+        where: { id: canonicalProductId },
+        data: { status: 'PUBLISHED' },
+      });
       const publicView = await request(app.getHttpServer())
         .get(`/api/v1/canonical-products/${canonicalProductId}`)
         .expect(200);
@@ -577,7 +592,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
         'LG',
         'OLED55',
       );
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
 
       const res = await request(app.getHttpServer())
@@ -643,7 +658,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
       // canonicalProductId double-filter has to get right (filtering
       // by canonicalProductId alone would leak vendor A's request to
       // vendor B here).
-      const ownerA = await signup(uniquePhone(), 'a-strong-password');
+      const ownerA = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: vendorAId } = await createVendorWithTwoBranches(ownerA);
       await confirmExactMatch(
         ownerA,
@@ -653,7 +668,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
         'بوز إيه',
         'Bose A',
       );
-      const ownerB = await signup(uniquePhone(), 'a-strong-password');
+      const ownerB = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: vendorBId } = await createVendorWithTwoBranches(ownerB);
       await confirmExactMatch(
         ownerB,
@@ -724,7 +739,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
 
   describe('RB-MATCH-004: CSV/Excel import', () => {
     it('imports valid CSV rows, auto-generates barcodes, and reports the count', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
       await activateVendorSubscription(owner, vendorId);
 
@@ -756,7 +771,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
     });
 
     it('reports a clear reason for invalid rows without aborting the rest of the import', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
       await activateVendorSubscription(owner, vendorId);
 
@@ -791,7 +806,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
     });
 
     it('PDR-019: same identifier_value with consistent brand/type/mpn is additive (multiple variants under one new offer), not a conflict', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
       await activateVendorSubscription(owner, vendorId);
 
@@ -818,7 +833,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
     });
 
     it('PDR-019: same identifier_value with differing brand is a mandatory-review conflict, not silently resolved', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
       await activateVendorSubscription(owner, vendorId);
 
@@ -851,7 +866,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
     // never spawn a second offer for what is the same real-world
     // product.
     it('PDR-019 across imports: a second import with the same identifier_type/value and a new seller_sku becomes an additional variant on the SAME offer as the first import', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
       await activateVendorSubscription(owner, vendorId);
 
@@ -894,7 +909,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
     });
 
     it('PDR-019 across imports: different identifier_types sharing the same raw value never merge into one offer', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
       await activateVendorSubscription(owner, vendorId);
 
@@ -940,7 +955,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
     // comparison undetected. collectGroupEvidence() now derives the
     // record's brand/type/mpn from the WHOLE group, not row 0.
     it('PDR-019 evidence: brand_name provided by a LATER row in the same group (not the first) is still persisted and still catches a later conflict', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
       await activateVendorSubscription(owner, vendorId);
 
@@ -999,7 +1014,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
     // must still be found and reused by a later import, not silently
     // duplicated into a second offer for the same real-world product.
     it('PDR-019 legacy data: a pre-existing OfferVariant with no ImportIdentifierRecord yet is found and reused, not duplicated into a second offer', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
       await activateVendorSubscription(owner, vendorId);
 
@@ -1052,7 +1067,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
     });
 
     it('PDR-019 legacy data: more than one pre-existing offer already using the same identifier is a manual-review conflict, never auto-linked', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
       await activateVendorSubscription(owner, vendorId);
 
@@ -1126,9 +1141,9 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
     // Postgres itself, not just by application code, since raw SQL
     // bypasses the app entirely.
     it('DB-level: a cross-vendor ImportIdentifierRecord link is rejected by the composite foreign key', async () => {
-      const ownerA = await signup(uniquePhone(), 'a-strong-password');
+      const ownerA = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: vendorAId } = await createVendorWithTwoBranches(ownerA);
-      const ownerB = await signup(uniquePhone(), 'a-strong-password');
+      const ownerB = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: vendorBId } = await createVendorWithTwoBranches(ownerB);
 
       const offerB = await prisma.vendorOffer.create({
@@ -1147,7 +1162,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
     // report a misleading "seller_sku conflict" for a SKU that never
     // actually collided.
     it('PDR-019 concurrency: two concurrent imports with the same identifier and different new seller_skus both succeed and merge into one offer', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
       await activateVendorSubscription(owner, vendorId);
 
@@ -1201,7 +1216,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
     });
 
     it('a duplicate seller_sku within the same file is reported, not silently overwritten', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
       await activateVendorSubscription(owner, vendorId);
 
@@ -1234,7 +1249,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
     });
 
     it('retrying the exact same import (same Idempotency-Key, same file) replays the same report and creates nothing twice', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
       await activateVendorSubscription(owner, vendorId);
 
@@ -1269,7 +1284,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
     });
 
     it('the same Idempotency-Key with a DIFFERENT file is rejected as a conflict, not silently processed', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
       await activateVendorSubscription(owner, vendorId);
       const key = unique('import');
@@ -1316,9 +1331,9 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
     });
 
     it("refuses an owner from importing into a DIFFERENT vendor's account (BOLA)", async () => {
-      const owner1 = await signup(uniquePhone(), 'a-strong-password');
+      const owner1 = await signup(await uniquePhone(), 'a-strong-password');
       await createVendorWithTwoBranches(owner1);
-      const owner2 = await signup(uniquePhone(), 'a-strong-password');
+      const owner2 = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId: vendor2Id } = await createVendorWithTwoBranches(owner2);
       await activateVendorSubscription(owner2, vendor2Id);
 
@@ -1336,7 +1351,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
     });
 
     it('never imports media - image/video columns in the file are ignored entirely', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
       await activateVendorSubscription(owner, vendorId);
       const sku = unique('sku');
@@ -1371,7 +1386,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
     // large") before the error ever reaches HttpExceptionFilter, so
     // there is nothing else to wire up for a clean, documented 4xx here.
     it('refuses a file exceeding the upload size limit, without ever reaching the parser/import logic', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
       await activateVendorSubscription(owner, vendorId);
 
@@ -1392,7 +1407,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
 
   describe('RB-STOREF-001: public storefront foundation', () => {
     it('defaults display_name to legal_name and generates a stable, unique slug at vendor creation', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const legalName = unique('Vendor');
       const res = await request(app.getHttpServer())
         .post('/api/v1/vendors')
@@ -1446,7 +1461,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
     });
 
     it('lets the owner update storefront settings', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
 
       const res = await request(app.getHttpServer())
@@ -1464,7 +1479,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
     });
 
     it('PDR-007: refuses to publish without at least one contact method, then succeeds once one is set', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
 
       const failRes = await request(app.getHttpServer())
@@ -1521,7 +1536,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
     });
 
     it('the public GET by slug returns identity/contacts, is unauthenticated, and never exposes the warehouse', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
       await request(app.getHttpServer())
         .put(`/api/v1/vendors/${vendorId}/storefront`)
@@ -1570,7 +1585,7 @@ describe('Sprint 7 - canonical naming, CSV/XLSX import, public storefront (e2e)'
     });
 
     it('reports "unavailable" (never 404) for an existing but unpublished store - identity still shows', async () => {
-      const owner = await signup(uniquePhone(), 'a-strong-password');
+      const owner = await signup(await uniquePhone(), 'a-strong-password');
       const { vendorId } = await createVendorWithTwoBranches(owner);
       const settings = await request(app.getHttpServer())
         .get(`/api/v1/vendors/${vendorId}/storefront`)

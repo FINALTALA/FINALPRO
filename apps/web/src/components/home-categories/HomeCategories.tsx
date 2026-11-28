@@ -7,6 +7,7 @@ import type { CSSProperties } from "react";
 import { registerTranslations } from "@/lib/i18n";
 import { useLang, useT } from "@/lib/useLang";
 import HomeSectionHead from "@/components/home-section-head/HomeSectionHead";
+import { linkOf, mediaOf, mediaUrl, overlayItems, pickText, useManagedSection } from "@/lib/contentStudio";
 import styles from "./home-categories.module.css";
 
 // The hero's editorial faces (same next/font settings, so the same files):
@@ -48,7 +49,7 @@ registerTranslations({
  * Routes are the site's department pages. `focus` is the object-position per layout (desktop / tablet
  * panels, and the phone's 3:4 card): faces and knitwear stay in frame.
  */
-const CATEGORIES = [
+export const CATEGORIES = [
   {
     key: "women",
     href: "/women",
@@ -75,13 +76,39 @@ const CATEGORIES = [
 export default function HomeCategories() {
   const lang = useLang();
   const t = useT();
+  // VIA phase 6: the Content Studio may manage this section (same panels).
+  const managed = useManagedSection("home.categories");
+  const builtIn = CATEGORIES.map((c) => ({
+    key: c.key as string,
+    href: c.href as string,
+    src: c.image.src as string,
+    alt: t(`cats.${c.key}.alt`),
+    cta: t(`cats.${c.key}.cta`),
+    focus: c.focus,
+    mobileSizes: c.mobileSizes as string,
+  }));
+  const panels = overlayItems(managed, builtIn, (c) => c.key, (base, it) => {
+    const src = mediaUrl(it.fields.image, null);
+    if (!src) return null;
+    return {
+      ...base,
+      key: it.id,
+      href: linkOf(it.fields.link, base.href)!,
+      src,
+      alt: pickText(mediaOf(it.fields.image)?.alt, lang, base.alt),
+      cta: pickText(it.fields.label, lang, base.cta),
+    };
+  });
+  const heading =
+    managed.mode === "managed" ? pickText(managed.section.fields.heading, lang, t("cats.title")) : t("cats.title");
+  if (panels.length === 0) return null;
 
   return (
     <section className={`${styles.root} ${FONT_VARS}`} data-lang={lang} dir={lang === "ar" ? "rtl" : "ltr"} aria-labelledby="home-categories-title">
-      <HomeSectionHead id="home-categories-title" title={t("cats.title")} />
+      <HomeSectionHead id="home-categories-title" title={heading} />
 
       <div className={styles.gallery}>
-        {CATEGORIES.map((c) => (
+        {panels.map((c) => (
           <Link
             key={c.key}
             href={c.href}
@@ -90,14 +117,15 @@ export default function HomeCategories() {
             style={{ "--focus": c.focus.desktop, "--focus-m": c.focus.mobile } as CSSProperties}
           >
             <Image
-              src={c.image.src}
-              alt={t(`cats.${c.key}.alt`)}
+              src={c.src}
+              alt={c.alt}
               fill
               sizes={`(max-width: 599px) ${c.mobileSizes}, (max-width: 899px) 34vw, 34vw`}
               quality={90}
               className={styles.image}
+              unoptimized={/^https?:/.test(c.src)}
             />
-            <span className={styles.cta}>{t(`cats.${c.key}.cta`)}</span>
+            <span className={styles.cta}>{c.cta}</span>
           </Link>
         ))}
       </div>

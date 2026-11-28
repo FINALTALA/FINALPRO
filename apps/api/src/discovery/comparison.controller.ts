@@ -1,3 +1,4 @@
+import { PUBLIC_CANONICAL_PRODUCT } from '../matching/public-canonical-product';
 import {
   BadRequestException,
   Controller,
@@ -125,7 +126,7 @@ export class ComparisonController {
 
   private async requireCanonicalProduct(id: string) {
     const product = await this.prisma.canonicalProduct.findUnique({
-      where: { id },
+      where: { id, ...PUBLIC_CANONICAL_PRODUCT },
       include: {
         brand: { select: { name: true } },
         category: { select: { nameAr: true, nameEn: true } },
@@ -325,7 +326,7 @@ export class CrossComparisonController {
     }
 
     const products = await this.prisma.canonicalProduct.findMany({
-      where: { id: { in: ids } },
+      where: { id: { in: ids }, ...PUBLIC_CANONICAL_PRODUCT },
       include: {
         brand: { select: { name: true } },
         category: { select: { nameAr: true, nameEn: true } },

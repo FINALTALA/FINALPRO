@@ -10,6 +10,7 @@ import { CODED_SPECS, MULTI_SPECS, isCodedSpec, specCodesOf } from "@/lib/specCo
 import OwnerMeasurementsPanel from "@/components/OwnerMeasurementsPanel";
 import OwnerSizeGuidePanel from "@/components/OwnerSizeGuidePanel";
 import OwnerOfferPairingsPanel from "@/components/OwnerOfferPairingsPanel";
+import PlatformHoldNotice from "@/components/owner/PlatformHoldNotice";
 import { ErrorBanner } from "@/components/States";
 import { EditProductButton } from "@/components/product-wizard/EditProductButton";
 import { ProductWizardPanel } from "@/components/product-wizard/ProductWizardPanel";
@@ -268,6 +269,9 @@ export default function OfferDetailPage() {
 
       {error && <ErrorBanner message={error} />}
       {notice && <p className="muted">{notice}</p>}
+
+      {/* VIA phase 2C: a platform hold on this product (reason, correction). */}
+      <PlatformHoldNotice vendorId={params.vendorId} offerId={params.offerId} />
 
       {/* Edit drafts: a published, classified product's content changes only in the wizard. */}
       {offer.status !== "ARCHIVED" && (offer.edit_via_draft || !offer.price_is_offer_level) && (

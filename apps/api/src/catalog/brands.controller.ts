@@ -141,6 +141,39 @@ export class BrandsController {
         message: 'Brand not found',
       });
     }
+    // M-09: renaming follows the same duplicate rules as creating. An exact
+    // match with another brand's displayed name (case-insensitive, trimmed)
+    // is always refused - independent of how normalizedName was written -
+    // and a merely similar name needs the explicit confirmation. Keeping the
+    // brand's own name (or changing only its case/spacing) is never a clash.
+    const renamedTo = dto.name.trim();
+    if (renamedTo.toLowerCase() !== existing.name.trim().toLowerCase()) {
+      const exact = await this.prisma.brand.findFirst({
+        where: { id: { not: id }, name: { equals: renamedTo, mode: 'insensitive' } },
+        select: { id: true },
+      });
+      if (exact) {
+        throw new ConflictException({
+          code: 'BRAND_ALREADY_EXISTS',
+          message: 'A brand with this name already exists',
+        });
+      }
+      if (!dto.confirm_despite_duplicate_warning) {
+        const similar = (await findSimilarBrands(this.prisma, dto.name)).filter((s) => s.id !== id);
+        if (similar.length > 0) {
+          throw new ConflictException({
+            code: 'POSSIBLE_DUPLICATE',
+            message:
+              'A similarly-named brand already exists - resubmit with confirm_despite_duplicate_warning to proceed anyway',
+            details: similar.map((s) => ({
+              id: s.id,
+              name: s.name,
+              similarity: s.similarity,
+            })),
+          });
+        }
+      }
+    }
     try {
       const brand = await this.prisma.brand.update({
         where: { id },

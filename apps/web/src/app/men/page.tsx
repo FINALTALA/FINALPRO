@@ -10,15 +10,28 @@ import { listingCategories, listingFilterOptions } from "@/lib/listingCategories
 import { useTaxonomy } from "@/lib/taxonomy";
 import { useListingFilters } from "@/lib/useListingFilters";
 import homeStyles from "@/app/home-via.module.css";
-import { useCallback, useMemo, useState } from "react";
+import { Fragment, useCallback, useMemo, useState } from "react";
 import { useProductFavorites } from "@/lib/useProductFavorites";
 import { useLang } from "@/lib/useLang";
 import { translate } from "@/lib/i18n";
 import "@/lib/sectionText";
 import "./men.css";
 import CollectionShowcase from "@/components/CollectionShowcase";
+import { AUDIENCE_BUILT_IN, useAudienceEditorial } from "@/lib/audienceEditorial";
+import { ManagedContentProvider } from "@/lib/contentStudio";
 
+// VIA phase 6: the hero, ticker and offer strip may come from the Content
+// Studio (same markup); categories, collection and products stay live.
 export default function MenPage() {
+  return (
+    <ManagedContentProvider page="MEN">
+      <MenPageBody />
+    </ManagedContentProvider>
+  );
+}
+
+function MenPageBody() {
+  const ed = useAudienceEditorial("MEN", AUDIENCE_BUILT_IN.MEN);
   // The filters are the page URL (refresh, back/forward, shared links).
   const { filters, setFilters } = useListingFilters();
   const [restoreScrollY] = useState(() => takeListingRestore("MEN"));
@@ -40,26 +53,32 @@ export default function MenPage() {
   }, [filters, setFilters]);
   return (
     <div className={`${homeStyles.home} men-page`}>
+      {ed.hero && (
       <section className="men-hero" aria-labelledby="men-hero-title">
-        <h1 className="visually-hidden" id="men-hero-title">{t("sec.men.title")}</h1>
+        <h1 className="visually-hidden" id="men-hero-title">{ed.hero.title}</h1>
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img className="men-hero-image" src="/images/men-hero.png" alt={t("sec.men.hero_alt")} fetchPriority="high" width={2041} height={770} />
-        <div className="men-hero-copy" aria-hidden="true"><strong>{t("sec.men.copy_strong")}</strong><span>{t("sec.men.copy_span")}</span></div>
-        <Link className="men-hero-cta" href="#men-products">
+        <img className="men-hero-image" src={ed.hero.image} alt={ed.hero.imageAlt} fetchPriority="high" width={2041} height={770} />
+        <div className="men-hero-copy" aria-hidden="true"><strong>{ed.hero.copyStrong}</strong><span>{ed.hero.copySpan}</span></div>
+        <Link className="men-hero-cta" href={ed.hero.ctaHref}>
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 8.5h14l-1 11H6l-1-11Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" /><path d="M8.5 9V6.75a3.5 3.5 0 0 1 7 0V9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
-          <span>{t("sec.shop_now")}</span>
+          <span>{ed.hero.cta}</span>
         </Link>
       </section>
+      )}
 
-      <div className="men-ticker" aria-label={t("sec.m.ticker_aria")}><div className="men-ticker-track">
-        {[0, 1].map((copy) => <span className="men-ticker-group" key={copy} aria-hidden={copy === 1}><span>{t("sec.m.ticker_1")}</span><i>✦</i><span>{t("sec.m.ticker_2")}</span><i>✦</i><span>{t("sec.ticker_3")}</span><i>✦</i></span>)}
+      {ed.ticker && (
+      <div className="men-ticker" aria-label={ed.ticker.label}><div className="men-ticker-track">
+        {[0, 1].map((copy) => <span className="men-ticker-group" key={copy} aria-hidden={copy === 1}>{ed.ticker!.items.map((text, i) => <Fragment key={i}><span>{text}</span><i>✦</i></Fragment>)}</span>)}
       </div></div>
+      )}
 
+      {ed.offer && (
       <div className="men-offer-strip" role="note">
         <span className="men-offer-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h11v10H3zM14 9h4l3 3.5V16h-7" /><circle cx="7" cy="17.5" r="1.6" /><circle cx="17.5" cy="17.5" r="1.6" /></svg></span>
-        <span>{t("sec.m.offer_pre")}<strong>{t("sec.offer_amount")}</strong>{t("sec.m.offer_mid")}<strong>{t("sec.offer_free")}</strong></span>
-        <Link href="#men-products" className="men-offer-link">{t("sec.shop_now")} <span aria-hidden="true">←</span></Link>
+        <span>{ed.offer.pre}<strong>{ed.offer.amount}</strong>{ed.offer.mid}<strong>{ed.offer.benefit}</strong></span>
+        <Link href={ed.offer.href} className="men-offer-link">{ed.offer.linkLabel} <span aria-hidden="true">←</span></Link>
       </div>
+      )}
 
       <div className="men-floor-extension"><div className="men-content">
         {(favoriteLoadError || favoriteError) && (

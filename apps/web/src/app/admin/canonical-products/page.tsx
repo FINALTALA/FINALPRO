@@ -1,15 +1,14 @@
 "use client";
 
+import "@/lib/adminCatalogText";
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { EmptyState, ErrorBanner } from "@/components/States";
 import { ApiError, apiFetch, newIdempotencyKey } from "@/lib/api";
-import {
-  CANONICAL_PRODUCT_STATUS_LABEL,
-  adminErrorMessage,
-  isForbidden,
-} from "@/lib/admin";
+import { isForbidden } from "@/lib/admin";
+import { fillMp, mpError, mpLabel } from "@/lib/adminMarketplaceText";
 import { useAdminGate } from "@/lib/useAdminGate";
+import { useLang, useT } from "@/lib/useLang";
 
 interface CanonicalProductRow {
   id: string;
@@ -31,6 +30,7 @@ interface BrandRow {
 interface CategoryRow {
   id: string;
   name_ar: string;
+  name_en?: string;
 }
 
 interface DuplicateCandidate {
@@ -47,21 +47,25 @@ interface DuplicateCandidate {
 // chosen category is restricted. PLATFORM_ADMIN only.
 export default function AdminCanonicalProductsPage() {
   const gate = useAdminGate("ADMIN");
+  const lang = useLang();
+  const t = useT();
   const [items, setItems] = useState<CanonicalProductRow[] | null>(null);
   const [brands, setBrands] = useState<BrandRow[]>([]);
   const [categories, setCategories] = useState<CategoryRow[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  // M-01: the failure itself is kept, so its message follows the UI language.
+  const [loadFailure, setLoadFailure] = useState<unknown>(null);
+  const error = loadFailure === null ? null : mpError(loadFailure, lang);
   const [forbidden, setForbidden] = useState(false);
 
   const load = useCallback(() => {
     apiFetch<CanonicalProductRow[]>("/canonical-products")
       .then((rows) => {
         setItems(rows);
-        setError(null);
+        setLoadFailure(null);
       })
       .catch((err) => {
         if (isForbidden(err)) setForbidden(true);
-        setError(adminErrorMessage(err));
+        setLoadFailure(err);
       });
   }, []);
 
@@ -73,7 +77,10 @@ export default function AdminCanonicalProductsPage() {
   }, [gate.status, load]);
 
   const brandName = (id: string) => brands.find((b) => b.id === id)?.name ?? "—";
-  const categoryName = (id: string) => categories.find((c) => c.id === id)?.name_ar ?? "—";
+  const categoryName = (id: string) => {
+    const c = categories.find((x) => x.id === id);
+    return (lang === "en" ? c?.name_en || c?.name_ar : c?.name_ar) ?? "—";
+  };
 
   // --- create ---
   const [brandId, setBrandId] = useState("");
@@ -108,7 +115,7 @@ export default function AdminCanonicalProductsPage() {
       } else {
         // CATEGORY_RESTRICTED (and anything else) is a real blocking
         // error here, never shown as an overridable warning.
-        setCreateError(adminErrorMessage(err));
+        setCreateError(mpError(err, lang));
       }
     } finally {
       setCreateBusy(false);
@@ -132,7 +139,7 @@ export default function AdminCanonicalProductsPage() {
   if (gate.status === "forbidden" || forbidden) {
     return (
       <div className="page-shell">
-        <EmptyState title="هذه الصفحة لمدير المنصة فقط" actionHref="/account" actionLabel="حسابي" />
+        <EmptyState title={t("mpa.cat.forbidden")} actionHref="/account" actionLabel={t("mpa.cat.myAccount")} />
       </div>
     );
   }
@@ -141,79 +148,79 @@ export default function AdminCanonicalProductsPage() {
     <div className="page-shell">
       <div className="wide-shell" style={{ maxWidth: 1000 }}>
         <div className="top-bar">
-          <h1 className="page-title" style={{ margin: 0 }}>المنتجات المرجعية</h1>
-          <Link href="/admin" className="button-link">إدارة المنصة</Link>
+          <h1 className="page-title" style={{ margin: 0 }}>{t("mpa.cp.title")}</h1>
+          <Link href="/admin" className="button-link">{t("mpa.cat.dashboard")}</Link>
         </div>
 
         {error && <ErrorBanner message={error} />}
 
         <div className="card" style={{ maxWidth: "none", marginBottom: 16 }}>
-          <h3 style={{ marginTop: 0 }}>منتج مرجعي جديد (يبدأ كمسودة)</h3>
+          <h3 style={{ marginTop: 0 }}>{t("mpa.cp.newTitle")}</h3>
           <form onSubmit={submitCreate}>
             <div className="form-row">
               <div className="field">
-                <label htmlFor="cp-brand">العلامة التجارية</label>
+                <label htmlFor="cp-brand">{t("mpa.cat.brand")}</label>
                 <select id="cp-brand" value={brandId} disabled={createBusy} onChange={(e) => setBrandId(e.target.value)}>
-                  <option value="">اختاري علامة تجارية</option>
+                  <option value="">{t("mpa.cat.chooseBrand")}</option>
                   {brands.map((b) => (
                     <option key={b.id} value={b.id}>{b.name}</option>
                   ))}
                 </select>
               </div>
               <div className="field">
-                <label htmlFor="cp-category">التصنيف</label>
+                <label htmlFor="cp-category">{t("mpa.cat.category")}</label>
                 <select id="cp-category" value={categoryId} disabled={createBusy} onChange={(e) => setCategoryId(e.target.value)}>
-                  <option value="">اختاري تصنيفاً</option>
+                  <option value="">{t("mpa.cat.chooseCategory")}</option>
                   {categories.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name_ar}</option>
+                    <option key={c.id} value={c.id}>{lang === "en" ? c.name_en || c.name_ar : c.name_ar}</option>
                   ))}
                 </select>
               </div>
             </div>
             <div className="field">
-              <label htmlFor="cp-model">اسم الطراز (Model name)</label>
+              <label htmlFor="cp-model">{t("mpa.cp.modelName")}</label>
               <input id="cp-model" value={modelName} disabled={createBusy} onChange={(e) => setModelName(e.target.value)} />
             </div>
             {createError && <ErrorBanner message={createError} />}
             {duplicates && duplicates.length > 0 && (
               <div className="warning-banner">
-                <p style={{ marginTop: 0 }}>توجد منتجات مرجعية مشابهة بالفعل، تأكدي أنّ هذا ليس تكراراً:</p>
+                <p style={{ marginTop: 0 }}>{t("mpa.cp.duplicates")}</p>
                 <ul style={{ margin: "0 0 10px", paddingInlineStart: 20 }}>
                   {duplicates.map((d) => (
                     <li key={d.id}>
-                      {d.model_name} — تشابه {(d.similarity * 100).toFixed(0)}٪
+                      {d.model_name} — {fillMp(t("mpa.cat.similarity"), { pct: (d.similarity * 100).toFixed(0) })}
                     </li>
                   ))}
                 </ul>
                 <button type="button" className="button" disabled={createBusy} onClick={() => createProduct(true)}>
-                  {createBusy ? "جارٍ الإنشاء..." : "إنشاء رغم التشابه"}
+                  {createBusy ? t("mpa.cat.creating") : t("mpa.cat.createAnyway")}
                 </button>
               </div>
             )}
             <button className="button" type="submit" disabled={createBusy || !brandId || !categoryId || !modelName.trim()}>
-              {createBusy ? "جارٍ الإنشاء..." : "إنشاء"}
+              {createBusy ? t("mpa.cat.creating") : t("mpa.cat.create")}
             </button>
           </form>
         </div>
 
         {!items && !error && (
-          <div aria-busy="true" aria-label="جارٍ التحميل">
+          <div aria-busy="true" aria-label={t("mpa.cat.loading")}>
             <div className="skeleton" style={{ height: 56, width: "100%", marginBottom: 8 }} />
             <div className="skeleton" style={{ height: 56, width: "100%" }} />
           </div>
         )}
         {items && items.length === 0 && (
-          <EmptyState title="لا توجد منتجات مرجعية بعد" message="أنشئي أول منتج مرجعي من النموذج أعلاه." />
+          <EmptyState title={t("mpa.cp.empty")} message={t("mpa.cp.emptyHint")} />
         )}
         {items && items.length > 0 && (
           <div style={{ overflowX: "auto" }}>
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>الطراز</th>
-                  <th>العلامة التجارية</th>
-                  <th>التصنيف</th>
-                  <th>الحالة</th>
+                  <th>{t("mpa.cp.colModel")}</th>
+                  <th>{t("mpa.cat.brand")}</th>
+                  <th>{t("mpa.cat.category")}</th>
+                  <th>{t("mpa.cp.colStatus")}</th>
                   <th />
                 </tr>
               </thead>
@@ -221,18 +228,18 @@ export default function AdminCanonicalProductsPage() {
                 {items.map((p) => (
                   <tr key={p.id}>
                     <td>
-                      {p.canonical_name_ar ?? p.model_name}
-                      {p.is_restricted && <span className="badge" style={{ marginInlineStart: 8 }}>مقيَّد</span>}
+                      {(lang === "en" ? p.canonical_name_en : p.canonical_name_ar) ?? p.model_name}
+                      {p.is_restricted && <span className="badge" style={{ marginInlineStart: 8 }}>{t("mpa.cat.restricted")}</span>}
                     </td>
                     <td>{brandName(p.brand_id)}</td>
                     <td>{categoryName(p.category_id)}</td>
                     <td>
                       <span className={`badge${p.status === "PUBLISHED" ? " badge-active" : ""}`}>
-                        {CANONICAL_PRODUCT_STATUS_LABEL[p.status] ?? p.status}
+                        {mpLabel(lang, "canonicalStatus", p.status)}
                       </span>
                     </td>
                     <td>
-                      <Link className="button-link" href={`/admin/canonical-products/${p.id}`}>التفاصيل</Link>
+                      <Link className="button-link" href={`/admin/canonical-products/${p.id}`}>{t("mpa.cp.details")}</Link>
                     </td>
                   </tr>
                 ))}

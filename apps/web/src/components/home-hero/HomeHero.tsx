@@ -5,6 +5,7 @@ import { Cormorant_Garamond, IBM_Plex_Sans_Arabic, Inter, Noto_Naskh_Arabic } fr
 import type { CSSProperties, MouseEvent } from "react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useLang, useT } from "@/lib/useLang";
+import { linkOf, mediaOf, mediaUrl, pickText, useManagedSection } from "@/lib/contentStudio";
 import { HERO_PHOTOGRAPH, HERO_SCENES, HERO_SET_BACKGROUND } from "./heroScenes";
 import ShopTheLook from "./ShopTheLook";
 import "./heroCopy";
@@ -63,7 +64,8 @@ export default function HomeHero() {
   const photo = HERO_PHOTOGRAPH;
   const lang = useLang();
   const t = useT();
-  const reduced = useSyncExternalStore(subscribeReduced, () => window.matchMedia(REDUCED_QUERY).matches, () => false);
+  const hero = useManagedSection("home.hero");
+  const reduced =useSyncExternalStore(subscribeReduced, () => window.matchMedia(REDUCED_QUERY).matches, () => false);
   const [playhead, setPlayhead] = useState<Playhead>(START);
   const [paused, setPaused] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
@@ -151,12 +153,22 @@ export default function HomeHero() {
 
   // One <picture>: the wide original, plus a dedicated phone image only when
   // there is one (otherwise the phone frame crops the original).
-  const alt = t(photo.image.altKey);
+  // VIA phase 6: the Content Studio may manage the opening scene's copy,
+  // button and photograph (same scene design). A photograph that is no
+  // longer available falls back to the bundled one (a structural visual).
+  // The bundled photograph itself is no override: it keeps its phone image.
+  const managedUrl = hero.mode === "managed" ? mediaUrl(hero.section.fields.image, null) : null;
+  const managedPhoto = managedUrl && managedUrl !== photo.image.src ? managedUrl : null;
+  const managedAlt = hero.mode === "managed" ? pickText(mediaOf(hero.section.fields.image)?.alt, lang, "") : "";
+  const alt = managedPhoto && managedAlt ? managedAlt : t(photo.image.altKey);
   const common = { alt, sizes: SIZES, quality: QUALITY };
-  const desktop = getImageProps({ ...common, src: photo.image.src, width: photo.image.width, height: photo.image.height });
-  const mobile = photo.mobileImage
-    ? getImageProps({ ...common, src: photo.mobileImage.src, width: photo.mobileImage.width, height: photo.mobileImage.height })
-    : null;
+  const desktop = managedPhoto
+    ? getImageProps({ ...common, src: managedPhoto, width: photo.image.width, height: photo.image.height, unoptimized: /^https?:/.test(managedPhoto) })
+    : getImageProps({ ...common, src: photo.image.src, width: photo.image.width, height: photo.image.height });
+  const mobile =
+    photo.mobileImage && !managedPhoto
+      ? getImageProps({ ...common, src: photo.mobileImage.src, width: photo.mobileImage.width, height: photo.mobileImage.height })
+      : null;
   const mobileFocus = photo.mobileImage?.focus ?? photo.image.focus.mobile;
   const setBg = getImageProps({ src: HERO_SET_BACKGROUND.src, width: HERO_SET_BACKGROUND.width, height: HERO_SET_BACKGROUND.height, alt: "", sizes: SIZES, quality: QUALITY });
 
@@ -166,6 +178,17 @@ export default function HomeHero() {
   const target = playhead.phase === "leaving" ? playhead.next ?? playhead.scene + 1 : playhead.scene;
   const setOn = Boolean(scenes[target]?.set);
   const closingOn = Boolean(scenes[playhead.scene].closing && playhead.phase === "text");
+
+  if (hero.mode === "hidden") return null;
+  const managedLines =
+    hero.mode === "managed"
+      ? pickText(hero.section.fields.headline, lang, "").split("\n").map((l) => l.trim()).filter(Boolean)
+      : [];
+  const managedDescription = hero.mode === "managed" ? pickText(hero.section.fields.subline, lang, "") : "";
+  const managedCta = hero.mode === "managed" ? pickText(hero.section.fields.cta_label, lang, "") : "";
+  // A link is a site path; "/#section" is a section of this page (in-page scroll).
+  const managedLink = hero.mode === "managed" ? linkOf(hero.section.fields.cta_link, null) : null;
+  const managedHref = managedLink?.startsWith("/#") ? managedLink.slice(1) : managedLink;
 
   return (
     <section
@@ -292,16 +315,27 @@ export default function HomeHero() {
                 </p>
               )}
               <Heading className={styles.title}>
-                {scene.copy.titleKeys.map((key, line) => (
-                  <span key={key} className={styles.titleMask}>
+                {(i === 0 && managedLines.length ? managedLines : scene.copy.titleKeys.map((key) => t(key))).map((text, line) => (
+                  <span key={`${i}-${line}`} className={styles.titleMask}>
                     <span className={styles.titleLine} style={{ "--line": line } as CSSProperties}>
-                      {t(key)}
+                      {text}
                     </span>
                   </span>
                 ))}
               </Heading>
-              <p className={styles.description}>{t(scene.copy.descriptionKey)}</p>
-              {scene.copy.ctaKey && scene.ctaTarget && (
+              <p className={styles.description}>{i === 0 && managedDescription ? managedDescription : t(scene.copy.descriptionKey)}</p>
+              {i === 0 && managedHref && managedCta ? (
+                <a
+                  href={managedHref}
+                  className={styles.cta}
+                  onClick={(e) => managedHref.startsWith("#") && onCta(e, managedHref.slice(1))}
+                >
+                  <span>{managedCta}</span>
+                  <svg className={styles.ctaArrow} viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M5 12h14M13 6l6 6-6 6" />
+                  </svg>
+                </a>
+              ) : scene.copy.ctaKey && scene.ctaTarget && (
                 <a href={`#${scene.ctaTarget}`} className={styles.cta} onClick={(e) => onCta(e, scene.ctaTarget!)}>
                   <span>{t(scene.copy.ctaKey)}</span>
                   <svg className={styles.ctaArrow} viewBox="0 0 24 24" aria-hidden="true">

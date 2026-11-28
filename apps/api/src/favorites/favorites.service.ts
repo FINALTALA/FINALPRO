@@ -6,6 +6,7 @@ import {
 import { eligibleProductWhere } from '../discovery/comparison.service';
 import { optionalName } from '../common/text/optional-name';
 import { PrismaService } from '../prisma/prisma.service';
+import { PUBLIC_OFFER } from '../offers/platform-hold.util';
 
 function favoriteDto(r: {
   id: string;
@@ -108,7 +109,7 @@ export class FavoritesService {
       where: {
         id: dto.offer_variant_id,
         canonicalVariantId: { not: null },
-        vendorOffer: { status: 'ACTIVE' },
+        vendorOffer: PUBLIC_OFFER,
         vendor: { storefrontPublished: true, status: 'ACTIVE' },
       },
       select: { id: true },
@@ -159,7 +160,7 @@ export class FavoritesService {
             targetType: 'OFFER',
             offerVariant: {
               canonicalVariantId: { not: null },
-              vendorOffer: { status: 'ACTIVE' },
+              vendorOffer: PUBLIC_OFFER,
               vendor: { storefrontPublished: true, status: 'ACTIVE' },
             },
           },
@@ -221,7 +222,7 @@ export class FavoritesService {
       where: {
         id: offerVariantId,
         vendorOffer: {
-          status: 'ACTIVE',
+          ...PUBLIC_OFFER,
           vendor: { status: 'ACTIVE', storefrontPublished: true },
         },
       },

@@ -21,9 +21,12 @@ export async function optionalSessionUserId(
   if (!session) return null;
   const user = await prisma.user.findUnique({
     where: { id: session.userId },
-    select: { sessionVersion: true },
+    select: { sessionVersion: true, suspendedAt: true },
   });
-  return user && user.sessionVersion === session.sessionVersion
+  // VIA phase 3: a suspended account reads public pages as a visitor.
+  return user &&
+    user.sessionVersion === session.sessionVersion &&
+    !user.suspendedAt
     ? session.userId
     : null;
 }
